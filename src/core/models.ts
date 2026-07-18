@@ -64,13 +64,13 @@ function escapeHtml(text: string): string {
 /** Telegram HTML parse mode: only &, <, > need escaping. LLM output (summary)
  * is untrusted free text and gets escaped; everything else is our own data. */
 export function renderReport(report: Report): string {
-  const lines: string[] = ["🏠 <b>Orch-A Daily Digest</b>", ""];
+  const lines: string[] = ["<b>Orch-A Daily Digest</b>", ""];
 
   if (report.summary) {
     lines.push(`<i>${escapeHtml(report.summary)}</i>`, "");
   }
 
-  lines.push("📊 <b>Availability (next 30d)</b>");
+  lines.push("<b>Availability (next 30d)</b>");
   for (const a of report.availability) {
     const pct = Math.round(a.occupancyRateNext30d * 100);
     lines.push(
@@ -78,7 +78,7 @@ export function renderReport(report: Report): string {
     );
   }
 
-  lines.push("", "💰 <b>Finance</b>");
+  lines.push("", "<b>Finance</b>");
   for (const f of report.finance) {
     lines.push(
       `• ${escapeHtml(prettifyPropertyId(f.propertyId))}: ${formatCurrency(f.revenueMonthToDate)} revenue · ${formatCurrency(f.outstandingPayouts)} outstanding`,
@@ -86,14 +86,14 @@ export function renderReport(report: Report): string {
   }
 
   if (report.anomalies.length > 0) {
-    lines.push("", "⚠️ <b>Needs attention</b>");
+    lines.push("", "<b>Needs attention</b>");
     lines.push(...report.anomalies.map((a) => `• ${escapeHtml(a)}`));
   }
 
   const healthOk = report.health.every((h) => h.status === "ok");
   lines.push(
     "",
-    `${healthOk ? "✅" : "⚠️"} Health: ${report.health.map((h) => `${h.name} ${h.status}`).join(" · ")}`,
+    `${healthOk ? "✅" : "🔴"} Health: ${report.health.map((h) => `${h.name} ${h.status}`).join(" · ")}`,
   );
 
   return lines.join("\n");
