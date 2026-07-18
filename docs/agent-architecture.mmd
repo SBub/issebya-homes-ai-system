@@ -45,6 +45,7 @@ flowchart TB
         CRON_INV["Cron: File Invoices<br><i>files completed invoices</i>"]
         CRON_TAX["Cron: Quarterly<br><i>tourist tax upload table</i>"]
         CRON_RFI["Cron: Annual (January)<br><i>RFI-21 re-issued by Airbnb; download, fill Section VI, resubmit. Booking.com equivalent: unknown. Out of scope for v0.1.0.</i>"]
+        CRON_AIRBNB_PRICING["One-time: Oct 13 2026<br><i>Airbnb retires split-fee pricing for EU hosts — Modelo30/invoice fee formulas need updating (see docs/finance/modelo-30-filing.md, invoices-filing.md). Out of scope for v0.1.0.</i>"]
         FIN_GAPS["Not yet: IRS report (year-end)<br>expense tracking<br>P&amp;L<br>income forecast"]
   end
  subgraph NotificationCenter["Notification Center"]
@@ -73,6 +74,7 @@ flowchart TB
     CRON_INV -- delivers --> TG
     CRON_TAX -- delivers --> TG
     CRON_RFI -- requests via --> NOTIF
+    CRON_AIRBNB_PRICING -- requests via --> NOTIF
     NOTIF -- delivers/re-notifies --> TG
     FIN -.-> FIN_GAPS
     CRON_PROJ -- delivers --> TG
@@ -107,6 +109,7 @@ flowchart TB
     style CRON_INV fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_TAX fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_RFI fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_AIRBNB_PRICING fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style NOTIF fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
