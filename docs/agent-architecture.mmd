@@ -1,0 +1,117 @@
+---
+config:
+  layout: fixed
+---
+%% LEGEND
+%% Light green fill + green border = built and live
+%% Grey fill / dashed border = not yet built (flip to green as each piece is wired)
+%% Red border = human-performed work, not delegated to any agent (permanent, not a build-status)
+%% Pink fill = Telegram Gateway, human-in-the-loop checkpoint
+%%
+%% STRUCTURAL GAPS (design-sufficiency review, assuming everything below is fully built as scoped):
+%% 1. No net-new demand engine — Ads/PR are unscoped stubs; Campaign Agent is scoped to existing guests only. Nothing targets people who don't know the property yet.
+%% 2. Content supply capped by one human — Social Media Agent collects/captions b-roll but doesn't create it; filming stays 100% manual (HUMAN_CONTENT).
+%% 3. OTA channels entirely outside the system — Airbnb/Booking.com replies + listing/rate management are HumanWork, untouched by any agent.
+%% 4. No feedback loop to learn what fills rooms — CRM's "measures instrument effectiveness" is needs-design; Orchestrator can react to Availability/Finance but can't tell which campaigns convert.
+%% 5. No pricing/yield lever — nothing adjusts price or pushes discounts on low-occupancy dates; Finance Tool is compliance-oriented (tax/invoices), not revenue management.
+flowchart TB
+ subgraph Tools["Tools"]
+        AVAIL["Availability Tool<br><i>(rooms availabilities endpoint)</i>"]
+        FIN["Finance Tool"]
+        CRM["CRM Tool<br><i>guest info + communication history; measures instrument effectiveness (needs design)</i>"]
+  end
+ subgraph Agents["Agents"]
+        PMA["Property Mgmt Agent<br><i>(cleaning lady comms only)</i>"]
+        GCA["Guest-Comms Agent<br><i>(runs via WhatsApp; webpage contact, convo, posts campaigns/updates)</i>"]
+        CAMP["Campaign Agent<br><i>(promotes right product to the right audience: product launch, brand awareness, promotional or seasonal, social media, email marketing)</i>"]
+        SOC["Social Media Agent<br><i>(captions + alt text only; collect pool of ready b-roll to use)</i>"]
+        ADS["Ads Agent<br><i>(stub, empty)</i>"]
+        PR["PR Agent<br><i>(stub, empty)</i>"]
+        DESIGN["Designer Agent<br><i>owns design system; creates digital + print assets</i>"]
+  end
+ subgraph Shared["Shared Teams"]
+        SWE["Software Engineering Team<br><i>(webpage updates, custom solutions; shared across projects)</i>"]
+  end
+ subgraph HumanWork["Human Work (not yet delegated)"]
+        HUMAN_CONTENT["Create Content<br><i>filming/making videos</i>"]
+        HUMAN_LAUNDRY["Laundry"]
+        HUMAN_CHECKIN["Guest Check-ins"]
+        HUMAN_PLATFORM_REPLY["Answering Guests on Booking Platforms"]
+        HUMAN_PLATFORM_MGMT["Managing Booking Platforms"]
+  end
+ subgraph FinanceCron["Finance Cron Jobs"]
+        CRON_EOM["Cron: Month-End<br><i>request CSV upload per platform</i>"]
+        CRON_M30["Cron: Modelo30 Ready<br><i>sends Modelo30 report + invoice info to fill</i>"]
+        CRON_INV["Cron: File Invoices<br><i>files completed invoices</i>"]
+        CRON_TAX["Cron: Quarterly<br><i>tourist tax upload table</i>"]
+        FIN_GAPS["Not yet: IRS report (year-end)<br>expense tracking<br>P&amp;L<br>income forecast"]
+  end
+ subgraph PropertyCron["Property Mgmt Cron Jobs"]
+        CRON_PROJ["Cron: 7 Days Before Month-End<br><i>send cleaning lady projected cleaning dates</i>"]
+        CRON_CONFIRM["Cron: 48h Before Checkout<br><i>draft checkout confirmation for cleaning lady</i>"]
+  end
+ subgraph SystemHealth["System Health"]
+        HEALTH["System Health Monitor<br><i>(needs design)<br>checks agents/tools/crons are up and running</i>"]
+  end
+    AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop</i>"] & CRON_PROJ & CRON_CONFIRM
+    FIN -. informs .-> ORCH
+    ORCH -- delegates --> PMA & CAMP & SOC & ADS & PR & DESIGN & SWE
+    DESIGN -- provides assets --> SOC & CAMP
+    SWE -- updates --> SITE(["Website"])
+    SWE -- reports completion --> TG
+    CAMP -- hands off content --> GCA
+    GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
+    PMA -- messages --> CLEAN(["Cleaning Lady"])
+    CRON_EOM -- delivers --> TG(["Telegram Gateway"])
+    CRON_EOM -. once CSVs uploaded .-> CRON_M30
+    CRON_M30 -- delivers --> TG
+    CRON_M30 -. once invoice info filled .-> CRON_INV
+    CRON_INV -- delivers --> TG
+    CRON_TAX -- delivers --> TG
+    FIN -.-> FIN_GAPS
+    CRON_PROJ -- delivers --> TG
+    CRON_CONFIRM -- delivers --> TG
+    TG -- forwards --> CLEAN
+    HUMAN_CONTENT -. raw material for .-> SOC
+    PMA -. not yet delegated .-> HUMAN_LAUNDRY & HUMAN_CHECKIN & HUMAN_PLATFORM_MGMT
+    GCA -. not yet delegated .-> HUMAN_PLATFORM_REPLY
+    CRM -. informs .-> ORCH
+    GCA -. logs communication .-> CRM
+    HEALTH -. monitors .-> ORCH
+    HEALTH -- alerts --> TG
+    ORCH -- reports --> TG
+
+    %% BUILT (green)
+    style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+
+    %% NOT YET BUILT (grey)
+    style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style FIN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style PMA fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style GCA fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CAMP fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style SOC fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style ADS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style PR fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style DESIGN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style SWE fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_EOM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_M30 fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_INV fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_TAX fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+
+    %% HUMAN WORK (red, permanent — not a build-status)
+    style HUMAN_CONTENT stroke:#D50000,stroke-width:2px
+    style HUMAN_LAUNDRY stroke:#D50000,stroke-width:2px
+    style HUMAN_CHECKIN stroke:#D50000,stroke-width:2px
+    style HUMAN_PLATFORM_REPLY stroke:#D50000,stroke-width:2px
+    style HUMAN_PLATFORM_MGMT stroke:#D50000,stroke-width:2px
+    style HumanWork stroke:#D50000,fill:#FFCDD2
+
+    %% TELEGRAM GATEWAY (pink, human-in-the-loop checkpoint)
+    style TG fill:#FFCDD2,stroke:#D50000
