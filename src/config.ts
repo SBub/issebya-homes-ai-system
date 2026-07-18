@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  SUPABASE_DB_URL: z.string().min(1),
+  DATABASE_URL: z.string().min(1),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_CHAT_ID: z.string().min(1),
   HEARTBEAT_STALE_AFTER_MINUTES: z.coerce.number().default(60 * 24 + 30),

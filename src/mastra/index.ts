@@ -5,7 +5,7 @@ import { createReporterAgent } from "./agents/reporter-agent.js";
 import { createHeartbeatWorkflow } from "./workflows/heartbeat-workflow.js";
 
 const settings = loadSettings();
-export const pool = createPool(settings.SUPABASE_DB_URL);
+export const pool = createPool(settings.DATABASE_URL);
 
 const reporterAgent = createReporterAgent(pool);
 export const heartbeatWorkflow = createHeartbeatWorkflow(pool, settings, reporterAgent);
