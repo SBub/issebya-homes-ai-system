@@ -6,10 +6,11 @@ Status: planning only, nothing executed yet.
 
 `issebya-homes-ai-system` becomes a Turborepo/yarn-workspaces monorepo. `apps/finance`
 gets rebuilt here as a new workspace (not a git-history-preserving move — a fresh
-implementation, since it needs to drop its `packages/shared` dependency anyway). It
-keeps running in `issebya-homes-website` in the meantime; only decommissioned there once
-the copy here is verified working. Scope is `apps/finance` only — not `apps/website` or
-`apps/crm-dashboard`.
+implementation, since it needs to drop its `packages/shared` dependency anyway),
+developed and run entirely against the local dev Supabase instance — no production
+access. The copy in `issebya-homes-website` keeps running against production
+unaffected; decommissioning it is a separate, later decision, out of scope here. Scope
+is `apps/finance` only — not `apps/website` or `apps/crm-dashboard`.
 
 ## Target structure
 
@@ -58,24 +59,23 @@ inlining that one factory (a few lines: `createClient(url, serviceRoleKey)`) dir
 into `apps/finance/src/lib/finance/supabase.ts` removes the cross-repo dependency
 entirely, with no loss of functionality.
 
-## A real operational detail: two different databases
+## Database: local only, no production for now
 
-Orch-A's own persistence (`orch_a_runs`, `orch_a_failed_deliveries`) currently points at
-a **local dev Supabase instance** (`supabase start`, `DATABASE_URL` in `.env`). The
-finance data (`finance_bookings`) lives in a **separate, real production Supabase
-project** — the same one `issebya-homes-website` uses. These are not the same database
-and must not be conflated. `apps/finance` here will need its own env var (e.g.
-`FINANCE_DATABASE_URL`, distinct from Orch-A's `DATABASE_URL`) pointing at that
-production project, plus its own `FINANCE_API_KEY`, `NOTION_API_KEY`,
-`NOTION_DATABASE_ID` — likely the *same* values currently configured for the
-`issebya-homes-website` deployment, since this is meant to be the same underlying data,
-just served from a new codebase.
+Explicit decision: we only work against the local dev Supabase instance
+(`supabase start`, the same one Orch-A's own `orch_a_runs`/`orch_a_failed_deliveries`
+already live in) — no connection to the real production Supabase project at all right
+now. `apps/finance` here uses the **same local `DATABASE_URL`** Orch-A already has; no
+separate `FINANCE_DATABASE_URL` needed.
 
-This means real production secrets (a service-role key with write access to
-`finance_bookings`, containing real guest names/payment data) will exist in this repo's
-`.env` once this is wired up. Given the earlier incident this session where real
-Telegram credentials briefly ended up in a tracked `.env.example`, worth being
-deliberate here: never let real values leave `.env` (gitignored) into any tracked file.
+Practical consequence: `finance_bookings` doesn't exist locally yet — it needs its own
+migration in this repo's `supabase/migrations/`, built with `booked_date` included from
+the start (not retrofitted, since we're not touching the production schema at all right
+now). Historical CSV backfill (Jan–Jul 2026, per earlier discussion) happens against
+this local table via the new upload page, giving real data to develop and test against
+without any production access.
+
+Pointing at production at all — and the eventual `issebya-homes-website` decommission —
+is a distinct, later decision, not scoped here.
 
 ## Parser fixes to apply during the port (not just a straight copy)
 
@@ -88,16 +88,14 @@ being fixed as part of the rewrite rather than ported as-is:
 - Booking.com: confirm `Original amount` vs `Final amount` against a real CSV row before
   finalizing which maps to `gross_room_income` (flagged, not yet resolved).
 
-## Schema change on the production table
+## Schema
 
-`finance_bookings` needs a new `booked_date` column (Airbnb's commission-invoice
-attribution field — see `modelo-30-filing.md`). This is a migration against the **real
-production database**, not a local dev one — needs a proper Supabase migration file, and
-care around backward compatibility (the old codebase in `issebya-homes-website` will
-still be running against this same table during the transition, and doesn't know about
-this new column — additive, nullable column, should be safe, but worth confirming
-nothing there does a `select *` that would break on an unexpected column, which is
-unlikely but cheap to check).
+`finance_bookings` gets created fresh in this repo's local `supabase/migrations/` —
+same shape as the original (see `apps/finance` source in `issebya-homes-website` for the
+exact columns/enums), plus `booked_date` included from day one (Airbnb's
+commission-invoice attribution field — see `modelo-30-filing.md`) rather than bolted on
+later, since there's no existing local data or another live consumer to stay compatible
+with.
 
 ## Migration steps, in order
 
@@ -107,30 +105,25 @@ unlikely but cheap to check).
    existing checks (`lint`, `typecheck`, `knip`, `test`) still pass after the reshuffle,
    and that `yarn run:heartbeat`/`yarn preview:digest`/`yarn dev` still work from the new
    location before moving on.
-2. Scaffold `apps/finance/` fresh (Next.js, matching the original's stack) with the 3
+2. Add the `finance_bookings` migration (with `booked_date`) to this repo's
+   `supabase/migrations/`.
+3. Scaffold `apps/finance/` fresh (Next.js, matching the original's stack) with the 3
    existing endpoints ported (with the parser fixes above) + the 2 new endpoints
    (`modelo30`, `invoices`) + the upload page — all already speced in
-   `docs/finance/plan.md`.
-3. Apply the `booked_date` migration to the production Supabase project.
-4. Wire env vars (`FINANCE_DATABASE_URL`, `FINANCE_API_KEY`, `NOTION_API_KEY`,
-   `NOTION_DATABASE_ID`) into `apps/finance/.env` here.
-5. Verify `apps/finance` here works correctly against real production data — test each
-   endpoint, a real CSV import (or a dry run against a copy), before anything in Orch-A
-   depends on it.
+   `docs/finance/plan.md`. Points at the same local `DATABASE_URL` as Orch-A.
+4. Backfill historical data (Jan–Jul 2026) via the upload page against the local table.
+5. Verify `apps/finance` here works correctly — test each endpoint against the real
+   backfilled local data — before anything in Orch-A depends on it.
 6. Point Orch-A's `src/tools/finance.ts` (and the new Modelo 30 / invoices / tourist-tax
-   workflows once built) at this repo's `apps/finance`, replacing the
-   `issebya-homes-website` URL.
-7. Decide a deployment target for `apps/finance` from this repo (new Vercel project, or
-   reuse somehow) — not yet decided.
-8. Only after all of the above is confirmed stable: go back to `issebya-homes-website`
-   and remove `apps/finance` there. Separate action, in a separate repo, not part of this
-   plan's execution.
+   workflows once built) at this repo's `apps/finance`.
+
+Production cutover and the `issebya-homes-website` decommission are explicitly **not**
+part of this plan — deferred to a later, separate decision.
 
 ## Open questions, not yet resolved
 
-- Deployment target for the new `apps/finance` (step 7).
-- Whether local dev needs read access to the real production `finance_bookings` table to
-  test against, or whether a safer staging approach (a copy of the data, or careful
-  read-only testing) is warranted given it holds real guest PII.
 - Exact turbo.json pipeline shape (task dependency graph) — deferred until apps/finance
   exists and there's a real second workspace to coordinate against.
+- When/how production ever gets connected, and what happens to the
+  `issebya-homes-website` copy at that point — explicitly deferred, not this plan's
+  concern.
