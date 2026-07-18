@@ -13,6 +13,7 @@
     "build": "mastra build",
     "start": "mastra start",
     "run:heartbeat": "tsx --env-file=.env src/run.ts",
+    "preview:digest": "tsx scripts/preview-digest.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",

@@ -3,7 +3,7 @@ import { createStep, createWorkflow } from "@mastra/core/workflows";
 import type pg from "pg";
 import { z } from "zod";
 import type { Settings } from "../../config.js";
-import { analysisSchema, renderReport, reportSchema } from "../../core/models.js";
+import { analysisSchema, detectAnomalies, renderReport, reportSchema } from "../../core/models.js";
 import {
   checkAvailabilityFreshness,
   checkFinanceFreshness,
@@ -44,13 +44,20 @@ function createDecideStep(reporterAgent: Agent) {
     inputSchema: analysisSchema,
     outputSchema: reportSchema,
     execute: async ({ inputData }) => {
-      const result = await reporterAgent.generate(
-        "Summarize the current state for the scheduled digest.",
-        { structuredOutput: { schema: digestSchema } },
-      );
+      const anomalies = detectAnomalies(inputData.availability, inputData.finance);
+      const prompt =
+        `Availability data:\n${JSON.stringify(inputData.availability, null, 2)}\n\n` +
+        `Finance data:\n${JSON.stringify(inputData.finance, null, 2)}\n\n` +
+        `Anomalies already detected: ${anomalies.length > 0 ? JSON.stringify(anomalies) : "none"}\n\n` +
+        "Write the one-sentence framing summary per your instructions.";
+      const result = await reporterAgent.generate(prompt, {
+        structuredOutput: { schema: digestSchema },
+      });
       return {
         summary: result.object.summary,
-        anomalies: result.object.anomalies,
+        availability: inputData.availability,
+        finance: inputData.finance,
+        anomalies,
         health: inputData.health,
       };
     },

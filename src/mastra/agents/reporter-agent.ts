@@ -1,8 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
-import { createAvailabilityTool } from "../tools/availability-tool.js";
-import { createFinanceTool } from "../tools/finance-tool.js";
 
 // createOpenRouter() with no `apiKey` option reads `OPENROUTER_API_KEY` from the
 // environment lazily (per-request), the same way the previous Mastra model-gateway
@@ -11,27 +9,32 @@ const openrouter = createOpenRouter();
 
 export const digestSchema = z.object({
   summary: z.string(),
-  anomalies: z.array(z.string()),
 });
 
 /**
- * Decide step (spec §Loop): no dispatch targets exist yet, so this agent's whole
- * job is to turn Availability + Finance into a short factual digest.
+ * Decide step (spec §Loop): no dispatch targets exist yet, so this agent's only
+ * job is a one-line framing sentence for the digest. It is NOT the source of
+ * truth for numbers or anomalies — those are computed deterministically in
+ * core/models.ts (detectAnomalies, renderReport) from the real Analyze output,
+ * and passed into this agent's prompt as the only data it's allowed to talk
+ * about. No tools: giving it its own fetch capability let it skip straight to
+ * inventing data instead of using what Analyze already fetched.
  */
 export function createReporterAgent() {
   return new Agent({
     id: "reporter-agent",
     name: "Orch-A Reporter",
-    description: "Formats current Availability and Finance state into a factual digest.",
+    description: "Writes a one-line framing sentence for the scheduled digest.",
     instructions:
-      "You are Orch-A's reporting step. Given the current Availability and Finance " +
-      "state, write a short factual summary and list any anomalies (e.g. unusually " +
-      "low occupancy, negative/zero revenue, stale-looking numbers). Do not " +
-      "speculate beyond the data. There is nothing to dispatch to yet — only report.",
+      "You will be given the exact current Availability and Finance data as JSON " +
+      "in the prompt, plus a list of anomalies already detected from that data. " +
+      "Write exactly one short, plain-English sentence framing the overall state " +
+      '(e.g. "Steady month, one room could use attention."). Rules: only refer ' +
+      "to properties that literally appear in the given JSON — never invent a " +
+      "property, number, or event that isn't there. Do not restate every number. " +
+      "Do not use markdown, HTML, or any formatting characters (no #, *, _, <, >) " +
+      "— plain prose only. If the given anomalies list is empty, do not imply " +
+      "there's a problem.",
     model: openrouter.chat("deepseek/deepseek-v4-pro"),
-    tools: {
-      getAvailability: createAvailabilityTool(),
-      getFinance: createFinanceTool(),
-    },
   });
 }

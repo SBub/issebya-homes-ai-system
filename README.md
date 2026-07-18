@@ -40,6 +40,8 @@ yarn dev              # starts everything needed for local dev: brings up
                        # dev server; Supabase's containers keep running in
                        # the background (docker ps) — `supabase stop` to stop them.
 yarn run:heartbeat    # runs the heartbeat workflow once (what the scheduler invokes)
+yarn preview:digest   # prints the Telegram digest text without calling the LLM
+                      # or sending anything — for checking copy/formatting changes
 ```
 
 ## Checks
