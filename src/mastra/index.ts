@@ -7,7 +7,7 @@ import { createHeartbeatWorkflow } from "./workflows/heartbeat-workflow.js";
 const settings = loadSettings();
 export const pool = createPool(settings.DATABASE_URL);
 
-const reporterAgent = createReporterAgent(pool);
+const reporterAgent = createReporterAgent();
 export const heartbeatWorkflow = createHeartbeatWorkflow(pool, settings, reporterAgent);
 
 export const mastra = new Mastra({

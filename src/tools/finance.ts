@@ -1,4 +1,3 @@
-import type pg from "pg";
 import { z } from "zod";
 
 export const financeSnapshotSchema = z.object({
@@ -10,17 +9,16 @@ export const financeSnapshotSchema = z.object({
 
 export type FinanceSnapshot = z.infer<typeof financeSnapshotSchema>;
 
-export async function fetchFinance(pool: pg.Pool): Promise<FinanceSnapshot[]> {
-  const { rows } = await pool.query(`
-    select property_id, revenue_month_to_date, outstanding_payouts, last_updated
-    from finance_bookings
-  `);
-  return rows.map((row) =>
-    financeSnapshotSchema.parse({
-      propertyId: row.property_id,
-      revenueMonthToDate: row.revenue_month_to_date,
-      outstandingPayouts: row.outstanding_payouts,
-      lastUpdated: row.last_updated,
-    }),
-  );
+// STUB: no Postgres wired up yet — returns fixed sample data instead of
+// querying `finance_bookings`. Swap back to a real query once DATABASE_URL
+// points at a reachable Postgres with that table.
+export async function fetchFinance(): Promise<FinanceSnapshot[]> {
+  return [
+    {
+      propertyId: "prop-1",
+      revenueMonthToDate: 4200,
+      outstandingPayouts: 850,
+      lastUpdated: new Date(),
+    },
+  ];
 }

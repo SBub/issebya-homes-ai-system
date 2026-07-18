@@ -1,6 +1,5 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type pg from "pg";
 import { z } from "zod";
 import { createAvailabilityTool } from "../tools/availability-tool.js";
 import { createFinanceTool } from "../tools/finance-tool.js";
@@ -19,7 +18,7 @@ export const digestSchema = z.object({
  * Decide step (spec §Loop): no dispatch targets exist yet, so this agent's whole
  * job is to turn Availability + Finance into a short factual digest.
  */
-export function createReporterAgent(pool: pg.Pool) {
+export function createReporterAgent() {
   return new Agent({
     id: "reporter-agent",
     name: "Orch-A Reporter",
@@ -31,8 +30,8 @@ export function createReporterAgent(pool: pg.Pool) {
       "speculate beyond the data. There is nothing to dispatch to yet — only report.",
     model: openrouter.chat("deepseek/deepseek-v4-pro"),
     tools: {
-      getAvailability: createAvailabilityTool(pool),
-      getFinance: createFinanceTool(pool),
+      getAvailability: createAvailabilityTool(),
+      getFinance: createFinanceTool(),
     },
   });
 }

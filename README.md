@@ -9,12 +9,21 @@ Read-only, no delegate agents wired yet.
 
 Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), TypeScript.
 
+> **Note:** `src/tools/availability.ts` and `src/tools/finance.ts` currently return
+> fixed stub data instead of querying Postgres — swap them back to real queries
+> once `booking_availability`/`finance_bookings` exist in the target DB. Persistence
+> (`src/storage/persistence.ts`: last-run timestamp, failed-delivery fallback) is
+> still real — it needs `orch_a_runs`/`orch_a_failed_deliveries` to exist, see below.
+
 ## Setup
 
 ```bash
 npm install
 npx lefthook install
-cp .env.example .env  # fill in DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY
+supabase start   # local Supabase CLI dev stack (Postgres + Studio); applies
+                 # supabase/migrations, including orch_a_runs/orch_a_failed_deliveries
+cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output),
+                       # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY
 ```
 
 ## Run

@@ -23,8 +23,8 @@ function createAnalyzeStep(pool: pg.Pool, settings: Settings) {
     outputSchema: analysisSchema,
     execute: async () => {
       const [availability, finance, lastRun] = await Promise.all([
-        fetchAvailability(pool),
-        fetchFinance(pool),
+        fetchAvailability(),
+        fetchFinance(),
         lastRunAt(pool),
       ]);
       const health = [
