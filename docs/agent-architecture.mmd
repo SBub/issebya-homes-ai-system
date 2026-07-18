@@ -16,7 +16,7 @@ config:
 %% 5. No pricing/yield lever — nothing adjusts price or pushes discounts on low-occupancy dates; Finance Tool is compliance-oriented (tax/invoices), not revenue management.
 flowchart TB
  subgraph Tools["Tools"]
-        AVAIL["Availability Tool<br><i>(rooms availabilities endpoint)</i>"]
+        AVAIL["Availability Tool<br><i>(GET issebya.com/api/availability?room=room1|room2)</i>"]
         FIN["Finance Tool"]
         CRM["CRM Tool<br><i>guest info + communication history; measures instrument effectiveness (needs design)</i>"]
   end
