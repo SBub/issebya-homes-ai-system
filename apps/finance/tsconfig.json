@@ -1,0 +1,42 @@
+{
+  // Deliberately NOT extending ../../tsconfig.base.json: that base config is
+  // tailored for orch-a, a plain Node/Mastra backend (module: "ES2022",
+  // noUncheckedIndexedAccess, no JSX). Next.js's own TS plugin requires a
+  // specific, opinionated set of options (allowJs, jsx, isolatedModules,
+  // resolveJsonModule, the "next" plugin entry, and its generated
+  // next-env.d.ts / .next/types includes) that don't compose cleanly with
+  // that base — so this mirrors the standalone shape Next.js itself
+  // generates, same as the reference implementation
+  // (issebya-homes-website/apps/finance/tsconfig.json).
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}
