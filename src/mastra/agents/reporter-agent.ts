@@ -14,7 +14,6 @@ export const digestSchema = z.object({
   summary: z.string(),
   anomalies: z.array(z.string()),
 });
-export type Digest = z.infer<typeof digestSchema>;
 
 /**
  * Decide step (spec §Loop): no dispatch targets exist yet, so this agent's whole

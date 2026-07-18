@@ -29,5 +29,6 @@ npm run dev              # Mastra dev server, for interactively inspecting/testi
 ```bash
 npm run lint
 npm run typecheck
+npm run knip
 npm run test
 ```

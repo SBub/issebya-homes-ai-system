@@ -26,5 +26,8 @@ jobs:
       - name: Type check (tsc)
         run: npx tsc --noEmit
 
+      - name: Dead code check (knip)
+        run: npx knip
+
       - name: Tests
         run: npx vitest run

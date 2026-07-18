@@ -8,6 +8,9 @@ pre-commit:
     typecheck:
       glob: "*.ts"
       run: npx tsc --noEmit
+    knip:
+      glob: "*.{ts,js,json}"
+      run: npx knip
 
 pre-push:
   commands:

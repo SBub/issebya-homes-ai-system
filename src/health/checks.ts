@@ -1,7 +1,7 @@
 import type { AvailabilitySnapshot } from "../tools/availability.js";
 import type { FinanceSnapshot } from "../tools/finance.js";
 
-export type HealthStatus = "ok" | "stale" | "missing";
+type HealthStatus = "ok" | "stale" | "missing";
 
 export interface HealthCheckResult {
   name: string;
