@@ -1875,6 +1875,48 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@turbo/darwin-64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/darwin-64@npm:2.10.5"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@turbo/darwin-arm64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/darwin-arm64@npm:2.10.5"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@turbo/linux-64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/linux-64@npm:2.10.5"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@turbo/linux-arm64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/linux-arm64@npm:2.10.5"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@turbo/windows-64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/windows-64@npm:2.10.5"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@turbo/windows-arm64@npm:2.10.5":
+  version: 2.10.5
+  resolution: "@turbo/windows-arm64@npm:2.10.5"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
 "@tybys/wasm-util@npm:^0.10.3":
   version: 0.10.3
   resolution: "@tybys/wasm-util@npm:0.10.3"
@@ -3924,6 +3966,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"issebya-homes-ai-system@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "issebya-homes-ai-system@workspace:."
+  dependencies:
+    "@biomejs/biome": "npm:^2.5.4"
+    knip: "npm:^6.27.0"
+    lefthook: "npm:^2.1.10"
+    turbo: "npm:^2.10.5"
+  languageName: unknown
+  linkType: soft
+
 "jiti@npm:^2.7.0":
   version: 2.7.0
   resolution: "jiti@npm:2.7.0"
@@ -5180,17 +5233,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"orch-a@workspace:.":
+"orch-a@workspace:apps/orch-a":
   version: 0.0.0-use.local
-  resolution: "orch-a@workspace:."
+  resolution: "orch-a@workspace:apps/orch-a"
   dependencies:
-    "@biomejs/biome": "npm:^2.5.4"
     "@mastra/core": "npm:^1.51.0"
     "@openrouter/ai-sdk-provider": "npm:^3.0.0"
     "@types/node": "npm:^26.1.1"
     "@types/pg": "npm:^8.20.0"
-    knip: "npm:^6.27.0"
-    lefthook: "npm:^2.1.10"
     mastra: "npm:^1.19.0"
     pg: "npm:^8.22.0"
     tsx: "npm:^4.23.1"
@@ -6697,6 +6747,35 @@ __metadata:
   bin:
     tsx: dist/cli.mjs
   checksum: 10c0/2f7393c09ffd161701342c87141c6158945967c0fdb6476f157a72e53554cbc983b8e516b441beafde27c9840d8ffd619802acce6b6be5e9e197d693e111a55d
+  languageName: node
+  linkType: hard
+
+"turbo@npm:^2.10.5":
+  version: 2.10.5
+  resolution: "turbo@npm:2.10.5"
+  dependencies:
+    "@turbo/darwin-64": "npm:2.10.5"
+    "@turbo/darwin-arm64": "npm:2.10.5"
+    "@turbo/linux-64": "npm:2.10.5"
+    "@turbo/linux-arm64": "npm:2.10.5"
+    "@turbo/windows-64": "npm:2.10.5"
+    "@turbo/windows-arm64": "npm:2.10.5"
+  dependenciesMeta:
+    "@turbo/darwin-64":
+      optional: true
+    "@turbo/darwin-arm64":
+      optional: true
+    "@turbo/linux-64":
+      optional: true
+    "@turbo/linux-arm64":
+      optional: true
+    "@turbo/windows-64":
+      optional: true
+    "@turbo/windows-arm64":
+      optional: true
+  bin:
+    turbo: bin/turbo
+  checksum: 10c0/081a8a4f4afe4026bde29ef9d0c98a1403437e9e72cd066973a82ec2f2482a1c6bd34973a997a23131520f37b9c063ba29a79583e18d0d70eeed8cd6baa1a003
   languageName: node
   linkType: hard
 

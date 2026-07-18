@@ -7,7 +7,7 @@ pre-commit:
       stage_fixed: true
     typecheck:
       glob: "*.ts"
-      run: yarn tsc --noEmit
+      run: yarn turbo run typecheck
     knip:
       glob: "*.{ts,js,json}"
       run: yarn knip
@@ -15,4 +15,4 @@ pre-commit:
 pre-push:
   commands:
     tests:
-      run: yarn vitest run
+      run: yarn turbo run test

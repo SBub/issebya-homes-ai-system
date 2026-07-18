@@ -1,7 +1,12 @@
-# issebya-homes-ai-system — Orch-A
+# issebya-homes-ai-system
 
-Orchestrator agent for the issebya.homes automation system. See `docs/spec-v0.1.0.md`
-for the full spec and `docs/agent-architecture.mmd` for the target-state org chart.
+Turborepo/yarn-workspaces monorepo for the issebya.homes automation system. See
+`docs/monorepo-migration-plan.md` for how this got structured this way.
+
+## apps/orch-a
+
+Orchestrator agent. See `docs/spec-v0.1.0.md` for the full spec and
+`docs/agent-architecture.mmd` for the target-state org chart.
 
 v0.1.0 scope: scheduled heartbeat that reads Availability + Finance state, runs
 three health checks, and reports a digest to Telegram. Read-only, no delegate
@@ -9,13 +14,15 @@ agents wired yet.
 
 Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), TypeScript.
 
-> **Note:** `src/tools/availability.ts` fetches real data — `GET
+> **Note:** `apps/orch-a/src/tools/availability.ts` fetches real data — `GET
 > issebya.com/api/availability?room=room1|room2` — for the 2 rooms currently live.
-> `src/tools/finance.ts` still returns fixed stub data instead of querying
+> `apps/orch-a/src/tools/finance.ts` still returns fixed stub data instead of querying
 > Postgres; swap it for a real query once `finance_bookings` exists in the
-> target DB. Persistence (`src/storage/persistence.ts`: last-run timestamp,
-> failed-delivery fallback) is still real Postgres — it needs
-> `orch_a_runs`/`orch_a_failed_deliveries` to exist, see below.
+> target DB (see `docs/finance/plan.md` and `docs/monorepo-migration-plan.md` —
+> `apps/finance` is planned but not built yet). Persistence
+> (`apps/orch-a/src/storage/persistence.ts`: last-run timestamp, failed-delivery
+> fallback) is still real Postgres — it needs `orch_a_runs`/`orch_a_failed_deliveries`
+> to exist, see below.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 
@@ -25,8 +32,9 @@ Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + 
 corepack enable   # one-time, if not already done — makes `yarn` resolve to the pinned version
 yarn install
 yarn lefthook install
-cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output, see below),
-                       # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY
+cp apps/orch-a/.env.example apps/orch-a/.env  # fill in DATABASE_URL (from `supabase
+                       # start` output, see below), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+                       # OPENROUTER_API_KEY
 ```
 
 ## Run

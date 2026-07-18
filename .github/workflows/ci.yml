@@ -26,11 +26,11 @@ jobs:
       - name: Biome check
         run: yarn biome check .
 
-      - name: Type check (tsc)
-        run: yarn tsc --noEmit
+      - name: Type check
+        run: yarn turbo run typecheck
 
       - name: Dead code check (knip)
         run: yarn knip
 
       - name: Tests
-        run: yarn vitest run
+        run: yarn turbo run test
