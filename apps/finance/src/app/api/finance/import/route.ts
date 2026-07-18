@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/finance/auth";
 import { pool } from "@/lib/finance/db";
+import { notionConfigured, syncBookings } from "@/lib/finance/notion";
 import { detectPlatform, parseAirbnb, parseBookingCom } from "@/lib/finance/parsers";
 import type { FinanceBooking } from "@/lib/finance/types";
 
@@ -116,9 +117,23 @@ export async function POST(request: NextRequest) {
     return acc;
   }, {});
 
+  // Postgres is the source of truth and already committed above — Notion
+  // sync is best-effort and never rolls back the DB write. Failures are
+  // reported, not swallowed, so a sync problem doesn't silently drift from
+  // what's actually stored.
+  let notionWarnings: string[] | undefined;
+  if (notionConfigured()) {
+    const syncResults = await syncBookings(allBookings);
+    const failures = syncResults.filter((r) => !r.ok);
+    if (failures.length > 0) {
+      notionWarnings = failures.map((f) => `${f.bookingId}: ${f.error}`);
+    }
+  }
+
   return NextResponse.json({
     bookings_upserted: upserted.length,
     by_platform: byPlatform,
     errors: errors.length > 0 ? errors : undefined,
+    notion_warnings: notionWarnings,
   });
 }
