@@ -44,7 +44,11 @@ flowchart TB
         CRON_M30["Cron: Modelo30 Ready<br><i>sends Modelo30 report + invoice info to fill</i>"]
         CRON_INV["Cron: File Invoices<br><i>files completed invoices</i>"]
         CRON_TAX["Cron: Quarterly<br><i>tourist tax upload table</i>"]
+        CRON_RFI["Cron: Annual (January)<br><i>RFI-21 re-issued by Airbnb; download, fill Section VI, resubmit. Booking.com equivalent: unknown. Out of scope for v0.1.0.</i>"]
         FIN_GAPS["Not yet: IRS report (year-end)<br>expense tracking<br>P&amp;L<br>income forecast"]
+  end
+ subgraph NotificationCenter["Notification Center"]
+        NOTIF["Notification Center<br><i>(needs design, out of scope for v0.1.0)<br>dispatches reminders; re-notifies until marked done</i>"]
   end
  subgraph PropertyCron["Property Mgmt Cron Jobs"]
         CRON_PROJ["Cron: 7 Days Before Month-End<br><i>send cleaning lady projected cleaning dates</i>"]
@@ -62,12 +66,14 @@ flowchart TB
     CAMP -- hands off content --> GCA
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
-    CRON_EOM -- delivers --> TG(["Telegram Gateway"])
+    CRON_EOM -- requests via --> NOTIF
     CRON_EOM -. once CSVs uploaded .-> CRON_M30
-    CRON_M30 -- delivers --> TG
+    CRON_M30 -- delivers --> TG(["Telegram Gateway"])
     CRON_M30 -. once invoice info filled .-> CRON_INV
     CRON_INV -- delivers --> TG
     CRON_TAX -- delivers --> TG
+    CRON_RFI -- requests via --> NOTIF
+    NOTIF -- delivers/re-notifies --> TG
     FIN -.-> FIN_GAPS
     CRON_PROJ -- delivers --> TG
     CRON_CONFIRM -- delivers --> TG
@@ -100,6 +106,8 @@ flowchart TB
     style CRON_M30 fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_INV fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_TAX fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style CRON_RFI fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style NOTIF fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
