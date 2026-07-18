@@ -3,16 +3,16 @@ pre-commit:
   commands:
     biome:
       glob: "*.{ts,js,json}"
-      run: npx biome check --write --no-errors-on-unmatched {staged_files}
+      run: yarn biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
     typecheck:
       glob: "*.ts"
-      run: npx tsc --noEmit
+      run: yarn tsc --noEmit
     knip:
       glob: "*.{ts,js,json}"
-      run: npx knip
+      run: yarn knip
 
 pre-push:
   commands:
     tests:
-      run: npx vitest run
+      run: yarn vitest run

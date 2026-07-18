@@ -15,11 +15,14 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 > (`src/storage/persistence.ts`: last-run timestamp, failed-delivery fallback) is
 > still real — it needs `orch_a_runs`/`orch_a_failed_deliveries` to exist, see below.
 
+Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
+
 ## Setup
 
 ```bash
-npm install
-npx lefthook install
+corepack enable   # one-time, if not already done — makes `yarn` resolve to the pinned version
+yarn install
+yarn lefthook install
 cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output, see below),
                        # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY
 ```
@@ -27,21 +30,21 @@ cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output, see 
 ## Run
 
 ```bash
-npm run dev              # starts everything needed for local dev: brings up
-                          # Supabase (Postgres + Studio, applying
-                          # supabase/migrations) if it isn't already running,
-                          # then the Mastra dev server (API + Playground/Studio
-                          # at http://localhost:4111). Ctrl+C stops the Mastra
-                          # dev server; Supabase's containers keep running in
-                          # the background (docker ps) — `supabase stop` to stop them.
-npm run run:heartbeat    # runs the heartbeat workflow once (what the scheduler invokes)
+yarn dev              # starts everything needed for local dev: brings up
+                       # Supabase (Postgres + Studio, applying
+                       # supabase/migrations) if it isn't already running,
+                       # then the Mastra dev server (API + Playground/Studio
+                       # at http://localhost:4111). Ctrl+C stops the Mastra
+                       # dev server; Supabase's containers keep running in
+                       # the background (docker ps) — `supabase stop` to stop them.
+yarn run:heartbeat    # runs the heartbeat workflow once (what the scheduler invokes)
 ```
 
 ## Checks
 
 ```bash
-npm run lint
-npm run typecheck
-npm run knip
-npm run test
+yarn lint
+yarn typecheck
+yarn knip
+yarn test
 ```

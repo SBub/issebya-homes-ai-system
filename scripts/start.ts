@@ -39,10 +39,10 @@ function main(): void {
   }
 
   console.log("\nStarting Mastra dev server (API + Playground/Studio)...\n");
-  // `npx mastra dev` spawns further child processes of its own (the mastra
+  // `yarn mastra dev` spawns further child processes of its own (the mastra
   // binary, then a bundled server process) — detached + killing the whole
   // process group is what makes sure none of them survive as orphans.
-  const mastraDev = spawn("npx", ["mastra", "dev"], { stdio: "inherit", detached: true });
+  const mastraDev = spawn("yarn", ["mastra", "dev"], { stdio: "inherit", detached: true });
 
   const shutdown = (signal: NodeJS.Signals) => {
     if (mastraDev.pid) {
