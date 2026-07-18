@@ -21,7 +21,7 @@ flowchart TB
         CRM["CRM Tool<br><i>guest info + communication history; measures instrument effectiveness (needs design)</i>"]
   end
  subgraph Agents["Agents"]
-        PMA["Property Mgmt Agent<br><i>(cleaning lady comms only)</i>"]
+        PMA["Property Mgmt Agent<br><i>standalone service for now — not delegated by Orch-A; receives cleaning lady comms, drafts a response, sends to Telegram Gateway</i>"]
         GCA["Guest-Comms Agent<br><i>(runs via WhatsApp; webpage contact, convo, posts campaigns/updates)</i>"]
         CAMP["Campaign Agent<br><i>(promotes right product to the right audience: product launch, brand awareness, promotional or seasonal, social media, email marketing)</i>"]
         SOC["Social Media Agent<br><i>(captions + alt text only; collect pool of ready b-roll to use)</i>"]
@@ -60,13 +60,15 @@ flowchart TB
   end
     AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop</i>"] & CRON_PROJ & CRON_CONFIRM
     FIN -. informs .-> ORCH
-    ORCH -- delegates --> PMA & CAMP & SOC & ADS & PR & DESIGN & SWE
+    ORCH -- delegates --> CAMP & SOC & ADS & PR & DESIGN & SWE
     DESIGN -- provides assets --> SOC & CAMP
     SWE -- updates --> SITE(["Website"])
     SWE -- reports completion --> TG
     CAMP -- hands off content --> GCA
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
+    CLEAN -- sends comms --> PMA
+    PMA -- drafts reply, sends --> TG
     CRON_EOM -- requests via --> NOTIF
     CRON_EOM -. once CSVs uploaded .-> CRON_M30
     CRON_M30 -- delivers --> TG(["Telegram Gateway"])
