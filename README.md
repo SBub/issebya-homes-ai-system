@@ -20,17 +20,21 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 ```bash
 npm install
 npx lefthook install
-supabase start   # local Supabase CLI dev stack (Postgres + Studio); applies
-                 # supabase/migrations, including orch_a_runs/orch_a_failed_deliveries
-cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output),
+cp .env.example .env  # fill in DATABASE_URL (from `supabase start` output, see below),
                        # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY
 ```
 
 ## Run
 
 ```bash
-npm run run:heartbeat   # runs the heartbeat workflow once (what the scheduler invokes)
-npm run dev              # Mastra dev server, for interactively inspecting/testing the agent
+npm run dev              # starts everything needed for local dev: brings up
+                          # Supabase (Postgres + Studio, applying
+                          # supabase/migrations) if it isn't already running,
+                          # then the Mastra dev server (API + Playground/Studio
+                          # at http://localhost:4111). Ctrl+C stops the Mastra
+                          # dev server; Supabase's containers keep running in
+                          # the background (docker ps) — `supabase stop` to stop them.
+npm run run:heartbeat    # runs the heartbeat workflow once (what the scheduler invokes)
 ```
 
 ## Checks
