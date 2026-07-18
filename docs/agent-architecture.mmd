@@ -21,7 +21,6 @@ flowchart TB
         CRM["CRM Tool<br><i>guest info + communication history; measures instrument effectiveness (needs design)</i>"]
   end
  subgraph Agents["Agents"]
-        PMA["Property Mgmt Agent<br><i>standalone service for now — not delegated by Orch-A; receives cleaning lady comms, drafts a response, sends to Telegram Gateway</i>"]
         GCA["Guest-Comms Agent<br><i>(runs via WhatsApp; webpage contact, convo, posts campaigns/updates)</i>"]
         CAMP["Campaign Agent<br><i>(promotes right product to the right audience: product launch, brand awareness, promotional or seasonal, social media, email marketing)</i>"]
         SOC["Social Media Agent<br><i>(captions + alt text only; collect pool of ready b-roll to use)</i>"]
@@ -51,9 +50,10 @@ flowchart TB
  subgraph NotificationCenter["Notification Center"]
         NOTIF["Notification Center<br><i>(needs design, out of scope for v0.1.0)<br>dispatches reminders; re-notifies until marked done</i>"]
   end
- subgraph PropertyCron["Property Mgmt Cron Jobs"]
+ subgraph PropertyCron["Property Mgmt System"]
         CRON_PROJ["Cron: 7 Days Before Month-End<br><i>send cleaning lady projected cleaning dates</i>"]
         CRON_CONFIRM["Cron: 48h Before Checkout<br><i>draft checkout confirmation for cleaning lady</i>"]
+        PMA["Webhook listener<br><i>not an LLM agent — receives cleaning lady messages via webhook, drafts a reply, sends to Telegram Gateway. Standalone, not delegated by Orch-A.</i>"]
   end
  subgraph SystemHealth["System Health"]
         HEALTH["System Health Monitor<br><i>(needs design)<br>checks agents/tools/crons are up and running</i>"]
@@ -67,7 +67,7 @@ flowchart TB
     CAMP -- hands off content --> GCA
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
-    CLEAN -- sends comms --> PMA
+    CLEAN -- webhook: incoming message --> PMA
     PMA -- drafts reply, sends --> TG
     CRON_EOM -- requests via --> NOTIF
     CRON_EOM -. once CSVs uploaded .-> CRON_M30
