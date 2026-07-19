@@ -29,11 +29,14 @@ export async function POST(request: NextRequest) {
     const post = await generateSocialPost(idea);
     const notionResult = await createSocialPost(idea, post);
 
-    const lines = ["Generated:", "", `Alt text: ${post.altText}`, "", `Caption: ${post.caption}`];
+    // Sent as separate messages, each with no label text, so Telegram's
+    // long-press -> Copy grabs exactly one field, paste-ready, with nothing
+    // to strip off first.
+    await sendMessage(post.altText);
+    await sendMessage(post.caption);
     if (!notionResult.ok) {
-      lines.push("", `⚠️ Notion sync failed: ${notionResult.error}`);
+      await sendMessage(`⚠️ Notion sync failed: ${notionResult.error}`);
     }
-    await sendMessage(lines.join("\n"));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[social-media] generation failed:", message);
