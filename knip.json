@@ -9,7 +9,9 @@
       "next": true
     },
     "apps/social-media": {
-      "next": true
+      "next": true,
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
     }
   },
   "ignoreBinaries": ["supabase"]
