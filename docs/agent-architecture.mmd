@@ -102,7 +102,7 @@ flowchart TB
     %% URL can be registered per bot token — needs either a dedicated
     %% bot/chat for this flow or a dispatch layer in front. Flagging before
     %% implementation, same open-question shape as PMA's own webhook setup.
-    TG -- incoming: post idea --> SOC_GEN
+    TG -- "/social &lt;idea&gt;" --> SOC_GEN
     SOC_GEN -- writes post --> NOTION_SOCIAL
     SOC_GEN -- replies with generated content --> TG
     UPLOAD -- syncs to Notion --> NOTION_FINANCE
