@@ -7,6 +7,9 @@
     },
     "apps/finance": {
       "next": true
+    },
+    "apps/social-media": {
+      "next": true
     }
   },
   "ignoreBinaries": ["supabase"]

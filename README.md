@@ -24,6 +24,21 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 > fallback) is still real Postgres — it needs `orch_a_runs`/`orch_a_failed_deliveries`
 > to exist, see below.
 
+## apps/social-media
+
+Social Media Post Generator (`SOC_GEN` in `docs/agent-architecture.mmd`). A single LLM
+call, not an autonomous agent, standalone from Orch-A (same shape as Property Mgmt's
+webhook listener): a Telegram `/social <idea>` command triggers `POST
+/api/telegram/webhook`, which generates alt text (~100 SEO/AEO keywords) and a caption
+(continues the idea, ends in 5 hashtags), writes the result to a Notion table, and
+replies on Telegram.
+
+> **Note:** the target Notion database doesn't exist as a real table yet — see
+> `.env.example`'s comment and `src/lib/social/notion.ts`'s placeholder property mapping.
+> The Telegram webhook also isn't registered anywhere yet (needs a public HTTPS URL —
+> same open deployment/hosting question as the rest of this repo) and the prompt/model
+> in `src/lib/social/generate.ts` is a starting point, not tuned.
+
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 
 ## Setup
@@ -35,6 +50,11 @@ yarn lefthook install
 cp apps/orch-a/.env.example apps/orch-a/.env  # fill in DATABASE_URL (from `supabase
                        # start` output, see below), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
                        # OPENROUTER_API_KEY
+cp apps/finance/.env.example apps/finance/.env  # fill in DATABASE_URL, FINANCE_API_KEY;
+                       # NOTION_*/TELEGRAM_* optional, see the file's own comments
+cp apps/social-media/.env.example apps/social-media/.env  # fill in TELEGRAM_BOT_TOKEN,
+                       # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, OPENROUTER_API_KEY;
+                       # NOTION_* optional, see the file's own comments
 ```
 
 ## Run
