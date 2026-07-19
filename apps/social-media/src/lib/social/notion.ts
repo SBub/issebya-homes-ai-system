@@ -26,14 +26,14 @@ function notionHeaders(apiKey: string): HeadersInit {
 }
 
 /**
- * PLACEHOLDER property mapping. Unlike apps/finance's Notion database, the
- * page shared for this (see .env.example) isn't a real database yet — these
- * column names/types are an assumption ("Post idea" as the title property),
- * not a confirmed schema. Confirm/adjust once the real table's columns exist.
+ * Maps to the real "Social Media Posts" Notion database (id in
+ * NOTION_DATABASE_ID): "Name" (title, Notion's default), "Alt text" and
+ * "Caption" (both rich_text) — confirmed against the actual schema, not a
+ * placeholder.
  */
 export function postToNotionProperties(idea: string, post: SocialPost): Record<string, unknown> {
   return {
-    "Post idea": { title: [{ text: { content: idea } }] },
+    Name: { title: [{ text: { content: idea } }] },
     "Alt text": { rich_text: [{ text: { content: post.altText } }] },
     Caption: { rich_text: [{ text: { content: post.caption } }] },
   };

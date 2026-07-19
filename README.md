@@ -33,11 +33,10 @@ webhook listener): a Telegram `/social <idea>` command triggers `POST
 (continues the idea, ends in 5 hashtags), writes the result to a Notion table, and
 replies on Telegram.
 
-> **Note:** the target Notion database doesn't exist as a real table yet — see
-> `.env.example`'s comment and `src/lib/social/notion.ts`'s placeholder property mapping.
-> The Telegram webhook also isn't registered anywhere yet (needs a public HTTPS URL —
-> same open deployment/hosting question as the rest of this repo) and the prompt/model
-> in `src/lib/social/generate.ts` is a starting point, not tuned.
+> **Note:** the Telegram webhook currently only has a real registered endpoint via a
+> temporary ngrok tunnel used for testing — no permanent public URL yet (same open
+> deployment/hosting question as the rest of this repo), and the prompt/model in
+> `src/lib/social/generate.ts` is being iterated against real output, not fully tuned.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 

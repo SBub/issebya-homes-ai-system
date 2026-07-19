@@ -14,7 +14,7 @@ const post: SocialPost = {
 describe("postToNotionProperties", () => {
   it("maps the idea, alt text, and caption", () => {
     const props = postToNotionProperties("Rooftop pool at sunset", post);
-    expect(props["Post idea"]).toEqual({
+    expect(props.Name).toEqual({
       title: [{ text: { content: "Rooftop pool at sunset" } }],
     });
     expect(props["Alt text"]).toEqual({ rich_text: [{ text: { content: post.altText } }] });
@@ -78,7 +78,7 @@ describe("createSocialPost", () => {
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body);
     expect(body.parent).toEqual({ database_id: "test-db-id" });
-    expect(body.properties["Post idea"]).toEqual({
+    expect(body.properties.Name).toEqual({
       title: [{ text: { content: "Rooftop pool at sunset" } }],
     });
   });
