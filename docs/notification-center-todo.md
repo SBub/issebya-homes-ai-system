@@ -8,6 +8,15 @@ lost or built ad hoc into whichever component happens to notice them first.
 
 ## Pending items
 
+- **Monthly CSV upload reminder (2nd of every month)** — nudge to upload last month's
+  Airbnb + Booking.com CSVs via `apps/finance`'s `/upload` page. Previously sketched as
+  its own `CRON_EOM` node in `agent-architecture.mmd`'s Finance System, but it's really
+  the same "keep telling the user until marked done" shape as the other items here, not
+  a finance-specific concern — moved here instead of living as a separate diagram node.
+  Code-wise: simple to build (one fixed Telegram message), but actually firing on a
+  schedule needs the still-undecided deployment/hosting question resolved first (same
+  open question as `spec-v0.1.0.md`'s "where this service runs").
+
 - **RFI-21 form (annual, January)** — Airbnb re-issues the Portugal–Ireland double-tax
   treaty form every January. Host downloads it, fills in Section VI (Portuguese tax ID
   and name), resubmits to Airbnb. Booking.com's equivalent, if any, is still unknown.

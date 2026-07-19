@@ -38,8 +38,7 @@ flowchart TB
         HUMAN_PLATFORM_REPLY["Answering Guests on Booking Platforms"]
         HUMAN_PLATFORM_MGMT["Managing Booking Platforms"]
   end
- subgraph FinanceCron["Finance Cron Jobs"]
-        CRON_EOM["Cron: Month-End<br><i>request CSV upload per platform</i>"]
+ subgraph FinanceCron["Finance System"]
         UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
         CRON_M30["Modelo30 Ready<br><i>event-driven — triggered right after upload, not a separate schedule; sends Modelo30 report</i>"]
         CRON_INV["File Invoices<br><i>event-driven — triggered right after upload; guest name + amount paid per reservation, as a CSV attachment</i>"]
@@ -70,7 +69,6 @@ flowchart TB
     PMA -- messages --> CLEAN(["Cleaning Lady"])
     CLEAN -- webhook: incoming message --> PMA
     PMA -- drafts reply, sends --> TG
-    CRON_EOM -- requests via --> NOTIF
     UPLOAD -- once CSVs uploaded --> CRON_M30 & CRON_INV
     CRON_M30 -- delivers --> TG(["Telegram Gateway"])
     CRON_INV -- delivers document --> TG
@@ -111,7 +109,6 @@ flowchart TB
     style PR fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style DESIGN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style SWE fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style CRON_EOM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_RFI fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_AIRBNB_PRICING fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style NOTIF fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
