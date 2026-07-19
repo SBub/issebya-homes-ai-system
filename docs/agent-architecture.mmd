@@ -41,12 +41,12 @@ flowchart TB
         CRON_M30["Modelo30 Ready<br><i>event-driven — triggered right after upload, not a separate schedule; sends Modelo30 report</i>"]
         CRON_INV["File Invoices<br><i>event-driven — triggered right after upload; guest name + amount paid per reservation, as a CSV attachment</i>"]
         CRON_TAX["Tourist Tax<br><i>event-driven — triggered when the uploaded month closes a quarter; CSV attachment</i>"]
-        CRON_RFI["Cron: Annual (January)<br><i>RFI-21 re-issued by Airbnb; download, fill Section VI, resubmit. Booking.com equivalent: unknown. Out of scope for v0.1.0.</i>"]
-        CRON_AIRBNB_PRICING["One-time: Oct 13 2026<br><i>Airbnb retires split-fee pricing for EU hosts — Modelo30/invoice fee formulas need updating (see docs/finance/modelo-30-filing.md, invoices-filing.md). Out of scope for v0.1.0.</i>"]
         FIN_GAPS["Not yet: IRS report (year-end)<br>expense tracking<br>P&amp;L<br>income forecast"]
   end
  subgraph NotificationCenter["Notification Center"]
         NOTIF["Notification Center<br><i>(needs design, out of scope for v0.1.0)<br>dispatches reminders; re-notifies until marked done</i>"]
+        CRON_RFI["Cron: Annual (January)<br><i>RFI-21 re-issued by Airbnb; download, fill Section VI, resubmit. Booking.com equivalent: unknown. Out of scope for v0.1.0.</i>"]
+        CRON_AIRBNB_PRICING["One-time: Oct 13 2026<br><i>Airbnb retires split-fee pricing for EU hosts — Modelo30/invoice fee formulas need updating (see docs/finance/modelo-30-filing.md, invoices-filing.md). Out of scope for v0.1.0.</i>"]
   end
  subgraph PropertyCron["Property Mgmt System"]
         CRON_PROJ["Cron: 7 Days Before Month-End<br><i>send cleaning lady projected cleaning dates</i>"]
