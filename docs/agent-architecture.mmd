@@ -95,11 +95,11 @@ flowchart TB
     HEALTH -- alerts --> TG
     ORCH -- reports --> TG
 
-    %% CAVEAT (not yet resolved): if SOC_GEN's inbound webhook shares the
-    %% same bot/chat TG already uses for outbound reports, only one webhook
-    %% URL can be registered per bot token — needs either a dedicated
-    %% bot/chat for this flow or a dispatch layer in front. Flagging before
-    %% implementation, same open-question shape as PMA's own webhook setup.
+    %% RESOLVED: the whole system (orch-a, finance, social-media) migrated to
+    %% one shared bot token that nothing else (e.g. Hermes) registers a
+    %% webhook against, so SOC_GEN's inbound webhook has that bot's webhook
+    %% slot exclusively — same TG bot as every other edge in this diagram,
+    %% confirmed via all three apps' .env files.
     TG -- "/social &lt;idea&gt;" --> SOC_GEN
     SOC_GEN -- writes post --> NOTION_SOCIAL
     SOC_GEN -- replies with generated content --> TG
@@ -111,6 +111,9 @@ flowchart TB
     style CRON_M30 fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style CRON_INV fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style CRON_TAX fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style SOC_GEN fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style NOTION_FINANCE fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style NOTION_SOCIAL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
 
     %% BUILT arrows (green) — connections actually wired + tested, not just
     %% "both endpoint nodes happen to be green." Mermaid only supports
@@ -125,16 +128,18 @@ flowchart TB
     %%  21 = UPLOAD -.-> CRON_TAX        (quarter-closing months only)
     %%  22 = CRON_TAX -- delivers document --> TG
     %%  38 = ORCH -- reports --> TG      (daily digest, tested extensively)
+    %%  39 = TG -- "/social <idea>" --> SOC_GEN   (real Telegram round trip confirmed)
+    %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the table)
+    %%  41 = SOC_GEN -- replies with generated content --> TG
     %%  42 = UPLOAD -- syncs to Notion --> NOTION_FINANCE (verified real Notion
     %%       pages created/updated field-by-field against a dedicated test DB)
-    linkStyle 0,17,18,19,20,21,22,38,42 stroke:#2E7D32,stroke-width:2px
+    linkStyle 0,17,18,19,20,21,22,38,39,40,41,42 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
     %% defaulting to black. 43 edges total (0-42); this is the complement
-    %% of the tested set. 39,40,41 = the SOC_GEN edges (Telegram in, Notion
-    %% write, Telegram reply).
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,39,40,41 stroke:#BDBDBD,stroke-width:1px
+    %% of the tested set.
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
@@ -154,7 +159,6 @@ flowchart TB
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style SOC_GEN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
 
     %% HUMAN WORK (red, permanent — not a build-status)
     style HUMAN_CONTENT stroke:#D50000,stroke-width:2px
