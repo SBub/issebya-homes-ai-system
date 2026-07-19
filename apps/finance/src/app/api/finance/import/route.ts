@@ -3,6 +3,19 @@ import { requireApiKey } from "@/lib/finance/auth";
 import { pool } from "@/lib/finance/db";
 import { notionConfigured, syncBookings } from "@/lib/finance/notion";
 import { detectPlatform, parseAirbnb, parseBookingCom } from "@/lib/finance/parsers";
+import {
+  buildImportMessage,
+  distinctModelo30Months,
+  invoicesToCsv,
+  isQuarterClosingMonth,
+  monthToQuarter,
+} from "@/lib/finance/reports";
+import {
+  getInvoicesReport,
+  getModelo30Summary,
+  getTouristTaxReport,
+} from "@/lib/finance/reports-db";
+import { sendDocument, sendMessage, telegramConfigured } from "@/lib/finance/telegram";
 import type { FinanceBooking } from "@/lib/finance/types";
 
 export const runtime = "nodejs";
@@ -130,10 +143,65 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Telegram delivery: announce which reports are now ready for every
+  // distinct (year, month) this upload batch touched, with the Modelo 30
+  // numbers and invoices CSV delivered directly (plus the tourist-tax CSV
+  // when that month closes a quarter). Best-effort like Notion sync above —
+  // Postgres already committed, so a delivery failure here is collected and
+  // reported, never thrown, and never rolls back anything.
+  let telegramWarnings: string[] | undefined;
+  if (telegramConfigured()) {
+    const months = distinctModelo30Months(allBookings);
+    const warnings: string[] = [];
+
+    for (const { year, month } of months) {
+      const label = `${year}-${String(month).padStart(2, "0")}`;
+      try {
+        const modelo30 = await getModelo30Summary(year, month);
+        const invoicesReport = await getInvoicesReport(year, month);
+        const invoicesCsv = invoicesToCsv(invoicesReport.reservations);
+        const invoicesFilename = `invoices-${label}.csv`;
+
+        let touristTax: { quarter: number; filename: string; csv: string } | undefined;
+        if (isQuarterClosingMonth(month)) {
+          const quarter = monthToQuarter(month);
+          const touristTaxReport = await getTouristTaxReport(quarter, year);
+          touristTax = { quarter, filename: touristTaxReport.filename, csv: touristTaxReport.csv };
+        }
+
+        const text = buildImportMessage({
+          year,
+          month,
+          modelo30,
+          invoicesFilename,
+          touristTax: touristTax && { quarter: touristTax.quarter, filename: touristTax.filename },
+        });
+
+        const messageResult = await sendMessage(text);
+        if (!messageResult.ok) warnings.push(`${label} message: ${messageResult.error}`);
+
+        const invoicesDocResult = await sendDocument(invoicesFilename, invoicesCsv);
+        if (!invoicesDocResult.ok) warnings.push(`${invoicesFilename}: ${invoicesDocResult.error}`);
+
+        if (touristTax) {
+          const touristTaxDocResult = await sendDocument(touristTax.filename, touristTax.csv);
+          if (!touristTaxDocResult.ok) {
+            warnings.push(`${touristTax.filename}: ${touristTaxDocResult.error}`);
+          }
+        }
+      } catch (err) {
+        warnings.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (warnings.length > 0) telegramWarnings = warnings;
+  }
+
   return NextResponse.json({
     bookings_upserted: upserted.length,
     by_platform: byPlatform,
     errors: errors.length > 0 ? errors : undefined,
     notion_warnings: notionWarnings,
+    telegram_warnings: telegramWarnings,
   });
 }

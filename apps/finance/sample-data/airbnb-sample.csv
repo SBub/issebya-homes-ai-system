@@ -1,0 +1,5 @@
+Confirmation code,Status,Guest name,Contact,# of adults,# of children,# of infants,Start date,End date,# of nights,Booked,Listing,Earnings
+SAMPLE-AIR-0001,Confirmed,Jane Doe,,2,0,0,2026-09-05,2026-09-08,3,2026-08-01,Private Room 1 near Adraga Beach,193.58
+SAMPLE-AIR-0002,Confirmed,Mark Silva,,1,0,0,2026-09-12,2026-09-16,4,2026-08-03,Private Room 2 near Adraga Beach,258.11
+SAMPLE-AIR-0003,Confirmed,Anna Kowalski,,2,1,0,2026-09-20,2026-09-22,2,2026-08-10,Private Room 1 near Adraga Beach,105.94
+SAMPLE-AIR-0004,Cancelled by guest,Tom Reyes,,2,0,0,2026-09-25,2026-09-27,2,2026-08-12,Private Room 2 near Adraga Beach,120.00
