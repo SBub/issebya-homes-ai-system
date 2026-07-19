@@ -58,6 +58,9 @@ flowchart TB
  subgraph SystemHealth["System Health"]
         HEALTH["System Health Monitor<br><i>(needs design)<br>checks agents/tools/crons are up and running</i>"]
   end
+ subgraph SocialMediaSystem["Social Media System"]
+        SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via Telegram, generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, replies via Telegram. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
+  end
     AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop</i>"] & CRON_PROJ & CRON_CONFIRM
     FIN -. informs .-> ORCH
     ORCH -- delegates --> CAMP & SOC & ADS & PR & DESIGN & SWE
@@ -90,6 +93,15 @@ flowchart TB
     HEALTH -- alerts --> TG
     ORCH -- reports --> TG
 
+    %% CAVEAT (not yet resolved): if SOC_GEN's inbound webhook shares the
+    %% same bot/chat TG already uses for outbound reports, only one webhook
+    %% URL can be registered per bot token — needs either a dedicated
+    %% bot/chat for this flow or a dispatch layer in front. Flagging before
+    %% implementation, same open-question shape as PMA's own webhook setup.
+    TG -- incoming: post idea --> SOC_GEN
+    SOC_GEN -- writes post --> NOTION_SOCIAL(["Notion: Social Media Posts"])
+    SOC_GEN -- replies with generated content --> TG
+
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style UPLOAD fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -114,9 +126,10 @@ flowchart TB
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 42 edges total (0-41); this is the complement
-    %% of the tested set.
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40 stroke:#BDBDBD,stroke-width:1px
+    %% defaulting to black. 45 edges total (0-44); this is the complement
+    %% of the tested set. 42,43,44 = the new SOC_GEN edges (Telegram in,
+    %% Notion write, Telegram reply) added with the Social Media System.
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,42,43,44 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
@@ -137,6 +150,7 @@ flowchart TB
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style SOC_GEN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
 
     %% HUMAN WORK (red, permanent — not a build-status)
     style HUMAN_CONTENT stroke:#D50000,stroke-width:2px
