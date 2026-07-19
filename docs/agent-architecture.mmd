@@ -39,7 +39,6 @@ flowchart TB
         HUMAN_PLATFORM_MGMT["Managing Booking Platforms"]
   end
  subgraph FinanceCron["Finance System"]
-        UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
         CRON_M30["Modelo30 Ready<br><i>event-driven — triggered right after upload, not a separate schedule; sends Modelo30 report</i>"]
         CRON_INV["File Invoices<br><i>event-driven — triggered right after upload; guest name + amount paid per reservation, as a CSV attachment</i>"]
         CRON_TAX["Tourist Tax<br><i>event-driven — triggered when the uploaded month closes a quarter; CSV attachment</i>"]
@@ -60,6 +59,11 @@ flowchart TB
   end
  subgraph SocialMediaSystem["Social Media System"]
         SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via Telegram, generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, replies via Telegram. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
+  end
+ subgraph DocumentInterfaces["Document Interfaces (human-facing pages, not chat)"]
+        UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
+        NOTION_FINANCE(["Notion: Finance Bookings"])
+        NOTION_SOCIAL(["Notion: Social Media Posts"])
   end
     AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop</i>"] & CRON_PROJ & CRON_CONFIRM
     FIN -. informs .-> ORCH
@@ -99,9 +103,9 @@ flowchart TB
     %% bot/chat for this flow or a dispatch layer in front. Flagging before
     %% implementation, same open-question shape as PMA's own webhook setup.
     TG -- incoming: post idea --> SOC_GEN
-    SOC_GEN -- writes post --> NOTION_SOCIAL(["Notion: Social Media Posts"])
+    SOC_GEN -- writes post --> NOTION_SOCIAL
     SOC_GEN -- replies with generated content --> TG
-    UPLOAD -- syncs to Notion --> NOTION_FINANCE(["Notion: Finance Bookings"])
+    UPLOAD -- syncs to Notion --> NOTION_FINANCE
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
