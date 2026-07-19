@@ -9,4 +9,10 @@ describe("buildPrompt", () => {
     const prompt = buildPrompt("Rooftop pool at sunset");
     expect(prompt).toContain("Rooftop pool at sunset");
   });
+
+  it("embeds the seed vocabulary context alongside the idea", () => {
+    const prompt = buildPrompt("Rooftop pool at sunset");
+    expect(prompt).toContain("Almoçageme");
+    expect(prompt).toContain("issebya.homes");
+  });
 });
