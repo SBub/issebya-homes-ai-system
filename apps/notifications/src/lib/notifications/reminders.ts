@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { type Reminder, reminderSchema } from "./types.js";
+import { type Reminder, reminderSchema } from "@/lib/notifications/types";
 
 const DUE_QUERY = `
   select key, message, due_at, last_message_id
