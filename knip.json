@@ -12,6 +12,11 @@
       "next": true,
       "entry": ["tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    "apps/telegram-router": {
+      "next": true,
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
     }
   },
   "ignoreBinaries": ["supabase"]

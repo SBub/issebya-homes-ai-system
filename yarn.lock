@@ -7229,6 +7229,22 @@ __metadata:
   languageName: node
   linkType: hard
 
+"telegram-router@workspace:apps/telegram-router":
+  version: 0.0.0-use.local
+  resolution: "telegram-router@workspace:apps/telegram-router"
+  dependencies:
+    "@types/node": "npm:^26.1.1"
+    "@types/react": "npm:^19"
+    "@types/react-dom": "npm:^19"
+    next: "npm:^16.2.1"
+    react: "npm:^19.2.3"
+    react-dom: "npm:^19.2.3"
+    typescript: "npm:^5.9.3"
+    vitest: "npm:^4.1.10"
+    zod: "npm:^4.4.3"
+  languageName: unknown
+  linkType: soft
+
 "text-decoder@npm:^1.1.0":
   version: 1.2.7
   resolution: "text-decoder@npm:1.2.7"

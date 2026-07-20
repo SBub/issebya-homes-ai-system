@@ -23,10 +23,10 @@ export interface TelegramUpdate {
 }
 
 /**
- * Telegram delivery is optional and best-effort, same contract as
- * apps/finance's telegram.ts: a missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
- * (or any delivery failure) no-ops / returns a result object rather than
- * throwing.
+ * Telegram delivery is optional and best-effort, same contract as every
+ * other app's telegram.ts in this repo: a missing TELEGRAM_BOT_TOKEN/
+ * TELEGRAM_CHAT_ID (or any delivery failure) no-ops / returns a result
+ * object rather than throwing.
  */
 export function telegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);

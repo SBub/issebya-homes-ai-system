@@ -24,19 +24,31 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 > fallback) is still real Postgres — it needs `orch_a_runs`/`orch_a_failed_deliveries`
 > to exist, see below.
 
+## apps/telegram-router
+
+Owns all Telegram I/O for the whole system — the one webhook a bot token allows,
+registered once. Parses incoming commands/callbacks and dispatches to plain logic APIs
+in other apps, which have zero Telegram awareness of their own. Currently just `/social
+<idea>` -> `apps/social-media`'s `/api/generate`; sends the result back to Telegram
+itself. Framed as a "calling system" for now — the plan is for it to grow into an actual
+orchestrator (deciding which agent to delegate to) once the systems it calls become real
+agents, same analyze -> decide -> dispatch -> report shape as Orch-A, just reactive
+instead of scheduled.
+
+> **Note:** only registered against a temporary ngrok tunnel used for testing — no
+> permanent public URL yet (same open deployment/hosting question as the rest of this
+> repo).
+
 ## apps/social-media
 
 Social Media Post Generator (`SOC_GEN` in `docs/agent-architecture.mmd`). A single LLM
-call, not an autonomous agent, standalone from Orch-A (same shape as Property Mgmt's
-webhook listener): a Telegram `/social <idea>` command triggers `POST
-/api/telegram/webhook`, which generates alt text (~100 SEO/AEO keywords) and a caption
-(continues the idea, ends in 5 hashtags), writes the result to a Notion table, and
-replies on Telegram.
+call, not an autonomous agent: `POST /api/generate` takes a post idea, generates alt
+text (~100 SEO/AEO keywords) and a caption (continues the idea, ends in 5 hashtags), and
+writes the result to a Notion table. No Telegram knowledge at all — `apps/telegram-router`
+is the only caller, authenticated via `SOCIAL_MEDIA_API_KEY`.
 
-> **Note:** the Telegram webhook currently only has a real registered endpoint via a
-> temporary ngrok tunnel used for testing — no permanent public URL yet (same open
-> deployment/hosting question as the rest of this repo), and the prompt/model in
-> `src/lib/social/generate.ts` is being iterated against real output, not fully tuned.
+> **Note:** the prompt/model in `src/lib/social/generate.ts` is being iterated against
+> real output, not fully tuned.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 
@@ -51,9 +63,11 @@ cp apps/orch-a/.env.example apps/orch-a/.env  # fill in DATABASE_URL (from `supa
                        # OPENROUTER_API_KEY
 cp apps/finance/.env.example apps/finance/.env  # fill in DATABASE_URL, FINANCE_API_KEY;
                        # NOTION_*/TELEGRAM_* optional, see the file's own comments
-cp apps/social-media/.env.example apps/social-media/.env  # fill in TELEGRAM_BOT_TOKEN,
-                       # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, OPENROUTER_API_KEY;
-                       # NOTION_* optional, see the file's own comments
+cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA_API_KEY,
+                       # OPENROUTER_API_KEY; NOTION_* optional, see the file's own comments
+cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
+                       # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
+                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's)
 ```
 
 ## Run

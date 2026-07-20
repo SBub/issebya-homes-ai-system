@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseSocialCommand } from "../../../src/lib/social/command.js";
-import type { TelegramUpdate } from "../../../src/lib/social/telegram.js";
+import { parseSocialCommand } from "../../../src/lib/telegram/command.js";
+import type { TelegramUpdate } from "../../../src/lib/telegram/telegram.js";
 
 function update(text: string | undefined, chatId = 992297288): TelegramUpdate {
   return {
