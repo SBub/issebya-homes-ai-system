@@ -200,7 +200,7 @@ cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.e
                        # README section for what's still not live without it),
                        # TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL once a real Twilio account
                        # exists, TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
-                       # uses), NEXT_PUBLIC_SITE_URL, CRM_DASHBOARD_ORIGIN
+                       # uses), NEXT_PUBLIC_SITE_URL
 ```
 
 ## Run

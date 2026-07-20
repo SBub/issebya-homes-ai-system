@@ -207,10 +207,12 @@ export async function performEscalation(params: {
     phone_number: phone,
     reason,
   });
-  const dashboardOrigin = process.env.CRM_DASHBOARD_ORIGIN ?? "http://localhost:3002";
-  const dashboardUrl = `${dashboardOrigin}/?phone=${encodeURIComponent(phone)}`;
+  // "View conversation: <dashboard link>" removed deliberately — there is no
+  // apps/crm-dashboard in this repo yet (that only exists in
+  // issebya-homes-website, not ported), so the link was dead. Come back to
+  // this once a real dashboard exists here — see project_gca_migration.md.
   await sendTelegramNotification(
-    `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}\nView conversation: ${dashboardUrl}`,
+    `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`,
   );
 }
 
