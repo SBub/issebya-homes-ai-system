@@ -57,7 +57,10 @@ flowchart TB
         HEALTH["System Health Monitor<br><i>(needs design)<br>checks agents/tools/crons are up and running</i>"]
   end
  subgraph SocialMediaSystem["Social Media System"]
-        SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via Telegram, generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, replies via Telegram. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
+        SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via an HTTP call from the Telegram Router (POST /api/generate), generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, and returns the result. No Telegram awareness at all. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
+  end
+ subgraph TelegramRouterSystem["Telegram Router"]
+        ROUTER["Telegram Router<br><i>owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps. For now a simple calling system — designed to grow into an actual orchestrator once the systems it dispatches to become full agents, same analyze -&gt; decide -&gt; dispatch -&gt; report shape as Orch-A, just reactive instead of scheduled.</i>"]
   end
  subgraph DocumentInterfaces["Document Interfaces (human-facing pages, not chat)"]
         UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
@@ -95,17 +98,19 @@ flowchart TB
     HEALTH -- alerts --> TG
     ORCH -- reports --> TG
 
-    %% RESOLVED: the whole system (orch-a, finance, social-media) migrated to
-    %% one shared bot token that nothing else (e.g. Hermes) registers a
-    %% webhook against, so SOC_GEN's inbound webhook has that bot's webhook
-    %% slot exclusively — same TG bot as every other edge in this diagram,
-    %% confirmed via all three apps' .env files.
-    TG -- "/social &lt;idea&gt;" --> SOC_GEN
+    %% RESOLVED: the whole system (orch-a, finance, social-media,
+    %% telegram-router) migrated to one shared bot token that nothing else
+    %% (e.g. Hermes) registers a webhook against, so ROUTER's inbound webhook
+    %% — the only one in the whole system now that it owns all Telegram I/O
+    %% — has that bot's webhook slot exclusively. Same TG bot as every other
+    %% edge in this diagram, confirmed via all four apps' .env files.
+    TG -- "/social &lt;idea&gt;" --> ROUTER
     SOC_GEN -- writes post --> NOTION_SOCIAL
-    SOC_GEN -- replies with generated content --> TG
+    ROUTER -- replies with generated content --> TG
     UPLOAD -- syncs to Notion --> NOTION_FINANCE
     CRON_EOM -- requests via --> NOTIF
     SITE -- "WhatsApp link" --> GCA
+    ROUTER -- calls /api/generate --> SOC_GEN
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -131,20 +136,25 @@ flowchart TB
     %%  21 = UPLOAD -.-> CRON_TAX        (quarter-closing months only)
     %%  22 = CRON_TAX -- delivers document --> TG
     %%  38 = ORCH -- reports --> TG      (daily digest, tested extensively)
-    %%  39 = TG -- "/social <idea>" --> SOC_GEN   (real Telegram round trip confirmed)
-    %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the table)
-    %%  41 = SOC_GEN -- replies with generated content --> TG
+    %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the
+    %%       table — verified fresh via a direct curl call to /api/generate,
+    %%       code path unchanged by the router split)
     %%  42 = UPLOAD -- syncs to Notion --> NOTION_FINANCE (verified real Notion
     %%       pages created/updated field-by-field against a dedicated test DB)
     %%  44 = SITE -- "WhatsApp link" --> GCA (GCA already built and live in
     %%       issebya-homes-website; this is its real, current entry point)
-    linkStyle 0,17,18,19,20,21,22,38,39,40,41,42,44 stroke:#2E7D32,stroke-width:2px
+    linkStyle 0,17,18,19,20,21,22,38,40,42,44 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 45 edges total (0-44); this is the complement
-    %% of the tested set. 43 = CRON_EOM -> NOTIF.
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,43 stroke:#BDBDBD,stroke-width:1px
+    %% defaulting to black. 46 edges total (0-45); this is the complement
+    %% of the tested set. 43 = CRON_EOM -> NOTIF. 39 = TG -> ROUTER and
+    %% 41 = ROUTER -> TG (router split just landed; no genuine end-to-end
+    %% Telegram round trip through the new code path has been tested yet,
+    %% even though the underlying bot mechanism is unchanged). 45 = ROUTER
+    %% -- calls /api/generate --> SOC_GEN (brand new edge, never exercised
+    %% via a real Telegram-triggered request).
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,39,41,43,45 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
@@ -164,6 +174,7 @@ flowchart TB
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style ROUTER fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
 
     %% HUMAN WORK (red, permanent — not a build-status)
     style HUMAN_CONTENT stroke:#D50000,stroke-width:2px
