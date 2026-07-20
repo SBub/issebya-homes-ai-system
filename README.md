@@ -26,7 +26,15 @@ Mastra workflow object in-process) was the cleaner fit for a plain `GET` read.
 
 `yarn run:heartbeat` runs the same loop locally and prints the rendered digest — useful
 for manual testing, but `apps/telegram-router`'s `POST /api/cron/check-digest` (calling
-`GET /digest` on its own schedule) is the real trigger now.
+`GET /digest` on its own schedule) is the real trigger now. A second custom route,
+`GET /health-check` (`src/mastra/routes/health-check.ts`, same `X-API-Key`/`ORCH_A_API_KEY`
+auth), is a shallow liveness check — confirms the process answers at all, a different
+concern from this app's own data-freshness checks below. Not `/health`: Mastra's own
+deployer ships a built-in, unauthenticated `GET /health` that silently shadows any custom
+route registered at that exact path (confirmed empirically — a custom handler there never
+even ran). Called by `apps/telegram-router`'s `check-health`/`/heartbeat` (see that
+section) — not to be confused with this app's own "heartbeat workflow" naming above, which
+predates and is unrelated to that command.
 
 > **Note:** `apps/orch-a/src/tools/availability.ts` fetches real data — `GET
 > issebya.com/api/availability?room=room1|room2` — for the 2 rooms currently live.
@@ -51,12 +59,27 @@ in other apps, which have zero Telegram awareness of their own:
 - `/digest` -> sends Orch-A's digest right now, on demand — same underlying send
   (`src/lib/telegram/digest.ts`'s `sendDigestNow`) as `check-digest` below, just
   triggered by the user instead of a schedule
+- `/heartbeat` -> runs a real system liveness check right now, on demand — same
+  underlying check (`src/lib/telegram/health-monitor.ts`'s `runCheckHealth`) as
+  `check-health` below, just triggered by the user instead of a schedule. Distinct from
+  `/digest`: this asks "is everything up," it doesn't send Orch-A's report. Always
+  replies with every service's current status (unlike the scheduled path, a manual
+  trigger means "tell me now," not just "page me if something changed")
 - a reminder's "✅ Done" button (`callback_query`) -> `apps/notifications`' ack endpoint
 - `POST /api/cron/check-reminders` (`X-Cron-Secret`-protected) -> pulls due reminders
   from `apps/notifications` and sends each one itself, button attached
 - `POST /api/cron/check-digest` (`X-Cron-Secret`-protected) -> pulls the rendered digest
   from `apps/orch-a`'s `GET /digest` and sends it itself, with `parse_mode: "HTML"`
   preserved (Orch-A's digest is pre-rendered with `<b>`/`<i>` tags)
+- `POST /api/cron/check-health` (`X-Cron-Secret`-protected) -> checks each service's
+  liveness (`apps/notifications`, `apps/finance`, `apps/social-media`, `apps/orch-a` —
+  this router excludes itself, see `src/lib/telegram/health-targets.ts`'s doc comment)
+  and alerts via Telegram only on a healthy↔unhealthy transition, persisted in the
+  `health_check_state` table (Postgres) so restarts don't lose known-bad state and cause
+  a spurious re-alert or a silently-swallowed recovery message. A different concern from
+  Orch-A's own data-freshness checks (`apps/orch-a/src/health/checks.ts`) — this is
+  "is the process up," not "is the data stale"; neither substitutes for the other. This
+  is the `HEALTH` node in `docs/agent-architecture.mmd`, previously marked "needs design."
 
 Sends every reply/reminder/digest itself, retrying once on failure (matching Orch-A's
 old `sendReport` retry behavior). If a send still fails after the retry, it's recorded

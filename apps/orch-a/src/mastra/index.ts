@@ -3,6 +3,7 @@ import { loadSettings } from "../config.js";
 import { createPool } from "../db.js";
 import { createReporterAgent } from "./agents/reporter-agent.js";
 import { digestRoute } from "./routes/digest.js";
+import { healthRoute } from "./routes/health-check.js";
 import { createHeartbeatWorkflow } from "./workflows/heartbeat-workflow.js";
 
 const settings = loadSettings();
@@ -15,6 +16,6 @@ export const mastra = new Mastra({
   agents: { reporterAgent },
   workflows: { heartbeatWorkflow },
   server: {
-    apiRoutes: [digestRoute],
+    apiRoutes: [digestRoute, healthRoute],
   },
 });

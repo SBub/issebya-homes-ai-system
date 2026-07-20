@@ -1,9 +1,16 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import { isCronListCommand, isDigestCommand, parseSocialCommand } from "@/lib/telegram/command";
+import {
+  isCronListCommand,
+  isDigestCommand,
+  isHeartbeatCommand,
+  parseSocialCommand,
+} from "@/lib/telegram/command";
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { sendDigestNow } from "@/lib/telegram/digest";
+import { runCheckHealth } from "@/lib/telegram/health-monitor";
+import { renderHealthSummary } from "@/lib/telegram/health-targets";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
@@ -84,6 +91,18 @@ export async function POST(request: NextRequest) {
     // just triggered by the user instead of a cron call.
     const result = await sendDigestNow();
     return NextResponse.json(result);
+  }
+
+  if (update && isHeartbeatCommand(update)) {
+    // On-demand system liveness check, independent of check-health's
+    // eventual schedule — same underlying check (persisted state +
+    // alert-on-transition included), just triggered by the user instead of a
+    // cron call. Unlike /digest, always replies with the current status of
+    // every service directly, since a manual trigger means "tell me now,"
+    // not just "page me if something changed."
+    const results = await runCheckHealth();
+    await sendMessage(renderHealthSummary(results));
+    return NextResponse.json({ results });
   }
 
   const idea = update ? parseSocialCommand(update) : null;

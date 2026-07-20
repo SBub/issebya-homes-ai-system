@@ -3,15 +3,15 @@
 // apps/social-media/vitest.config.ts's comment for the full story).
 import { pool } from "@/lib/telegram/db";
 
-export type DeliverySource = "digest" | "social" | "reminder";
+export type DeliverySource = "digest" | "social" | "reminder" | "health";
 
 /**
  * Durable last-resort record for a Telegram send that failed even after a
- * retry — shared across all three send paths (`/social` replies, reminder
- * sends, and the digest) now that this router is the sole Telegram sender
- * for the whole system. Not the primary alerting mechanism (that's a
- * separate observability conversation) — just makes sure a failed send isn't
- * silently lost.
+ * retry — shared across all four send paths (`/social` replies, reminder
+ * sends, the digest, and health alerts) now that this router is the sole
+ * Telegram sender for the whole system. Not the primary alerting mechanism
+ * (that's a separate observability conversation) — just makes sure a failed
+ * send isn't silently lost.
  *
  * Replaces apps/orch-a's old `orch_a_failed_deliveries` table (left in place
  * for its historical data, no longer written to — see
