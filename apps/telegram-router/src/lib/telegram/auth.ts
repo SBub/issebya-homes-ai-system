@@ -19,3 +19,21 @@ export function verifyWebhookSecret(request: NextRequest): NextResponse | null {
   }
   return null;
 }
+
+/**
+ * Checked against a shared X-Cron-Secret header — protects
+ * /api/cron/check-reminders from being triggered by anything except
+ * whatever real scheduler ends up calling it (still an open question, same
+ * as the rest of this repo's deployment/hosting question).
+ */
+export function verifyCronSecret(request: NextRequest): NextResponse | null {
+  const expected = process.env.CRON_SECRET;
+  if (!expected) {
+    console.error("[telegram-router] CRON_SECRET is not set — all cron requests will be rejected");
+  }
+  const provided = request.headers.get("X-Cron-Secret");
+  if (!expected || provided !== expected) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return null;
+}

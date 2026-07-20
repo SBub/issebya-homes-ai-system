@@ -17,6 +17,10 @@
       "next": true,
       "entry": ["tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    "apps/notifications": {
+      "next": true,
+      "project": ["src/**/*.ts"]
     }
   },
   "ignoreBinaries": ["supabase"]

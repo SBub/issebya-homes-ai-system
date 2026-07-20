@@ -28,16 +28,38 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 
 Owns all Telegram I/O for the whole system — the one webhook a bot token allows,
 registered once. Parses incoming commands/callbacks and dispatches to plain logic APIs
-in other apps, which have zero Telegram awareness of their own. Currently just `/social
-<idea>` -> `apps/social-media`'s `/api/generate`; sends the result back to Telegram
-itself. Framed as a "calling system" for now — the plan is for it to grow into an actual
-orchestrator (deciding which agent to delegate to) once the systems it calls become real
-agents, same analyze -> decide -> dispatch -> report shape as Orch-A, just reactive
-instead of scheduled.
+in other apps, which have zero Telegram awareness of their own:
+- `/social <idea>` -> `apps/social-media`'s `/api/generate`
+- a reminder's "✅ Done" button (`callback_query`) -> `apps/notifications`' ack endpoint
+- `POST /api/cron/check-reminders` (`X-Cron-Secret`-protected) -> pulls due reminders
+  from `apps/notifications` and sends each one itself, button attached
+
+Sends every reply/reminder itself. Framed as a "calling system" for now — the plan is for
+it to grow into an actual orchestrator (deciding which agent to delegate to) once the
+systems it calls become real agents, same analyze -> decide -> dispatch -> report shape
+as Orch-A, just reactive instead of scheduled.
 
 > **Note:** only registered against a temporary ngrok tunnel used for testing — no
 > permanent public URL yet (same open deployment/hosting question as the rest of this
-> repo).
+> repo). Nothing calls `/api/cron/check-reminders` on a real schedule yet either — same
+> unresolved question Orch-A's own heartbeat already has.
+
+## apps/notifications
+
+Notification Center (`NOTIF` in `docs/agent-architecture.mmd`) — reminders that nag until
+acknowledged. Plain logic API, no Telegram knowledge: `GET /api/reminders/due` (what's
+due to send/re-send right now), `POST /api/reminders/:key/ack` (stop nagging, called from
+the Done button), `POST /api/reminders/:key/sent` (record delivery, paces re-nags).
+`apps/telegram-router` is the only caller, authenticated via `NOTIFICATIONS_API_KEY`.
+
+A reminder's `reminders` table row (`supabase/migrations/20260720120000_create_reminders.sql`)
+is due when unacknowledged, past `due_at`, and either never sent or `renotify_every` has
+elapsed since `last_sent_at` (null `renotify_every` = send once, never repeat). Seeded
+with the three known candidates from `docs/notification-center-todo.md`.
+
+> **Note:** recurrence (e.g. auto-creating next month's CSV-upload reminder once this
+> month's is acknowledged) isn't automated — a documented gap, not an oversight. New
+> cycles need a new seed row for now.
 
 ## apps/social-media
 
@@ -67,7 +89,11 @@ cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA
                        # OPENROUTER_API_KEY; NOTION_* optional, see the file's own comments
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
-                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's)
+                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
+                       # NOTIFICATIONS_API_URL, NOTIFICATIONS_API_KEY (same value as
+                       # apps/notifications'), CRON_SECRET
+cp apps/notifications/.env.example apps/notifications/.env  # fill in DATABASE_URL,
+                       # NOTIFICATIONS_API_KEY (same value as apps/telegram-router's)
 ```
 
 ## Run
