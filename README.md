@@ -8,11 +8,25 @@ Turborepo/yarn-workspaces monorepo for the issebya.homes automation system. See
 Orchestrator agent. See `docs/spec-v0.1.0.md` for the full spec and
 `docs/agent-architecture.mmd` for the target-state org chart.
 
-v0.1.0 scope: scheduled heartbeat that reads Availability + Finance state, runs
-three health checks, and reports a digest to Telegram. Read-only, no delegate
-agents wired yet.
+v0.1.0 scope: Analyze -> Decide -> Dispatch (no-op) -> Report loop that reads
+Availability + Finance state and runs three health checks. Read-only, no delegate
+agents wired yet. No Telegram knowledge of its own — matching the
+apps/social-media/apps/notifications precedent, `apps/telegram-router` owns sending
+the digest; this app just computes it and hands back ready-to-send text.
 
 Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), TypeScript.
+The heartbeat workflow is exposed as `GET /digest` — a custom Mastra API route
+(`registerApiRoute`, see `src/mastra/routes/digest.ts`), `X-API-Key`-protected via
+`ORCH_A_API_KEY`. It's reachable at `/digest`, not `/api/digest`: Mastra reserves its
+own `/api` prefix for the built-in `/api/agents`, `/api/workflows`, etc. routes that
+`mastra dev`/`mastra build`+`mastra start` auto-generate, and rejects custom routes
+registered under it. Those auto-generated workflow-execution routes are POST-only and
+wrap the result in a run-lifecycle envelope, so a custom route (still running the same
+Mastra workflow object in-process) was the cleaner fit for a plain `GET` read.
+
+`yarn run:heartbeat` runs the same loop locally and prints the rendered digest — useful
+for manual testing, but `apps/telegram-router`'s `POST /api/cron/check-digest` (calling
+`GET /digest` on its own schedule) is the real trigger now.
 
 > **Note:** `apps/orch-a/src/tools/availability.ts` fetches real data — `GET
 > issebya.com/api/availability?room=room1|room2` — for the 2 rooms currently live.
@@ -20,9 +34,11 @@ Built with [Mastra](https://mastra.ai) (`Agent` + typed tools + `Workflow`), Typ
 > Postgres; swap it for a real query once `finance_bookings` exists in the
 > target DB (see `docs/finance/plan.md` and `docs/monorepo-migration-plan.md` —
 > `apps/finance` is planned but not built yet). Persistence
-> (`apps/orch-a/src/storage/persistence.ts`: last-run timestamp, failed-delivery
-> fallback) is still real Postgres — it needs `orch_a_runs`/`orch_a_failed_deliveries`
-> to exist, see below.
+> (`apps/orch-a/src/storage/persistence.ts`: last-run timestamp, the dead-man's-switch
+> `orch_a_runs` table) is still real Postgres. The old `orch_a_failed_deliveries` table
+> is left in place (historical data) but nothing writes to it anymore — that durable
+> fallback is now `apps/telegram-router`'s shared `telegram_delivery_failures` table,
+> see below.
 
 ## apps/telegram-router
 
@@ -33,16 +49,28 @@ in other apps, which have zero Telegram awareness of their own:
 - a reminder's "✅ Done" button (`callback_query`) -> `apps/notifications`' ack endpoint
 - `POST /api/cron/check-reminders` (`X-Cron-Secret`-protected) -> pulls due reminders
   from `apps/notifications` and sends each one itself, button attached
+- `POST /api/cron/check-digest` (`X-Cron-Secret`-protected) -> pulls the rendered digest
+  from `apps/orch-a`'s `GET /digest` and sends it itself, with `parse_mode: "HTML"`
+  preserved (Orch-A's digest is pre-rendered with `<b>`/`<i>` tags)
 
-Sends every reply/reminder itself. Framed as a "calling system" for now — the plan is for
-it to grow into an actual orchestrator (deciding which agent to delegate to) once the
-systems it calls become real agents, same analyze -> decide -> dispatch -> report shape
-as Orch-A, just reactive instead of scheduled.
+Sends every reply/reminder/digest itself, retrying once on failure (matching Orch-A's
+old `sendReport` retry behavior). If a send still fails after the retry, it's recorded
+in a shared `telegram_delivery_failures` table (Postgres, `DATABASE_URL` — same local
+Supabase instance every other app uses) instead of just logged — a durable last-resort
+record, not the primary alerting mechanism, shared across all three send paths
+(`source` column: `'social'` | `'reminder'` | `'digest'`). This replaces Orch-A's old
+per-app `orch_a_failed_deliveries` table now that this router is the sole Telegram
+sender for the whole system.
+
+Framed as a "calling system" for now — the plan is for it to grow into an actual
+orchestrator (deciding which agent to delegate to) once the systems it calls become
+real agents, same analyze -> decide -> dispatch -> report shape as Orch-A, just
+reactive instead of scheduled.
 
 > **Note:** only registered against a temporary ngrok tunnel used for testing — no
 > permanent public URL yet (same open deployment/hosting question as the rest of this
-> repo). Nothing calls `/api/cron/check-reminders` on a real schedule yet either — same
-> unresolved question Orch-A's own heartbeat already has.
+> repo). Nothing calls `/api/cron/check-reminders` or `/api/cron/check-digest` on a
+> real schedule yet either — same unresolved question Orch-A's own heartbeat already had.
 
 ## apps/notifications
 
@@ -81,8 +109,8 @@ corepack enable   # one-time, if not already done — makes `yarn` resolve to th
 yarn install
 yarn lefthook install
 cp apps/orch-a/.env.example apps/orch-a/.env  # fill in DATABASE_URL (from `supabase
-                       # start` output, see below), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-                       # OPENROUTER_API_KEY
+                       # start` output, see below), ORCH_A_API_KEY (same value as
+                       # apps/telegram-router's), OPENROUTER_API_KEY
 cp apps/finance/.env.example apps/finance/.env  # fill in DATABASE_URL, FINANCE_API_KEY;
                        # NOTION_*/TELEGRAM_* optional, see the file's own comments
 cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA_API_KEY,
@@ -91,7 +119,10 @@ cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGR
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
                        # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
                        # NOTIFICATIONS_API_URL, NOTIFICATIONS_API_KEY (same value as
-                       # apps/notifications'), CRON_SECRET
+                       # apps/notifications'), ORCH_A_API_URL, ORCH_A_API_KEY (same value
+                       # as apps/orch-a's), CRON_SECRET, DATABASE_URL (from `supabase
+                       # start` output, see below — for the shared
+                       # telegram_delivery_failures fallback table)
 cp apps/notifications/.env.example apps/notifications/.env  # fill in DATABASE_URL,
                        # NOTIFICATIONS_API_KEY (same value as apps/telegram-router's)
 ```

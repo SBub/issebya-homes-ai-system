@@ -26,6 +26,12 @@ export const reportSchema = z.object({
 });
 export type Report = z.infer<typeof reportSchema>;
 
+/** What the digest endpoint (GET /digest) actually returns: the Report fields
+ * plus the fully-rendered Telegram-HTML text, ready for apps/telegram-router
+ * to send as-is (parse_mode: "HTML") without doing any formatting itself. */
+export const digestResultSchema = reportSchema.extend({ text: z.string() });
+export type DigestResult = z.infer<typeof digestResultSchema>;
+
 const LOW_OCCUPANCY_THRESHOLD = 0.3;
 
 /** Deterministic — never trust an LLM to both invent and flag the numbers it's summarizing. */

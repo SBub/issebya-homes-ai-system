@@ -3,14 +3,19 @@ import { createStep, createWorkflow } from "@mastra/core/workflows";
 import type pg from "pg";
 import { z } from "zod";
 import type { Settings } from "../../config.js";
-import { analysisSchema, detectAnomalies, renderReport, reportSchema } from "../../core/models.js";
+import {
+  analysisSchema,
+  detectAnomalies,
+  digestResultSchema,
+  renderReport,
+  reportSchema,
+} from "../../core/models.js";
 import {
   checkAvailabilityFreshness,
   checkFinanceFreshness,
   checkHeartbeat,
 } from "../../health/checks.js";
-import { sendReport } from "../../reporting/telegram.js";
-import { lastRunAt, recordFailedDelivery, recordRun } from "../../storage/persistence.js";
+import { lastRunAt, recordRun } from "../../storage/persistence.js";
 import { fetchAvailability } from "../../tools/availability.js";
 import { fetchFinance } from "../../tools/finance.js";
 import { digestSchema } from "../agents/reporter-agent.js";
@@ -74,20 +79,21 @@ const dispatchStep = createStep({
   execute: async ({ inputData }) => inputData,
 });
 
-function createReportStep(pool: pg.Pool, settings: Settings) {
+function createReportStep(pool: pg.Pool) {
   return createStep({
     id: "report",
-    description: "Send the digest to Telegram, confirm delivery, fall back to a durable record.",
+    description:
+      "Render the digest to Telegram-HTML text and record this as Orch-A's heartbeat. " +
+      "No Telegram side effects here — apps/telegram-router sends the result itself " +
+      "(GET /digest is a plain read, matching the apps/social-media/apps/notifications precedent).",
     inputSchema: reportSchema,
-    outputSchema: z.object({ delivered: z.boolean() }),
+    outputSchema: digestResultSchema,
     execute: async ({ inputData }) => {
       const text = renderReport(inputData);
-      const result = await sendReport(settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_ID, text);
-      if (!result.delivered) {
-        await recordFailedDelivery(pool, text, result.detail);
-      }
+      // A successful digest render *is* the heartbeat now — apps/telegram-router's
+      // cron calling GET /digest on a schedule is what used to be "a run happened".
       await recordRun(pool, new Date());
-      return { delivered: result.delivered };
+      return { ...inputData, text };
     },
   });
 }
@@ -97,11 +103,11 @@ export function createHeartbeatWorkflow(pool: pg.Pool, settings: Settings, repor
     id: "heartbeat-workflow",
     description: "Orch-A core loop: Analyze -> Decide -> Dispatch (no-op) -> Report.",
     inputSchema: z.object({}),
-    outputSchema: z.object({ delivered: z.boolean() }),
+    outputSchema: digestResultSchema,
   })
     .then(createAnalyzeStep(pool, settings))
     .then(createDecideStep(reporterAgent))
     .then(dispatchStep)
-    .then(createReportStep(pool, settings))
+    .then(createReportStep(pool))
     .commit();
 }

@@ -3,6 +3,7 @@ import {
   answerCallbackQuery,
   editMessageText,
   sendMessage,
+  sendWithRetry,
   telegramConfigured,
 } from "../../../src/lib/telegram/telegram.js";
 
@@ -105,6 +106,54 @@ describe("sendMessage", () => {
     expect(JSON.parse(init.body).reply_markup).toEqual({
       inline_keyboard: [[{ text: "✅ Done", callback_data: "done:rfi_21_2027" }]],
     });
+  });
+
+  it("does not include parse_mode when not given", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    await sendMessage("hello");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ chat_id: "test-chat-id", text: "hello" });
+  });
+
+  it("includes parse_mode: HTML when given — needed for Orch-A's pre-rendered digest", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    await sendMessage("<b>Digest</b>", undefined, { parseMode: "HTML" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      chat_id: "test-chat-id",
+      text: "<b>Digest</b>",
+      parse_mode: "HTML",
+    });
+  });
+});
+
+describe("sendWithRetry", () => {
+  it("returns the first result without retrying when it succeeds", async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true });
+    const result = await sendWithRetry(send);
+    expect(result).toEqual({ ok: true });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries exactly once on failure and returns the second result", async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: "first attempt failed" })
+      .mockResolvedValueOnce({ ok: true });
+    const result = await sendWithRetry(send);
+    expect(result).toEqual({ ok: true });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the second result's failure if the retry also fails, without throwing", async () => {
+    const send = vi.fn().mockResolvedValue({ ok: false, error: "still failing" });
+    const result = await sendWithRetry(send);
+    expect(result).toEqual({ ok: false, error: "still failing" });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });
 

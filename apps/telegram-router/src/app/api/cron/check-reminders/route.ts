@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/telegram/auth";
+import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { getDueReminders, recordReminderSent } from "@/lib/telegram/notifications";
-import { sendMessage } from "@/lib/telegram/telegram";
+import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
 
 /**
  * Whatever real scheduler ends up existing (still an open deployment
@@ -20,12 +21,13 @@ export async function POST(request: NextRequest) {
   const results: Array<{ key: string; sent: boolean; error?: string }> = [];
 
   for (const reminder of due) {
+    const text = `🔔 ${reminder.message}`;
     try {
-      const sendResult = await sendMessage(`🔔 ${reminder.message}`, {
-        text: "✅ Done",
-        callbackData: `done:${reminder.key}`,
-      });
+      const sendResult = await sendWithRetry(() =>
+        sendMessage(text, { text: "✅ Done", callbackData: `done:${reminder.key}` }),
+      );
       if (!sendResult.ok) {
+        await recordDeliveryFailure("reminder", text, sendResult.error ?? "sendMessage failed");
         throw new Error(sendResult.error ?? "sendMessage failed");
       }
       if (sendResult.messageId) {

@@ -1,12 +1,26 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
 import { parseSocialCommand } from "@/lib/telegram/command";
+import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
-import { answerCallbackQuery, editMessageText, sendMessage } from "@/lib/telegram/telegram";
+import {
+  answerCallbackQuery,
+  editMessageText,
+  sendMessage,
+  sendWithRetry,
+} from "@/lib/telegram/telegram";
 
 const DONE_PREFIX = "done:";
+
+/** Sends a social reply with the shared retry-once + durable-fallback behavior. */
+async function sendSocialReply(text: string): Promise<void> {
+  const result = await sendWithRetry(() => sendMessage(text));
+  if (!result.ok) {
+    await recordDeliveryFailure("social", text, result.error ?? "sendMessage failed");
+  }
+}
 
 async function handleCallbackQuery(
   callbackQuery: NonNullable<TelegramUpdate["callback_query"]>,
@@ -60,15 +74,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await generateSocialPost(idea);
-    await sendMessage(result.altText);
-    await sendMessage(result.caption);
+    await sendSocialReply(result.altText);
+    await sendSocialReply(result.caption);
     if (!result.notionOk) {
-      await sendMessage(`⚠️ Notion sync failed: ${result.notionError}`);
+      await sendSocialReply(`⚠️ Notion sync failed: ${result.notionError}`);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[telegram-router] generation failed:", message);
-    await sendMessage(`⚠️ Couldn't generate a social post: ${message}`);
+    await sendSocialReply(`⚠️ Couldn't generate a social post: ${message}`);
   }
 
   return NextResponse.json({ ok: true });
