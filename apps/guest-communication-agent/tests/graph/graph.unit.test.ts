@@ -1,0 +1,310 @@
+import { AIMessage, HumanMessage, type ToolMessage } from "@langchain/core/messages";
+import { END } from "@langchain/langgraph";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { graph } from "@/graph/graph.js";
+import { agentNode } from "@/graph/nodes/agent.js";
+import { loadContext } from "@/graph/nodes/load-context.js";
+import { getPricingNode, routeToToolNodes } from "@/graph/nodes/tool-nodes.js";
+import type { GraphStateType } from "@/graph/state.js";
+
+// Ported from issebya-homes-website's
+// apps/guest-communication-agent/src/graph/__tests__/graph.unit.test.ts —
+// moved into this repo's tests/ convention (co-located __tests__ there vs.
+// a top-level tests/ dir mirroring src/ here, matching every other app in
+// this monorepo). Mock import path updated: that repo's
+// @issebya/shared/supabase -> this repo's @/lib/supabase.
+vi.mock("@/lib/supabase.js", () => ({
+  createAdminClient: vi.fn(),
+  // ../tools/search-property.ts also imports createClient() at module load
+  // time (its own singleton pattern) — must be present here too or the
+  // whole mock factory replaces the module with just createAdminClient,
+  // leaving createClient undefined and crashing that unrelated import chain.
+  createClient: vi.fn(),
+}));
+vi.mock("@/lib/telegram.js", () => ({
+  sendTelegramNotification: vi.fn(),
+}));
+
+const { createAdminClient } = await import("@/lib/supabase.js");
+const { sendTelegramNotification } = await import("@/lib/telegram.js");
+
+// Proves the graph compiles and is structurally sound — nodes/edges wired
+// as expected — without invoking .invoke() against a real LLM. No
+// OPENROUTER_API_KEY/LANGSMITH_API_KEY needed: ChatOpenAI's constructor
+// doesn't validate credentials until an actual network call is made.
+describe("whatsapp-agent graph", () => {
+  it("compiles with the expected nodes", () => {
+    const nodeNames = Object.keys(graph.nodes);
+
+    expect(nodeNames).toContain("load_context");
+    expect(nodeNames).toContain("agent");
+    // Node id is 'getPricingStub' (not 'getPricing') — the tool still
+    // returns hardcoded PRICING data, so its node is named to make that
+    // obvious. The tool's own LLM-facing name is unaffected.
+    expect(nodeNames).toContain("getPricingStub");
+    expect(nodeNames).toContain("checkAvailability");
+    expect(nodeNames).toContain("sendBookingLink");
+    expect(nodeNames).toContain("answerPropertyQuestion");
+    expect(nodeNames).toContain("escalateToOwner");
+    // No more single collapsed "tools" box — each tool is its own node.
+    expect(nodeNames).not.toContain("tools");
+  });
+
+  it("exposes a runnable graph representation", () => {
+    const drawable = graph.getGraph();
+    const nodeIds = Object.keys(drawable.nodes);
+
+    expect(nodeIds).toContain("__start__");
+    expect(nodeIds).toContain("load_context");
+    expect(nodeIds).toContain("agent");
+    expect(nodeIds).toContain("getPricingStub");
+    expect(nodeIds).toContain("checkAvailability");
+    expect(nodeIds).toContain("sendBookingLink");
+    expect(nodeIds).toContain("answerPropertyQuestion");
+    expect(nodeIds).toContain("escalateToOwner");
+    expect(nodeIds).toContain("__end__");
+  });
+});
+
+// Direct, no-LLM tests for the routing/dispatch plumbing introduced to
+// replace the single shared ToolNode + toolsCondition.
+describe("routeToToolNodes", () => {
+  it("routes a getPricing tool_call to the getPricingStub node", () => {
+    const state = {
+      messages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{ name: "getPricing", args: { room: "room1" }, id: "call_1" }],
+        }),
+      ],
+    } as GraphStateType;
+
+    expect(routeToToolNodes(state)).toEqual(["getPricingStub"]);
+  });
+
+  it("fans out to every matching tool node when the model calls more than one tool", () => {
+    const state = {
+      messages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            { name: "getPricing", args: { room: "room1" }, id: "call_1" },
+            {
+              name: "checkAvailability",
+              args: {
+                room: "room1",
+                checkIn: "2026-08-01",
+                checkOut: "2026-08-05",
+              },
+              id: "call_2",
+            },
+          ],
+        }),
+      ],
+    } as GraphStateType;
+
+    expect(routeToToolNodes(state)).toEqual(["getPricingStub", "checkAvailability"]);
+  });
+
+  it("routes to END when there are no tool calls", () => {
+    const state = {
+      messages: [new AIMessage({ content: "Hello!" })],
+    } as GraphStateType;
+
+    expect(routeToToolNodes(state)).toBe(END);
+  });
+});
+
+describe("getPricingNode", () => {
+  it("invokes the getPricing tool and returns a ToolMessage for the matching tool_call", async () => {
+    const state = {
+      messages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{ name: "getPricing", args: { room: "room1" }, id: "call_123" }],
+        }),
+      ],
+    } as GraphStateType;
+
+    const result = await getPricingNode(state, {});
+
+    expect(result.messages).toHaveLength(1);
+    const [message] = result.messages as ToolMessage[];
+    expect(message.tool_call_id).toBe("call_123");
+    expect(message.name).toBe("getPricing");
+    const content = JSON.parse(message.content as string);
+    expect(content).toMatchObject({ room: "room1", currency: "EUR" });
+  });
+
+  it("throws when invoked with no matching tool_call on the last AIMessage", async () => {
+    const state = {
+      messages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{ name: "checkAvailability", args: {}, id: "call_1" }],
+        }),
+      ],
+    } as GraphStateType;
+
+    await expect(getPricingNode(state, {})).rejects.toThrow(/no matching tool_call/);
+  });
+});
+
+describe("agentNode step cap", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("escalates instead of calling the model once MAX_AGENT_STEPS is exceeded", async () => {
+    const mockInsert = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(createAdminClient).mockReturnValue({
+      from: vi.fn().mockReturnValue({ insert: mockInsert }),
+    } as unknown as ReturnType<typeof createAdminClient>);
+
+    const state = {
+      messages: [new AIMessage({ content: "looping..." })],
+      conversationId: "convo-cap-test",
+      phone: "+351900000099",
+      guestContext: null,
+      // Already at the cap — this call would be round 9, one past MAX_AGENT_STEPS (8).
+      stepCount: 8,
+    } as GraphStateType;
+
+    // No OPENROUTER_API_KEY/LANGSMITH_API_KEY is set in the test environment —
+    // if this branch fell through to a real model/prompt-pull call, the
+    // promise would reject with a network/auth error instead of resolving
+    // cleanly, so a clean resolution here is itself proof the model was
+    // never invoked.
+    const result = await agentNode(state, {});
+
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation_id: "convo-cap-test",
+        phone_number: "+351900000099",
+      }),
+    );
+    expect(sendTelegramNotification).toHaveBeenCalledTimes(1);
+
+    expect(result.messages).toHaveLength(1);
+    const [message] = result.messages as AIMessage[];
+    expect(message.tool_calls ?? []).toHaveLength(0);
+    expect(message.content).toMatch(/owner/i);
+    expect(result.stepCount).toBe(9);
+  });
+});
+
+// Builds a fake createAdminClient() return value that answers
+// .from('whatsapp_messages')...limit() and .from('guest_contacts')...
+// maybeSingle() with fixed data, the same two queries loadContext's
+// Promise.all issues (loadRecentMessages/loadGuestInfo in @/lib/db.ts).
+function makeSupabaseMock(options: {
+  messageRows: Array<{ role: "user" | "assistant"; content: string }>;
+  contactRow: {
+    last_room: string | null;
+    last_stay_checkin: string | null;
+    total_stays: number;
+  } | null;
+}) {
+  return {
+    from: vi.fn((table: string) => {
+      if (table === "whatsapp_messages") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockResolvedValue({ data: options.messageRows, error: null }),
+        };
+      }
+      if (table === "guest_contacts") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: options.contactRow, error: null }),
+        };
+      }
+      throw new Error(`makeSupabaseMock: unexpected table "${table}"`);
+    }),
+  } as unknown as ReturnType<typeof createAdminClient>;
+}
+
+// No-LLM test for load_context's message-conversion/ordering logic — the
+// specific bug this graph's design has to avoid (see state.ts's
+// incomingMessage comment): with MessagesAnnotation's append-only reducer,
+// getting this wrong would silently produce [newMessage, ...history] instead
+// of [...history, newMessage].
+describe("loadContext ordering", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns prior history (oldest first) followed by the new incoming message last", async () => {
+    vi.mocked(createAdminClient).mockReturnValue(
+      makeSupabaseMock({
+        // loadRecentMessages queries created_at DESC (to actually get the most
+        // recent N messages of a long conversation) then reverses the result
+        // back to ascending — so this fixture simulates what the DB itself
+        // returns (newest first), not the final expected order.
+        messageRows: [
+          { role: "user", content: "Great, what does it cost?" },
+          {
+            role: "assistant",
+            content: "Yes! Room 1 is open for most of August.",
+          },
+          { role: "user", content: "Hi, do you have room 1 free in August?" },
+        ],
+        contactRow: {
+          last_room: "room_2",
+          last_stay_checkin: "2025-09-28",
+          total_stays: 1,
+        },
+      }),
+    );
+
+    const state = {
+      conversationId: "convo-1",
+      phone: "+351900000001",
+      incomingMessage: "Also, is breakfast included?",
+      messages: [],
+      guestContext: null,
+      stepCount: 0,
+    } as GraphStateType;
+
+    const result = await loadContext(state);
+
+    expect(result.messages).toHaveLength(4);
+    const [m1, m2, m3, m4] = result.messages as GraphStateType["messages"];
+
+    expect(m1).toBeInstanceOf(HumanMessage);
+    expect(m1.content).toBe("Hi, do you have room 1 free in August?");
+    expect(m2).toBeInstanceOf(AIMessage);
+    expect(m2.content).toBe("Yes! Room 1 is open for most of August.");
+    expect(m3).toBeInstanceOf(HumanMessage);
+    expect(m3.content).toBe("Great, what does it cost?");
+    // The turn's new message must land last, not first — proves the
+    // ordering described in state.ts's incomingMessage comment holds.
+    expect(m4).toBeInstanceOf(HumanMessage);
+    expect(m4.content).toBe("Also, is breakfast included?");
+
+    expect(result.guestContext).toMatch(/room_2/);
+    expect(result.guestContext).toMatch(/2025-09-28/);
+  });
+
+  it("returns just the new message and null guestContext for a phone with no history/no guest_contacts row", async () => {
+    vi.mocked(createAdminClient).mockReturnValue(
+      makeSupabaseMock({ messageRows: [], contactRow: null }),
+    );
+
+    const state = {
+      conversationId: "convo-fresh",
+      phone: "+351900000002",
+      incomingMessage: "Hello, is room 2 available next week?",
+      messages: [],
+      guestContext: null,
+      stepCount: 0,
+    } as GraphStateType;
+
+    const result = await loadContext(state);
+
+    expect(result.messages).toHaveLength(1);
+    const [message] = result.messages as GraphStateType["messages"];
+    expect(message).toBeInstanceOf(HumanMessage);
+    expect(message.content).toBe("Hello, is room 2 available next week?");
+    expect(result.guestContext).toBeNull();
+  });
+});

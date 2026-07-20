@@ -130,24 +130,40 @@ is the only caller, authenticated via `SOCIAL_MEDIA_API_KEY`.
 
 ## apps/guest-communication-agent
 
-Guest-Comms Agent (`GCA` in `docs/agent-architecture.mmd`) — scaffold only so far.
-`POST /api/webhook/whatsapp` receives Twilio's WhatsApp webhook format (form-encoded
-`From`/`Body`/etc.) and validates a real `X-Twilio-Signature` (`src/lib/gca/twilio.ts`,
-hand-implemented HMAC-SHA1 per Twilio's spec — no `twilio` SDK dependency, matching every
-other app's minimal footprint), but does not yet invoke any actual agent.
+Guest-Comms Agent (`GCA` in `docs/agent-architecture.mmd`) — ported (2026-07-20) from
+`issebya-homes-website` once that repo's merge conflict was resolved. Faithful port, not a
+redesign: same LangGraph.js graph (`src/graph/` — `load_context -> agent <-> 5 tools ->
+END`; see that source repo's own extensive doc comments, preserved here), same tools
+(pricing, availability, booking links, property Q&A via pgvector, escalate-to-owner). Its
+only real dependency the destination lacked was `packages/shared`'s two Supabase client
+factories, inlined directly (`src/lib/supabase.ts`) since this monorepo has no `packages/*`
+workspace — otherwise a straight copy, including keeping Supabase-JS (`.from()`/`.rpc()`)
+rather than rewriting to this repo's usual raw `pg.Pool` convention.
 
-> **Note:** the real GCA — a LangGraph agent with its own tools (pricing, availability,
-> booking links, property Q&A, escalate-to-owner) and DB tables — currently lives in
-> `issebya-homes-website`, not here, and despite `docs/agent-architecture.mmd` previously
-> saying otherwise, it is **not wired to live WhatsApp traffic there either** — that
-> repo's own `apps/guest-communication-agent/app-docs/production-integration-status.md`
-> confirms it, and the website's actual "WhatsApp link" is just a `wa.me` deep link, not
-> a call into any agent. Porting the real agent here is deliberately deferred: that repo
-> is currently mid-merge with unresolved conflicts. Once it's ported, this webhook's
-> `TODO` should call into its graph, its 5-table schema
-> (`whatsapp_conversations`/`whatsapp_messages`/`escalations`/etc.) needs a local Supabase
-> migration here, and its current direct-Telegram escalation send should probably route
-> through `apps/telegram-router` instead, consistent with every other app in this repo.
+`POST /api/webhook/whatsapp` validates a real `X-Twilio-Signature` (`src/lib/twilio.ts`,
+hand-implemented HMAC-SHA1, no `twilio` SDK dependency) and invokes the graph for real —
+verified live end-to-end (signature check -> conversation created/looked-up -> inbound
+message recorded -> graph reaches the agent node).
+
+> **Note: not yet actually live.** The agent node pulls its system prompt from LangSmith's
+> Prompt Hub at runtime (`whatsapp-booking-agent:production`) — it is not a file anywhere
+> in this repo, and needs access to the same LangSmith org/prompt as the source. No real
+> Twilio account/WhatsApp number is configured either. Without both, a real inbound
+> message fails at the prompt-pull step — confirmed live, and it fails *only* there,
+> nowhere earlier in the pipeline.
+>
+> **Known gaps carried over, not yet resolved:**
+> - `guest_contacts` has no committed migration anywhere in the source repo's history
+>   despite being referenced as real by its own docs — `supabase/migrations/20260720150002_create_guest_contacts_reconstructed.sql`
+>   here is a hand-reconstructed minimal version (columns the ported code actually reads,
+>   plus what source docs describe), not a verified copy of a real schema.
+> - Escalation alerts (`escalateToOwner` tool, the agent's step-cap safety net) still send
+>   Telegram directly (own bot token/chat ID), bypassing `apps/telegram-router` like every
+>   other app here already does — ported as-is; routing this through the router instead is
+>   a deliberate, separate decision not made yet.
+> - `checkAvailability`/`sendBookingLink` call the live `issebya.com/api/availability`
+>   directly (`NEXT_PUBLIC_SITE_URL`) — moving the code didn't remove this cross-repo
+>   runtime dependency.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 
@@ -176,8 +192,15 @@ cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGR
 cp apps/notifications/.env.example apps/notifications/.env  # fill in DATABASE_URL,
                        # NOTIFICATIONS_API_KEY (same value as apps/telegram-router's)
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
-                       # TWILIO_AUTH_TOKEN, TWILIO_WEBHOOK_URL once a real Twilio account
-                       # exists — scaffold only for now, see that app's README section
+                       # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
+                       # `supabase status`, Publishable/Secret on newer CLI versions),
+                       # OPENROUTER_API_KEY (same key apps/orch-a/apps/social-media use),
+                       # LANGSMITH_API_KEY (needs access to the same LangSmith org/prompt
+                       # as issebya-homes-website — not yet configured, see that app's
+                       # README section for what's still not live without it),
+                       # TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL once a real Twilio account
+                       # exists, TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
+                       # uses), NEXT_PUBLIC_SITE_URL, CRM_DASHBOARD_ORIGIN
 ```
 
 ## Run

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { verifyTwilioSignature } from "@/lib/gca/twilio.js";
+import { verifyTwilioSignature } from "@/lib/twilio.js";
 
 const AUTH_TOKEN = "test-auth-token";
 const URL = "https://example.com/api/webhook/whatsapp";

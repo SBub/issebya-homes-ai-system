@@ -1,7 +1,7 @@
 {
   "name": "guest-communication-agent",
   "version": "0.1.0",
-  "description": "Guest-Comms Agent (GCA) — WhatsApp guest communication. Webhook scaffolded here; the actual LangGraph agent (currently in issebya-homes-website, not yet wired to live traffic there either) will be ported in once that repo's in-flight merge is resolved.",
+  "description": "Guest-Comms Agent (GCA) — WhatsApp guest communication. Twilio webhook (POST /api/webhook/whatsapp) invokes a ported LangGraph.js graph (src/graph/) — the same reasoning/tools as issebya-homes-website's apps/guest-communication-agent, faithfully ported, not redesigned. See that source repo for the graph's own extensive doc comments.",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,9 +15,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.48",
+    "@langchain/core": "^1.2.1",
+    "@langchain/langgraph": "^1.4.7",
+    "@langchain/openai": "^1.5.3",
+    "@supabase/supabase-js": "^2.49.8",
+    "ai": "^6.0.138",
+    "langsmith": "^0.7.17",
     "next": "^16.2.1",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
