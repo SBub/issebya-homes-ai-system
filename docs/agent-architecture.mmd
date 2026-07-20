@@ -43,7 +43,7 @@ flowchart TB
         FIN_GAPS["Not yet: IRS report (year-end)<br>expense tracking<br>P&amp;L<br>income forecast"]
   end
  subgraph NotificationCenter["Notification Center"]
-        NOTIF["Notification Center<br><i>(needs design, out of scope for v0.1.0)<br>dispatches reminders; re-notifies until marked done</i>"]
+        NOTIF["Notification Center (apps/notifications)<br><i>plain logic API, no Telegram awareness — GET /api/reminders/due, POST .../ack, POST .../sent. A reminder is due when unacknowledged, past due_at, and renotify_every has elapsed since last sent (or never sent at all). Recurrence isn't auto-regenerated — a documented gap, not an oversight.</i>"]
         CRON_RFI["Cron: Annual (January)<br><i>RFI-21 re-issued by Airbnb; download, fill Section VI, resubmit. Booking.com equivalent: unknown. Out of scope for v0.1.0.</i>"]
         CRON_AIRBNB_PRICING["One-time: Oct 13 2026<br><i>Airbnb retires split-fee pricing for EU hosts — Modelo30/invoice fee formulas need updating (see docs/finance/modelo-30-filing.md, invoices-filing.md). Out of scope for v0.1.0.</i>"]
         CRON_EOM["Cron: 2nd of Every Month<br><i>nudge to upload last month's Airbnb + Booking.com CSVs via apps/finance's /upload page, per platform. Out of scope for v0.1.0.</i>"]
@@ -60,7 +60,7 @@ flowchart TB
         SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via an HTTP call from the Telegram Router (POST /api/generate), generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, and returns the result. No Telegram awareness at all. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
   end
  subgraph TelegramRouterSystem["Telegram Router"]
-        ROUTER["Telegram Router<br><i>owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps. For now a simple calling system — designed to grow into an actual orchestrator once the systems it dispatches to become full agents, same analyze -&gt; decide -&gt; dispatch -&gt; report shape as Orch-A, just reactive instead of scheduled.</i>"]
+        ROUTER["Telegram Router<br><i>owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — /social -&gt; social-media, a reminder's &quot;✅ Done&quot; button and the periodic due-check -&gt; apps/notifications. For now a simple calling system — designed to grow into an actual orchestrator once the systems it dispatches to become full agents, same analyze -&gt; decide -&gt; dispatch -&gt; report shape as Orch-A, just reactive instead of scheduled.</i>"]
   end
  subgraph DocumentInterfaces["Document Interfaces (human-facing pages, not chat)"]
         UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
@@ -83,9 +83,9 @@ flowchart TB
     CRON_INV -- delivers document --> TG
     UPLOAD -. if uploaded month closes a quarter .-> CRON_TAX
     CRON_TAX -- delivers document --> TG
-    CRON_RFI -- requests via --> NOTIF
-    CRON_AIRBNB_PRICING -- requests via --> NOTIF
-    NOTIF -- delivers/re-notifies --> TG
+    CRON_RFI -- seeded as reminder in --> NOTIF
+    CRON_AIRBNB_PRICING -- seeded as reminder in --> NOTIF
+    ROUTER -- "sends reminder, &quot;✅ Done&quot; button" --> TG
     FIN -.-> FIN_GAPS
     CRON_PROJ -- delivers --> TG
     CRON_CONFIRM -- delivers --> TG
@@ -108,9 +108,11 @@ flowchart TB
     SOC_GEN -- writes post --> NOTION_SOCIAL
     ROUTER -- replies with generated content --> TG
     UPLOAD -- syncs to Notion --> NOTION_FINANCE
-    CRON_EOM -- requests via --> NOTIF
+    CRON_EOM -- seeded as reminder in --> NOTIF
     SITE -- "WhatsApp link" --> GCA
     ROUTER -- calls /api/generate --> SOC_GEN
+    TG -- "Done button press" --> ROUTER
+    ROUTER -- calls /api/reminders/* --> NOTIF
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -122,6 +124,10 @@ flowchart TB
     style NOTION_FINANCE fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style NOTION_SOCIAL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style GCA fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style NOTIF fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style CRON_RFI fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style CRON_AIRBNB_PRICING fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style CRON_EOM fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
 
     %% BUILT arrows (green) — connections actually wired + tested, not just
     %% "both endpoint nodes happen to be green." Mermaid only supports
@@ -135,26 +141,39 @@ flowchart TB
     %%  20 = CRON_INV -- delivers document --> TG
     %%  21 = UPLOAD -.-> CRON_TAX        (quarter-closing months only)
     %%  22 = CRON_TAX -- delivers document --> TG
+    %%  23 = CRON_RFI -- seeded as reminder in --> NOTIF (real seeded DB row,
+    %%       verified by direct query)
+    %%  24 = CRON_AIRBNB_PRICING -- seeded as reminder in --> NOTIF (real
+    %%       seeded DB row, verified by direct query)
+    %%  25 = ROUTER -- "sends reminder, "Done" button" --> TG (the exact
+    %%       mechanism proven live today: demo reminder created, due-check
+    %%       triggered, real Telegram message with Done button sent)
     %%  38 = ORCH -- reports --> TG      (daily digest, tested extensively)
     %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the
     %%       table — verified fresh via a direct curl call to /api/generate,
     %%       code path unchanged by the router split)
     %%  42 = UPLOAD -- syncs to Notion --> NOTION_FINANCE (verified real Notion
     %%       pages created/updated field-by-field against a dedicated test DB)
+    %%  43 = CRON_EOM -- seeded as reminder in --> NOTIF (real seeded DB row,
+    %%       verified by direct query)
     %%  44 = SITE -- "WhatsApp link" --> GCA (GCA already built and live in
     %%       issebya-homes-website; this is its real, current entry point)
-    linkStyle 0,17,18,19,20,21,22,38,40,42,44 stroke:#2E7D32,stroke-width:2px
+    %%  46 = TG -- "Done button press" --> ROUTER (button was pressed for
+    %%       real in today's end-to-end test)
+    %%  47 = ROUTER -- calls /api/reminders/* --> NOTIF (exercised live via
+    %%       the due-check + ack calls in today's test)
+    linkStyle 0,17,18,19,20,21,22,23,24,25,38,40,42,43,44,46,47 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 46 edges total (0-45); this is the complement
-    %% of the tested set. 43 = CRON_EOM -> NOTIF. 39 = TG -> ROUTER and
-    %% 41 = ROUTER -> TG (router split just landed; no genuine end-to-end
-    %% Telegram round trip through the new code path has been tested yet,
-    %% even though the underlying bot mechanism is unchanged). 45 = ROUTER
-    %% -- calls /api/generate --> SOC_GEN (brand new edge, never exercised
-    %% via a real Telegram-triggered request).
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,39,41,43,45 stroke:#BDBDBD,stroke-width:1px
+    %% defaulting to black. 48 edges total (0-47); this is the complement
+    %% of the tested set. 39 = TG -> ROUTER and 41 = ROUTER -> TG (router
+    %% split just landed; no genuine end-to-end Telegram round trip through
+    %% the new /social code path has been tested yet, even though the
+    %% underlying bot mechanism is unchanged). 45 = ROUTER -- calls
+    %% /api/generate --> SOC_GEN (brand new edge, never exercised via a real
+    %% Telegram-triggered request).
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,36,37,39,41,45 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
@@ -166,10 +185,6 @@ flowchart TB
     style PR fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style DESIGN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style SWE fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style CRON_RFI fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style CRON_AIRBNB_PRICING fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style CRON_EOM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style NOTIF fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
