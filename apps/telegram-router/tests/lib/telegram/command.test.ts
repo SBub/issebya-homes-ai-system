@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseSocialCommand } from "../../../src/lib/telegram/command.js";
-import type { TelegramUpdate } from "../../../src/lib/telegram/telegram.js";
+import { isCronListCommand, isDigestCommand, parseSocialCommand } from "@/lib/telegram/command.js";
+import type { TelegramUpdate } from "@/lib/telegram/telegram.js";
 
 function update(text: string | undefined, chatId = 992297288): TelegramUpdate {
   return {
@@ -67,5 +67,95 @@ describe("parseSocialCommand", () => {
 
   it("returns null when /social is followed only by whitespace", () => {
     expect(parseSocialCommand(update("/social    "))).toBeNull();
+  });
+});
+
+describe("isCronListCommand", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.TELEGRAM_CHAT_ID = "992297288";
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("matches /cron list", () => {
+    expect(isCronListCommand(update("/cron list"))).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isCronListCommand(update("/CRON LIST"))).toBe(true);
+  });
+
+  it("matches a bot-mention between /cron and list", () => {
+    expect(isCronListCommand(update("/cron@IssebyaBot list"))).toBe(true);
+  });
+
+  it("returns false when there's no text message", () => {
+    expect(isCronListCommand(update(undefined))).toBe(false);
+  });
+
+  it("returns false when the message isn't from the configured chat", () => {
+    expect(isCronListCommand(update("/cron list", 1))).toBe(false);
+  });
+
+  it("returns false when TELEGRAM_CHAT_ID isn't configured", () => {
+    delete process.env.TELEGRAM_CHAT_ID;
+    expect(isCronListCommand(update("/cron list"))).toBe(false);
+  });
+
+  it("returns false for /cron without list", () => {
+    expect(isCronListCommand(update("/cron"))).toBe(false);
+  });
+
+  it("returns false for unrelated text", () => {
+    expect(isCronListCommand(update("hello there"))).toBe(false);
+  });
+});
+
+describe("isDigestCommand", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.TELEGRAM_CHAT_ID = "992297288";
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("matches /digest", () => {
+    expect(isDigestCommand(update("/digest"))).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isDigestCommand(update("/DIGEST"))).toBe(true);
+  });
+
+  it("matches a bot-mention suffix", () => {
+    expect(isDigestCommand(update("/digest@IssebyaBot"))).toBe(true);
+  });
+
+  it("returns false when there's no text message", () => {
+    expect(isDigestCommand(update(undefined))).toBe(false);
+  });
+
+  it("returns false when the message isn't from the configured chat", () => {
+    expect(isDigestCommand(update("/digest", 1))).toBe(false);
+  });
+
+  it("returns false when TELEGRAM_CHAT_ID isn't configured", () => {
+    delete process.env.TELEGRAM_CHAT_ID;
+    expect(isDigestCommand(update("/digest"))).toBe(false);
+  });
+
+  it("returns false for /digest with trailing text", () => {
+    expect(isDigestCommand(update("/digest now"))).toBe(false);
+  });
+
+  it("returns false for unrelated text", () => {
+    expect(isDigestCommand(update("hello there"))).toBe(false);
   });
 });

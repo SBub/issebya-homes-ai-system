@@ -1,8 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/telegram/auth";
-import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
-import { getDigest } from "@/lib/telegram/orch-a";
-import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
+import { sendDigestNow } from "@/lib/telegram/digest";
 
 /**
  * Whatever real scheduler ends up existing (still an open deployment
@@ -10,7 +8,8 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  * pre-rendered digest from apps/orch-a (pure logic, no Telegram awareness —
  * GET /digest) and sends it itself, with `parse_mode: "HTML"` preserved
  * (Orch-A's renderReport formats the digest with `<b>`/`<i>` tags — see
- * apps/orch-a/src/core/models.ts).
+ * apps/orch-a/src/core/models.ts). Same underlying send as the on-demand
+ * /digest command (see webhook/route.ts) — this is just the scheduled path.
  */
 export async function POST(request: NextRequest) {
   const unauthorized = verifyCronSecret(request);
@@ -18,12 +17,6 @@ export async function POST(request: NextRequest) {
     return unauthorized;
   }
 
-  const { text } = await getDigest();
-  const result = await sendWithRetry(() => sendMessage(text, undefined, { parseMode: "HTML" }));
-  if (!result.ok) {
-    console.error("[telegram-router] failed to send digest:", result.error);
-    await recordDeliveryFailure("digest", text, result.error ?? "sendMessage failed");
-  }
-
-  return NextResponse.json({ delivered: result.ok });
+  const result = await sendDigestNow();
+  return NextResponse.json(result);
 }

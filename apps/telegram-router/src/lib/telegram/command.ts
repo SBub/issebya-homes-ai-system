@@ -4,6 +4,12 @@ import type { TelegramUpdate } from "./telegram.js";
 // span multiple lines, hence [\s\S] instead of "." (which doesn't match \n).
 const COMMAND_PATTERN = /^\/social(?:@\w+)?(?:\s+([\s\S]+))?$/i;
 
+// Telegram attaches the "@BotName" mention directly to the command token
+// itself (e.g. "/cron@IssebyaBot list"), not to the end of the phrase.
+const CRON_LIST_PATTERN = /^\/cron(?:@\w+)?\s+list$/i;
+
+const DIGEST_PATTERN = /^\/digest(?:@\w+)?$/i;
+
 /**
  * Extracts the post idea from a "/social <idea>" message. Returns null if
  * the update isn't a text message, isn't from the configured host chat, isn't
@@ -24,4 +30,41 @@ export function parseSocialCommand(update: TelegramUpdate): string | null {
   const match = COMMAND_PATTERN.exec(message.text.trim());
   const idea = match?.[1]?.trim();
   return idea ? idea : null;
+}
+
+/**
+ * True for a "/cron list" message from the configured host chat. Same
+ * chat-gating as parseSocialCommand, just no argument to extract.
+ */
+export function isCronListCommand(update: TelegramUpdate): boolean {
+  const message = update.message;
+  if (!message?.text) {
+    return false;
+  }
+
+  const expectedChatId = process.env.TELEGRAM_CHAT_ID;
+  if (!expectedChatId || String(message.chat.id) !== expectedChatId) {
+    return false;
+  }
+
+  return CRON_LIST_PATTERN.test(message.text.trim());
+}
+
+/**
+ * True for a "/digest" message from the configured host chat — an on-demand
+ * digest send, independent of whatever schedule check-digest ends up running
+ * on. Same chat-gating as the other commands.
+ */
+export function isDigestCommand(update: TelegramUpdate): boolean {
+  const message = update.message;
+  if (!message?.text) {
+    return false;
+  }
+
+  const expectedChatId = process.env.TELEGRAM_CHAT_ID;
+  if (!expectedChatId || String(message.chat.id) !== expectedChatId) {
+    return false;
+  }
+
+  return DIGEST_PATTERN.test(message.text.trim());
 }

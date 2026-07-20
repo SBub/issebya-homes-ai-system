@@ -5,7 +5,7 @@ import {
   sendMessage,
   sendWithRetry,
   telegramConfigured,
-} from "../../../src/lib/telegram/telegram.js";
+} from "@/lib/telegram/telegram.js";
 
 describe("telegramConfigured", () => {
   const originalEnv = { ...process.env };

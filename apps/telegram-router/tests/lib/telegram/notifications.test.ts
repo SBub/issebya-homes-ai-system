@@ -3,7 +3,7 @@ import {
   acknowledgeReminder,
   getDueReminders,
   recordReminderSent,
-} from "../../../src/lib/telegram/notifications.js";
+} from "@/lib/telegram/notifications.js";
 
 describe("notifications client", () => {
   const originalEnv = { ...process.env };

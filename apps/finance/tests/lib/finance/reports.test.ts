@@ -7,8 +7,8 @@ import {
   isQuarterClosingMonth,
   monthRange,
   monthToQuarter,
-} from "../../../src/lib/finance/reports.js";
-import type { FinanceBooking } from "../../../src/lib/finance/types.js";
+} from "@/lib/finance/reports.js";
+import type { FinanceBooking } from "@/lib/finance/types.js";
 
 // Minimal valid FinanceBooking fixture — only the fields exercised by the
 // month/quarter detection logic vary per test; the rest are filler.

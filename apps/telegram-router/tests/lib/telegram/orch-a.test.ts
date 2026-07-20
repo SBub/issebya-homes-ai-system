@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getDigest } from "../../../src/lib/telegram/orch-a.js";
+import { getDigest } from "@/lib/telegram/orch-a.js";
 
 describe("getDigest", () => {
   const originalEnv = { ...process.env };

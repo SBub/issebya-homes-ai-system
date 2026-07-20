@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { airbnbBaseCommission, airbnbGuestPaid } from "../../../src/lib/finance/formulas.js";
+import { airbnbBaseCommission, airbnbGuestPaid } from "@/lib/finance/formulas.js";
 
 // Verified fixtures from docs/finance/modelo-30-filing.md and
 // docs/finance/invoices-filing.md — real Airbnb room_fee (= gross_room_income)

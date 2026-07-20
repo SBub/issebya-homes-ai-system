@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectPlatform, parseAirbnb, parseBookingCom } from "../../../src/lib/finance/parsers.js";
+import { detectPlatform, parseAirbnb, parseBookingCom } from "@/lib/finance/parsers.js";
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 

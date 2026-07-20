@@ -1,7 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import { parseSocialCommand } from "@/lib/telegram/command";
+import { isCronListCommand, isDigestCommand, parseSocialCommand } from "@/lib/telegram/command";
+import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
+import { sendDigestNow } from "@/lib/telegram/digest";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
@@ -65,6 +67,23 @@ export async function POST(request: NextRequest) {
   if (update?.callback_query) {
     await handleCallbackQuery(update.callback_query);
     return NextResponse.json({ ok: true });
+  }
+
+  if (update && isCronListCommand(update)) {
+    // A direct, synchronous reply to the user's own command — unlike
+    // reminders/digest (pushed with nobody watching), there's no need for
+    // the retry + durable-fallback treatment: if this fails, the user
+    // notices immediately (no reply shows up) and can just retry.
+    await sendMessage(renderCronJobsList());
+    return NextResponse.json({ ok: true });
+  }
+
+  if (update && isDigestCommand(update)) {
+    // On-demand digest send, independent of check-digest's eventual
+    // schedule — same underlying send (retry + durable-fallback included),
+    // just triggered by the user instead of a cron call.
+    const result = await sendDigestNow();
+    return NextResponse.json(result);
   }
 
   const idea = update ? parseSocialCommand(update) : null;

@@ -46,6 +46,11 @@ Owns all Telegram I/O for the whole system — the one webhook a bot token allow
 registered once. Parses incoming commands/callbacks and dispatches to plain logic APIs
 in other apps, which have zero Telegram awareness of their own:
 - `/social <idea>` -> `apps/social-media`'s `/api/generate`
+- `/cron list` -> replies with the manifest in `src/lib/telegram/cron-jobs.ts` (what
+  cron endpoints exist, since nothing calls them on a real schedule yet)
+- `/digest` -> sends Orch-A's digest right now, on demand — same underlying send
+  (`src/lib/telegram/digest.ts`'s `sendDigestNow`) as `check-digest` below, just
+  triggered by the user instead of a schedule
 - a reminder's "✅ Done" button (`callback_query`) -> `apps/notifications`' ack endpoint
 - `POST /api/cron/check-reminders` (`X-Cron-Secret`-protected) -> pulls due reminders
   from `apps/notifications` and sends each one itself, button attached

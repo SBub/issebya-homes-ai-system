@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SocialPost } from "../../../src/lib/social/generate.js";
-import {
-  createSocialPost,
-  notionConfigured,
-  postToNotionProperties,
-} from "../../../src/lib/social/notion.js";
+import type { SocialPost } from "@/lib/social/generate.js";
+import { createSocialPost, notionConfigured, postToNotionProperties } from "@/lib/social/notion.js";
 
 const post: SocialPost = {
   altText: "issebya homes, rooftop pool, Porto villa, sunset swim",

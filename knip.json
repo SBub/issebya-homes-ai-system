@@ -6,7 +6,9 @@
       "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
     },
     "apps/finance": {
-      "next": true
+      "next": true,
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
     },
     "apps/social-media": {
       "next": true,

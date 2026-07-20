@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderSeedContext } from "../../../src/lib/social/seed-vocabulary.js";
+import { renderSeedContext } from "@/lib/social/seed-vocabulary.js";
 
 describe("renderSeedContext", () => {
   const context = renderSeedContext();

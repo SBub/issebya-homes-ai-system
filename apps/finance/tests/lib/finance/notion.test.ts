@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  bookingToNotionProperties,
-  notionConfigured,
-  syncBooking,
-} from "../../../src/lib/finance/notion.js";
-import type { FinanceBooking } from "../../../src/lib/finance/types.js";
+import { bookingToNotionProperties, notionConfigured, syncBooking } from "@/lib/finance/notion.js";
+import type { FinanceBooking } from "@/lib/finance/types.js";
 
 const booking: FinanceBooking = {
   booking_id: "HMABC12345",

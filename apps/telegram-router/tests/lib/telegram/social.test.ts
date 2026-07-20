@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateSocialPost } from "../../../src/lib/telegram/social.js";
+import { generateSocialPost } from "@/lib/telegram/social.js";
 
 describe("generateSocialPost", () => {
   const originalEnv = { ...process.env };
