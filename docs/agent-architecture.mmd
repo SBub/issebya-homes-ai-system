@@ -67,7 +67,7 @@ flowchart TB
         NOTION_FINANCE(["Notion: Finance Bookings"])
         NOTION_SOCIAL(["Notion: Social Media Posts"])
   end
-    AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop</i>"] & CRON_PROJ & CRON_CONFIRM
+    AVAIL -. informs .-> ORCH["Orchestrator (Orch-A)<br><i>analyze -&gt; decide -&gt; dispatch -&gt; report loop; the report step just renders the digest and returns it via GET /digest — apps/telegram-router is the one that actually sends it. No Telegram awareness at all.</i>"] & CRON_PROJ & CRON_CONFIRM
     FIN -. informs .-> ORCH
     ORCH -- delegates --> CAMP & ADS & PR & DESIGN & SWE
     DESIGN -- provides assets --> CAMP
@@ -96,14 +96,21 @@ flowchart TB
     GCA -. logs communication .-> CRM
     HEALTH -. monitors .-> ORCH
     HEALTH -- alerts --> TG
-    ORCH -- reports --> TG
+    ROUTER -- sends digest --> TG
 
-    %% RESOLVED: the whole system (orch-a, finance, social-media,
-    %% telegram-router) migrated to one shared bot token that nothing else
-    %% (e.g. Hermes) registers a webhook against, so ROUTER's inbound webhook
-    %% — the only one in the whole system now that it owns all Telegram I/O
-    %% — has that bot's webhook slot exclusively. Same TG bot as every other
-    %% edge in this diagram, confirmed via all four apps' .env files.
+    %% RESOLVED: the whole system migrated to one shared bot token that
+    %% nothing else (e.g. Hermes) registers a webhook against, so ROUTER's
+    %% inbound webhook — the only one in the whole system now that it owns
+    %% all Telegram I/O — has that bot's webhook slot exclusively. Same TG
+    %% bot as every other edge in this diagram. apps/orch-a had
+    %% TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID removed from its own config
+    %% entirely (it has zero Telegram awareness now); only
+    %% apps/telegram-router still holds TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
+    %% directly now, as the sole sender for the whole system. Known,
+    %% unaddressed fact: apps/finance still separately holds its own
+    %% TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID and still sends Telegram messages
+    %% directly, bypassing the router entirely — the same "odd one out"
+    %% situation Orch-A used to be in.
     TG -- "/social &lt;idea&gt;" --> ROUTER
     SOC_GEN -- writes post --> NOTION_SOCIAL
     ROUTER -- replies with generated content --> TG
@@ -113,6 +120,7 @@ flowchart TB
     ROUTER -- calls /api/generate --> SOC_GEN
     TG -- "Done button press" --> ROUTER
     ROUTER -- calls /api/reminders/* --> NOTIF
+    ROUTER -- calls /digest --> ORCH
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -148,7 +156,11 @@ flowchart TB
     %%  25 = ROUTER -- "sends reminder, "Done" button" --> TG (the exact
     %%       mechanism proven live today: demo reminder created, due-check
     %%       triggered, real Telegram message with Done button sent)
-    %%  38 = ORCH -- reports --> TG      (daily digest, tested extensively)
+    %%  38 = ROUTER -- sends digest --> TG (daily digest; live-tested today —
+    %%       POST /api/cron/check-digest called Orch-A's GET /digest and
+    %%       delivered a real digest message to the real Telegram chat, with
+    %%       parse_mode: "HTML" preserved since Orch-A's digest is
+    %%       pre-rendered with <b>/<i> tags)
     %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the
     %%       table — verified fresh via a direct curl call to /api/generate,
     %%       code path unchanged by the router split)
@@ -162,11 +174,16 @@ flowchart TB
     %%       real in today's end-to-end test)
     %%  47 = ROUTER -- calls /api/reminders/* --> NOTIF (exercised live via
     %%       the due-check + ack calls in today's test)
-    linkStyle 0,17,18,19,20,21,22,23,24,25,38,40,42,43,44,46,47 stroke:#2E7D32,stroke-width:2px
+    %%  48 = ROUTER -- calls /digest --> ORCH (live-verified today: GET
+    %%       /digest hit directly — confirmed 401 on a bad key, 404 on the
+    %%       old /api/digest path, and a correct real response with live
+    %%       Availability data on a valid call — and exercised end-to-end via
+    %%       POST /api/cron/check-digest)
+    linkStyle 0,17,18,19,20,21,22,23,24,25,38,40,42,43,44,46,47,48 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 48 edges total (0-47); this is the complement
+    %% defaulting to black. 49 edges total (0-48); this is the complement
     %% of the tested set. 39 = TG -> ROUTER and 41 = ROUTER -> TG (router
     %% split just landed; no genuine end-to-end Telegram round trip through
     %% the new /social code path has been tested yet, even though the
