@@ -128,6 +128,27 @@ is the only caller, authenticated via `SOCIAL_MEDIA_API_KEY`.
 > **Note:** the prompt/model in `src/lib/social/generate.ts` is being iterated against
 > real output, not fully tuned.
 
+## apps/guest-communication-agent
+
+Guest-Comms Agent (`GCA` in `docs/agent-architecture.mmd`) — scaffold only so far.
+`POST /api/webhook/whatsapp` receives Twilio's WhatsApp webhook format (form-encoded
+`From`/`Body`/etc.) and validates a real `X-Twilio-Signature` (`src/lib/gca/twilio.ts`,
+hand-implemented HMAC-SHA1 per Twilio's spec — no `twilio` SDK dependency, matching every
+other app's minimal footprint), but does not yet invoke any actual agent.
+
+> **Note:** the real GCA — a LangGraph agent with its own tools (pricing, availability,
+> booking links, property Q&A, escalate-to-owner) and DB tables — currently lives in
+> `issebya-homes-website`, not here, and despite `docs/agent-architecture.mmd` previously
+> saying otherwise, it is **not wired to live WhatsApp traffic there either** — that
+> repo's own `apps/guest-communication-agent/app-docs/production-integration-status.md`
+> confirms it, and the website's actual "WhatsApp link" is just a `wa.me` deep link, not
+> a call into any agent. Porting the real agent here is deliberately deferred: that repo
+> is currently mid-merge with unresolved conflicts. Once it's ported, this webhook's
+> `TODO` should call into its graph, its 5-table schema
+> (`whatsapp_conversations`/`whatsapp_messages`/`escalations`/etc.) needs a local Supabase
+> migration here, and its current direct-Telegram escalation send should probably route
+> through `apps/telegram-router` instead, consistent with every other app in this repo.
+
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack — always use yarn, not npm, in this repo).
 
 ## Setup
@@ -148,11 +169,15 @@ cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGR
                        # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
                        # NOTIFICATIONS_API_URL, NOTIFICATIONS_API_KEY (same value as
                        # apps/notifications'), ORCH_A_API_URL, ORCH_A_API_KEY (same value
-                       # as apps/orch-a's), CRON_SECRET, DATABASE_URL (from `supabase
-                       # start` output, see below — for the shared
-                       # telegram_delivery_failures fallback table)
+                       # as apps/orch-a's), FINANCE_API_URL, FINANCE_API_KEY (same value
+                       # as apps/finance's — used only for /api/health today), CRON_SECRET,
+                       # DATABASE_URL (from `supabase start` output, see below — for the
+                       # shared telegram_delivery_failures + health_check_state tables)
 cp apps/notifications/.env.example apps/notifications/.env  # fill in DATABASE_URL,
                        # NOTIFICATIONS_API_KEY (same value as apps/telegram-router's)
+cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
+                       # TWILIO_AUTH_TOKEN, TWILIO_WEBHOOK_URL once a real Twilio account
+                       # exists — scaffold only for now, see that app's README section
 ```
 
 ## Run

@@ -54,13 +54,13 @@ flowchart TB
         PMA["Webhook listener<br><i>not an LLM agent — receives cleaning lady messages via webhook, drafts a reply, sends to Telegram Gateway. Standalone, not delegated by Orch-A.</i>"]
   end
  subgraph SystemHealth["System Health"]
-        HEALTH["System Health Monitor<br><i>(needs design)<br>checks agents/tools/crons are up and running</i>"]
+        HEALTH["System Health Monitor<br><i>runs via apps/telegram-router's POST /api/cron/check-health (no real external scheduler wired yet, same open question as check-reminders/check-digest) or the on-demand /heartbeat command (same underlying check; always additionally replies with current status). Checks liveness of notifications, finance, and social-media via each app's own GET /api/health (deep: real Postgres SELECT 1 for notifications/finance, since both silently stop working if their DB dies while the process stays up; shallow process-check for social-media) plus orch-a's GET /health-check (shallow; NOT /health — Mastra's deployer ships a built-in unauthenticated /health that silently shadows any custom route there). State persisted per-service in Postgres table health_check_state (is_healthy, last_checked_at, last_status_change_at, last_error, consecutive_failures). Alert-on-transition only: 🔴 sent the moment a service goes healthy-&gt;unhealthy, silent while it stays down, 🟢 recovery message with downtime duration on unhealthy-&gt;healthy, silent while healthy. A different concern from Orch-A's own data-freshness checks (checkHeartbeat etc., already reported inside the digest) — this answers &quot;is the process up,&quot; not &quot;is the data stale.&quot; Does not check apps/telegram-router itself (self-check would be trivially always-healthy; real self-monitoring needs external uptime monitoring, out of scope).</i>"]
   end
  subgraph SocialMediaSystem["Social Media System"]
         SOC_GEN["Social Media Post Generator<br><i>single LLM call, not an autonomous agent — receives a post idea via an HTTP call from the Telegram Router (POST /api/generate), generates alt text (~100 SEO/AEO keywords) + a caption that continues the post's idea and ends in 5 hashtags, writes the result to Notion, and returns the result. No Telegram awareness at all. Standalone, not delegated by Orch-A (same shape as PMA).</i>"]
   end
  subgraph TelegramRouterSystem["Telegram Router"]
-        ROUTER["Telegram Router<br><i>owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — /social -&gt; social-media, a reminder's &quot;✅ Done&quot; button and the periodic due-check -&gt; apps/notifications. For now a simple calling system — designed to grow into an actual orchestrator once the systems it dispatches to become full agents, same analyze -&gt; decide -&gt; dispatch -&gt; report shape as Orch-A, just reactive instead of scheduled.</i>"]
+        ROUTER["Telegram Router<br><i>owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — /social -&gt; social-media, /digest -&gt; pulls Orch-A's GET /digest and sends it, /heartbeat -&gt; runs the same liveness check as check-health across notifications/finance/social-media/orch-a and always replies with current status, /cron list -&gt; renders the seeded reminder cron jobs, a reminder's &quot;✅ Done&quot; button and the periodic due-check -&gt; apps/notifications. For now a simple calling system — designed to grow into an actual orchestrator once the systems it dispatches to become full agents, same analyze -&gt; decide -&gt; dispatch -&gt; report shape as Orch-A, just reactive instead of scheduled.</i>"]
   end
  subgraph DocumentInterfaces["Document Interfaces (human-facing pages, not chat)"]
         UPLOAD["Upload Page (apps/finance /upload)<br><i>human uploads Airbnb + Booking.com CSVs</i>"]
@@ -73,7 +73,7 @@ flowchart TB
     DESIGN -- provides assets --> CAMP
     SWE -- updates --> SITE(["Website"])
     SWE -- reports completion --> TG
-    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>already built and live, in issebya-homes-website (runs via WhatsApp; webpage contact, convo, posts campaigns/updates)</i>"]
+    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>a real LangGraph agent (own tools: pricing, availability, booking links, property Q&amp;A, escalate-to-owner) but NOT wired to live WhatsApp traffic anywhere — confirmed against issebya-homes-website's own app-docs/production-integration-status.md; the website's &quot;WhatsApp link&quot; is just a wa.me deep link, not a call into any agent. Its own repo is mid-merge with unresolved conflicts, so it hasn't been ported yet either. apps/guest-communication-agent here is a webhook scaffold only (POST /api/webhook/whatsapp, real Twilio signature verification) — the actual graph invocation is a TODO pending the port.</i>"]
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
     CLEAN -- webhook: incoming message --> PMA
@@ -94,7 +94,7 @@ flowchart TB
     GCA -. not yet delegated .-> HUMAN_PLATFORM_REPLY
     CRM -. informs .-> ORCH
     GCA -. logs communication .-> CRM
-    HEALTH -. monitors .-> ORCH
+    HEALTH -. checks .-> NOTIF & UPLOAD & SOC_GEN & ORCH
     HEALTH -- alerts --> TG
     ROUTER -- sends digest --> TG
 
@@ -112,8 +112,13 @@ flowchart TB
     %% directly, bypassing the router entirely — the same "odd one out"
     %% situation Orch-A used to be in.
     TG -- "/social &lt;idea&gt;" --> ROUTER
+    TG -- "/cron list" --> ROUTER
+    TG -- "/digest" --> ROUTER
+    TG -- "/heartbeat" --> ROUTER
     SOC_GEN -- writes post --> NOTION_SOCIAL
     ROUTER -- replies with generated content --> TG
+    ROUTER -- sends cron jobs list --> TG
+    ROUTER -- sends health summary --> TG
     UPLOAD -- syncs to Notion --> NOTION_FINANCE
     CRON_EOM -- seeded as reminder in --> NOTIF
     SITE -- "WhatsApp link" --> GCA
@@ -131,11 +136,13 @@ flowchart TB
     style SOC_GEN fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style NOTION_FINANCE fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style NOTION_SOCIAL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
-    style GCA fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style NOTIF fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style CRON_RFI fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style CRON_AIRBNB_PRICING fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style CRON_EOM fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style ORCH fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style ROUTER fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style HEALTH fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
 
     %% BUILT arrows (green) — connections actually wired + tested, not just
     %% "both endpoint nodes happen to be green." Mermaid only supports
@@ -156,44 +163,80 @@ flowchart TB
     %%  25 = ROUTER -- "sends reminder, "Done" button" --> TG (the exact
     %%       mechanism proven live today: demo reminder created, due-check
     %%       triggered, real Telegram message with Done button sent)
-    %%  38 = ROUTER -- sends digest --> TG (daily digest; live-tested today —
+    %%  36 = HEALTH -.-> NOTIF
+    %%  37 = HEALTH -.-> UPLOAD (stands in for apps/finance — judgment call:
+    %%       no single node in this diagram represents "apps/finance the
+    %%       process," only its UPLOAD/CRON_*/NOTION_FINANCE pieces, and
+    %%       UPLOAD is the one most directly tied to that process)
+    %%  38 = HEALTH -.-> SOC_GEN
+    %%  39 = HEALTH -.-> ORCH
+    %%       (36-39 all live-verified today via /heartbeat: ran it with all 4
+    %%       services up -> ok:true for all 4, confirmed 4 rows written to
+    %%       health_check_state; killed apps/social-media's process, ran
+    %%       /heartbeat again -> ok:false for social-media confirmed written
+    %%       with a real transition timestamp; ran it again while still down
+    %%       -> confirmed last_status_change_at held steady and
+    %%       consecutive_failures incremented from 1 to 2, proving "stay
+    %%       silent while still down" rather than alert-on-every-failure;
+    %%       restarted social-media, ran /heartbeat again -> confirmed
+    %%       is_healthy flipped back true, consecutive_failures reset to 0,
+    %%       last_status_change_at updated to the new transition)
+    %%  40 = HEALTH -- alerts --> TG (the alert-on-transition send fired for
+    %%       real during the kill/restart test above, via the same
+    %%       sendMessage/sendWithRetry path already proven elsewhere)
+    %%  41 = ROUTER -- sends digest --> TG (daily digest; live-tested today —
     %%       POST /api/cron/check-digest called Orch-A's GET /digest and
     %%       delivered a real digest message to the real Telegram chat, with
     %%       parse_mode: "HTML" preserved since Orch-A's digest is
     %%       pre-rendered with <b>/<i> tags)
-    %%  40 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the
+    %%  45 = TG -- "/heartbeat" --> ROUTER (the on-demand command trigger
+    %%       itself, exercised for real in the same /heartbeat test as
+    %%       36-39/40 above — contrast with 44 = TG -- "/digest" --> ROUTER,
+    %%       which has NOT been exercised as a real typed command; only
+    %%       /digest's downstream send (41) and its cron trigger have been
+    %%       proven)
+    %%  46 = SOC_GEN -- writes post --> NOTION_SOCIAL (real row confirmed in the
     %%       table — verified fresh via a direct curl call to /api/generate,
     %%       code path unchanged by the router split)
-    %%  42 = UPLOAD -- syncs to Notion --> NOTION_FINANCE (verified real Notion
+    %%  49 = ROUTER -- sends health summary --> TG (the direct status reply
+    %%       /heartbeat always sends regardless of any transition, exercised
+    %%       in the same live test as 45)
+    %%  50 = UPLOAD -- syncs to Notion --> NOTION_FINANCE (verified real Notion
     %%       pages created/updated field-by-field against a dedicated test DB)
-    %%  43 = CRON_EOM -- seeded as reminder in --> NOTIF (real seeded DB row,
+    %%  51 = CRON_EOM -- seeded as reminder in --> NOTIF (real seeded DB row,
     %%       verified by direct query)
-    %%  44 = SITE -- "WhatsApp link" --> GCA (GCA already built and live in
-    %%       issebya-homes-website; this is its real, current entry point)
-    %%  46 = TG -- "Done button press" --> ROUTER (button was pressed for
+    %%  54 = TG -- "Done button press" --> ROUTER (button was pressed for
     %%       real in today's end-to-end test)
-    %%  47 = ROUTER -- calls /api/reminders/* --> NOTIF (exercised live via
+    %%  55 = ROUTER -- calls /api/reminders/* --> NOTIF (exercised live via
     %%       the due-check + ack calls in today's test)
-    %%  48 = ROUTER -- calls /digest --> ORCH (live-verified today: GET
+    %%  56 = ROUTER -- calls /digest --> ORCH (live-verified today: GET
     %%       /digest hit directly — confirmed 401 on a bad key, 404 on the
     %%       old /api/digest path, and a correct real response with live
     %%       Availability data on a valid call — and exercised end-to-end via
     %%       POST /api/cron/check-digest)
-    linkStyle 0,17,18,19,20,21,22,23,24,25,38,40,42,43,44,46,47,48 stroke:#2E7D32,stroke-width:2px
+    linkStyle 0,17,18,19,20,21,22,23,24,25,36,37,38,39,40,41,45,46,49,50,51,54,55,56 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 49 edges total (0-48); this is the complement
-    %% of the tested set. 39 = TG -> ROUTER and 41 = ROUTER -> TG (router
-    %% split just landed; no genuine end-to-end Telegram round trip through
-    %% the new /social code path has been tested yet, even though the
-    %% underlying bot mechanism is unchanged). 45 = ROUTER -- calls
-    %% /api/generate --> SOC_GEN (brand new edge, never exercised via a real
-    %% Telegram-triggered request).
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,36,37,39,41,45 stroke:#BDBDBD,stroke-width:1px
+    %% defaulting to black. 57 edges total (0-56); this is the complement
+    %% of the tested set. 42 = TG -> ROUTER ("/social <idea>") and 47 =
+    %% ROUTER -> TG (replies with generated content) (router split just
+    %% landed; no genuine end-to-end Telegram round trip through the /social
+    %% code path has been tested yet, even though the underlying bot
+    %% mechanism is unchanged). 53 = ROUTER -- calls /api/generate -->
+    %% SOC_GEN (brand new edge, never exercised via a real Telegram-triggered
+    %% request). 43 = TG -- "/cron list" --> ROUTER and 48 = ROUTER -- sends
+    %% cron jobs list --> TG (new command this round, never exercised). 44 =
+    %% TG -- "/digest" --> ROUTER (the on-demand command trigger itself
+    %% hasn't been exercised as a real typed command — see note at 45 above).
+    %% 52 = SITE -- "WhatsApp link" --> GCA — corrected from green: this is
+    %% NOT a real invocation. Confirmed against issebya-homes-website's own
+    %% docs and code — the "WhatsApp link" is a plain wa.me deep link; no
+    %% webhook or code path connects it to GCA's agent anywhere. GCA itself
+    %% has no live entry point today (see its node's own description).
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,42,43,44,47,48,52,53 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
-    style ORCH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style PMA fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
@@ -204,9 +247,8 @@ flowchart TB
     style SWE fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style HEALTH fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style ROUTER fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
+    style GCA fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
 
     %% HUMAN WORK (red, permanent — not a build-status)
     style HUMAN_CONTENT stroke:#D50000,stroke-width:2px

@@ -23,6 +23,11 @@
     "apps/notifications": {
       "next": true,
       "project": ["src/**/*.ts"]
+    },
+    "apps/guest-communication-agent": {
+      "next": true,
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
     }
   },
   "ignoreBinaries": ["supabase"]

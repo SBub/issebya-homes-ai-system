@@ -4067,6 +4067,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"guest-communication-agent@workspace:apps/guest-communication-agent":
+  version: 0.0.0-use.local
+  resolution: "guest-communication-agent@workspace:apps/guest-communication-agent"
+  dependencies:
+    "@types/node": "npm:^26.1.1"
+    "@types/react": "npm:^19"
+    "@types/react-dom": "npm:^19"
+    next: "npm:^16.2.1"
+    react: "npm:^19.2.3"
+    react-dom: "npm:^19.2.3"
+    typescript: "npm:^5.9.3"
+    vitest: "npm:^4.1.10"
+  languageName: unknown
+  linkType: soft
+
 "has-flag@npm:^4.0.0":
   version: 4.0.0
   resolution: "has-flag@npm:4.0.0"
