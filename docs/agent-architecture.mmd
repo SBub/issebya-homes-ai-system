@@ -73,7 +73,7 @@ flowchart TB
     DESIGN -- provides assets --> CAMP
     SWE -- updates --> SITE(["Website"])
     SWE -- reports completion --> TG
-    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>ported into apps/guest-communication-agent here (2026-07-20) from issebya-homes-website, faithfully — same LangGraph.js graph (load_context -&gt; agent &lt;-&gt; 5 tools -&gt; END), same DB schema (whatsapp_conversations/messages/escalations, plus a hand-reconstructed guest_contacts — no committed migration for it existed anywhere in the source repo). POST /api/webhook/whatsapp validates a real X-Twilio-Signature and invokes the graph for real — verified live end-to-end (signature check -&gt; conversation created -&gt; message recorded -&gt; graph reaches the agent node). NOT yet actually live: the agent node pulls its system prompt from LangSmith's Prompt Hub at runtime (not a file), and no real Twilio account/WhatsApp number/LangSmith access is configured yet — without both, it fails at that step (confirmed: fails there and only there). Its own escalation alerts still send Telegram directly (own bot token), bypassing apps/telegram-router like every other app here already does — a known, not-yet-resolved inconsistency, ported as-is.</i>"]
+    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>ported into apps/guest-communication-agent here (2026-07-20) from issebya-homes-website, faithfully — same LangGraph.js graph (load_context -&gt; agent &lt;-&gt; 5 tools -&gt; END), same DB schema (whatsapp_conversations/messages/escalations, plus a hand-reconstructed guest_contacts — no committed migration for it existed anywhere in the source repo). POST /api/webhook/whatsapp validates a real X-Twilio-Signature and invokes the graph for real. LIVE end-to-end on real WhatsApp traffic via Twilio's free WhatsApp Sandbox + ngrok: real guest messages answered in-character by the real LangSmith Prompt Hub prompt (whatsapp-booking-agent:production), and a real out-of-coverage question correctly escalated. Escalation alerts send Telegram directly (own bot token), bypassing apps/telegram-router like every other app here already does — a known, not-yet-resolved inconsistency, ported as-is; the alert's old dead &quot;View conversation&quot; dashboard link (apps/crm-dashboard doesn't exist here) has been removed, now just includes the conversation ID.</i>"]
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
     CLEAN -- webhook: incoming message --> PMA
@@ -143,6 +143,7 @@ flowchart TB
     style ORCH fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style ROUTER fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
     style HEALTH fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    style GCA fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
 
     %% BUILT arrows (green) — connections actually wired + tested, not just
     %% "both endpoint nodes happen to be green." Mermaid only supports
@@ -229,11 +230,15 @@ flowchart TB
     %% cron jobs list --> TG (new command this round, never exercised). 44 =
     %% TG -- "/digest" --> ROUTER (the on-demand command trigger itself
     %% hasn't been exercised as a real typed command — see note at 45 above).
-    %% 52 = SITE -- "WhatsApp link" --> GCA — corrected from green: this is
-    %% NOT a real invocation. Confirmed against issebya-homes-website's own
-    %% docs and code — the "WhatsApp link" is a plain wa.me deep link; no
-    %% webhook or code path connects it to GCA's agent anywhere. GCA itself
-    %% has no live entry point today (see its node's own description).
+    %% 52 = SITE -- "WhatsApp link" --> GCA — stays grey even though GCA
+    %% itself is now live (green node): confirmed against
+    %% issebya-homes-website's apps/website/src/app/ui/WhatsAppLink.tsx —
+    %% still a plain wa.me/351920742845 deep link (the real production
+    %% number), no webhook or code path connects it to GCA anywhere. GCA's
+    %% live testing so far has all been via Twilio's WhatsApp Sandbox (its
+    %% own Twilio-assigned test number), not this production number — this
+    %% specific edge needs the production number registered with Twilio and
+    %% pointed at GCA's webhook before it can go green.
     linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,42,43,44,47,48,52,53 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
@@ -248,7 +253,6 @@ flowchart TB
     style CRON_PROJ fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style CRON_CONFIRM fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
     style FIN_GAPS fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
-    style GCA fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
 
     %% HUMAN WORK (red, permanent — not a build-status)
     style HUMAN_CONTENT stroke:#D50000,stroke-width:2px
