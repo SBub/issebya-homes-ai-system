@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/finance/auth";
 import { pool } from "@/lib/finance/db";
+import { guestContactsSyncConfigured, syncGuestContacts } from "@/lib/finance/guest-contacts";
 import { notionConfigured, syncBookings } from "@/lib/finance/notion";
 import { detectPlatform, parseAirbnb, parseBookingCom } from "@/lib/finance/parsers";
 import {
@@ -197,11 +198,24 @@ export async function POST(request: NextRequest) {
     if (warnings.length > 0) telegramWarnings = warnings;
   }
 
+  // guest_contacts refresh: pushes a "sync now" request to
+  // apps/guest-communication-agent so it re-derives guest_contacts from the
+  // finance_bookings rows just committed above. Best-effort like Notion sync
+  // and Telegram delivery above — Postgres already committed, so a failure
+  // here is collected and reported, never thrown, and never rolls back
+  // anything.
+  let guestContactsSyncWarning: string | undefined;
+  if (guestContactsSyncConfigured()) {
+    const result = await syncGuestContacts();
+    if (!result.ok) guestContactsSyncWarning = result.error;
+  }
+
   return NextResponse.json({
     bookings_upserted: upserted.length,
     by_platform: byPlatform,
     errors: errors.length > 0 ? errors : undefined,
     notion_warnings: notionWarnings,
     telegram_warnings: telegramWarnings,
+    guest_contacts_sync_warning: guestContactsSyncWarning,
   });
 }

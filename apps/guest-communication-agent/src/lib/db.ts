@@ -1,3 +1,4 @@
+import { normalizePhone } from "./phone";
 import { createAdminClient } from "./supabase";
 
 // Ported verbatim from issebya-homes-website's
@@ -77,10 +78,15 @@ export async function loadRecentMessages(
 export async function loadGuestInfo(phone: string): Promise<string | null> {
   const supabase = createAdminClient();
 
+  // Twilio passes phone prefixed ("whatsapp:+351..."), but guest_contacts.phone
+  // may have been populated from Notion (unprefixed, human-typed) by the
+  // Notion phone pull-sync (see ./notion-phone-sync.ts) — normalize here so
+  // both sides of this comparison land in the same canonical form regardless
+  // of which direction the stored value came from.
   const { data: contact } = await supabase
     .from("guest_contacts")
     .select("last_room, last_stay_checkin, total_stays")
-    .eq("phone", phone)
+    .eq("phone", normalizePhone(phone))
     .maybeSingle();
   if (!contact || contact.total_stays <= 0) return null;
 
