@@ -1,13 +1,19 @@
 import { normalizePhone } from "./phone";
 import { createAdminClient } from "./supabase";
 
-// Pulls phone numbers a human has manually typed into Notion's "Finance
-// Bookings" database (apps/finance/src/lib/finance/notion.ts's existing
-// push-sync writes every booking there; a human adds the "Phone" property
-// themselves in Notion's UI — this doesn't create that property) back into
-// GCA's own guest_contacts table. This is the one place data flows FROM
-// Notion INTO Postgres — everything else in this repo's Notion sync is
-// one-way Postgres -> Notion.
+// Pulls phone numbers a human has manually typed into the dedicated "Guest
+// Contacts" Notion database (./notion-guest-contacts-sync.ts's push-sync
+// creates/updates every guest_contacts row there; a human then fills in the
+// "Phone" property themselves in Notion's UI) back into GCA's own
+// guest_contacts table. This is the one place data flows FROM Notion INTO
+// Postgres — everything else in this repo's Notion sync is one-way
+// Postgres -> Notion.
+//
+// This database is separate from apps/finance's "Finance Bookings" database
+// on purpose — an earlier design put Phone directly on Finance Bookings,
+// but mixing financial records with guest contact info was confusing, so a
+// dedicated Guest Contacts database was created instead (see
+// GUEST_CONTACTS_NOTION_DATABASE_ID's own .env comment).
 //
 // Same pure/orchestration split as ./finance-sync.ts: a pure extraction
 // function (unit-testable, no network) and an orchestration function that
@@ -150,9 +156,9 @@ export interface NotionPhoneSyncSummary {
 // reasoning as finance-sync.ts never writing phone itself.
 export async function syncPhonesFromNotion(): Promise<NotionPhoneSyncSummary> {
   const apiKey = process.env.NOTION_API_KEY;
-  const databaseId = process.env.NOTION_DATABASE_ID;
+  const databaseId = process.env.GUEST_CONTACTS_NOTION_DATABASE_ID;
   if (!apiKey || !databaseId) {
-    throw new Error("NOTION_API_KEY/NOTION_DATABASE_ID are not set");
+    throw new Error("NOTION_API_KEY/GUEST_CONTACTS_NOTION_DATABASE_ID are not set");
   }
 
   const pages = await fetchAllNotionPages(apiKey, databaseId);
