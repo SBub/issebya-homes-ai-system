@@ -93,6 +93,10 @@ export interface TouristTaxReport {
   csv: string;
   filename: string;
   total: number;
+  /** Sum of guests × min(nights, 3) across qualifying bookings — the exact
+   * count the Sintra municipal tax portal's "Number of overnight stays
+   * subject to tax up to a maximum of 3 nights (€2)" field wants. */
+  totalOvernightStays: number;
 }
 
 // ---------------------------------------------------------------------------

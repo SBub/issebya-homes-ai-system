@@ -154,12 +154,14 @@ export async function getTouristTaxReport(
   }[];
 
   let total = 0;
+  let totalOvernightStays = 0;
   const csvLines = ["Date,Room,Total nights paid,People,Total"];
 
   for (const row of rows) {
     const nightsCapped = Math.min(row.nights, 3);
     const amount = 2 * row.guests * nightsCapped;
     total += amount;
+    totalOvernightStays += row.guests * nightsCapped;
     csvLines.push(
       `${formatDateRange(row.checkin_date, row.checkout_date)},${roomLabel(row.room)},${nightsCapped},${row.guests},${amount}`,
     );
@@ -167,10 +169,17 @@ export async function getTouristTaxReport(
 
   csvLines.push(",,,,");
   csvLines.push(`,,,Total,${total}`);
+  // The exact figure the Sintra municipal tax portal's "Number of overnight
+  // stays subject to tax up to a maximum of 3 nights (€2)" field wants — a
+  // count (guests × nights, each booking capped at 3 nights), not a euro
+  // amount. total (above) / 2 gives the same number since the rate is a flat
+  // €2, but computing it directly here doesn't rely on that coincidence.
+  csvLines.push(`,,,Total overnight stays subject to tax,${totalOvernightStays}`);
 
   return {
     csv: csvLines.join("\n"),
     filename: `tourist-tax-Q${quarter}-${year}.csv`,
     total,
+    totalOvernightStays,
   };
 }
