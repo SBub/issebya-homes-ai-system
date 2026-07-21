@@ -10,14 +10,14 @@ describe("guestContactsSyncConfigured", () => {
   it("is false when either env var is missing", () => {
     // Node coerces `= undefined` on process.env to the string "undefined"
     // (truthy!) — must actually delete the key to simulate "unset".
-    delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
-    process.env.GUEST_COMMUNICATION_AGENT_API_KEY = "test-key";
+    delete process.env.CRM_API_URL;
+    process.env.CRM_API_KEY = "test-key";
     expect(guestContactsSyncConfigured()).toBe(false);
   });
 
   it("is true when both are set", () => {
-    process.env.GUEST_COMMUNICATION_AGENT_API_URL = "http://localhost:3005";
-    process.env.GUEST_COMMUNICATION_AGENT_API_KEY = "test-key";
+    process.env.CRM_API_URL = "http://localhost:3006";
+    process.env.CRM_API_KEY = "test-key";
     expect(guestContactsSyncConfigured()).toBe(true);
   });
 });
@@ -27,8 +27,8 @@ describe("syncGuestContacts", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    process.env.GUEST_COMMUNICATION_AGENT_API_URL = "http://localhost:3005";
-    process.env.GUEST_COMMUNICATION_AGENT_API_KEY = "test-key";
+    process.env.CRM_API_URL = "http://localhost:3006";
+    process.env.CRM_API_KEY = "test-key";
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -39,7 +39,7 @@ describe("syncGuestContacts", () => {
   });
 
   it("no-ops (ok: true) when not configured, without calling fetch", async () => {
-    delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
+    delete process.env.CRM_API_URL;
     const result = await syncGuestContacts();
     expect(result).toEqual({ ok: true });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -55,7 +55,7 @@ describe("syncGuestContacts", () => {
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3005/api/guest-contacts/sync");
+    expect(url).toBe("http://localhost:3006/api/guest-contacts/sync");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "X-API-Key": "test-key" });
   });

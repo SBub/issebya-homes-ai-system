@@ -27,8 +27,16 @@
     "apps/guest-communication-agent": {
       "next": true,
       "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
+    },
+    "apps/crm": {
+      "next": true,
+      "entry": ["tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
     }
   },
-  "ignoreBinaries": ["supabase"]
+  "ignoreBinaries": ["supabase"],
+  "ignoreIssues": {
+    "apps/crm/src/lib/supabase.ts": ["exports"]
+  }
 }

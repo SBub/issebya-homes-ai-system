@@ -1,4 +1,4 @@
-import { normalizePhone } from "./phone";
+import { lookupGuestContact } from "./crm";
 import { createAdminClient } from "./supabase";
 
 // Ported verbatim from issebya-homes-website's
@@ -60,12 +60,19 @@ export async function loadRecentMessages(
     .reverse();
 }
 
-// Looks up this guest's past-stay facts from guest_contacts, unconditionally
-// for any known phone — decoupled from whether a CRM campaign was ever sent
-// (that coupling is what loadCrmContext used to bake in). Deliberately
-// limited to past-stay facts (room/check-in/total stays); free-text
+// Looks up this guest's past-stay facts, unconditionally for any known
+// phone — decoupled from whether a CRM campaign was ever sent (that
+// coupling is what loadCrmContext used to bake in). Deliberately limited to
+// past-stay facts (room/check-in/total stays); free-text
 // preferences/summary memory is out of scope here (see guest_memory note
 // above — still unpopulated, still a future concern, not this one).
+//
+// Data now comes from CRM (apps/crm), not a direct Supabase query — CRM
+// owns the guest_contacts table (see src/lib/crm.ts's lookupGuestContact,
+// which normalizes `phone` and is resilient to CRM being unreachable,
+// returning null rather than throwing). The interpretation/formatting logic
+// below is unchanged from when this queried guest_contacts directly:
+//
 // Returns null when there's no guest_contacts row for the phone at all, OR
 // when a row exists but total_stays is 0 (a contact record with no actual
 // completed stay yet — in practice guest_contacts is populated from the
@@ -76,19 +83,8 @@ export async function loadRecentMessages(
 // stayed with us before — most recently (0 stay(s) total)," which is false
 // and reads as broken. Both are now the same "no info" case.
 export async function loadGuestInfo(phone: string): Promise<string | null> {
-  const supabase = createAdminClient();
-
-  // Twilio passes phone prefixed ("whatsapp:+351..."), but guest_contacts.phone
-  // may have been populated from Notion (unprefixed, human-typed) by the
-  // Notion phone pull-sync (see ./notion-phone-sync.ts) — normalize here so
-  // both sides of this comparison land in the same canonical form regardless
-  // of which direction the stored value came from.
-  const { data: contact } = await supabase
-    .from("guest_contacts")
-    .select("last_room, last_stay_checkin, total_stays")
-    .eq("phone", normalizePhone(phone))
-    .maybeSingle();
-  if (!contact || contact.total_stays <= 0) return null;
+  const contact = await lookupGuestContact(phone);
+  if (!contact?.found || contact.total_stays <= 0) return null;
 
   const roomLine = contact.last_room
     ? ` in ${contact.last_room}${

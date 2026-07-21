@@ -24,9 +24,19 @@ vi.mock("@/lib/supabase.js", () => ({
 vi.mock("@/lib/telegram.js", () => ({
   sendTelegramNotification: vi.fn(),
 }));
+// loadGuestInfo (@/lib/db.ts) no longer queries Supabase directly — the
+// guest_contacts table now lives in apps/crm, and db.ts calls
+// @/lib/crm.ts's lookupGuestContact() over HTTP instead. Mock that function
+// here rather than a guest_contacts Supabase table, so the "loadContext
+// ordering" tests below still control what loadGuestInfo returns without
+// making a real network call.
+vi.mock("@/lib/crm.js", () => ({
+  lookupGuestContact: vi.fn(),
+}));
 
 const { createAdminClient } = await import("@/lib/supabase.js");
 const { sendTelegramNotification } = await import("@/lib/telegram.js");
+const { lookupGuestContact } = await import("@/lib/crm.js");
 
 // Proves the graph compiles and is structurally sound — nodes/edges wired
 // as expected — without invoking .invoke() against a real LLM. No
@@ -192,16 +202,12 @@ describe("agentNode step cap", () => {
 });
 
 // Builds a fake createAdminClient() return value that answers
-// .from('whatsapp_messages')...limit() and .from('guest_contacts')...
-// maybeSingle() with fixed data, the same two queries loadContext's
-// Promise.all issues (loadRecentMessages/loadGuestInfo in @/lib/db.ts).
+// .from('whatsapp_messages')...limit() with fixed data — the query
+// loadRecentMessages (@/lib/db.ts) issues. loadGuestInfo's data no longer
+// comes from Supabase (see @/lib/crm.js mock above), so this only needs to
+// cover the whatsapp_messages table now.
 function makeSupabaseMock(options: {
   messageRows: Array<{ role: "user" | "assistant"; content: string }>;
-  contactRow: {
-    last_room: string | null;
-    last_stay_checkin: string | null;
-    total_stays: number;
-  } | null;
 }) {
   return {
     from: vi.fn((table: string) => {
@@ -211,13 +217,6 @@ function makeSupabaseMock(options: {
           eq: vi.fn().mockReturnThis(),
           order: vi.fn().mockReturnThis(),
           limit: vi.fn().mockResolvedValue({ data: options.messageRows, error: null }),
-        };
-      }
-      if (table === "guest_contacts") {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: vi.fn().mockResolvedValue({ data: options.contactRow, error: null }),
         };
       }
       throw new Error(`makeSupabaseMock: unexpected table "${table}"`);
@@ -248,13 +247,14 @@ describe("loadContext ordering", () => {
           },
           { role: "user", content: "Hi, do you have room 1 free in August?" },
         ],
-        contactRow: {
-          last_room: "room_2",
-          last_stay_checkin: "2025-09-28",
-          total_stays: 1,
-        },
       }),
     );
+    vi.mocked(lookupGuestContact).mockResolvedValue({
+      found: true,
+      last_room: "room_2",
+      last_stay_checkin: "2025-09-28",
+      total_stays: 1,
+    });
 
     const state = {
       conversationId: "convo-1",
@@ -286,9 +286,8 @@ describe("loadContext ordering", () => {
   });
 
   it("returns just the new message and null guestContext for a phone with no history/no guest_contacts row", async () => {
-    vi.mocked(createAdminClient).mockReturnValue(
-      makeSupabaseMock({ messageRows: [], contactRow: null }),
-    );
+    vi.mocked(createAdminClient).mockReturnValue(makeSupabaseMock({ messageRows: [] }));
+    vi.mocked(lookupGuestContact).mockResolvedValue({ found: false });
 
     const state = {
       conversationId: "convo-fresh",
