@@ -4,16 +4,15 @@ import { type FormEvent, useState } from "react";
 
 export default function UploadPage() {
   const [apiKey, setApiKey] = useState("");
-  const [airbnbFile, setAirbnbFile] = useState<File | null>(null);
-  const [bookingComFile, setBookingComFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [result, setResult] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!airbnbFile || !bookingComFile) {
-      setError("Both files are required");
+    if (files.length === 0) {
+      setError("At least 1 CSV file is required");
       return;
     }
 
@@ -23,8 +22,9 @@ export default function UploadPage() {
 
     try {
       const formData = new FormData();
-      formData.append("files", airbnbFile);
-      formData.append("files", bookingComFile);
+      for (const file of files) {
+        formData.append("files", file);
+      }
 
       const res = await fetch("/api/finance/import", {
         method: "POST",
@@ -46,26 +46,27 @@ export default function UploadPage() {
       <h1>Finance CSV Import</h1>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: "1rem" }}>
-          <label htmlFor="airbnb-file">Airbnb CSV</label>
+          <label htmlFor="csv-files">
+            CSV files (any mix of Airbnb and Booking.com — platform is auto-detected per file, so
+            select as many as you need, e.g. one Airbnb export plus several monthly Booking.com
+            exports)
+          </label>
           <br />
           <input
-            id="airbnb-file"
+            id="csv-files"
             type="file"
             accept=".csv"
+            multiple
             required
-            onChange={(e) => setAirbnbFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
-        </div>
-        <div style={{ marginBottom: "1rem" }}>
-          <label htmlFor="booking-com-file">Booking.com CSV</label>
-          <br />
-          <input
-            id="booking-com-file"
-            type="file"
-            accept=".csv"
-            required
-            onChange={(e) => setBookingComFile(e.target.files?.[0] ?? null)}
-          />
+          {files.length > 0 && (
+            <ul>
+              {files.map((f) => (
+                <li key={`${f.name}-${f.size}-${f.lastModified}`}>{f.name}</li>
+              ))}
+            </ul>
+          )}
         </div>
         <div style={{ marginBottom: "1rem" }}>
           <label htmlFor="api-key">Finance API Key</label>

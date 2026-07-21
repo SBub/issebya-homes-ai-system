@@ -80,13 +80,12 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const files = formData.getAll("files").filter((f): f is File => f instanceof File);
 
-  // "should support 2 of these csv uploads" — both required, not an
-  // either-or single-file endpoint.
-  if (files.length !== 2) {
-    return NextResponse.json(
-      { error: "Exactly 2 files required: one Airbnb CSV and one Booking.com CSV" },
-      { status: 400 },
-    );
+  // At least 1 file required — no fixed count. Booking.com only exports
+  // monthly, per-room CSVs (unlike Airbnb's single combined export), so a
+  // real upload batch is often 1 Airbnb file + many Booking.com files.
+  // Platform is auto-detected per file below, so any mix works.
+  if (files.length < 1) {
+    return NextResponse.json({ error: "At least 1 CSV file is required" }, { status: 400 });
   }
 
   const allBookings: FinanceBooking[] = [];
