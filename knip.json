@@ -27,7 +27,7 @@
     "apps/guest-communication-agent": {
       "next": true,
       "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
     }
   },
   "ignoreBinaries": ["supabase"]
