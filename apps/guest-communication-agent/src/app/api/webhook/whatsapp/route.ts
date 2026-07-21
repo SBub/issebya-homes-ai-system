@@ -2,7 +2,8 @@ import { AIMessage } from "@langchain/core/messages";
 import { type NextRequest, NextResponse } from "next/server";
 import { graph } from "@/graph/graph";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
-import { registerGuestContact } from "@/lib/crm";
+import { registerGuestContact, touchGuestContact } from "@/lib/crm";
+import { deriveStageHint } from "@/lib/funnel-stage";
 import { verifyTwilioSignature } from "@/lib/twilio";
 
 function escapeXml(text: string): string {
@@ -91,6 +92,21 @@ export async function POST(request: NextRequest) {
       : "Sorry, I couldn't process that — please try again shortly.";
 
   await recordMessage(conversationId, "assistant", replyText);
+
+  // Fire-and-forget: record this turn's guest interaction and, if the
+  // tools that fired this turn imply funnel-stage progress, let CRM
+  // advance guest_contacts.funnel_stage (CRM owns the forward-only upgrade
+  // logic; this route just derives the hint — see funnel-stage.ts's own
+  // doc comment for the derivation rules and lib/crm.ts's touchGuestContact
+  // for why this never blocks/fails the guest-facing reply, exactly like
+  // registerGuestContact above).
+  const stageHint = deriveStageHint(result.messages);
+  const touchResult = await touchGuestContact(phone, stageHint);
+  if (!touchResult.ok) {
+    console.warn(
+      `[guest-communication-agent] touchGuestContact failed for ${phone}: ${touchResult.error}`,
+    );
+  }
 
   return new NextResponse(`<Response><Message>${escapeXml(replyText)}</Message></Response>`, {
     status: 200,

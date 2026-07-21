@@ -100,3 +100,50 @@ export async function registerGuestContact(phone: string): Promise<GuestContactR
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export type FunnelStageHint = "informed" | "link_sent" | "booked";
+
+export interface GuestContactTouchResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Calls CRM's POST /api/guest-contacts/touch once per guest-facing turn,
+ * after the graph has already replied, to record that the guest interacted
+ * (CRM always bumps last_interaction_at) and, when `stageHint` is given, to
+ * let CRM advance guest_contacts.funnel_stage if that hint outranks the
+ * row's current stage (CRM owns the forward-only upgrade logic — see
+ * apps/crm/src/app/api/guest-contacts/touch/route.ts's own doc comment;
+ * this function is just the caller).
+ *
+ * Same resilience shape as registerGuestContact above, not
+ * lookupGuestContact's: this is not in the live reply-blocking path either
+ * (the webhook route calls it after graph.invoke() has already produced the
+ * TwiML reply), so it never throws — `{ ok: true }` on success or when CRM
+ * isn't configured, `{ ok: false, error }` on failure for the caller to log.
+ */
+export async function touchGuestContact(
+  phone: string,
+  stageHint?: FunnelStageHint,
+): Promise<GuestContactTouchResult> {
+  const baseUrl = process.env.CRM_API_URL;
+  const apiKey = process.env.CRM_API_KEY;
+  if (!baseUrl || !apiKey) {
+    return { ok: true };
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/api/guest-contacts/touch`, {
+      method: "POST",
+      headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, stageHint }),
+    });
+    if (!res.ok) {
+      throw new Error(`guest-contacts touch failed (${res.status}): ${await res.text()}`);
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

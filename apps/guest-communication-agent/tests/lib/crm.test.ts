@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { crmConfigured, lookupGuestContact, registerGuestContact } from "@/lib/crm.js";
+import {
+  crmConfigured,
+  lookupGuestContact,
+  registerGuestContact,
+  touchGuestContact,
+} from "@/lib/crm.js";
 
 describe("crmConfigured", () => {
   const originalEnv = { ...process.env };
@@ -154,6 +159,83 @@ describe("registerGuestContact", () => {
     fetchMock.mockRejectedValueOnce(new Error("network error"));
 
     const result = await registerGuestContact("+351920742845");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("network error");
+  });
+});
+
+describe("touchGuestContact", () => {
+  const originalEnv = { ...process.env };
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env.CRM_API_URL = "http://localhost:3006";
+    process.env.CRM_API_KEY = "test-key";
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unstubAllGlobals();
+  });
+
+  // Same resilience shape as registerGuestContact above — this fires after
+  // graph.invoke() has already produced the guest-facing reply, not in the
+  // reply-blocking path, so it returns { ok: ... } rather than throwing.
+
+  it("no-ops (ok: true) when not configured, without calling fetch", async () => {
+    delete process.env.CRM_API_URL;
+    const result = await touchGuestContact("+351920742845");
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("POSTs to the guest-contacts touch route with the phone body and X-API-Key header, no stageHint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ updated: true, funnel_stage: "new" }), { status: 200 }),
+    );
+
+    const result = await touchGuestContact("whatsapp:+351920742845");
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:3006/api/guest-contacts/touch");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "X-API-Key": "test-key", "Content-Type": "application/json" });
+    // JSON.stringify drops the stageHint key entirely when it's undefined —
+    // the request body has no stageHint field at all in this case, not
+    // stageHint: null.
+    expect(init.body).toBe(JSON.stringify({ phone: "whatsapp:+351920742845" }));
+  });
+
+  it("includes stageHint in the request body when given", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ updated: true, funnel_stage: "link_sent" }), { status: 200 }),
+    );
+
+    const result = await touchGuestContact("+351920742845", "link_sent");
+
+    expect(result).toEqual({ ok: true });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(JSON.stringify({ phone: "+351920742845", stageHint: "link_sent" }));
+  });
+
+  it("returns ok: false with the error message on an HTTP failure, does not throw", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
+
+    const result = await touchGuestContact("+351920742845");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("401");
+  });
+
+  it("returns ok: false when fetch itself rejects, does not throw", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network error"));
+
+    const result = await touchGuestContact("+351920742845");
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe("network error");
