@@ -17,19 +17,21 @@ import {
 } from "../../health/checks.js";
 import { lastRunAt, recordRun } from "../../storage/persistence.js";
 import { fetchAvailability } from "../../tools/availability.js";
+import { fetchCampaignStats } from "../../tools/campaigns.js";
 import { fetchFinance } from "../../tools/finance.js";
 import { digestSchema } from "../agents/reporter-agent.js";
 
 function createAnalyzeStep(pool: pg.Pool, settings: Settings) {
   return createStep({
     id: "analyze",
-    description: "Pull current state from Availability and Finance, run health checks.",
+    description: "Pull current state from Availability, Finance, and Campaigns, run health checks.",
     inputSchema: z.object({}),
     outputSchema: analysisSchema,
     execute: async () => {
-      const [availability, finance, lastRun] = await Promise.all([
+      const [availability, finance, campaigns, lastRun] = await Promise.all([
         fetchAvailability(),
         fetchFinance(),
+        fetchCampaignStats(),
         lastRunAt(pool),
       ]);
       const health = [
@@ -37,7 +39,7 @@ function createAnalyzeStep(pool: pg.Pool, settings: Settings) {
         checkAvailabilityFreshness(availability, settings.AVAILABILITY_STALE_AFTER_HOURS),
         checkFinanceFreshness(finance, settings.FINANCE_STALE_AFTER_HOURS),
       ];
-      return { availability, finance, health };
+      return { availability, finance, campaigns, health };
     },
   });
 }
@@ -62,6 +64,7 @@ function createDecideStep(reporterAgent: Agent) {
         summary: result.object.summary,
         availability: inputData.availability,
         finance: inputData.finance,
+        campaigns: inputData.campaigns,
         anomalies,
         health: inputData.health,
       };

@@ -6,17 +6,20 @@
 import { detectAnomalies, renderReport } from "../src/core/models.js";
 import { checkHeartbeat } from "../src/health/checks.js";
 import { fetchAvailability } from "../src/tools/availability.js";
+import { fetchCampaignStats } from "../src/tools/campaigns.js";
 import { fetchFinance } from "../src/tools/finance.js";
 
 async function main() {
   const availability = await fetchAvailability();
   const finance = await fetchFinance();
+  const campaigns = await fetchCampaignStats();
   const anomalies = detectAnomalies(availability, finance);
   const health = [checkHeartbeat(new Date(), 60)];
   const text = renderReport({
     summary: "(LLM-generated one-line summary would go here)",
     availability,
     finance,
+    campaigns,
     anomalies,
     health,
   });

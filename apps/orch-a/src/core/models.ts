@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type AvailabilitySnapshot, availabilitySnapshotSchema } from "../tools/availability.js";
+import { campaignStatsSchema } from "../tools/campaigns.js";
 import { type FinanceSnapshot, financeSnapshotSchema } from "../tools/finance.js";
 
 const healthStatusSchema = z.enum(["ok", "stale", "missing"]);
@@ -13,6 +14,7 @@ const healthCheckResultSchema = z.object({
 export const analysisSchema = z.object({
   availability: z.array(availabilitySnapshotSchema),
   finance: z.array(financeSnapshotSchema),
+  campaigns: z.array(campaignStatsSchema),
   health: z.array(healthCheckResultSchema),
 });
 
@@ -21,6 +23,7 @@ export const reportSchema = z.object({
   summary: z.string(),
   availability: z.array(availabilitySnapshotSchema),
   finance: z.array(financeSnapshotSchema),
+  campaigns: z.array(campaignStatsSchema),
   anomalies: z.array(z.string()),
   health: z.array(healthCheckResultSchema),
 });
@@ -53,6 +56,13 @@ export function detectAnomalies(
   }
   return anomalies;
 }
+
+// Matches apps/crm/src/lib/campaigns.ts's own CAMPAIGN_NAMES wording (minus
+// its "(automated)" suffix, which is implementation detail, not digest copy).
+const CAMPAIGN_LABELS: Record<string, string> = {
+  seasonal_nudge: "Seasonal check-in",
+  stalled_link_nudge: "Stalled booking-link follow-up",
+};
 
 function prettifyPropertyId(id: string): string {
   const match = id.match(/^room(\d+)$/);
@@ -89,6 +99,12 @@ export function renderReport(report: Report): string {
     lines.push(
       `• ${escapeHtml(prettifyPropertyId(f.propertyId))}: ${formatCurrency(f.revenueMonthToDate)} revenue · ${formatCurrency(f.outstandingPayouts)} outstanding`,
     );
+  }
+
+  lines.push("", "<b>Campaigns</b>");
+  for (const c of report.campaigns) {
+    const label = escapeHtml(CAMPAIGN_LABELS[c.kind] ?? c.kind);
+    lines.push(`• ${label}: ${c.issued} issued · ${c.sent} sent · ${c.rejected} rejected`);
   }
 
   if (report.anomalies.length > 0) {
