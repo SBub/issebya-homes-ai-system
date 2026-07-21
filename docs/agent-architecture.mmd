@@ -134,6 +134,8 @@ flowchart TB
     CRM -- calls /api/campaign-drafts --> ROUTER
     ROUTER -- "calls /api/promo-codes/* (check + mark-sent/rejected)" --> CRM
     ROUTER -- calls /api/send --> GCA
+    CRM -. design intent, not built, notifies GCA to craft a personalized nudge per guest .-> GCA
+    SOC_GEN -. design intent, schema only, social post or comment should trigger a code-word campaign .-> CRM
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -291,12 +293,18 @@ flowchart TB
     %%       of the same simulated-approve test as 62 — GCA's /api/send was
     %%       called for real and in turn called Twilio's live API (accepted,
     %%       via one of Twilio's own documented magic/test numbers, so
-    %%       nothing reached a real device))
+    %%       nothing reached a real device). Design-intent note: the schema's
+    %%       fourth campaigns.kind, 'manual' (owner-initiated, one-off, zero
+    %%       code today), has no distinct originating system the way
+    %%       social_code_word will — once built it would not need a new edge
+    %%       at all, it would just enter this same already-live approve-then-
+    %%       send path and go out through this exact edge, same as an
+    %%       approved automated nudge does today)
     linkStyle 0,17,18,19,20,21,22,23,24,25,34,36,37,38,39,40,41,45,46,49,50,51,54,55,56,58,59,60,61,62,63 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 64 edges total (0-63); this is the complement
+    %% defaulting to black. 66 edges total (0-65); this is the complement
     %% of the tested set. 42 = TG -> ROUTER ("/social <idea>") and 47 =
     %% ROUTER -> TG (replies with generated content) (router split just
     %% landed; no genuine end-to-end Telegram round trip through the /social
@@ -326,7 +334,27 @@ flowchart TB
     %% target changed, even though the endpoint it calls has been proven to
     %% work (see 58/59 above). Needs a real upload-triggered call against the
     %% new CRM target before it can go green again.
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,35,42,43,44,47,48,52,53,57 stroke:#BDBDBD,stroke-width:1px
+    %% 64 = CRM -.-> GCA (design intent, added 2026-07-21, NOT built: today
+    %% check-stalled-guests' cron drafts a fixed template itself, see 61, and
+    %% pushes that fixed draft straight to ROUTER for approval — CRM never
+    %% talks to GCA in that flow at all. This edge instead captures where the
+    %% flow should evolve: the cron notifying GCA so GCA — not CRM — crafts a
+    %% personalized message per guest, presumably drawing on its own
+    %% conversational/LLM capabilities and the guest's real history. Distinct
+    %% from 63 = ROUTER -- calls /api/send --> GCA, which is the unrelated,
+    %% already-live, post-human-approval send step; this edge is about
+    %% drafting/personalizing before any draft exists, not sending after
+    %% approval. Zero code behind this edge today.
+    %% 65 = SOC_GEN -.-> CRM (design intent, added 2026-07-21, NOT built:
+    %% social_code_word is one of four campaigns.kind values the CRM schema's
+    %% check constraint allows, but has zero implementation — no cron, no
+    %% draft generator, nothing. Unlike the other three kinds, a code-word
+    %% campaign is meant to originate from a social media post or comment
+    %% (e.g. a caption inviting guests to message a code word) rather than
+    %% from any GCA guest conversation or funnel-stall cron, so this edge
+    %% represents that origin conceptually from the Social Media System (its
+    %% only node, SOC_GEN) toward CRM. Schema-only today, nothing wired.
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,35,42,43,44,47,48,52,53,57,64,65 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style FIN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
