@@ -17,10 +17,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { csv, filename } = await getTouristTaxReport(quarter, year);
-    return new NextResponse(csv, {
+    const { buffer, filename } = await getTouristTaxReport(quarter, year);
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
-        "Content-Type": "text/csv",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     });

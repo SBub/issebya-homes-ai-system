@@ -1,3 +1,4 @@
+import * as XLSX from "xlsx";
 import { pool } from "./db";
 import { airbnbBaseCommission, airbnbGuestPaid } from "./formulas";
 import type { InvoicesReport, Modelo30Summary, TouristTaxReport } from "./reports";
@@ -155,30 +156,43 @@ export async function getTouristTaxReport(
 
   let total = 0;
   let totalOvernightStays = 0;
-  const csvLines = ["Date,Room,Total nights paid,People,Total"];
+  const sheetRows: (string | number)[][] = [
+    ["Date", "Room", "Total nights paid", "People", "Total"],
+  ];
 
   for (const row of rows) {
     const nightsCapped = Math.min(row.nights, 3);
     const amount = 2 * row.guests * nightsCapped;
     total += amount;
     totalOvernightStays += row.guests * nightsCapped;
-    csvLines.push(
-      `${formatDateRange(row.checkin_date, row.checkout_date)},${roomLabel(row.room)},${nightsCapped},${row.guests},${amount}`,
-    );
+    sheetRows.push([
+      formatDateRange(row.checkin_date, row.checkout_date),
+      roomLabel(row.room),
+      nightsCapped,
+      row.guests,
+      amount,
+    ]);
   }
 
-  csvLines.push(",,,,");
-  csvLines.push(`,,,Total,${total}`);
+  sheetRows.push([]);
+  sheetRows.push(["", "", "", "Total", total]);
   // The exact figure the Sintra municipal tax portal's "Number of overnight
   // stays subject to tax up to a maximum of 3 nights (€2)" field wants — a
   // count (guests × nights, each booking capped at 3 nights), not a euro
   // amount. total (above) / 2 gives the same number since the rate is a flat
   // €2, but computing it directly here doesn't rely on that coincidence.
-  csvLines.push(`,,,Total overnight stays subject to tax,${totalOvernightStays}`);
+  sheetRows.push(["", "", "", "Total overnight stays subject to tax", totalOvernightStays]);
+
+  // .xlsx, not CSV — confirmed live that the Sintra municipal tax portal's
+  // upload only accepts Excel files (a CSV of the same data was rejected).
+  const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Tourist Tax");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 
   return {
-    csv: csvLines.join("\n"),
-    filename: `tourist-tax-Q${quarter}-${year}.csv`,
+    buffer,
+    filename: `tourist-tax-Q${quarter}-${year}.xlsx`,
     total,
     totalOvernightStays,
   };

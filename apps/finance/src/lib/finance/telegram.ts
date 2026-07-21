@@ -53,14 +53,18 @@ export async function sendMessage(text: string): Promise<TelegramResult> {
 }
 
 /**
- * Uploads `content` as a CSV file named `filename` via Telegram's
- * sendDocument API, using Node's built-in FormData/Blob (global since
- * Node 18, no new dependency needed) to build the multipart body.
+ * Uploads `content` as a file named `filename` via Telegram's sendDocument
+ * API, using Node's built-in FormData/Blob (global since Node 18, no new
+ * dependency needed) to build the multipart body. `content` accepts a
+ * Buffer (e.g. the tourist-tax report's .xlsx binary) as well as a string
+ * (e.g. the invoices CSV) — `mimeType` defaults to `text/csv` to keep that
+ * existing call site unchanged.
  */
 export async function sendDocument(
   filename: string,
-  content: string,
+  content: string | Buffer,
   caption?: string,
+  mimeType = "text/csv",
 ): Promise<TelegramResult> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -72,7 +76,10 @@ export async function sendDocument(
     const form = new FormData();
     form.append("chat_id", chatId);
     if (caption) form.append("caption", caption);
-    form.append("document", new Blob([content], { type: "text/csv" }), filename);
+    // Buffer isn't directly assignable to BlobPart (TS's ArrayBuffer vs
+    // ArrayBufferLike/SharedArrayBuffer strictness) — Uint8Array is.
+    const blobContent = typeof content === "string" ? content : new Uint8Array(content);
+    form.append("document", new Blob([blobContent], { type: mimeType }), filename);
 
     const res = await fetch(`${TELEGRAM_API}/bot${token}/sendDocument`, {
       method: "POST",

@@ -90,7 +90,9 @@ export function invoicesToCsv(reservations: InvoiceReservation[]): string {
 // ---------------------------------------------------------------------------
 
 export interface TouristTaxReport {
-  csv: string;
+  /** .xlsx binary, not CSV — confirmed live that the Sintra municipal tax
+   * portal's upload only accepts Excel files, not CSV. */
+  buffer: Buffer;
   filename: string;
   total: number;
   /** Sum of guests × min(nights, 3) across qualifying bookings — the exact

@@ -162,11 +162,15 @@ export async function POST(request: NextRequest) {
         const invoicesCsv = invoicesToCsv(invoicesReport.reservations);
         const invoicesFilename = `invoices-${label}.csv`;
 
-        let touristTax: { quarter: number; filename: string; csv: string } | undefined;
+        let touristTax: { quarter: number; filename: string; buffer: Buffer } | undefined;
         if (isQuarterClosingMonth(month)) {
           const quarter = monthToQuarter(month);
           const touristTaxReport = await getTouristTaxReport(quarter, year);
-          touristTax = { quarter, filename: touristTaxReport.filename, csv: touristTaxReport.csv };
+          touristTax = {
+            quarter,
+            filename: touristTaxReport.filename,
+            buffer: touristTaxReport.buffer,
+          };
         }
 
         const text = buildImportMessage({
@@ -184,7 +188,12 @@ export async function POST(request: NextRequest) {
         if (!invoicesDocResult.ok) warnings.push(`${invoicesFilename}: ${invoicesDocResult.error}`);
 
         if (touristTax) {
-          const touristTaxDocResult = await sendDocument(touristTax.filename, touristTax.csv);
+          const touristTaxDocResult = await sendDocument(
+            touristTax.filename,
+            touristTax.buffer,
+            undefined,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
           if (!touristTaxDocResult.ok) {
             warnings.push(`${touristTax.filename}: ${touristTaxDocResult.error}`);
           }
