@@ -18,7 +18,7 @@ flowchart TB
  subgraph Tools["Tools"]
         AVAIL["Availability Tool<br><i>(GET issebya.com/api/availability?room=room1|room2)</i>"]
         FIN["Finance Tool"]
-        CRM["CRM Tool<br><i>guest info (apps/guest-communication-agent's guest_contacts table, auto-populated from apps/finance's finance_bookings on every CSV upload via POST /api/guest-contacts/sync, enriched with phone numbers a human adds to a dedicated &quot;Guest Contacts&quot; Notion database — a full pull-refresh-push round trip, all triggered automatically by the same CSV upload) + communication history (GCA's whatsapp_conversations/whatsapp_messages) are both real and live; does NOT yet measure instrument effectiveness — no campaigns, promo codes, or conversion tracking exist (see STRUCTURAL GAPS #4)</i>"]
+        CRM["CRM (apps/crm, port 3006)<br><i>extracted out of apps/guest-communication-agent into its own app on 2026-07-21: owns the guest_contacts table + its full Notion round trip (finance-sync, notion-phone-sync, notion-guest-contacts-sync, phone normalization). Auto-populated from apps/finance's finance_bookings via POST /api/guest-contacts/sync (apps/finance calls this after every CSV upload), enriched with phone numbers a human adds to a dedicated &quot;Guest Contacts&quot; Notion database — a full pull-refresh-push round trip; the sync endpoint's real Notion round trip (4 real guests) was live-verified this session by calling it directly against a locally running crm server. New GET /api/guest-contacts/lookup?phone= returns raw past-stay facts (last_room, last_stay_checkin, total_stays) for a normalized phone, no interpretation — called by apps/guest-communication-agent on every conversational turn via a new src/lib/crm.ts client, deliberately resilient (returns null on any failure, never throws) since it sits in GCA's live request path; this lookup endpoint (auth, validation, phone normalization) plus GCA's real CRM_API_URL/CRM_API_KEY env wiring to it were both live-verified this session. Communication history (GCA's own whatsapp_conversations/whatsapp_messages) is untouched by this extraction and still lives in GCA. Does NOT yet measure instrument effectiveness — no campaigns, promo codes, or conversion tracking exist (see STRUCTURAL GAPS #4)</i>"]
   end
  subgraph Agents["Agents"]
         CAMP["Campaign Agent<br><i>(promotes right product to the right audience: product launch, brand awareness, promotional or seasonal, social media, email marketing)</i>"]
@@ -74,7 +74,7 @@ flowchart TB
     DESIGN -- provides assets --> CAMP
     SWE -- updates --> SITE(["Website"])
     SWE -- reports completion --> TG
-    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>ported into apps/guest-communication-agent here (2026-07-20) from issebya-homes-website, faithfully — same LangGraph.js graph (load_context -&gt; agent &lt;-&gt; 5 tools -&gt; END), same DB schema (whatsapp_conversations/messages/escalations, plus a hand-reconstructed guest_contacts — no committed migration for it existed anywhere in the source repo). POST /api/webhook/whatsapp validates a real X-Twilio-Signature and invokes the graph for real. LIVE end-to-end on real WhatsApp traffic via Twilio's free WhatsApp Sandbox + ngrok: real guest messages answered in-character by the real LangSmith Prompt Hub prompt (whatsapp-booking-agent:production), and a real out-of-coverage question correctly escalated. Escalation alerts send Telegram directly (own bot token), bypassing apps/telegram-router like every other app here already does — a known, not-yet-resolved inconsistency, ported as-is; the alert's old dead &quot;View conversation&quot; dashboard link (apps/crm-dashboard doesn't exist here) has been removed, now just includes the conversation ID.</i>"]
+    CAMP -- hands off content --> GCA["Guest-Comms Agent<br><i>ported into apps/guest-communication-agent here (2026-07-20) from issebya-homes-website, faithfully — same LangGraph.js graph (load_context -&gt; agent &lt;-&gt; 5 tools -&gt; END), same DB schema (whatsapp_conversations/messages/escalations — the hand-reconstructed guest_contacts table that briefly lived here too, no committed migration for it existed anywhere in the source repo, was extracted out to its own app, apps/crm, on 2026-07-21; GCA now calls CRM's GET /api/guest-contacts/lookup via a new src/lib/crm.ts client instead of querying that table directly, resiliently returning null on any failure since it sits in the live conversational request path). POST /api/webhook/whatsapp validates a real X-Twilio-Signature and invokes the graph for real. LIVE end-to-end on real WhatsApp traffic via Twilio's free WhatsApp Sandbox + ngrok: real guest messages answered in-character by the real LangSmith Prompt Hub prompt (whatsapp-booking-agent:production), and a real out-of-coverage question correctly escalated. Escalation alerts send Telegram directly (own bot token), bypassing apps/telegram-router like every other app here already does — a known, not-yet-resolved inconsistency, ported as-is; the alert's old dead &quot;View conversation&quot; dashboard link (apps/crm-dashboard doesn't exist here) has been removed, now just includes the conversation ID.</i>"]
     GCA -- posts/replies --> GUEST(["Guest / Webpage Visitor"])
     PMA -- messages --> CLEAN(["Cleaning Lady"])
     CLEAN -- webhook: incoming message --> PMA
@@ -127,9 +127,10 @@ flowchart TB
     TG -- "Done button press" --> ROUTER
     ROUTER -- calls /api/reminders/* --> NOTIF
     ROUTER -- calls /digest --> ORCH
-    UPLOAD -- calls /api/guest-contacts/sync --> GCA
-    NOTION_CRM -- phone numbers --> GCA
-    GCA -- writes merged contacts --> NOTION_CRM
+    UPLOAD -- calls /api/guest-contacts/sync --> CRM
+    NOTION_CRM -- phone numbers --> CRM
+    CRM -- writes merged contacts --> NOTION_CRM
+    GCA -- calls /api/guest-contacts/lookup --> CRM
 
     %% BUILT (green)
     style AVAIL fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -221,28 +222,41 @@ flowchart TB
     %%       old /api/digest path, and a correct real response with live
     %%       Availability data on a valid call — and exercised end-to-end via
     %%       POST /api/cron/check-digest)
-    %%  57 = UPLOAD -- calls /api/guest-contacts/sync --> GCA (new edge;
-    %%       live-verified today: a real CSV upload through the actual
-    %%       apps/finance /upload page triggered apps/finance's
-    %%       X-API-Key-guarded POST to GCA's /api/guest-contacts/sync,
-    %%       same cross-app-call pattern as every other inter-app call in
-    %%       this repo)
-    %%  58 = NOTION_CRM -- phone numbers --> GCA (new edge; the pull step of
-    %%       the round trip — GCA's syncPhonesFromNotion() reads the
-    %%       manually-typed Phone property off the Guest Contacts Notion
-    %%       database first, before the finance-refresh runs, so a human's
-    %%       manual edit survives; live-verified today as part of the same
-    %%       end-to-end upload test)
-    %%  59 = GCA -- writes merged contacts --> NOTION_CRM (new edge; the push
-    %%       step — GCA's pushGuestContactsToNotion() writes the
-    %%       finance-refreshed + phone-preserved guest_contacts rows back out
-    %%       as real Notion pages, matched by a "Contact ID" property; real
-    %%       pages confirmed created/updated in today's same test)
-    linkStyle 0,17,18,19,20,21,22,23,24,25,36,37,38,39,40,41,45,46,49,50,51,54,55,56,57,58,59 stroke:#2E7D32,stroke-width:2px
+    %%  58 = NOTION_CRM -- phone numbers --> CRM (retargeted 2026-07-21: this
+    %%       used to be GCA's own syncPhonesFromNotion() pull step; that
+    %%       function moved to apps/crm's notion-phone-sync.ts verbatim as
+    %%       part of the CRM extraction, so the edge now points at CRM
+    %%       instead of GCA. Still the pull step of the same round trip —
+    %%       reads the manually-typed Phone property off the Guest Contacts
+    %%       Notion database first, before the finance-refresh runs, so a
+    %%       human's manual edit survives. Live-verified this session: CRM's
+    %%       POST /api/guest-contacts/sync was exercised directly against a
+    %%       locally running crm server and produced a real Notion round trip
+    %%       for 4 real guests)
+    %%  59 = CRM -- writes merged contacts --> NOTION_CRM (retargeted
+    %%       2026-07-21: this used to be GCA's own pushGuestContactsToNotion()
+    %%       push step; that function moved to apps/crm's
+    %%       notion-guest-contacts-sync.ts verbatim, so the edge's source is
+    %%       now CRM instead of GCA. Still the push step of the same round
+    %%       trip — writes the finance-refreshed + phone-preserved
+    %%       guest_contacts rows back out as real Notion pages, matched by a
+    %%       "Contact ID" property. Live-verified this session as part of the
+    %%       same direct sync-endpoint test as 58 above (4 real guests,
+    %%       real pages confirmed created/updated)
+    %%  60 = GCA -- calls /api/guest-contacts/lookup --> CRM (brand new edge,
+    %%       added 2026-07-21 as part of the CRM extraction: GCA's
+    %%       loadGuestInfo() no longer queries guest_contacts directly — it
+    %%       now calls this new CRM endpoint via a new src/lib/crm.ts client.
+    %%       Live-verified this session: GCA's actual CRM_API_URL/CRM_API_KEY
+    %%       env wiring was exercised directly against the live lookup
+    %%       endpoint and got back a real response; the endpoint's own auth,
+    %%       validation, and phone normalization (Twilio's "whatsapp:" prefix)
+    %%       were also verified)
+    linkStyle 0,17,18,19,20,21,22,23,24,25,36,37,38,39,40,41,45,46,49,50,51,54,55,56,58,59,60 stroke:#2E7D32,stroke-width:2px
 
     %% ALL OTHER EDGES (grey) — everything not in the tested list above,
     %% so untested paths read as grey like not-yet-built nodes instead of
-    %% defaulting to black. 60 edges total (0-59); this is the complement
+    %% defaulting to black. 61 edges total (0-60); this is the complement
     %% of the tested set. 42 = TG -> ROUTER ("/social <idea>") and 47 =
     %% ROUTER -> TG (replies with generated content) (router split just
     %% landed; no genuine end-to-end Telegram round trip through the /social
@@ -262,7 +276,17 @@ flowchart TB
     %% own Twilio-assigned test number), not this production number — this
     %% specific edge needs the production number registered with Twilio and
     %% pointed at GCA's webhook before it can go green.
-    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,42,43,44,47,48,52,53 stroke:#BDBDBD,stroke-width:1px
+    %% 57 = UPLOAD -- calls /api/guest-contacts/sync --> CRM — retargeted
+    %% 2026-07-21 (was GCA, now CRM) and downgraded from green to grey: this
+    %% session's sync-endpoint test hit CRM's POST /api/guest-contacts/sync
+    %% directly against a locally running crm server, not through an actual
+    %% CSV upload via the apps/finance /upload page — so the real trigger
+    %% path (apps/finance's import route calling CRM with its
+    %% X-API-Key-guarded fetch) hasn't itself been re-exercised since the
+    %% target changed, even though the endpoint it calls has been proven to
+    %% work (see 58/59 above). Needs a real upload-triggered call against the
+    %% new CRM target before it can go green again.
+    linkStyle 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,26,27,28,29,30,31,32,33,34,35,42,43,44,47,48,52,53,57 stroke:#BDBDBD,stroke-width:1px
 
     %% NOT YET BUILT (grey)
     style FIN fill:#F0F0F0,stroke:#BDBDBD,color:#757575,stroke-width:1px,stroke-dasharray: 2
