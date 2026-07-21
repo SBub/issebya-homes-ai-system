@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { crmConfigured, lookupGuestContact } from "@/lib/crm.js";
+import { crmConfigured, lookupGuestContact, registerGuestContact } from "@/lib/crm.js";
 
 describe("crmConfigured", () => {
   const originalEnv = { ...process.env };
@@ -93,5 +93,69 @@ describe("lookupGuestContact", () => {
     const result = await lookupGuestContact("+351920742845");
 
     expect(result).toBeNull();
+  });
+});
+
+describe("registerGuestContact", () => {
+  const originalEnv = { ...process.env };
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env.CRM_API_URL = "http://localhost:3006";
+    process.env.CRM_API_KEY = "test-key";
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unstubAllGlobals();
+  });
+
+  // Same resilience shape as apps/finance's guest-contacts.test.ts's
+  // syncGuestContacts tests — this is a fire-and-forget side effect after a
+  // DB write already committed (a brand-new whatsapp_conversation row), NOT
+  // in the live reply-blocking path like lookupGuestContact above, so it
+  // returns { ok: ... } rather than throwing.
+
+  it("no-ops (ok: true) when not configured, without calling fetch", async () => {
+    delete process.env.CRM_API_URL;
+    const result = await registerGuestContact("+351920742845");
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("POSTs to the guest-contacts register route with the phone body and X-API-Key header", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ created: true }), { status: 200 }),
+    );
+
+    const result = await registerGuestContact("whatsapp:+351920742845");
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:3006/api/guest-contacts/register");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "X-API-Key": "test-key", "Content-Type": "application/json" });
+    expect(init.body).toBe(JSON.stringify({ phone: "whatsapp:+351920742845" }));
+  });
+
+  it("returns ok: false with the error message on an HTTP failure, does not throw", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
+
+    const result = await registerGuestContact("+351920742845");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("401");
+  });
+
+  it("returns ok: false when fetch itself rejects, does not throw", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network error"));
+
+    const result = await registerGuestContact("+351920742845");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("network error");
   });
 });

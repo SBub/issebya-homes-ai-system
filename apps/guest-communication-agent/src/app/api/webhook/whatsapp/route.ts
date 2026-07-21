@@ -2,6 +2,7 @@ import { AIMessage } from "@langchain/core/messages";
 import { type NextRequest, NextResponse } from "next/server";
 import { graph } from "@/graph/graph";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
+import { registerGuestContact } from "@/lib/crm";
 import { verifyTwilioSignature } from "@/lib/twilio";
 
 function escapeXml(text: string): string {
@@ -53,8 +54,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing From/Body" }, { status: 400 });
   }
 
-  const conversationId = await getOrCreateActiveConversation(phone);
+  const { conversationId, isNew } = await getOrCreateActiveConversation(phone);
   await recordMessage(conversationId, "user", incomingMessage);
+
+  // Fire-and-forget: register a phone-keyed CRM stub the moment this guest's
+  // first conversation starts. Never blocks/fails the guest-facing reply —
+  // registerGuestContact() itself never throws (see its own doc comment),
+  // and this route replies via TwiML, not JSON, so there's no response body
+  // to attach a warning to like apps/finance's import route does; a
+  // console.warn is the only signal on failure.
+  if (isNew) {
+    const result = await registerGuestContact(phone);
+    if (!result.ok) {
+      console.warn(
+        `[guest-communication-agent] registerGuestContact failed for ${phone}: ${result.error}`,
+      );
+    }
+  }
 
   const result = await graph.invoke(
     { conversationId, phone, incomingMessage },

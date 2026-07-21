@@ -59,3 +59,44 @@ export async function lookupGuestContact(phone: string): Promise<GuestContactLoo
     return null;
   }
 }
+
+export interface GuestContactRegisterResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Calls CRM's POST /api/guest-contacts/register to create a phone-keyed stub
+ * guest_contacts row the moment a brand-new whatsapp_conversation starts
+ * (see the webhook route's use of getOrCreateActiveConversation's `isNew`
+ * flag). Unlike lookupGuestContact above, this is NOT in the live
+ * reply-blocking path — it fires after the conversation/message rows are
+ * already committed to Postgres, as a side effect, the same category as
+ * apps/finance's src/lib/finance/guest-contacts.ts's syncGuestContacts (a
+ * "sync now" push after a DB write already succeeded). So this follows that
+ * function's resilience shape, not lookupGuestContact's: it never throws,
+ * and returns `{ ok: true }` both on success and when CRM isn't configured
+ * (nothing to do), only surfacing `{ ok: false, error }` for the caller to
+ * log — never to block or alter the guest-facing reply.
+ */
+export async function registerGuestContact(phone: string): Promise<GuestContactRegisterResult> {
+  const baseUrl = process.env.CRM_API_URL;
+  const apiKey = process.env.CRM_API_KEY;
+  if (!baseUrl || !apiKey) {
+    return { ok: true };
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/api/guest-contacts/register`, {
+      method: "POST",
+      headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ phone }),
+    });
+    if (!res.ok) {
+      throw new Error(`guest-contacts register failed (${res.status}): ${await res.text()}`);
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

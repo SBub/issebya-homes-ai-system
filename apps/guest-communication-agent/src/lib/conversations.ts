@@ -8,8 +8,21 @@ import { createAdminClient } from "./supabase";
 // whatsapp_conversations/whatsapp_messages tables the ported graph itself
 // reads from (@/lib/db.ts).
 
+export interface ActiveConversation {
+  conversationId: string;
+  /**
+   * True only on the actual insert branch below — this is the one and only
+   * "did a brand new conversation just start" signal in this codebase. The
+   * webhook route uses it to fire a one-time registerGuestContact() call
+   * (@/lib/crm.ts) on a guest's very first inbound message, without
+   * re-registering them on every subsequent turn of an already-active
+   * conversation.
+   */
+  isNew: boolean;
+}
+
 /** Finds the guest's currently-active conversation, or starts a new one. */
-export async function getOrCreateActiveConversation(phone: string): Promise<string> {
+export async function getOrCreateActiveConversation(phone: string): Promise<ActiveConversation> {
   const supabase = createAdminClient();
 
   const { data: existing } = await supabase
@@ -19,7 +32,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<stri
     .eq("status", "active")
     .maybeSingle();
   if (existing) {
-    return existing.id;
+    return { conversationId: existing.id, isNew: false };
   }
 
   const { data: created, error } = await supabase
@@ -30,7 +43,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<stri
   if (error || !created) {
     throw new Error(`Failed to create whatsapp_conversation for ${phone}: ${error?.message}`);
   }
-  return created.id;
+  return { conversationId: created.id, isNew: true };
 }
 
 export async function recordMessage(
