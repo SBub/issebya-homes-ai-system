@@ -97,14 +97,33 @@ describe("sendMessage", () => {
     expect(result).toEqual({ ok: true, messageId: 42 });
   });
 
-  it("attaches an inline keyboard when a button is given", async () => {
+  it("attaches an inline keyboard with a single button when a one-element array is given", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
-    await sendMessage("Reminder text", { text: "✅ Done", callbackData: "done:rfi_21_2027" });
+    await sendMessage("Reminder text", [{ text: "✅ Done", callbackData: "done:rfi_21_2027" }]);
 
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body).reply_markup).toEqual({
       inline_keyboard: [[{ text: "✅ Done", callback_data: "done:rfi_21_2027" }]],
+    });
+  });
+
+  it("attaches multiple buttons in a single row when given", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    await sendMessage("Draft message", [
+      { text: "✅ Approve", callbackData: "nudge_approve:promo-1" },
+      { text: "❌ Reject", callbackData: "nudge_reject:promo-1" },
+    ]);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).reply_markup).toEqual({
+      inline_keyboard: [
+        [
+          { text: "✅ Approve", callback_data: "nudge_approve:promo-1" },
+          { text: "❌ Reject", callback_data: "nudge_reject:promo-1" },
+        ],
+      ],
     });
   });
 

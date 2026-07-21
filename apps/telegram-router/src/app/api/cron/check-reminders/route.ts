@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     const text = `🔔 ${reminder.message}`;
     try {
       const sendResult = await sendWithRetry(() =>
-        sendMessage(text, { text: "✅ Done", callbackData: `done:${reminder.key}` }),
+        sendMessage(text, [{ text: "✅ Done", callbackData: `done:${reminder.key}` }]),
       );
       if (!sendResult.ok) {
         await recordDeliveryFailure("reminder", text, sendResult.error ?? "sendMessage failed");

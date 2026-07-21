@@ -63,10 +63,15 @@ export interface SendMessageOptions {
   parseMode?: "HTML";
 }
 
-/** Plain text message, optionally with a single inline button (e.g. reminders' "✅ Done"). */
+/**
+ * Plain text message, optionally with one row of inline buttons (e.g.
+ * reminders' single "✅ Done" button — pass `[button]` — or the campaign-
+ * draft approve/reject prompt's two buttons — pass `[approveButton,
+ * rejectButton]`). All buttons render in a single row, in array order.
+ */
 export async function sendMessage(
   text: string,
-  button?: InlineButton,
+  buttons?: InlineButton[],
   options?: SendMessageOptions,
 ): Promise<TelegramResult & { messageId?: number }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -77,9 +82,11 @@ export async function sendMessage(
 
   try {
     const payload: Record<string, unknown> = { chat_id: chatId, text };
-    if (button) {
+    if (buttons && buttons.length > 0) {
       payload.reply_markup = {
-        inline_keyboard: [[{ text: button.text, callback_data: button.callbackData }]],
+        inline_keyboard: [
+          buttons.map((button) => ({ text: button.text, callback_data: button.callbackData })),
+        ],
       };
     }
     if (options?.parseMode) {
