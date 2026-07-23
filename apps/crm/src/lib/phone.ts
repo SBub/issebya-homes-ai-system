@@ -1,11 +1,12 @@
 // Single shared phone-normalization helper — used everywhere a phone is
 // read, written, or compared, so both sides of any comparison always land
 // in the same canonical form regardless of which direction the data came
-// from (Twilio's WhatsApp webhook vs. a human typing a number into Notion).
+// from (Twilio's WhatsApp webhook vs. a human editing a row directly in
+// Postgres, e.g. via Supabase Studio's Table Editor).
 //
 // Twilio's `From` field always arrives as "whatsapp:+351920742845" (see
 // src/lib/db.ts's loadGuestInfo and apps/guest-communication-agent's
-// webhook route). A human typing a phone into Notion will naturally omit
+// webhook route). A human editing a phone directly will naturally omit
 // that prefix (e.g. "+351920742845"). If guest_contacts.phone ends up in
 // one form while lookups pass the other, they never match — silently
 // breaking guest identity linkage. This function is the one place that

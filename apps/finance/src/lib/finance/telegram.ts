@@ -11,12 +11,11 @@ interface TelegramApiResponse {
 }
 
 /**
- * Telegram delivery is optional and best-effort, matching notion.ts's
- * contract: Postgres (finance_bookings) is already committed by the time
- * this runs, so a missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (or any
- * delivery failure) must no-op / return a result object rather than
- * throwing — it's a supplementary notification, not a hard dependency for
- * import to succeed.
+ * Telegram delivery is optional and best-effort: Postgres (finance_bookings)
+ * is already committed by the time this runs, so a missing
+ * TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (or any delivery failure) must no-op /
+ * return a result object rather than throwing — it's a supplementary
+ * notification, not a hard dependency for import to succeed.
  */
 export function telegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);

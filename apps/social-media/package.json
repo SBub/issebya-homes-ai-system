@@ -1,7 +1,7 @@
 {
   "name": "social-media",
   "version": "0.1.0",
-  "description": "Social Media Post Generator — Telegram-triggered alt text + caption generation, synced to Notion",
+  "description": "Social Media Post Generator — Telegram-triggered alt text + caption generation",
   "private": true,
   "type": "module",
   "engines": {

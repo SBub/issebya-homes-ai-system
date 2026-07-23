@@ -217,9 +217,6 @@ export async function POST(request: NextRequest) {
     const result = await generateSocialPost(idea);
     await sendSocialReply(result.altText);
     await sendSocialReply(result.caption);
-    if (!result.notionOk) {
-      await sendSocialReply(`⚠️ Notion sync failed: ${result.notionError}`);
-    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[telegram-router] generation failed:", message);

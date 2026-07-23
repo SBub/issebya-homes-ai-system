@@ -27,14 +27,14 @@ describe("generateSocialPost", () => {
 
   it("posts the idea with the X-API-Key header and returns the parsed result", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ altText: "alt", caption: "caption", notionOk: true }), {
+      new Response(JSON.stringify({ altText: "alt", caption: "caption" }), {
         status: 200,
       }),
     );
 
     const result = await generateSocialPost("Rooftop pool at sunset");
 
-    expect(result).toEqual({ altText: "alt", caption: "caption", notionOk: true });
+    expect(result).toEqual({ altText: "alt", caption: "caption" });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://localhost:3002/api/generate");
     expect(init.headers["X-API-Key"]).toBe("test-key");

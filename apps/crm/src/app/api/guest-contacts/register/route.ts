@@ -26,10 +26,6 @@ import { createAdminClient } from "@/lib/supabase";
  *     column (guest_name, guest_name_normalized, last_room,
  *     last_stay_checkin, last_stay_checkout) is left at its schema default
  *     (null, or 0 for total_stays) — `{ created: true }`.
- *
- * This does NOT push to Notion synchronously — that stays exclusively
- * CSV-import-triggered via POST /api/guest-contacts/sync, consistent with
- * this app's already-documented "not real-time" limitation.
  */
 export async function POST(request: NextRequest) {
   const unauthorized = requireApiKey(request);

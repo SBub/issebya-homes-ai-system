@@ -7,9 +7,9 @@ export const runtime = "nodejs";
 
 /**
  * Deep liveness check — Postgres holds finance_bookings; a DB outage here
- * means CSV imports silently fail while the process looks alive. (Notion and
- * Telegram are already optional/best-effort per this app's own contract — see
- * src/lib/finance/telegram.ts — so they're not worth failing health over.)
+ * means CSV imports silently fail while the process looks alive. (Telegram
+ * is already optional/best-effort per this app's own contract — see
+ * src/lib/finance/telegram.ts — so it's not worth failing health over.)
  * Called by apps/telegram-router's check-health cron / /heartbeat command.
  */
 export async function GET(request: NextRequest) {

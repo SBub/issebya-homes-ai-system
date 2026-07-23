@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase";
  * Guest-lookup endpoint. Callers (currently apps/guest-communication-agent's
  * load_context node, on every conversational turn) pass a phone number in
  * whatever form they have it — Twilio's `whatsapp:`-prefixed form, or a bare
- * number typed by a human into Notion — and this normalizes it via
+ * number a human typed directly into Postgres — and this normalizes it via
  * normalizePhone() before querying, so both forms land on the same row (see
  * ./phone.ts's own doc comment for why that matters).
  *

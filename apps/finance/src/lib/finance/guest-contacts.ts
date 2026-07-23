@@ -5,9 +5,9 @@ export interface GuestContactsSyncResult {
 
 /**
  * guest_contacts refresh is optional and best-effort, matching
- * notion.ts/telegram.ts's contract: Postgres (finance_bookings) is already
- * committed by the time this runs, so a missing CRM_API_URL/CRM_API_KEY (or
- * any delivery failure) must no-op / return a result object rather than
+ * telegram.ts's contract: Postgres (finance_bookings) is already committed
+ * by the time this runs, so a missing CRM_API_URL/CRM_API_KEY (or any
+ * delivery failure) must no-op / return a result object rather than
  * throwing — it's a supplementary sync, not a hard dependency for import to
  * succeed.
  */

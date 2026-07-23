@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/finance/auth";
 import { pool } from "@/lib/finance/db";
 import { guestContactsSyncConfigured, syncGuestContacts } from "@/lib/finance/guest-contacts";
-import { notionConfigured, syncBookings } from "@/lib/finance/notion";
 import { detectPlatform, parseAirbnb, parseBookingCom } from "@/lib/finance/parsers";
 import {
   buildImportMessage,
@@ -130,25 +129,12 @@ export async function POST(request: NextRequest) {
     return acc;
   }, {});
 
-  // Postgres is the source of truth and already committed above — Notion
-  // sync is best-effort and never rolls back the DB write. Failures are
-  // reported, not swallowed, so a sync problem doesn't silently drift from
-  // what's actually stored.
-  let notionWarnings: string[] | undefined;
-  if (notionConfigured()) {
-    const syncResults = await syncBookings(allBookings);
-    const failures = syncResults.filter((r) => !r.ok);
-    if (failures.length > 0) {
-      notionWarnings = failures.map((f) => `${f.bookingId}: ${f.error}`);
-    }
-  }
-
   // Telegram delivery: announce which reports are now ready for every
   // distinct (year, month) this upload batch touched, with the Modelo 30
   // numbers and invoices CSV delivered directly (plus the tourist-tax CSV
-  // when that month closes a quarter). Best-effort like Notion sync above —
-  // Postgres already committed, so a delivery failure here is collected and
-  // reported, never thrown, and never rolls back anything.
+  // when that month closes a quarter). Best-effort — Postgres already
+  // committed, so a delivery failure here is collected and reported, never
+  // thrown, and never rolls back anything.
   let telegramWarnings: string[] | undefined;
   if (telegramConfigured()) {
     const months = distinctModelo30Months(allBookings);
@@ -208,10 +194,9 @@ export async function POST(request: NextRequest) {
 
   // guest_contacts refresh: pushes a "sync now" request to
   // apps/guest-communication-agent so it re-derives guest_contacts from the
-  // finance_bookings rows just committed above. Best-effort like Notion sync
-  // and Telegram delivery above — Postgres already committed, so a failure
-  // here is collected and reported, never thrown, and never rolls back
-  // anything.
+  // finance_bookings rows just committed above. Best-effort like Telegram
+  // delivery above — Postgres already committed, so a failure here is
+  // collected and reported, never thrown, and never rolls back anything.
   let guestContactsSyncWarning: string | undefined;
   if (guestContactsSyncConfigured()) {
     const result = await syncGuestContacts();
@@ -222,7 +207,6 @@ export async function POST(request: NextRequest) {
     bookings_upserted: upserted.length,
     by_platform: byPlatform,
     errors: errors.length > 0 ? errors : undefined,
-    notion_warnings: notionWarnings,
     telegram_warnings: telegramWarnings,
     guest_contacts_sync_warning: guestContactsSyncWarning,
   });

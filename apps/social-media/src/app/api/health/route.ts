@@ -3,9 +3,9 @@ import { NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/social/auth";
 
 /**
- * Shallow liveness check — no DB. A live network probe against
- * OpenRouter/Notion on every hourly check would burn quota and add latency
- * for a check that's supposed to be cheap and frequent; a misconfigured key
+ * Shallow liveness check — no DB. A live network probe against OpenRouter
+ * on every hourly check would burn quota and add latency for a check
+ * that's supposed to be cheap and frequent; a misconfigured key
  * is already surfaced immediately and loudly when /api/generate actually
  * fails. Called by apps/telegram-router's check-health cron / /heartbeat
  * command.

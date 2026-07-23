@@ -13,8 +13,7 @@
     "start": "next start --port 3006",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "sync:guest-contacts": "tsx --env-file=.env scripts/sync-guest-contacts.ts",
-    "sync:phones-from-notion": "tsx --env-file=.env scripts/sync-phones-from-notion.ts"
+    "sync:guest-contacts": "tsx --env-file=.env scripts/sync-guest-contacts.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

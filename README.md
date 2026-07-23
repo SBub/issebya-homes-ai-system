@@ -120,10 +120,10 @@ with the three known candidates from `docs/notification-center-todo.md`.
 ## apps/social-media
 
 Social Media Post Generator (`SOC_GEN` in `docs/agent-architecture.mmd`). A single LLM
-call, not an autonomous agent: `POST /api/generate` takes a post idea, generates alt
-text (~100 SEO/AEO keywords) and a caption (continues the idea, ends in 5 hashtags), and
-writes the result to a Notion table. No Telegram knowledge at all — `apps/telegram-router`
-is the only caller, authenticated via `SOCIAL_MEDIA_API_KEY`.
+call, not an autonomous agent: `POST /api/generate` takes a post idea and generates alt
+text (~100 SEO/AEO keywords) and a caption (continues the idea, ends in 5 hashtags). No
+Telegram knowledge at all — `apps/telegram-router` is the only caller, authenticated via
+`SOCIAL_MEDIA_API_KEY`.
 
 > **Note:** the prompt/model in `src/lib/social/generate.ts` is being iterated against
 > real output, not fully tuned.
@@ -177,9 +177,9 @@ cp apps/orch-a/.env.example apps/orch-a/.env  # fill in DATABASE_URL (from `supa
                        # start` output, see below), ORCH_A_API_KEY (same value as
                        # apps/telegram-router's), OPENROUTER_API_KEY
 cp apps/finance/.env.example apps/finance/.env  # fill in DATABASE_URL, FINANCE_API_KEY;
-                       # NOTION_*/TELEGRAM_* optional, see the file's own comments
+                       # TELEGRAM_* optional, see the file's own comments
 cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA_API_KEY,
-                       # OPENROUTER_API_KEY; NOTION_* optional, see the file's own comments
+                       # OPENROUTER_API_KEY
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
                        # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),

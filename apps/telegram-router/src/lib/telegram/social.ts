@@ -3,8 +3,6 @@ import { z } from "zod";
 const generateResponseSchema = z.object({
   altText: z.string(),
   caption: z.string(),
-  notionOk: z.boolean(),
-  notionError: z.string().optional(),
 });
 
 export type GenerateResponse = z.infer<typeof generateResponseSchema>;
