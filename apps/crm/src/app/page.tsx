@@ -115,22 +115,39 @@ const STAY_LENGTH_FILTER_OPTIONS: { value: StayLengthBucket; label: string }[] =
   { value: "short_term", label: "Short-term (<7 nights)" },
 ];
 
+const ROOM_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "room_1", label: "Room 1" },
+  { value: "room_2", label: "Room 2" },
+];
+
+// Shared day-diff math, used by stayLengthBucket below and the "Nights"
+// table column — a guest missing either date has no computable stay length.
+// Both dates are plain YYYY-MM-DD strings (finance_bookings.checkin_date/
+// checkout_date are `date`, not `timestamptz`), so new Date(...) on each
+// parses as UTC midnight and the difference is already a whole number of
+// nights.
+function nightsBetween(
+  checkin: string | null | undefined,
+  checkout: string | null | undefined,
+): number | null {
+  if (!checkin || !checkout) {
+    return null;
+  }
+  return Math.round(
+    (new Date(checkout).getTime() - new Date(checkin).getTime()) / (1000 * 60 * 60 * 24),
+  );
+}
+
 // Hidden derived column (see its columnDef below) never renders a header or
 // cell — it exists purely so stay length can be filtered through TanStack
 // Table's own columnFilters state instead of a separate ad-hoc mechanism.
 // A guest with no stay dates at all (a phone-only stub with no finance
-// history) buckets as null, matching neither filter chip. Both dates are
-// plain YYYY-MM-DD strings (finance_bookings.checkin_date/checkout_date are
-// `date`, not `timestamptz`), so new Date(...) on each parses as UTC
-// midnight and the difference is already a whole number of nights.
+// history) buckets as null, matching neither filter chip.
 function stayLengthBucket(guest: GuestContact): StayLengthBucket | null {
-  if (!guest.last_stay_checkin || !guest.last_stay_checkout) {
+  const nights = nightsBetween(guest.last_stay_checkin, guest.last_stay_checkout);
+  if (nights === null) {
     return null;
   }
-  const nights = Math.round(
-    (new Date(guest.last_stay_checkout).getTime() - new Date(guest.last_stay_checkin).getTime()) /
-      (1000 * 60 * 60 * 24),
-  );
   return nights >= 7 ? "long_term" : "short_term";
 }
 
@@ -292,6 +309,18 @@ export default function DashboardPage() {
     await loadConversationsFor(guest.id);
   }
 
+  // Mirrors selectGuest's own resets (conversations/conversationsError/
+  // conversationsLoading back to their initial values), plus clearing
+  // selectedGuestId itself — selectGuest never does that since it's always
+  // selecting a real guest, never deselecting.
+  const closeGuestDetail = useCallback(() => {
+    selectedGuestIdRef.current = null;
+    setSelectedGuestId(null);
+    setConversations(null);
+    setConversationsError(null);
+    setConversationsLoading(false);
+  }, []);
+
   const startEditingPhone = useCallback((guest: GuestContact, event: MouseEvent) => {
     event.stopPropagation();
     editingGuestIdRef.current = guest.id;
@@ -443,6 +472,7 @@ export default function DashboardPage() {
       {
         accessorKey: "last_room",
         header: "Last Room",
+        filterFn: filterValueIncludes,
         cell: (info) => (info.getValue() as string | null) ?? "—",
       },
       {
@@ -455,20 +485,50 @@ export default function DashboardPage() {
         },
       },
       {
-        // Sorts by check-in date; the cell shows the full check-in–check-out
-        // range. This is the field that matters most for deciding whether
-        // (and what) to send a returning-guest campaign to — surfaced here,
-        // sortable across the whole guest list, rather than only visible one
-        // guest at a time in the detail panel. Dates only, no time — see
-        // formatDateOnly's own comment above.
+        // Sorts by checkout date (see sortingFn below) but the cell shows
+        // only the check-in date — the fuller checkin–checkout range still
+        // lives in the detail panel, but a single date reads better in a
+        // dense table row now that the Nights and Last Room columns give
+        // complementary context. This is the field that matters most for
+        // deciding whether (and what) to send a returning-guest campaign to
+        // — surfaced here, sortable across the whole guest list, rather
+        // than only visible one guest at a time in the detail panel. Dates
+        // only, no time — see formatDateOnly's own comment above.
         accessorKey: "last_stay_checkin",
         header: "Last Stay",
+        // Sorts by checkout date, not the accessor's own checkin value —
+        // checkout is the more useful sort key (e.g. "who left most
+        // recently"), even though the cell itself only displays checkin.
+        // Both dates are plain YYYY-MM-DD strings, so lexical comparison is
+        // correct. Nulls (no stay history) compare as "" — an empty string
+        // sorts before any real date, so those guests land first ascending
+        // / last descending, consistently regardless of sort direction.
+        sortingFn: (rowA, rowB) => {
+          const a = rowA.original.last_stay_checkout ?? "";
+          const b = rowB.original.last_stay_checkout ?? "";
+          return a < b ? -1 : a > b ? 1 : 0;
+        },
         cell: (info) => {
           const guest = info.row.original;
           if (!guest.last_stay_checkin) {
             return "—";
           }
-          return `${formatDateOnly(guest.last_stay_checkin)} – ${formatDateOnly(guest.last_stay_checkout)}`;
+          return formatDateOnly(guest.last_stay_checkin);
+        },
+      },
+      {
+        // Real, visible, plain-sortable column — derived the same way as
+        // the hidden stay_length_bucket column below (accessorFn, no single
+        // source field), except this one renders. No dedicated filter: the
+        // existing "Stay length" long-term/short-term chips already filter
+        // on the derived bucket, this column is just for at-a-glance
+        // scanning of the raw night count.
+        id: "nights",
+        accessorFn: (guest) => nightsBetween(guest.last_stay_checkin, guest.last_stay_checkout),
+        header: "Nights",
+        cell: (info) => {
+          const nights = info.getValue() as number | null;
+          return nights === null ? "—" : nights;
         },
       },
       {
@@ -539,6 +599,95 @@ export default function DashboardPage() {
         </Text>
       )}
 
+      {guests.length > 0 && (
+        <>
+          <Flex direction="column" gap="3" mb="4">
+            <Box>
+              <Text as="div" size="2" weight="medium" mb="1">
+                Stay length
+              </Text>
+              <Flex gap="2" wrap="wrap">
+                {STAY_LENGTH_FILTER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    size="1"
+                    color="gray"
+                    highContrast
+                    variant={
+                      isFilterValueActive("stay_length_bucket", option.value) ? "solid" : "soft"
+                    }
+                    onClick={() => toggleFilterValue("stay_length_bucket", option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </Flex>
+            </Box>
+            <Box>
+              <Text as="div" size="2" weight="medium" mb="1">
+                Platform
+              </Text>
+              <Flex gap="2" wrap="wrap">
+                {PLATFORM_FILTER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    size="1"
+                    color="gray"
+                    highContrast
+                    variant={isFilterValueActive("platform", option.value) ? "solid" : "soft"}
+                    onClick={() => toggleFilterValue("platform", option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </Flex>
+            </Box>
+            <Box>
+              <Text as="div" size="2" weight="medium" mb="1">
+                Funnel stage
+              </Text>
+              <Flex gap="2" wrap="wrap">
+                {FUNNEL_STAGE_FILTER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    size="1"
+                    color="gray"
+                    highContrast
+                    variant={isFilterValueActive("funnel_stage", option.value) ? "solid" : "soft"}
+                    onClick={() => toggleFilterValue("funnel_stage", option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </Flex>
+            </Box>
+            <Box>
+              <Text as="div" size="2" weight="medium" mb="1">
+                Room
+              </Text>
+              <Flex gap="2" wrap="wrap">
+                {ROOM_FILTER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    size="1"
+                    color="gray"
+                    highContrast
+                    variant={isFilterValueActive("last_room", option.value) ? "solid" : "soft"}
+                    onClick={() => toggleFilterValue("last_room", option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </Flex>
+            </Box>
+          </Flex>
+
+          <Text as="p" size="2" color="gray" mb="2">
+            Showing {table.getFilteredRowModel().rows.length} of {guests.length} guests
+          </Text>
+        </>
+      )}
+
       <Flex gap="5" align="start">
         <Box flexGrow="1" style={{ minWidth: 0 }}>
           {!hasLoaded && !guestsLoading && (
@@ -546,111 +695,50 @@ export default function DashboardPage() {
           )}
           {hasLoaded && guests.length === 0 && <Text color="gray">No guests yet.</Text>}
           {guests.length > 0 && (
-            <>
-              <Flex direction="column" gap="3" mb="4">
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Stay length
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {STAY_LENGTH_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        variant={
-                          isFilterValueActive("stay_length_bucket", option.value) ? "solid" : "soft"
-                        }
-                        onClick={() => toggleFilterValue("stay_length_bucket", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Platform
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {PLATFORM_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        variant={isFilterValueActive("platform", option.value) ? "solid" : "soft"}
-                        onClick={() => toggleFilterValue("platform", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Funnel stage
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {FUNNEL_STAGE_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        variant={
-                          isFilterValueActive("funnel_stage", option.value) ? "solid" : "soft"
-                        }
-                        onClick={() => toggleFilterValue("funnel_stage", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-              </Flex>
-
-              <Text as="p" size="2" color="gray" mb="2">
-                Showing {table.getFilteredRowModel().rows.length} of {guests.length} guests
-              </Text>
-
-              <Table.Root variant="surface">
-                <Table.Header>
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <Table.Row key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => {
-                        const sortState = header.column.getIsSorted();
-                        return (
-                          <Table.ColumnHeaderCell
-                            key={header.id}
-                            onClick={header.column.getToggleSortingHandler()}
-                            style={{ cursor: "pointer", userSelect: "none" }}
+            <Table.Root variant="surface">
+              <Table.Header>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <Table.Row key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => {
+                      const sortState = header.column.getIsSorted();
+                      return (
+                        <Table.ColumnHeaderCell
+                          key={header.id}
+                          onClick={header.column.getToggleSortingHandler()}
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          <span
+                            style={{ display: "inline-block", width: "1em", textAlign: "center" }}
                           >
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {sortState === "asc" && " ▲"}
-                            {sortState === "desc" && " ▼"}
-                          </Table.ColumnHeaderCell>
-                        );
-                      })}
-                    </Table.Row>
-                  ))}
-                </Table.Header>
-                <Table.Body>
-                  {table.getRowModel().rows.map((row) => (
-                    <Table.Row
-                      key={row.id}
-                      onClick={() => void selectGuest(row.original)}
-                      style={{
-                        cursor: "pointer",
-                        backgroundColor:
-                          row.original.id === selectedGuestId ? "var(--accent-a3)" : undefined,
-                      }}
-                    >
-                      {row.getVisibleCells().map((cell) => (
-                        <Table.Cell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </Table.Cell>
-                      ))}
-                    </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-            </>
+                            {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
+                          </span>
+                        </Table.ColumnHeaderCell>
+                      );
+                    })}
+                  </Table.Row>
+                ))}
+              </Table.Header>
+              <Table.Body>
+                {table.getRowModel().rows.map((row) => (
+                  <Table.Row
+                    key={row.id}
+                    onClick={() => void selectGuest(row.original)}
+                    style={{
+                      cursor: "pointer",
+                      backgroundColor:
+                        row.original.id === selectedGuestId ? "var(--accent-a3)" : undefined,
+                    }}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <Table.Cell key={cell.id}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </Table.Cell>
+                    ))}
+                  </Table.Row>
+                ))}
+              </Table.Body>
+            </Table.Root>
           )}
         </Box>
 
@@ -658,9 +746,18 @@ export default function DashboardPage() {
           <Box style={{ flexShrink: 0, width: 380, position: "sticky", top: 24 }}>
             <Flex direction="column" gap="3">
               <Card>
-                <Heading size="4" mb="2">
-                  {selectedGuest?.guest_name ?? "Unnamed guest"}
-                </Heading>
+                <Flex justify="between" align="center" mb="2">
+                  <Heading size="4">{selectedGuest?.guest_name ?? "Unnamed guest"}</Heading>
+                  <Button
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    aria-label="Close"
+                    onClick={closeGuestDetail}
+                  >
+                    ✕
+                  </Button>
+                </Flex>
                 <Flex direction="column" gap="1">
                   <Text as="div" size="2">
                     Phone: {selectedGuest?.phone ?? "—"}
