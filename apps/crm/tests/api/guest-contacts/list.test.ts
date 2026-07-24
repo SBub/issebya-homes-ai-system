@@ -63,6 +63,7 @@ describe("GET /api/guest-contacts", () => {
       total_stays: 2,
       platform: "airbnb",
       funnel_stage: "link_sent",
+      enabled: true,
       last_interaction_at: "2026-07-18T09:00:00Z",
       link_sent_at: "2026-07-17T09:00:00Z",
       stage_updated_at: "2026-07-17T09:00:00Z",
@@ -76,7 +77,7 @@ describe("GET /api/guest-contacts", () => {
 
     expect(json).toEqual({ guests: [row] });
     expect(selectMock).toHaveBeenCalledWith(
-      "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, funnel_stage, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at",
+      "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, funnel_stage, enabled, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at",
     );
     expect(orderMock).toHaveBeenCalledWith("created_at", { ascending: true });
   });

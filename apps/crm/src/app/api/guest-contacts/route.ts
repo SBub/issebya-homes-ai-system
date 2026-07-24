@@ -3,7 +3,7 @@ import { requireApiKey } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase";
 
 const GUEST_CONTACT_COLUMNS =
-  "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, funnel_stage, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at";
+  "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, funnel_stage, enabled, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at";
 
 /**
  * Lists every guest_contacts row, unfiltered and unpaginated — powers the v1
@@ -16,6 +16,13 @@ const GUEST_CONTACT_COLUMNS =
  * external caller, apps/orch-a's digest), this returns every real
  * guest_contacts column as-is: it's an internal dashboard reading CRM's own
  * table directly, so there's no PII-stripping rationale here.
+ *
+ * Includes `enabled` (see
+ * supabase/migrations/20260724130000_add_enabled_to_guest_contacts.sql and
+ * PATCH /api/guest-contacts/[id]'s doc comment) so the dashboard can
+ * eventually surface which guests are excluded from every campaign — no
+ * such column/toggle exists in this dashboard yet, that's a separate,
+ * deferred frontend piece.
  *
  * Response: `{ guests: GuestContact[] }`, ordered oldest-first (created_at
  * ascending) purely for a stable, predictable response shape — the

@@ -63,9 +63,19 @@ describe("PATCH /api/guest-contacts/[id]", () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when phone is missing from the body", async () => {
+  it("returns 400 when both phone and enabled are missing from the body", async () => {
     const res = await PATCH(makeRequest({}), makeParams("contact-1"));
+    const json = await res.json();
     expect(res.status).toBe(400);
+    expect(json).toEqual({ error: "Must provide phone and/or enabled" });
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when enabled is present but not a boolean", async () => {
+    const res = await PATCH(makeRequest({ enabled: "false" }), makeParams("contact-1"));
+    const json = await res.json();
+    expect(res.status).toBe(400);
+    expect(json).toEqual({ error: "enabled must be a boolean" });
     expect(fromMock).not.toHaveBeenCalled();
   });
 
@@ -83,7 +93,7 @@ describe("PATCH /api/guest-contacts/[id]", () => {
   it("normalizes the phone and updates the row, returning the updated row", async () => {
     maybeSingleMock.mockResolvedValueOnce({ data: { id: "contact-1" }, error: null });
     singleMock.mockResolvedValueOnce({
-      data: { id: "contact-1", phone: "+351920742845" },
+      data: { id: "contact-1", phone: "+351920742845", enabled: true },
       error: null,
     });
 
@@ -94,8 +104,43 @@ describe("PATCH /api/guest-contacts/[id]", () => {
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(json).toEqual({ id: "contact-1", phone: "+351920742845" });
+    expect(json).toEqual({ id: "contact-1", phone: "+351920742845", enabled: true });
     expect(updateMock).toHaveBeenCalledWith({ phone: "+351920742845" });
+    expect(updateEqMock).toHaveBeenCalledWith("id", "contact-1");
+  });
+
+  it("patches enabled alone, leaving phone untouched", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: { id: "contact-1" }, error: null });
+    singleMock.mockResolvedValueOnce({
+      data: { id: "contact-1", phone: "+351920742845", enabled: false },
+      error: null,
+    });
+
+    const res = await PATCH(makeRequest({ enabled: false }), makeParams("contact-1"));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ id: "contact-1", phone: "+351920742845", enabled: false });
+    expect(updateMock).toHaveBeenCalledWith({ enabled: false });
+    expect(updateEqMock).toHaveBeenCalledWith("id", "contact-1");
+  });
+
+  it("patches phone and enabled together", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: { id: "contact-1" }, error: null });
+    singleMock.mockResolvedValueOnce({
+      data: { id: "contact-1", phone: "+351920742845", enabled: false },
+      error: null,
+    });
+
+    const res = await PATCH(
+      makeRequest({ phone: "whatsapp:+351920742845", enabled: false }),
+      makeParams("contact-1"),
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ id: "contact-1", phone: "+351920742845", enabled: false });
+    expect(updateMock).toHaveBeenCalledWith({ phone: "+351920742845", enabled: false });
     expect(updateEqMock).toHaveBeenCalledWith("id", "contact-1");
   });
 

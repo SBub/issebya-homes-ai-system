@@ -156,6 +156,7 @@ describe("getCampaignCandidates", () => {
 
     expect(candidates).toEqual([{ id: "guest-1", phone: "+351920742845" }]);
     expect(fromMock).toHaveBeenCalledWith("guest_contacts");
+    expect(chain.eq).toHaveBeenCalledWith("enabled", true);
     expect(chain.eq).toHaveBeenCalledWith("funnel_stage", "new");
     expect(chain.lt).toHaveBeenCalledWith("last_interaction_at", expect.any(String));
   });
@@ -186,7 +187,9 @@ describe("getCampaignCandidates", () => {
 
     await getCampaignCandidates(supabase, winbackLikeCampaign);
 
-    expect(chain.eq).not.toHaveBeenCalled();
+    // enabled=true is always applied, but no per-campaign targeting eq()
+    // fires here since target_funnel_stage is null for this campaign shape.
+    expect(chain.eq).toHaveBeenCalledExactlyOnceWith("enabled", true);
     expect(chain.lt).toHaveBeenCalledWith("last_stay_checkout", "2026-01-01");
     expect(chain.gte).not.toHaveBeenCalled();
   });
@@ -204,12 +207,14 @@ describe("getCampaignCandidates", () => {
 
     await getCampaignCandidates(supabase, everyPastGuestCampaign);
 
-    expect(chain.eq).not.toHaveBeenCalled();
+    // enabled=true is always applied, but no per-campaign targeting eq()
+    // fires here since target_funnel_stage is null for this campaign shape.
+    expect(chain.eq).toHaveBeenCalledExactlyOnceWith("enabled", true);
     expect(chain.lt).not.toHaveBeenCalled();
     expect(chain.gte).toHaveBeenCalledWith("total_stays", 1);
   });
 
-  it("applies no filters at all when every targeting column is null", async () => {
+  it("applies no per-campaign targeting filters (beyond the always-on enabled=true) when every targeting column is null", async () => {
     const chain = makeChain({ data: [], error: null });
     const fromMock = vi.fn(() => chain);
     const supabase = { from: fromMock } as never;
@@ -223,7 +228,7 @@ describe("getCampaignCandidates", () => {
 
     await getCampaignCandidates(supabase, untargetedCampaign);
 
-    expect(chain.eq).not.toHaveBeenCalled();
+    expect(chain.eq).toHaveBeenCalledExactlyOnceWith("enabled", true);
     expect(chain.lt).not.toHaveBeenCalled();
     expect(chain.gte).not.toHaveBeenCalled();
   });

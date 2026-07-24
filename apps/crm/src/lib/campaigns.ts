@@ -112,12 +112,23 @@ export async function getCampaignById(
  * can't express, since funnel_stage only tracks the WhatsApp-conversation
  * funnel and a finance-synced guest with no WhatsApp contact yet would still
  * default to 'new' despite having a real completed stay.
+ *
+ * guest_contacts.enabled is filtered unconditionally, before any of the
+ * campaign's own (nullable, per-campaign) targeting columns are applied —
+ * see supabase/migrations/20260724130000_add_enabled_to_guest_contacts.sql.
+ * Unlike target_funnel_stage/min_idle_days/target_stay_before/
+ * min_total_stays, which a campaign can leave null to skip, enabled is not a
+ * targeting criterion at all: a guest set to enabled = false (e.g. because
+ * they weren't happy with a past stay and shouldn't be bothered further) is
+ * excluded from every campaign's candidate set, automated or one-off, full
+ * stop — there is no campaign-level switch that brings a disabled guest back
+ * in.
  */
 export async function getCampaignCandidates(
   supabase: SupabaseAdminClient,
   campaign: Campaign,
 ): Promise<GuestContact[]> {
-  let query = supabase.from("guest_contacts").select("id, phone, guest_name");
+  let query = supabase.from("guest_contacts").select("id, phone, guest_name").eq("enabled", true);
 
   if (campaign.target_funnel_stage != null) {
     query = query.eq("funnel_stage", campaign.target_funnel_stage);

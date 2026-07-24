@@ -1,0 +1,42 @@
+-- Adds a blanket contact-eligibility flag to guest_contacts: whether this
+-- guest should ever be contacted by a campaign at all, full stop.
+--
+-- Named `enabled` (not `disabled`/`opted_out`) to read consistently with
+-- campaigns.enabled (added by
+-- 20260724110000_campaigns_data_driven_targeting.sql) — both columns answer
+-- "is this row live for campaign purposes," just on opposite sides of the
+-- guest/campaign relationship.
+--
+-- This closes (at the schema layer) the opt-out/consent gap flagged by
+-- docs/whatsapp-campaign-templates.md §3/§5: that doc notes guest_contacts
+-- has no consent/opt-out column today, and flags adding one — plus
+-- campaign-drafting logic that respects it — as a real prerequisite before
+-- ever sending a Marketing-category WhatsApp template to a real guest.
+-- `enabled` is that column; apps/crm/src/lib/campaigns.ts's
+-- getCampaignCandidates is updated in the same pass to filter on it.
+--
+-- The motivating case is a human decision, not an automated one: an owner
+-- marks a guest enabled = false because they weren't happy with a past stay
+-- and shouldn't be bothered further — there is no UI/API surface in this
+-- pass beyond PATCH /api/guest-contacts/[id] accepting `enabled` in its body
+-- (see that route for the write path); a real dashboard toggle is a
+-- separate, later frontend piece.
+--
+-- Critically, this is a blanket exclusion, not a per-campaign targeting
+-- criterion. Every other guest_contacts-side filter getCampaignCandidates
+-- applies (target_funnel_stage, min_idle_days, target_stay_before,
+-- min_total_stays) is nullable and campaign-specific: a campaign that
+-- leaves one of those null simply doesn't filter on it, so a guest can
+-- match one campaign's criteria and not another's. enabled is different —
+-- it is applied unconditionally by getCampaignCandidates for every
+-- campaign, automated or one-off, regardless of that campaign's own
+-- targeting columns: a guest with enabled = false is excluded from every
+-- campaign's candidate set, never a candidate-by-candidate or
+-- campaign-by-campaign decision.
+--
+-- Defaults to true so every existing guest_contacts row stays eligible
+-- exactly as before this migration — this is an opt-out flag a human sets
+-- deliberately per guest, not a default-off gate the whole table starts
+-- behind.
+alter table public.guest_contacts
+  add column enabled boolean not null default true;
