@@ -20,7 +20,19 @@
 // only CRM_API_KEY ever reaches the browser. GCA's own API key stays
 // entirely server-side, inside the proxy route.
 
-import { Badge, Box, Button, Card, Flex, Heading, Table, Text, TextField } from "@radix-ui/themes";
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Flex,
+  Heading,
+  Switch,
+  Table,
+  Tabs,
+  Text,
+  TextField,
+} from "@radix-ui/themes";
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -69,6 +81,70 @@ interface Conversation {
   started_at: string;
   closed_at: string | null;
   messages: ConversationMessage[];
+}
+
+// Campaigns tab — a list + enable/disable + run-now view over campaigns
+// rows that already exist (seeded via migration; see
+// apps/crm/src/lib/campaigns.ts's own Campaign interface and doc comment).
+// Deliberately NOT a campaign-creation form: defining new targeting
+// criteria/message templates through the UI is separate, later work.
+interface Campaign {
+  id: string;
+  name: string;
+  kind: string;
+  target_funnel_stage: string | null;
+  min_idle_days: number | null;
+  target_stay_before: string | null;
+  min_total_stays: number | null;
+  discount_percent: number | null;
+  offer_description: string;
+  message_template: string;
+  is_recurring: boolean;
+  enabled: boolean;
+  created_at: string;
+}
+
+interface CampaignRunResult {
+  drafted: number;
+  skipped: number;
+}
+
+// Plain-English summary of whichever targeting columns are non-null on a
+// campaign row — joined with a comma when more than one is set. Mirrors
+// getCampaignCandidates' own "null criterion isn't applied as a filter"
+// logic (apps/crm/src/lib/campaigns.ts) purely for display, not filtering.
+function summarizeCampaignTargeting(campaign: Campaign): string {
+  const parts: string[] = [];
+  if (campaign.target_funnel_stage != null) {
+    parts.push(
+      campaign.min_idle_days != null
+        ? `Funnel stage: ${campaign.target_funnel_stage}, idle ${campaign.min_idle_days}+ days`
+        : `Funnel stage: ${campaign.target_funnel_stage}`,
+    );
+  } else if (campaign.min_idle_days != null) {
+    parts.push(`Idle ${campaign.min_idle_days}+ days`);
+  }
+  if (campaign.target_stay_before != null) {
+    parts.push(`Last stay before ${formatDateOnly(campaign.target_stay_before)}`);
+  }
+  if (campaign.min_total_stays != null) {
+    parts.push(`Total stays ≥ ${campaign.min_total_stays}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "No targeting criteria set";
+}
+
+// discount_percent takes priority over offer_description (a campaign with
+// both set would only ever have discount_percent actually interpolated by
+// renderCampaignMessage — see campaign-messages.ts), then falls back to
+// offer_description if non-empty, then "—".
+function summarizeCampaignOffer(campaign: Campaign): string {
+  if (campaign.discount_percent != null) {
+    return `${campaign.discount_percent}% off`;
+  }
+  if (campaign.offer_description) {
+    return campaign.offer_description;
+  }
+  return "—";
 }
 
 const FUNNEL_STAGE_COLOR: Record<FunnelStage, "gray" | "blue" | "amber" | "green"> = {
@@ -195,6 +271,23 @@ function formatDateOnly(value: string | null | undefined): string {
 export default function DashboardPage() {
   const [apiKey, setApiKey] = useState("");
 
+  // Campaigns tab state — kept separate from the CRM tab's guest state
+  // below, both sharing only `apiKey`. campaignRunResults/campaignRunErrors/
+  // campaignRunLoading are keyed by campaign id (one row's "Run now" action
+  // shouldn't affect any other row's own inline result/loading state).
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
+  const [hasLoadedCampaigns, setHasLoadedCampaigns] = useState(false);
+  const [campaignToggleErrors, setCampaignToggleErrors] = useState<Record<string, string>>({});
+  const [campaignTogglingIds, setCampaignTogglingIds] = useState<Set<string>>(new Set());
+  const [campaignRunLoadingIds, setCampaignRunLoadingIds] = useState<Set<string>>(new Set());
+  const [campaignRunResults, setCampaignRunResults] = useState<Record<string, CampaignRunResult>>(
+    {},
+  );
+  const [campaignRunErrors, setCampaignRunErrors] = useState<Record<string, string>>({});
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
+
   const [guests, setGuests] = useState<GuestContact[]>([]);
   const [guestsLoading, setGuestsLoading] = useState(false);
   const [guestsError, setGuestsError] = useState<string | null>(null);
@@ -257,6 +350,137 @@ export default function DashboardPage() {
       setGuestsLoading(false);
     }
   }
+
+  // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
+  // against GET /api/campaigns instead — the "explicit load button" pattern
+  // this page uses elsewhere rather than a new auto-fetch convention.
+  async function loadCampaigns() {
+    setCampaignsLoading(true);
+    setCampaignsError(null);
+    try {
+      const res = await fetch("/api/campaigns", { headers: { "X-API-Key": apiKey } });
+      const json = await res.json();
+      if (!res.ok) {
+        setCampaignsError(typeof json.error === "string" ? json.error : "Failed to load campaigns");
+        setCampaigns([]);
+        return;
+      }
+      setCampaigns((json.campaigns ?? []) as Campaign[]);
+      setHasLoadedCampaigns(true);
+    } catch (err) {
+      setCampaignsError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setCampaignsLoading(false);
+    }
+  }
+
+  // Toggling a campaign's enabled Switch — confirmation-based (not
+  // optimistic): the Switch only flips once PATCH /api/campaigns/[id]
+  // actually confirms the write, so a failed toggle visibly snaps back
+  // rather than silently drifting from the server's real state. Per-campaign
+  // loading state (campaignTogglingIds) disables that row's own Switch while
+  // in flight without affecting any other row.
+  const toggleCampaignEnabled = useCallback(
+    async (campaign: Campaign, nextEnabled: boolean) => {
+      setCampaignTogglingIds((prev) => new Set(prev).add(campaign.id));
+      setCampaignToggleErrors((prev) => {
+        const { [campaign.id]: _removed, ...rest } = prev;
+        return rest;
+      });
+      try {
+        const res = await fetch(`/api/campaigns/${encodeURIComponent(campaign.id)}`, {
+          method: "PATCH",
+          headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: nextEnabled }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setCampaignToggleErrors((prev) => ({
+            ...prev,
+            [campaign.id]: typeof json.error === "string" ? json.error : "Failed to save",
+          }));
+          return;
+        }
+        const updatedEnabled = (json.enabled ?? nextEnabled) as boolean;
+        setCampaigns((prev) =>
+          prev.map((c) => (c.id === campaign.id ? { ...c, enabled: updatedEnabled } : c)),
+        );
+      } catch (err) {
+        setCampaignToggleErrors((prev) => ({
+          ...prev,
+          [campaign.id]: err instanceof Error ? err.message : "Unknown error",
+        }));
+      } finally {
+        setCampaignTogglingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(campaign.id);
+          return next;
+        });
+      }
+    },
+    [apiKey],
+  );
+
+  // "Run now" per campaign row — POST /api/campaigns/[id]/run, which only
+  // drafts promo codes and pushes them to Telegram for human approval; it
+  // never itself sends anything to a guest (see that route's own doc
+  // comment). Result/error is shown inline near the row that triggered it,
+  // keyed by campaign id like every other per-row action state here.
+  const runCampaignNow = useCallback(
+    async (campaign: Campaign) => {
+      setCampaignRunLoadingIds((prev) => new Set(prev).add(campaign.id));
+      setCampaignRunErrors((prev) => {
+        const { [campaign.id]: _removed, ...rest } = prev;
+        return rest;
+      });
+      setCampaignRunResults((prev) => {
+        const { [campaign.id]: _removed, ...rest } = prev;
+        return rest;
+      });
+      try {
+        const res = await fetch(`/api/campaigns/${encodeURIComponent(campaign.id)}/run`, {
+          method: "POST",
+          headers: { "X-API-Key": apiKey },
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setCampaignRunErrors((prev) => ({
+            ...prev,
+            [campaign.id]: typeof json.error === "string" ? json.error : "Failed to run campaign",
+          }));
+          return;
+        }
+        setCampaignRunResults((prev) => ({
+          ...prev,
+          [campaign.id]: { drafted: json.drafted as number, skipped: json.skipped as number },
+        }));
+      } catch (err) {
+        setCampaignRunErrors((prev) => ({
+          ...prev,
+          [campaign.id]: err instanceof Error ? err.message : "Unknown error",
+        }));
+      } finally {
+        setCampaignRunLoadingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(campaign.id);
+          return next;
+        });
+      }
+    },
+    [apiKey],
+  );
+
+  const toggleMessageExpanded = useCallback((campaignId: string) => {
+    setExpandedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(campaignId)) {
+        next.delete(campaignId);
+      } else {
+        next.add(campaignId);
+      }
+      return next;
+    });
+  }, []);
 
   const loadConversationsFor = useCallback(
     async (guestId: string) => {
@@ -593,252 +817,395 @@ export default function DashboardPage() {
         </Button>
       </Flex>
 
-      {guestsError && (
-        <Text as="p" color="red" mb="3">
-          {guestsError}
-        </Text>
-      )}
+      <Tabs.Root defaultValue="crm">
+        <Tabs.List mb="4">
+          <Tabs.Trigger value="crm">CRM</Tabs.Trigger>
+          <Tabs.Trigger value="campaigns">Campaigns</Tabs.Trigger>
+        </Tabs.List>
 
-      {guests.length > 0 && (
-        <>
-          <Flex direction="column" gap="3" mb="4">
-            <Box>
-              <Text as="div" size="2" weight="medium" mb="1">
-                Stay length
-              </Text>
-              <Flex gap="2" wrap="wrap">
-                {STAY_LENGTH_FILTER_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    size="1"
-                    color="gray"
-                    highContrast
-                    variant={
-                      isFilterValueActive("stay_length_bucket", option.value) ? "solid" : "soft"
-                    }
-                    onClick={() => toggleFilterValue("stay_length_bucket", option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Box>
-            <Box>
-              <Text as="div" size="2" weight="medium" mb="1">
-                Platform
-              </Text>
-              <Flex gap="2" wrap="wrap">
-                {PLATFORM_FILTER_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    size="1"
-                    color="gray"
-                    highContrast
-                    variant={isFilterValueActive("platform", option.value) ? "solid" : "soft"}
-                    onClick={() => toggleFilterValue("platform", option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Box>
-            <Box>
-              <Text as="div" size="2" weight="medium" mb="1">
-                Funnel stage
-              </Text>
-              <Flex gap="2" wrap="wrap">
-                {FUNNEL_STAGE_FILTER_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    size="1"
-                    color="gray"
-                    highContrast
-                    variant={isFilterValueActive("funnel_stage", option.value) ? "solid" : "soft"}
-                    onClick={() => toggleFilterValue("funnel_stage", option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Box>
-            <Box>
-              <Text as="div" size="2" weight="medium" mb="1">
-                Room
-              </Text>
-              <Flex gap="2" wrap="wrap">
-                {ROOM_FILTER_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    size="1"
-                    color="gray"
-                    highContrast
-                    variant={isFilterValueActive("last_room", option.value) ? "solid" : "soft"}
-                    onClick={() => toggleFilterValue("last_room", option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Box>
-          </Flex>
-
-          <Text as="p" size="2" color="gray" mb="2">
-            Showing {table.getFilteredRowModel().rows.length} of {guests.length} guests
-          </Text>
-        </>
-      )}
-
-      <Flex gap="5" align="start">
-        <Box flexGrow="1" style={{ minWidth: 0 }}>
-          {!hasLoaded && !guestsLoading && (
-            <Text color="gray">Enter the CRM API key and click "Load guests" to begin.</Text>
+        <Tabs.Content value="crm">
+          {guestsError && (
+            <Text as="p" color="red" mb="3">
+              {guestsError}
+            </Text>
           )}
-          {hasLoaded && guests.length === 0 && <Text color="gray">No guests yet.</Text>}
+
           {guests.length > 0 && (
-            <Table.Root variant="surface">
-              <Table.Header>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <Table.Row key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => {
-                      const sortState = header.column.getIsSorted();
-                      return (
-                        <Table.ColumnHeaderCell
-                          key={header.id}
-                          onClick={header.column.getToggleSortingHandler()}
-                          style={{ cursor: "pointer", userSelect: "none" }}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span
-                            style={{ display: "inline-block", width: "1em", textAlign: "center" }}
-                          >
-                            {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
-                          </span>
-                        </Table.ColumnHeaderCell>
-                      );
-                    })}
-                  </Table.Row>
-                ))}
-              </Table.Header>
-              <Table.Body>
-                {table.getRowModel().rows.map((row) => (
-                  <Table.Row
-                    key={row.id}
-                    onClick={() => void selectGuest(row.original)}
-                    style={{
-                      cursor: "pointer",
-                      backgroundColor:
-                        row.original.id === selectedGuestId ? "var(--accent-a3)" : undefined,
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <Table.Cell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </Table.Cell>
-                    ))}
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
-          )}
-        </Box>
-
-        {selectedGuestId && (
-          <Box style={{ flexShrink: 0, width: 380, position: "sticky", top: 24 }}>
-            <Flex direction="column" gap="3">
-              <Card>
-                <Flex justify="between" align="center" mb="2">
-                  <Heading size="4">{selectedGuest?.guest_name ?? "Unnamed guest"}</Heading>
-                  <Button
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Close"
-                    onClick={closeGuestDetail}
-                  >
-                    ✕
-                  </Button>
-                </Flex>
-                <Flex direction="column" gap="1">
-                  <Text as="div" size="2">
-                    Phone: {selectedGuest?.phone ?? "—"}
+            <>
+              <Flex direction="column" gap="3" mb="4">
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Stay length
                   </Text>
-                  <Text as="div" size="2">
-                    Funnel stage:{" "}
-                    {selectedGuest && (
-                      <Badge color={FUNNEL_STAGE_COLOR[selectedGuest.funnel_stage]}>
-                        {selectedGuest.funnel_stage}
-                      </Badge>
-                    )}
-                  </Text>
-                  <Text as="div" size="2">
-                    Last room: {selectedGuest?.last_room ?? "—"}
-                  </Text>
-                  <Text as="div" size="2">
-                    Platform:{" "}
-                    {selectedGuest && (
-                      <Badge color={PLATFORM_COLOR[selectedGuest.platform]}>
-                        {PLATFORM_LABEL[selectedGuest.platform]}
-                      </Badge>
-                    )}
-                  </Text>
-                  <Text as="div" size="2">
-                    Last stay: {formatDateOnly(selectedGuest?.last_stay_checkin)} –{" "}
-                    {formatDateOnly(selectedGuest?.last_stay_checkout)}
-                  </Text>
-                  <Text as="div" size="2">
-                    Total stays: {selectedGuest?.total_stays ?? 0}
-                  </Text>
-                  <Text as="div" size="2">
-                    Last interaction: {formatDate(selectedGuest?.last_interaction_at)}
-                  </Text>
-                  <Text as="div" size="2">
-                    Link sent at: {formatDate(selectedGuest?.link_sent_at)}
-                  </Text>
-                </Flex>
-              </Card>
-
-              <Heading size="3">Conversation history</Heading>
-              {!selectedGuest?.phone && (
-                <Text color="gray">No phone number yet — add one to see conversation history.</Text>
-              )}
-              {conversationsLoading && <Text color="gray">Loading…</Text>}
-              {conversationsError && <Text color="red">{conversationsError}</Text>}
-              {conversations && conversations.length === 0 && (
-                <Text color="gray">No WhatsApp conversations yet.</Text>
-              )}
-              {conversations?.map((conversation) => (
-                <Card key={conversation.id}>
-                  <Text as="div" size="2" weight="medium" mb="2">
-                    {conversation.status} — started {formatDate(conversation.started_at)}
-                  </Text>
-                  <Flex direction="column" gap="2">
-                    {conversation.messages.map((message) => (
-                      <Box
-                        key={message.id}
-                        style={{
-                          alignSelf: message.role === "user" ? "flex-start" : "flex-end",
-                          backgroundColor:
-                            message.role === "user" ? "var(--gray-a3)" : "var(--accent-a4)",
-                          borderRadius: "var(--radius-3)",
-                          padding: "6px 10px",
-                          maxWidth: "85%",
-                        }}
+                  <Flex gap="2" wrap="wrap">
+                    {STAY_LENGTH_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isFilterValueActive("stay_length_bucket", option.value) ? "solid" : "soft"
+                        }
+                        onClick={() => toggleFilterValue("stay_length_bucket", option.value)}
                       >
-                        <Text as="div" size="1" color="gray">
-                          {message.role} · {formatDate(message.created_at)}
-                        </Text>
-                        <Text as="div" size="2">
-                          {message.content}
-                        </Text>
-                      </Box>
+                        {option.label}
+                      </Button>
                     ))}
                   </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Platform
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {PLATFORM_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={isFilterValueActive("platform", option.value) ? "solid" : "soft"}
+                        onClick={() => toggleFilterValue("platform", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Funnel stage
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {FUNNEL_STAGE_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isFilterValueActive("funnel_stage", option.value) ? "solid" : "soft"
+                        }
+                        onClick={() => toggleFilterValue("funnel_stage", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Room
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {ROOM_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={isFilterValueActive("last_room", option.value) ? "solid" : "soft"}
+                        onClick={() => toggleFilterValue("last_room", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+              </Flex>
+
+              <Text as="p" size="2" color="gray" mb="2">
+                Showing {table.getFilteredRowModel().rows.length} of {guests.length} guests
+              </Text>
+            </>
+          )}
+
+          <Flex gap="5" align="start">
+            <Box flexGrow="1" style={{ minWidth: 0 }}>
+              {!hasLoaded && !guestsLoading && (
+                <Text color="gray">Enter the CRM API key and click "Load guests" to begin.</Text>
+              )}
+              {hasLoaded && guests.length === 0 && <Text color="gray">No guests yet.</Text>}
+              {guests.length > 0 && (
+                <Table.Root variant="surface">
+                  <Table.Header>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <Table.Row key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => {
+                          const sortState = header.column.getIsSorted();
+                          return (
+                            <Table.ColumnHeaderCell
+                              key={header.id}
+                              onClick={header.column.getToggleSortingHandler()}
+                              style={{ cursor: "pointer", userSelect: "none" }}
+                            >
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              <span
+                                style={{
+                                  display: "inline-block",
+                                  width: "1em",
+                                  textAlign: "center",
+                                }}
+                              >
+                                {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
+                              </span>
+                            </Table.ColumnHeaderCell>
+                          );
+                        })}
+                      </Table.Row>
+                    ))}
+                  </Table.Header>
+                  <Table.Body>
+                    {table.getRowModel().rows.map((row) => (
+                      <Table.Row
+                        key={row.id}
+                        onClick={() => void selectGuest(row.original)}
+                        style={{
+                          cursor: "pointer",
+                          backgroundColor:
+                            row.original.id === selectedGuestId ? "var(--accent-a3)" : undefined,
+                        }}
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <Table.Cell key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </Table.Cell>
+                        ))}
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              )}
+            </Box>
+
+            {selectedGuestId && (
+              <Box style={{ flexShrink: 0, width: 380, position: "sticky", top: 24 }}>
+                <Flex direction="column" gap="3">
+                  <Card>
+                    <Flex justify="between" align="center" mb="2">
+                      <Heading size="4">{selectedGuest?.guest_name ?? "Unnamed guest"}</Heading>
+                      <Button
+                        size="1"
+                        variant="ghost"
+                        color="gray"
+                        aria-label="Close"
+                        onClick={closeGuestDetail}
+                      >
+                        ✕
+                      </Button>
+                    </Flex>
+                    <Flex direction="column" gap="1">
+                      <Text as="div" size="2">
+                        Phone: {selectedGuest?.phone ?? "—"}
+                      </Text>
+                      <Text as="div" size="2">
+                        Funnel stage:{" "}
+                        {selectedGuest && (
+                          <Badge color={FUNNEL_STAGE_COLOR[selectedGuest.funnel_stage]}>
+                            {selectedGuest.funnel_stage}
+                          </Badge>
+                        )}
+                      </Text>
+                      <Text as="div" size="2">
+                        Last room: {selectedGuest?.last_room ?? "—"}
+                      </Text>
+                      <Text as="div" size="2">
+                        Platform:{" "}
+                        {selectedGuest && (
+                          <Badge color={PLATFORM_COLOR[selectedGuest.platform]}>
+                            {PLATFORM_LABEL[selectedGuest.platform]}
+                          </Badge>
+                        )}
+                      </Text>
+                      <Text as="div" size="2">
+                        Last stay: {formatDateOnly(selectedGuest?.last_stay_checkin)} –{" "}
+                        {formatDateOnly(selectedGuest?.last_stay_checkout)}
+                      </Text>
+                      <Text as="div" size="2">
+                        Total stays: {selectedGuest?.total_stays ?? 0}
+                      </Text>
+                      <Text as="div" size="2">
+                        Last interaction: {formatDate(selectedGuest?.last_interaction_at)}
+                      </Text>
+                      <Text as="div" size="2">
+                        Link sent at: {formatDate(selectedGuest?.link_sent_at)}
+                      </Text>
+                    </Flex>
+                  </Card>
+
+                  <Heading size="3">Conversation history</Heading>
+                  {!selectedGuest?.phone && (
+                    <Text color="gray">
+                      No phone number yet — add one to see conversation history.
+                    </Text>
+                  )}
+                  {conversationsLoading && <Text color="gray">Loading…</Text>}
+                  {conversationsError && <Text color="red">{conversationsError}</Text>}
+                  {conversations && conversations.length === 0 && (
+                    <Text color="gray">No WhatsApp conversations yet.</Text>
+                  )}
+                  {conversations?.map((conversation) => (
+                    <Card key={conversation.id}>
+                      <Text as="div" size="2" weight="medium" mb="2">
+                        {conversation.status} — started {formatDate(conversation.started_at)}
+                      </Text>
+                      <Flex direction="column" gap="2">
+                        {conversation.messages.map((message) => (
+                          <Box
+                            key={message.id}
+                            style={{
+                              alignSelf: message.role === "user" ? "flex-start" : "flex-end",
+                              backgroundColor:
+                                message.role === "user" ? "var(--gray-a3)" : "var(--accent-a4)",
+                              borderRadius: "var(--radius-3)",
+                              padding: "6px 10px",
+                              maxWidth: "85%",
+                            }}
+                          >
+                            <Text as="div" size="1" color="gray">
+                              {message.role} · {formatDate(message.created_at)}
+                            </Text>
+                            <Text as="div" size="2">
+                              {message.content}
+                            </Text>
+                          </Box>
+                        ))}
+                      </Flex>
+                    </Card>
+                  ))}
+                </Flex>
+              </Box>
+            )}
+          </Flex>
+        </Tabs.Content>
+
+        <Tabs.Content value="campaigns">
+          <Flex gap="3" align="end" mb="4">
+            <Button onClick={loadCampaigns} disabled={campaignsLoading || !apiKey}>
+              {campaignsLoading ? "Loading…" : "Load campaigns"}
+            </Button>
+          </Flex>
+
+          {campaignsError && (
+            <Text as="p" color="red" mb="3">
+              {campaignsError}
+            </Text>
+          )}
+
+          {!hasLoadedCampaigns && !campaignsLoading && (
+            <Text color="gray">Click "Load campaigns" to begin.</Text>
+          )}
+          {hasLoadedCampaigns && campaigns.length === 0 && (
+            <Text color="gray">No campaigns yet.</Text>
+          )}
+
+          <Flex direction="column" gap="3">
+            {campaigns.map((campaign) => {
+              const isToggling = campaignTogglingIds.has(campaign.id);
+              const isRunning = campaignRunLoadingIds.has(campaign.id);
+              const runResult = campaignRunResults[campaign.id];
+              const runError = campaignRunErrors[campaign.id];
+              const toggleError = campaignToggleErrors[campaign.id];
+              const isMessageExpanded = expandedMessageIds.has(campaign.id);
+
+              return (
+                <Card key={campaign.id}>
+                  <Flex justify="between" align="start" mb="2" gap="3">
+                    <Flex align="center" gap="2" wrap="wrap">
+                      <Heading size="3">{campaign.name}</Heading>
+                      <Badge color="gray">{campaign.kind}</Badge>
+                      <Badge color={campaign.is_recurring ? "green" : "amber"}>
+                        {campaign.is_recurring ? "Automated" : "One-off"}
+                      </Badge>
+                    </Flex>
+                    <Flex direction="column" align="end" gap="1" style={{ flexShrink: 0 }}>
+                      <Flex align="center" gap="2">
+                        <Text size="2" color="gray">
+                          {campaign.enabled ? "Enabled" : "Disabled"}
+                        </Text>
+                        <Switch
+                          checked={campaign.enabled}
+                          disabled={isToggling}
+                          onCheckedChange={(checked) =>
+                            void toggleCampaignEnabled(campaign, checked)
+                          }
+                        />
+                      </Flex>
+                      {toggleError && (
+                        <Text size="1" color="red">
+                          {toggleError}
+                        </Text>
+                      )}
+                    </Flex>
+                  </Flex>
+
+                  <Flex direction="column" gap="1" mb="3">
+                    <Text as="div" size="2">
+                      <Text weight="medium">Targeting: </Text>
+                      {summarizeCampaignTargeting(campaign)}
+                    </Text>
+                    <Text as="div" size="2">
+                      <Text weight="medium">Offer: </Text>
+                      {summarizeCampaignOffer(campaign)}
+                    </Text>
+                    <Box>
+                      <Text as="div" size="2" weight="medium">
+                        Message
+                      </Text>
+                      <Text
+                        as="div"
+                        size="2"
+                        color="gray"
+                        style={
+                          isMessageExpanded
+                            ? { maxWidth: 560 }
+                            : {
+                                maxWidth: 560,
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }
+                        }
+                      >
+                        {campaign.message_template}
+                      </Text>
+                      <Button
+                        size="1"
+                        variant="ghost"
+                        onClick={() => toggleMessageExpanded(campaign.id)}
+                      >
+                        {isMessageExpanded ? "Show less" : "Show full message"}
+                      </Button>
+                    </Box>
+                  </Flex>
+
+                  <Flex align="center" gap="3">
+                    <Button
+                      size="1"
+                      onClick={() => void runCampaignNow(campaign)}
+                      disabled={isRunning}
+                    >
+                      {isRunning ? "Running…" : "Run now"}
+                    </Button>
+                    {runResult && (
+                      <Text size="2" color="green">
+                        Drafted {runResult.drafted}, skipped {runResult.skipped}
+                      </Text>
+                    )}
+                    {runError && (
+                      <Text size="2" color="red">
+                        {runError}
+                      </Text>
+                    )}
+                  </Flex>
                 </Card>
-              ))}
-            </Flex>
-          </Box>
-        )}
-      </Flex>
+              );
+            })}
+          </Flex>
+        </Tabs.Content>
+      </Tabs.Root>
     </Box>
   );
 }

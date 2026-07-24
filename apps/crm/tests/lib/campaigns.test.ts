@@ -75,6 +75,7 @@ const SEASONAL_CAMPAIGN = {
     "Hi! Just checking in — no rush at all. [fill in what's happening locally this season]. Happy to help with availability or pricing whenever you're ready!",
   is_recurring: true,
   enabled: true,
+  created_at: "2026-07-01T00:00:00Z",
 };
 
 const STALLED_CAMPAIGN = {
@@ -91,6 +92,7 @@ const STALLED_CAMPAIGN = {
     "Hi! Just following up on the booking link I sent over — still interested in those dates? Happy to answer any questions, or help if anything's changed.",
   is_recurring: true,
   enabled: true,
+  created_at: "2026-07-02T00:00:00Z",
 };
 
 describe("getRecurringEnabledCampaigns", () => {

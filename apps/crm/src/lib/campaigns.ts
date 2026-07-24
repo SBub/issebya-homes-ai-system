@@ -40,6 +40,7 @@ export interface Campaign {
   message_template: string;
   is_recurring: boolean;
   enabled: boolean;
+  created_at: string;
 }
 
 export interface GuestContact {
