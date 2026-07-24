@@ -257,6 +257,42 @@ const CAMPAIGN_ENABLED_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "false", label: "Disabled" },
 ];
 
+// Explicit per-column pixel widths, applied alongside `tableLayout: "fixed"`
+// on each table's Table.Root below. Radix's Table.Root otherwise renders a
+// plain HTML <table> with the browser default `table-layout: auto`, which
+// recomputes every column's width from scratch based on ONLY the
+// currently-visible rows' content — so toggling a filter chip to a
+// different row subset reflows every column, not just the ones whose own
+// data changed (confirmed by measuring getBoundingClientRect() on header
+// cells before/after filtering). Keyed by column id (accessorKey, or the
+// explicit `id` for derived columns) and looked up in each
+// Table.ColumnHeaderCell's own inline style. Values are today's natural
+// (unfiltered) column widths, so the fixed layout still matches the
+// pre-existing design rather than introducing a visual regression.
+const CRM_COLUMN_WIDTHS: Record<string, number> = {
+  guest_name: 232,
+  phone: 96,
+  funnel_stage: 151,
+  enabled: 110,
+  last_room: 130,
+  platform: 115,
+  last_stay_checkin: 120,
+  nights: 98,
+  total_stays: 134,
+  last_interaction_at: 173,
+};
+
+const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
+  name: 195,
+  kind: 187,
+  is_recurring: 100,
+  enabled: 85,
+  targeting: 159,
+  offer: 184,
+  message_template: 327,
+  actions: 124,
+};
+
 // Shared day-diff math, used by stayLengthBucket below and the "Nights"
 // table column — a guest missing either date has no computable stay length.
 // Both dates are plain YYYY-MM-DD strings (finance_bookings.checkin_date/
@@ -408,6 +444,19 @@ export default function DashboardPage() {
   const [newCampaignForm, setNewCampaignForm] = useState<NewCampaignForm>(EMPTY_NEW_CAMPAIGN_FORM);
   const [newCampaignSubmitting, setNewCampaignSubmitting] = useState(false);
   const [newCampaignError, setNewCampaignError] = useState<string | null>(null);
+  // NLP-assisted draft ("Describe your campaign" + Generate, above the
+  // manual fields) — POST /api/campaigns/parse. Deliberately separate
+  // loading/error state from newCampaignSubmitting/newCampaignError above:
+  // generating a draft and submitting the (now-prefilled, still editable)
+  // form below are two independent actions that can each be in flight or
+  // fail on their own. Generating never auto-submits — it only calls
+  // updateNewCampaignForm per returned field, same as if the user had typed
+  // each one by hand; the user still has to review and click "Create"
+  // themselves, same human-in-the-loop principle as the Telegram
+  // approve/reject flow for actual message sends.
+  const [parseCampaignDescription, setParseCampaignDescription] = useState("");
+  const [parseCampaignLoading, setParseCampaignLoading] = useState(false);
+  const [parseCampaignError, setParseCampaignError] = useState<string | null>(null);
 
   const [guests, setGuests] = useState<GuestContact[]>([]);
   const [guestsLoading, setGuestsLoading] = useState(false);
@@ -671,6 +720,73 @@ export default function DashboardPage() {
     [apiKey],
   );
 
+  // NLP-assisted draft: POST /api/campaigns/parse with the free-text
+  // description, then prefills newCampaignForm with whatever fields the
+  // response contains — via updateNewCampaignForm's own setter shape (an
+  // object spread that only overwrites returned fields), so any field the
+  // user already typed by hand before clicking Generate, or that the
+  // description didn't support, is left untouched rather than blanked out.
+  // Every value comes back type-checked by the endpoint itself (see
+  // POST /api/campaigns/parse's own validateCampaignDraft), so this only
+  // needs to convert number fields back to the form's own string
+  // representation — same convention createCampaign below reverses on the
+  // way out.
+  const generateCampaignDraft = useCallback(async () => {
+    const description = parseCampaignDescription.trim();
+    if (!description) {
+      setParseCampaignError("Describe the campaign first.");
+      return;
+    }
+
+    setParseCampaignLoading(true);
+    setParseCampaignError(null);
+    try {
+      const res = await fetch("/api/campaigns/parse", {
+        method: "POST",
+        headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setParseCampaignError(
+          typeof json.error === "string" ? json.error : "Failed to generate campaign draft",
+        );
+        return;
+      }
+      setNewCampaignForm((prev) => ({
+        ...prev,
+        ...(typeof json.name === "string" ? { name: json.name } : {}),
+        ...(typeof json.kind === "string" ? { kind: json.kind } : {}),
+        ...(typeof json.is_recurring === "boolean" ? { isRecurring: json.is_recurring } : {}),
+        ...(typeof json.target_funnel_stage === "string"
+          ? { targetFunnelStage: json.target_funnel_stage }
+          : {}),
+        ...(typeof json.min_idle_days === "number"
+          ? { minIdleDays: String(json.min_idle_days) }
+          : {}),
+        ...(typeof json.target_stay_before === "string"
+          ? { targetStayBefore: json.target_stay_before }
+          : {}),
+        ...(typeof json.min_total_stays === "number"
+          ? { minTotalStays: String(json.min_total_stays) }
+          : {}),
+        ...(typeof json.discount_percent === "number"
+          ? { discountPercent: String(json.discount_percent) }
+          : {}),
+        ...(typeof json.offer_description === "string"
+          ? { offerDescription: json.offer_description }
+          : {}),
+        ...(typeof json.message_template === "string"
+          ? { messageTemplate: json.message_template }
+          : {}),
+      }));
+    } catch (err) {
+      setParseCampaignError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setParseCampaignLoading(false);
+    }
+  }, [apiKey, parseCampaignDescription]);
+
   // Creates a new campaign (POST /api/campaigns) from the "+ New Campaign"
   // dialog's form state. Only fields with a value are sent — an empty
   // optional input is omitted entirely rather than sent as "" or NaN, since
@@ -755,6 +871,8 @@ export default function DashboardPage() {
     if (!open) {
       setNewCampaignForm(EMPTY_NEW_CAMPAIGN_FORM);
       setNewCampaignError(null);
+      setParseCampaignDescription("");
+      setParseCampaignError(null);
     }
   }, []);
 
@@ -1328,7 +1446,7 @@ export default function DashboardPage() {
 
           {guests.length > 0 && (
             <>
-              <Flex wrap="wrap" gap="4" align="start" mb="4">
+              <Flex wrap="wrap" gap="7" align="start" mb="4">
                 <Box>
                   <Text as="div" size="2" weight="medium" mb="1">
                     Stay length
@@ -1424,7 +1542,7 @@ export default function DashboardPage() {
               )}
               {hasLoaded && guests.length === 0 && <Text color="gray">No guests yet.</Text>}
               {guests.length > 0 && (
-                <Table.Root variant="surface">
+                <Table.Root variant="surface" style={{ tableLayout: "fixed" }}>
                   <Table.Header>
                     {table.getHeaderGroups().map((headerGroup) => (
                       <Table.Row key={headerGroup.id}>
@@ -1434,7 +1552,11 @@ export default function DashboardPage() {
                             <Table.ColumnHeaderCell
                               key={header.id}
                               onClick={header.column.getToggleSortingHandler()}
-                              style={{ cursor: "pointer", userSelect: "none" }}
+                              style={{
+                                cursor: "pointer",
+                                userSelect: "none",
+                                width: CRM_COLUMN_WIDTHS[header.column.id],
+                              }}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               <span
@@ -1577,8 +1699,57 @@ export default function DashboardPage() {
         </Tabs.Content>
 
         <Tabs.Content value="campaigns">
-          <Flex justify="between" align="center" mb="4">
-            <Box />
+          <Flex justify="between" align="start" mb="4">
+            <Flex wrap="wrap" gap="7" align="start">
+              {campaigns.length > 0 && (
+                <>
+                  <Box>
+                    <Text as="div" size="2" weight="medium" mb="1">
+                      Type
+                    </Text>
+                    <Flex gap="2" wrap="wrap">
+                      {CAMPAIGN_TYPE_FILTER_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          size="1"
+                          color="gray"
+                          highContrast
+                          variant={
+                            isCampaignFilterValueActive("is_recurring", option.value)
+                              ? "solid"
+                              : "soft"
+                          }
+                          onClick={() => toggleCampaignFilterValue("is_recurring", option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Flex>
+                  </Box>
+                  <Box>
+                    <Text as="div" size="2" weight="medium" mb="1">
+                      Enabled
+                    </Text>
+                    <Flex gap="2" wrap="wrap">
+                      {CAMPAIGN_ENABLED_FILTER_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          size="1"
+                          color="gray"
+                          highContrast
+                          variant={
+                            isCampaignFilterValueActive("enabled", option.value) ? "solid" : "soft"
+                          }
+                          onClick={() => toggleCampaignFilterValue("enabled", option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Flex>
+                  </Box>
+                </>
+              )}
+            </Flex>
             <Dialog.Root open={isNewCampaignOpen} onOpenChange={handleNewCampaignOpenChange}>
               <Dialog.Trigger>
                 <Button>+ New Campaign</Button>
@@ -1586,6 +1757,35 @@ export default function DashboardPage() {
               <Dialog.Content maxWidth="520px">
                 <Dialog.Title>New Campaign</Dialog.Title>
                 <Flex direction="column" gap="3">
+                  <Box>
+                    <Text as="label" size="2" weight="medium" htmlFor="new-campaign-description">
+                      Describe your campaign
+                    </Text>
+                    <Box mt="1">
+                      <TextArea
+                        id="new-campaign-description"
+                        value={parseCampaignDescription}
+                        onChange={(e) => setParseCampaignDescription(e.target.value)}
+                        placeholder="e.g. Invite past guests who stayed before June, offer them 10% off to come back"
+                        rows={3}
+                      />
+                    </Box>
+                    <Flex justify="end" mt="2">
+                      <Button
+                        size="1"
+                        variant="soft"
+                        onClick={() => void generateCampaignDraft()}
+                        disabled={parseCampaignLoading || !parseCampaignDescription.trim()}
+                      >
+                        {parseCampaignLoading ? "Generating…" : "Generate"}
+                      </Button>
+                    </Flex>
+                    {parseCampaignError && (
+                      <Text as="p" size="2" color="red" mt="1">
+                        {parseCampaignError}
+                      </Text>
+                    )}
+                  </Box>
                   <Box>
                     <Text as="label" size="2" weight="medium" htmlFor="new-campaign-name">
                       Name
@@ -1777,63 +1977,14 @@ export default function DashboardPage() {
           )}
 
           {campaigns.length > 0 && (
-            <>
-              <Flex wrap="wrap" gap="4" align="start" mb="4">
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Type
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {CAMPAIGN_TYPE_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        color="gray"
-                        highContrast
-                        variant={
-                          isCampaignFilterValueActive("is_recurring", option.value)
-                            ? "solid"
-                            : "soft"
-                        }
-                        onClick={() => toggleCampaignFilterValue("is_recurring", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Enabled
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {CAMPAIGN_ENABLED_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        color="gray"
-                        highContrast
-                        variant={
-                          isCampaignFilterValueActive("enabled", option.value) ? "solid" : "soft"
-                        }
-                        onClick={() => toggleCampaignFilterValue("enabled", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-              </Flex>
-
-              <Text as="p" size="2" color="gray" mb="2">
-                Showing {campaignsTable.getFilteredRowModel().rows.length} of {campaigns.length}{" "}
-                campaigns
-              </Text>
-            </>
+            <Text as="p" size="2" color="gray" mb="2">
+              Showing {campaignsTable.getFilteredRowModel().rows.length} of {campaigns.length}{" "}
+              campaigns
+            </Text>
           )}
 
           {campaigns.length > 0 && (
-            <Table.Root variant="surface">
+            <Table.Root variant="surface" style={{ tableLayout: "fixed" }}>
               <Table.Header>
                 {campaignsTable.getHeaderGroups().map((headerGroup) => (
                   <Table.Row key={headerGroup.id}>
@@ -1843,7 +1994,11 @@ export default function DashboardPage() {
                         <Table.ColumnHeaderCell
                           key={header.id}
                           onClick={header.column.getToggleSortingHandler()}
-                          style={{ cursor: "pointer", userSelect: "none" }}
+                          style={{
+                            cursor: "pointer",
+                            userSelect: "none",
+                            width: CAMPAIGN_COLUMN_WIDTHS[header.column.id],
+                          }}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
                           <span
