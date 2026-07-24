@@ -1,0 +1,115 @@
+import { type NextRequest, NextResponse } from "next/server";
+import { requireApiKey } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase";
+
+interface ConversationRow {
+  id: string;
+  status: "active" | "closed";
+  started_at: string;
+  closed_at: string | null;
+}
+
+interface MessageRow {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+/**
+ * New read endpoint for the v1 CRM dashboard (apps/crm/src/app/page.tsx) —
+ * the only caller today is CRM's own proxy route,
+ * apps/crm/src/app/api/guest-contacts/[phone]/conversations/route.ts, which
+ * keeps this route's API key entirely server-side. Guarded by the existing
+ * requireApiKey (X-API-Key against GUEST_COMMUNICATION_AGENT_API_KEY), same
+ * as POST /api/send.
+ *
+ * Phone form reconciliation: Twilio always stores whatsapp_conversations
+ * .phone_number with a "whatsapp:" prefix (see ./../../../lib/conversations.ts's
+ * getOrCreateActiveConversation, which inserts Twilio's raw `From` field
+ * as-is). The caller here (CRM) passes the normalized, unprefixed form
+ * (apps/crm/src/lib/phone.ts's normalizePhone is the canonical form
+ * guest_contacts.phone is stored in). GCA has no phone-normalization helper
+ * of its own anymore (removed entirely when CRM was extracted), so rather
+ * than reviving one just for this route, this queries for BOTH the phone
+ * param as given AND a "whatsapp:"-prefixed variant of it, so either stored
+ * form matches.
+ *
+ * Response shape: `{ conversations: [{ id, status, started_at, closed_at,
+ * messages: [{ id, role, content, created_at }] }] }` — each message's own
+ * id is included specifically so callers (the CRM dashboard) have a
+ * guaranteed-unique React key; created_at alone can collide (e.g. messages
+ * inserted in the same batch/query can land at the identical timestamp).
+ * All conversations for the
+ * phone are returned (a guest can have more than one over time — old closed
+ * ones plus a current active one), conversations ordered newest-first
+ * (started_at descending) so the dashboard can show the most recent one
+ * expanded by default; each conversation's own messages are ordered
+ * oldest-first (created_at ascending) for natural reading order.
+ *
+ * `{ conversations: [] }` (200, not 404) when no conversations exist for the
+ * phone — a normal case (e.g. a guest who only exists via CSV import and has
+ * never messaged).
+ */
+export async function GET(request: NextRequest) {
+  const unauthorized = requireApiKey(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const phone = request.nextUrl.searchParams.get("phone");
+  if (!phone) {
+    return NextResponse.json({ error: "Missing phone query parameter" }, { status: 400 });
+  }
+
+  const supabase = createAdminClient();
+
+  const { data: conversations, error: conversationsError } = await supabase
+    .from("whatsapp_conversations")
+    .select("id, status, started_at, closed_at")
+    .in("phone_number", [phone, `whatsapp:${phone}`])
+    .order("started_at", { ascending: false });
+
+  if (conversationsError) {
+    return NextResponse.json({ error: conversationsError.message }, { status: 500 });
+  }
+
+  const conversationRows = (conversations ?? []) as ConversationRow[];
+  if (conversationRows.length === 0) {
+    return NextResponse.json({ conversations: [] });
+  }
+
+  const conversationIds = conversationRows.map((conversation) => conversation.id);
+  const { data: messages, error: messagesError } = await supabase
+    .from("whatsapp_messages")
+    .select("id, conversation_id, role, content, created_at")
+    .in("conversation_id", conversationIds)
+    .order("created_at", { ascending: true });
+
+  if (messagesError) {
+    return NextResponse.json({ error: messagesError.message }, { status: 500 });
+  }
+
+  const messagesByConversation = new Map<string, MessageRow[]>();
+  for (const message of (messages ?? []) as MessageRow[]) {
+    const list = messagesByConversation.get(message.conversation_id) ?? [];
+    list.push(message);
+    messagesByConversation.set(message.conversation_id, list);
+  }
+
+  return NextResponse.json({
+    conversations: conversationRows.map((conversation) => ({
+      id: conversation.id,
+      status: conversation.status,
+      started_at: conversation.started_at,
+      closed_at: conversation.closed_at,
+      messages: (messagesByConversation.get(conversation.id) ?? []).map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
+      })),
+    })),
+  });
+}

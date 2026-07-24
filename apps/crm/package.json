@@ -16,7 +16,9 @@
     "sync:guest-contacts": "tsx --env-file=.env scripts/sync-guest-contacts.ts"
   },
   "dependencies": {
+    "@radix-ui/themes": "^3.2.1",
     "@supabase/supabase-js": "^2.49.8",
+    "@tanstack/react-table": "^8.21.3",
     "next": "^16.2.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
