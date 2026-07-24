@@ -287,6 +287,10 @@ export default function DashboardPage() {
   );
   const [campaignRunErrors, setCampaignRunErrors] = useState<Record<string, string>>({});
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
+  // Own sorting state for the Campaigns tab's table — deliberately not
+  // shared with the CRM tab's own `sorting` state below (two independent
+  // useReactTable instances, one per tab).
+  const [campaignsSorting, setCampaignsSorting] = useState<SortingState>([]);
 
   const [guests, setGuests] = useState<GuestContact[]>([]);
   const [guestsLoading, setGuestsLoading] = useState(false);
@@ -791,6 +795,162 @@ export default function DashboardPage() {
 
   const selectedGuest = guests.find((guest) => guest.id === selectedGuestId) ?? null;
 
+  // Campaigns tab's own columns — mirrors the CRM tab's `columns` useMemo
+  // above in shape/conventions, but entirely separate (own state, own
+  // accessors) per Campaign rather than GuestContact. Every handler/state
+  // referenced in cells below (toggleCampaignEnabled, runCampaignNow,
+  // toggleMessageExpanded, campaignTogglingIds, campaignToggleErrors,
+  // campaignRunLoadingIds, campaignRunResults, campaignRunErrors,
+  // expandedMessageIds) is the same state declared earlier in this
+  // component — this is a rendering-structure change only, not new
+  // behavior.
+  const campaignColumns = useMemo<ColumnDef<Campaign>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: (info) => info.getValue() as string,
+      },
+      {
+        accessorKey: "kind",
+        header: "Kind",
+        cell: (info) => <Badge color="gray">{info.getValue() as string}</Badge>,
+      },
+      {
+        accessorKey: "is_recurring",
+        header: "Type",
+        cell: (info) => {
+          const isRecurring = info.getValue() as boolean;
+          return (
+            <Badge color={isRecurring ? "green" : "amber"}>
+              {isRecurring ? "Automated" : "One-off"}
+            </Badge>
+          );
+        },
+      },
+      {
+        accessorKey: "enabled",
+        header: "Enabled",
+        cell: (info) => {
+          const campaign = info.row.original;
+          const isToggling = campaignTogglingIds.has(campaign.id);
+          const toggleError = campaignToggleErrors[campaign.id];
+          return (
+            <Flex direction="column" gap="1">
+              <Switch
+                checked={campaign.enabled}
+                disabled={isToggling}
+                onCheckedChange={(checked) => void toggleCampaignEnabled(campaign, checked)}
+              />
+              {toggleError && (
+                <Text size="1" color="red">
+                  {toggleError}
+                </Text>
+              )}
+            </Flex>
+          );
+        },
+      },
+      {
+        id: "targeting",
+        accessorFn: (campaign) => summarizeCampaignTargeting(campaign),
+        header: "Targeting",
+        cell: (info) => info.getValue() as string,
+      },
+      {
+        id: "offer",
+        accessorFn: (campaign) => summarizeCampaignOffer(campaign),
+        header: "Offer",
+        cell: (info) => info.getValue() as string,
+      },
+      {
+        accessorKey: "message_template",
+        header: "Message",
+        cell: (info) => {
+          const campaign = info.row.original;
+          const isMessageExpanded = expandedMessageIds.has(campaign.id);
+          return (
+            <Box>
+              <Text
+                as="div"
+                size="2"
+                color="gray"
+                style={
+                  isMessageExpanded
+                    ? { maxWidth: 560 }
+                    : {
+                        maxWidth: 560,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                      }
+                }
+              >
+                {campaign.message_template}
+              </Text>
+              <Button size="1" variant="ghost" onClick={() => toggleMessageExpanded(campaign.id)}>
+                {isMessageExpanded ? "Show less" : "Show full message"}
+              </Button>
+            </Box>
+          );
+        },
+      },
+      {
+        // No natural accessor (this column is pure UI action, not a data
+        // field) — disable sorting here rather than let the header's
+        // sort-toggle do nothing meaningful.
+        id: "actions",
+        header: "Actions",
+        enableSorting: false,
+        cell: (info) => {
+          const campaign = info.row.original;
+          const isRunning = campaignRunLoadingIds.has(campaign.id);
+          const runResult = campaignRunResults[campaign.id];
+          const runError = campaignRunErrors[campaign.id];
+          return (
+            <Flex align="center" gap="3">
+              <Button size="1" onClick={() => void runCampaignNow(campaign)} disabled={isRunning}>
+                {isRunning ? "Running…" : "Run now"}
+              </Button>
+              {runResult && (
+                <Text size="2" color="green">
+                  Drafted {runResult.drafted}, skipped {runResult.skipped}
+                </Text>
+              )}
+              {runError && (
+                <Text size="2" color="red">
+                  {runError}
+                </Text>
+              )}
+            </Flex>
+          );
+        },
+      },
+    ],
+    [
+      campaignTogglingIds,
+      campaignToggleErrors,
+      toggleCampaignEnabled,
+      expandedMessageIds,
+      toggleMessageExpanded,
+      campaignRunLoadingIds,
+      campaignRunResults,
+      campaignRunErrors,
+      runCampaignNow,
+    ],
+  );
+
+  const campaignsTable = useReactTable({
+    data: campaigns,
+    columns: campaignColumns,
+    state: { sorting: campaignsSorting },
+    onSortingChange: setCampaignsSorting,
+    getRowId: (row) => row.id,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
   return (
     <Box p="5">
       <Heading size="6" mb="4">
@@ -1100,110 +1260,48 @@ export default function DashboardPage() {
             <Text color="gray">No campaigns yet.</Text>
           )}
 
-          <Flex direction="column" gap="3">
-            {campaigns.map((campaign) => {
-              const isToggling = campaignTogglingIds.has(campaign.id);
-              const isRunning = campaignRunLoadingIds.has(campaign.id);
-              const runResult = campaignRunResults[campaign.id];
-              const runError = campaignRunErrors[campaign.id];
-              const toggleError = campaignToggleErrors[campaign.id];
-              const isMessageExpanded = expandedMessageIds.has(campaign.id);
-
-              return (
-                <Card key={campaign.id}>
-                  <Flex justify="between" align="start" mb="2" gap="3">
-                    <Flex align="center" gap="2" wrap="wrap">
-                      <Heading size="3">{campaign.name}</Heading>
-                      <Badge color="gray">{campaign.kind}</Badge>
-                      <Badge color={campaign.is_recurring ? "green" : "amber"}>
-                        {campaign.is_recurring ? "Automated" : "One-off"}
-                      </Badge>
-                    </Flex>
-                    <Flex direction="column" align="end" gap="1" style={{ flexShrink: 0 }}>
-                      <Flex align="center" gap="2">
-                        <Text size="2" color="gray">
-                          {campaign.enabled ? "Enabled" : "Disabled"}
-                        </Text>
-                        <Switch
-                          checked={campaign.enabled}
-                          disabled={isToggling}
-                          onCheckedChange={(checked) =>
-                            void toggleCampaignEnabled(campaign, checked)
-                          }
-                        />
-                      </Flex>
-                      {toggleError && (
-                        <Text size="1" color="red">
-                          {toggleError}
-                        </Text>
-                      )}
-                    </Flex>
-                  </Flex>
-
-                  <Flex direction="column" gap="1" mb="3">
-                    <Text as="div" size="2">
-                      <Text weight="medium">Targeting: </Text>
-                      {summarizeCampaignTargeting(campaign)}
-                    </Text>
-                    <Text as="div" size="2">
-                      <Text weight="medium">Offer: </Text>
-                      {summarizeCampaignOffer(campaign)}
-                    </Text>
-                    <Box>
-                      <Text as="div" size="2" weight="medium">
-                        Message
-                      </Text>
-                      <Text
-                        as="div"
-                        size="2"
-                        color="gray"
-                        style={
-                          isMessageExpanded
-                            ? { maxWidth: 560 }
-                            : {
-                                maxWidth: 560,
-                                display: "-webkit-box",
-                                WebkitLineClamp: 2,
-                                WebkitBoxOrient: "vertical",
-                                overflow: "hidden",
-                              }
-                        }
-                      >
-                        {campaign.message_template}
-                      </Text>
-                      <Button
-                        size="1"
-                        variant="ghost"
-                        onClick={() => toggleMessageExpanded(campaign.id)}
-                      >
-                        {isMessageExpanded ? "Show less" : "Show full message"}
-                      </Button>
-                    </Box>
-                  </Flex>
-
-                  <Flex align="center" gap="3">
-                    <Button
-                      size="1"
-                      onClick={() => void runCampaignNow(campaign)}
-                      disabled={isRunning}
-                    >
-                      {isRunning ? "Running…" : "Run now"}
-                    </Button>
-                    {runResult && (
-                      <Text size="2" color="green">
-                        Drafted {runResult.drafted}, skipped {runResult.skipped}
-                      </Text>
-                    )}
-                    {runError && (
-                      <Text size="2" color="red">
-                        {runError}
-                      </Text>
-                    )}
-                  </Flex>
-                </Card>
-              );
-            })}
-          </Flex>
+          {campaigns.length > 0 && (
+            <Table.Root variant="surface">
+              <Table.Header>
+                {campaignsTable.getHeaderGroups().map((headerGroup) => (
+                  <Table.Row key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => {
+                      const sortState = header.column.getIsSorted();
+                      return (
+                        <Table.ColumnHeaderCell
+                          key={header.id}
+                          onClick={header.column.getToggleSortingHandler()}
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          <span
+                            style={{
+                              display: "inline-block",
+                              width: "1em",
+                              textAlign: "center",
+                            }}
+                          >
+                            {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
+                          </span>
+                        </Table.ColumnHeaderCell>
+                      );
+                    })}
+                  </Table.Row>
+                ))}
+              </Table.Header>
+              <Table.Body>
+                {campaignsTable.getRowModel().rows.map((row) => (
+                  <Table.Row key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <Table.Cell key={cell.id}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </Table.Cell>
+                    ))}
+                  </Table.Row>
+                ))}
+              </Table.Body>
+            </Table.Root>
+          )}
         </Tabs.Content>
       </Tabs.Root>
     </Box>
