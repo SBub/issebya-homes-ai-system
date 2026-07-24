@@ -3,15 +3,22 @@
 // v1 CRM dashboard — a preview UI, explicitly not a finished product. Rows =
 // guest_contacts (GET /api/guest-contacts), clicking a row shows that
 // guest's full CRM fields plus their WhatsApp conversation history (GET
-// /api/guest-contacts/[phone]/conversations, which proxies server-side to
-// apps/guest-communication-agent). No filters/search/pagination/editing —
-// all explicitly deferred to a later pass.
+// /api/guest-contacts/[id]/conversations, which proxies server-side to
+// apps/guest-communication-agent). No filters/search/pagination — deferred
+// to a later pass. Phone is the one inline-editable field (PATCH
+// /api/guest-contacts/[id]) — no editing of name/funnel stage/etc.
+//
+// Selection is keyed on guest_contacts.id (always present), not phone —
+// phone can be null (a guest synced from finance history with no WhatsApp
+// number yet), and a null-phone row must still open the detail panel so a
+// phone can be attached to it. Only the conversation-history fetch is
+// conditional on phone being truthy.
 //
 // API-key field follows apps/finance/src/app/upload/page.tsx's exact
 // pattern (password-style input, held in local state, sent as X-API-Key on
-// every fetch) — this page only ever talks to CRM's own two new endpoints
-// above, so only CRM_API_KEY ever reaches the browser. GCA's own API key
-// stays entirely server-side, inside the proxy route.
+// every fetch) — this page only ever talks to CRM's own endpoints above, so
+// only CRM_API_KEY ever reaches the browser. GCA's own API key stays
+// entirely server-side, inside the proxy route.
 
 import { Badge, Box, Button, Card, Flex, Heading, Table, Text, TextField } from "@radix-ui/themes";
 import {
@@ -22,7 +29,7 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { type MouseEvent, useCallback, useMemo, useRef, useState } from "react";
 
 type FunnelStage = "new" | "informed" | "link_sent" | "booked";
 
@@ -80,12 +87,37 @@ export default function DashboardPage() {
   const [guestsError, setGuestsError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
 
-  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+  const [selectedGuestId, setSelectedGuestId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [conversationsError, setConversationsError] = useState<string | null>(null);
+  // Mirrors selectedGuestId synchronously, same reason as editingGuestIdRef
+  // below. Guards a real race: if a guest is selected (kicking off a
+  // conversation-history fetch), then a different guest is selected before
+  // that fetch resolves, the first fetch's late response must not overwrite
+  // the second guest's already-showing panel with stale content/errors.
+  const selectedGuestIdRef = useRef<string | null>(null);
 
   const [sorting, setSorting] = useState<SortingState>([]);
+
+  // Inline phone edit — only one cell can be in edit mode at a time, tracked
+  // by guest id rather than per-row state.
+  const [editingGuestId, setEditingGuestId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [editingError, setEditingError] = useState<string | null>(null);
+  const [editingSaving, setEditingSaving] = useState(false);
+  // Mirrors editingGuestId synchronously (unlike the state value, which only
+  // updates on the next render). Needed because a successful commit closes
+  // the input, and browsers fire a native blur on an input removed from the
+  // DOM while focused — that stale onBlur closure would otherwise re-invoke
+  // commitPhoneEdit a second time for the same edit. Checking this ref at
+  // the top of commitPhoneEdit makes that second, stale call a no-op.
+  const editingGuestIdRef = useRef<string | null>(null);
+
+  const closeEditing = useCallback(() => {
+    editingGuestIdRef.current = null;
+    setEditingGuestId(null);
+  }, []);
 
   async function loadGuests() {
     setGuestsLoading(true);
@@ -107,33 +139,110 @@ export default function DashboardPage() {
     }
   }
 
-  async function selectGuest(phone: string | null) {
-    setSelectedPhone(phone);
+  const loadConversationsFor = useCallback(
+    async (guestId: string) => {
+      setConversationsLoading(true);
+      try {
+        const res = await fetch(
+          `/api/guest-contacts/${encodeURIComponent(guestId)}/conversations`,
+          {
+            headers: { "X-API-Key": apiKey },
+          },
+        );
+        const json = await res.json();
+        if (selectedGuestIdRef.current !== guestId) {
+          // A different guest was selected while this request was in
+          // flight — this response is stale, discard it rather than
+          // overwriting whatever the now-selected guest's own panel shows.
+          return;
+        }
+        if (!res.ok) {
+          setConversationsError(
+            typeof json.error === "string" ? json.error : "Failed to load conversation history",
+          );
+          return;
+        }
+        setConversations((json.conversations ?? []) as Conversation[]);
+      } catch (err) {
+        if (selectedGuestIdRef.current === guestId) {
+          setConversationsError(err instanceof Error ? err.message : "Unknown error");
+        }
+      } finally {
+        if (selectedGuestIdRef.current === guestId) {
+          setConversationsLoading(false);
+        }
+      }
+    },
+    [apiKey],
+  );
+
+  async function selectGuest(guest: GuestContact) {
+    setSelectedGuestId(guest.id);
+    selectedGuestIdRef.current = guest.id;
     setConversations(null);
     setConversationsError(null);
-    if (!phone) {
+    if (!guest.phone) {
+      // No phone yet — nothing to fetch conversation history for. The
+      // detail panel itself still renders (see render logic below), it just
+      // shows a "no phone yet" message in the conversation-history section.
       return;
     }
+    await loadConversationsFor(guest.id);
+  }
 
-    setConversationsLoading(true);
-    try {
-      const res = await fetch(`/api/guest-contacts/${encodeURIComponent(phone)}/conversations`, {
-        headers: { "X-API-Key": apiKey },
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setConversationsError(
-          typeof json.error === "string" ? json.error : "Failed to load conversation history",
-        );
+  const startEditingPhone = useCallback((guest: GuestContact, event: MouseEvent) => {
+    event.stopPropagation();
+    editingGuestIdRef.current = guest.id;
+    setEditingGuestId(guest.id);
+    setEditingValue(guest.phone ?? "");
+    setEditingError(null);
+  }, []);
+
+  const commitPhoneEdit = useCallback(
+    async (guestId: string) => {
+      if (editingGuestIdRef.current !== guestId) {
+        // Already committed (or cancelled) by a prior call for this same
+        // edit — see editingGuestIdRef's own comment above.
         return;
       }
-      setConversations((json.conversations ?? []) as Conversation[]);
-    } catch (err) {
-      setConversationsError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setConversationsLoading(false);
-    }
-  }
+
+      const value = editingValue.trim();
+      setEditingSaving(true);
+      setEditingError(null);
+      try {
+        const res = await fetch(`/api/guest-contacts/${encodeURIComponent(guestId)}`, {
+          method: "PATCH",
+          headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: value }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setEditingError(typeof json.error === "string" ? json.error : "Failed to save phone");
+          return;
+        }
+        const updatedPhone = (json.phone ?? value) as string;
+        setGuests((prev) =>
+          prev.map((guest) => (guest.id === guestId ? { ...guest, phone: updatedPhone } : guest)),
+        );
+        closeEditing();
+        setEditingValue("");
+        // If the guest whose phone we just saved is also the one currently
+        // selected, the detail panel's conversation-history section was
+        // either showing "no phone yet" (first time a phone is added) or
+        // conversations for the guest's previous phone (a correction) —
+        // either way it's now stale. Re-fetch so it reflects the new value
+        // immediately instead of only updating on the next row click.
+        if (selectedGuestId === guestId) {
+          await loadConversationsFor(guestId);
+        }
+      } catch (err) {
+        setEditingError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        setEditingSaving(false);
+      }
+    },
+    [editingValue, apiKey, closeEditing, selectedGuestId, loadConversationsFor],
+  );
 
   const columns = useMemo<ColumnDef<GuestContact>[]>(
     () => [
@@ -145,7 +254,53 @@ export default function DashboardPage() {
       {
         accessorKey: "phone",
         header: "Phone",
-        cell: (info) => (info.getValue() as string | null) ?? "—",
+        cell: (info) => {
+          const guest = info.row.original;
+          if (editingGuestId === guest.id) {
+            return (
+              <Box onClick={(e) => e.stopPropagation()}>
+                <TextField.Root
+                  autoFocus
+                  size="1"
+                  value={editingValue}
+                  disabled={editingSaving}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      void commitPhoneEdit(guest.id);
+                    }
+                  }}
+                  onBlur={() => void commitPhoneEdit(guest.id)}
+                />
+                {editingError && (
+                  <Text as="div" size="1" color="red" mt="1">
+                    {editingError}
+                  </Text>
+                )}
+              </Box>
+            );
+          }
+          if (guest.phone) {
+            return (
+              <Flex align="center" gap="2">
+                <Text>{guest.phone}</Text>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  aria-label="Edit phone"
+                  onClick={(e) => startEditingPhone(guest, e)}
+                >
+                  ✎
+                </Button>
+              </Flex>
+            );
+          }
+          return (
+            <Button size="1" variant="soft" onClick={(e) => startEditingPhone(guest, e)}>
+              Edit
+            </Button>
+          );
+        },
       },
       {
         accessorKey: "funnel_stage",
@@ -161,6 +316,22 @@ export default function DashboardPage() {
         cell: (info) => (info.getValue() as string | null) ?? "—",
       },
       {
+        // Sorts by check-in date; the cell shows the full check-in–check-out
+        // range. This is the field that matters most for deciding whether
+        // (and what) to send a returning-guest campaign to — surfaced here,
+        // sortable across the whole guest list, rather than only visible one
+        // guest at a time in the detail panel.
+        accessorKey: "last_stay_checkin",
+        header: "Last Stay",
+        cell: (info) => {
+          const guest = info.row.original;
+          if (!guest.last_stay_checkin) {
+            return "—";
+          }
+          return `${formatDate(guest.last_stay_checkin)} – ${formatDate(guest.last_stay_checkout)}`;
+        },
+      },
+      {
         accessorKey: "total_stays",
         header: "Total Stays",
       },
@@ -170,7 +341,7 @@ export default function DashboardPage() {
         cell: (info) => formatDate(info.getValue() as string | null),
       },
     ],
-    [],
+    [editingGuestId, editingValue, editingSaving, editingError, commitPhoneEdit, startEditingPhone],
   );
 
   const table = useReactTable({
@@ -183,7 +354,7 @@ export default function DashboardPage() {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const selectedGuest = guests.find((guest) => guest.phone === selectedPhone) ?? null;
+  const selectedGuest = guests.find((guest) => guest.id === selectedGuestId) ?? null;
 
   return (
     <Box p="5">
@@ -249,13 +420,11 @@ export default function DashboardPage() {
                 {table.getRowModel().rows.map((row) => (
                   <Table.Row
                     key={row.id}
-                    onClick={() => selectGuest(row.original.phone)}
+                    onClick={() => void selectGuest(row.original)}
                     style={{
-                      cursor: row.original.phone ? "pointer" : "default",
+                      cursor: "pointer",
                       backgroundColor:
-                        row.original.phone && row.original.phone === selectedPhone
-                          ? "var(--accent-a3)"
-                          : undefined,
+                        row.original.id === selectedGuestId ? "var(--accent-a3)" : undefined,
                     }}
                   >
                     {row.getVisibleCells().map((cell) => (
@@ -271,9 +440,9 @@ export default function DashboardPage() {
         </Box>
 
         <Box style={{ flexShrink: 0, width: 380 }}>
-          {!selectedPhone && <Text color="gray">Select a guest to see details</Text>}
+          {!selectedGuestId && <Text color="gray">Select a guest to see details</Text>}
 
-          {selectedPhone && (
+          {selectedGuestId && (
             <Flex direction="column" gap="3">
               <Card>
                 <Heading size="4" mb="2">
@@ -281,7 +450,7 @@ export default function DashboardPage() {
                 </Heading>
                 <Flex direction="column" gap="1">
                   <Text as="div" size="2">
-                    Phone: {selectedPhone}
+                    Phone: {selectedGuest?.phone ?? "—"}
                   </Text>
                   <Text as="div" size="2">
                     Funnel stage:{" "}
@@ -311,6 +480,9 @@ export default function DashboardPage() {
               </Card>
 
               <Heading size="3">Conversation history</Heading>
+              {!selectedGuest?.phone && (
+                <Text color="gray">No phone number yet — add one to see conversation history.</Text>
+              )}
               {conversationsLoading && <Text color="gray">Loading…</Text>}
               {conversationsError && <Text color="red">{conversationsError}</Text>}
               {conversations && conversations.length === 0 && (

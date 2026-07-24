@@ -20,8 +20,10 @@ interface MessageRow {
 /**
  * New read endpoint for the v1 CRM dashboard (apps/crm/src/app/page.tsx) —
  * the only caller today is CRM's own proxy route,
- * apps/crm/src/app/api/guest-contacts/[phone]/conversations/route.ts, which
- * keeps this route's API key entirely server-side. Guarded by the existing
+ * apps/crm/src/app/api/guest-contacts/[id]/conversations/route.ts (id-keyed,
+ * not phone-keyed — it looks up the guest's phone itself before calling
+ * here), which keeps this route's API key entirely server-side. Guarded by
+ * the existing
  * requireApiKey (X-API-Key against GUEST_COMMUNICATION_AGENT_API_KEY), same
  * as POST /api/send.
  *
