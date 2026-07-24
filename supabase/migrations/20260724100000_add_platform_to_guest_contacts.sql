@@ -1,0 +1,35 @@
+-- Adds a platform column to guest_contacts so the CRM dashboard
+-- (apps/crm/src/app/page.tsx) can filter guests by acquisition channel.
+--
+-- Reuses apps/finance's own finance_bookings.platform values verbatim
+-- ('airbnb', 'booking_com', 'direct' — see
+-- supabase/migrations/20260718213027_finance_bookings.sql's finance_platform
+-- enum) rather than inventing a parallel vocabulary for the same concept.
+-- 'direct' means a non-OTA, direct/website booking — schema-anticipated on
+-- finance_bookings from day one but never actually produced by apps/finance's
+-- CSV parsers, which only ever detect Airbnb or Booking.com (the same
+-- "unwired schema value" pattern as campaigns.kind's
+-- social_code_word/manual, see 20260721103000_add_funnel_stage_and_campaign_tables.sql).
+-- The CRM dashboard displays 'direct' to users as "Direct" — a display
+-- label only, not a different stored value.
+--
+-- Plain `text` + `check`, NOT a reference to (or dependency on) the
+-- finance_platform Postgres enum type: guest_contacts is CRM-owned, not
+-- finance-owned, and every other guest_contacts classification column
+-- (funnel_stage; see the same migration referenced above) and every other
+-- check-constrained status column in this schema (campaigns.kind,
+-- promo_codes.status) is a plain text + check column too, even though
+-- finance_bookings.platform itself is a native enum. Matching that
+-- established convention here keeps guest_contacts independent of
+-- apps/finance's schema — this column only borrows finance's *values*, not
+-- its type.
+--
+-- Defaults to 'direct': every existing guest_contacts row today either came
+-- from a finance sync (about to be backfilled with a real platform by the
+-- next sync run, see apps/crm/src/lib/finance-sync.ts) or was created by
+-- POST /api/guest-contacts/register's phone-only stub insert (which never
+-- sets platform at all, and for a first-contact WhatsApp stub with no
+-- booking history yet, 'direct' is the least wrong guess).
+alter table public.guest_contacts
+  add column platform text not null default 'direct'
+    check (platform in ('airbnb', 'booking_com', 'direct'));
