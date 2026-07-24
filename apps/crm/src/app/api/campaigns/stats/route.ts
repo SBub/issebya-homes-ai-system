@@ -1,9 +1,21 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
-import type { CampaignKind } from "@/lib/campaign-messages";
 import { createAdminClient } from "@/lib/supabase";
 
 type PromoCodeStatus = "issued" | "sent" | "redeemed" | "expired" | "rejected";
+
+// This digest's own fixed allowlist of kinds to report — NOT derived from
+// any DB constraint anymore. Before
+// supabase/migrations/20260724110000_campaigns_data_driven_targeting.sql,
+// campaigns.kind was a 4-value check constraint and this type was described
+// as "narrower" than it; now kind is unrestricted `text` (any campaign can be
+// named anything), so there's no DB-level set to be narrower than. This
+// array is simply "the two kinds Orch-A's digest currently knows how to
+// show" — always reported, even at zero activity or before any campaigns
+// row exists for a kind, so the digest has a stable, predictable shape from
+// day one. A future campaign kind (e.g. a win-back or winter-program
+// campaign) won't appear here until this list is deliberately extended.
+type DigestCampaignKind = "seasonal_nudge" | "stalled_link_nudge";
 
 interface PromoCodeWithCampaignRow {
   status: PromoCodeStatus;
@@ -11,11 +23,11 @@ interface PromoCodeWithCampaignRow {
   // — lives on this table) as a single nested object, not an array. `null` is
   // handled defensively below for an orphaned row, even though the FK is
   // NOT NULL and no delete path exists for campaigns today.
-  campaigns: { kind: CampaignKind } | null;
+  campaigns: { kind: DigestCampaignKind } | null;
 }
 
 export interface CampaignKindStats {
-  kind: CampaignKind;
+  kind: DigestCampaignKind;
   issued: number;
   sent: number;
   rejected: number;
@@ -23,14 +35,9 @@ export interface CampaignKindStats {
   redeemed: number;
 }
 
-// The only two kinds apps/orch-a's digest needs to know about — deliberately
-// narrower than the DB check constraint (which also allows 'social_code_word'
-// and 'manual'), matching CampaignKind in campaign-messages.ts. Always
-// reported, even at zero activity or before any campaigns row exists yet for
-// a kind, so the digest has a stable, predictable shape from day one.
-const CAMPAIGN_KINDS: CampaignKind[] = ["seasonal_nudge", "stalled_link_nudge"];
+const CAMPAIGN_KINDS: DigestCampaignKind[] = ["seasonal_nudge", "stalled_link_nudge"];
 
-function emptyStats(kind: CampaignKind): CampaignKindStats {
+function emptyStats(kind: DigestCampaignKind): CampaignKindStats {
   return { kind, issued: 0, sent: 0, rejected: 0, expired: 0, redeemed: 0 };
 }
 
@@ -43,7 +50,7 @@ function emptyStats(kind: CampaignKind): CampaignKindStats {
  * silently excluded rather than crashing.
  */
 export function aggregateCampaignStats(rows: PromoCodeWithCampaignRow[]): CampaignKindStats[] {
-  const byKind = new Map<CampaignKind, CampaignKindStats>(
+  const byKind = new Map<DigestCampaignKind, CampaignKindStats>(
     CAMPAIGN_KINDS.map((kind) => [kind, emptyStats(kind)]),
   );
 

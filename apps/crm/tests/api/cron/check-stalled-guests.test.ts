@@ -44,9 +44,12 @@ describe("POST /api/cron/check-stalled-guests", () => {
 
   it("returns runCheckStalledGuests' summary on success", async () => {
     runCheckStalledGuestsMock.mockResolvedValueOnce({
-      seasonal_nudge_drafted: 2,
-      stalled_link_nudge_drafted: 1,
-      skipped_already_nudged: 3,
+      results: [
+        { campaign_id: "campaign-seasonal", kind: "seasonal_nudge", drafted: 2, skipped: 1 },
+        { campaign_id: "campaign-stalled", kind: "stalled_link_nudge", drafted: 1, skipped: 2 },
+      ],
+      total_drafted: 3,
+      total_skipped_already_nudged: 3,
     });
 
     const res = await POST(makeRequest());
@@ -54,9 +57,12 @@ describe("POST /api/cron/check-stalled-guests", () => {
 
     expect(res.status).toBe(200);
     expect(json).toEqual({
-      seasonal_nudge_drafted: 2,
-      stalled_link_nudge_drafted: 1,
-      skipped_already_nudged: 3,
+      results: [
+        { campaign_id: "campaign-seasonal", kind: "seasonal_nudge", drafted: 2, skipped: 1 },
+        { campaign_id: "campaign-stalled", kind: "stalled_link_nudge", drafted: 1, skipped: 2 },
+      ],
+      total_drafted: 3,
+      total_skipped_already_nudged: 3,
     });
   });
 

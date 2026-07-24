@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// postCampaignDraft is the one real side effect draftForCandidates/
+// postCampaignDraft is the one real side effect draftForCampaign/
 // runCheckStalledGuests reach for outside the Supabase client passed in —
 // mock the module boundary, same "mock the module boundary, not the
 // network" approach as this app's route tests (e.g.
@@ -12,9 +12,10 @@ vi.mock("@/lib/telegram-router-client.js", () => ({
 
 const {
   alreadyNudgedGuestIds,
-  findOrCreateCampaign,
-  getSeasonalNudgeCandidates,
-  getStalledLinkNudgeCandidates,
+  draftForCampaign,
+  getCampaignById,
+  getCampaignCandidates,
+  getRecurringEnabledCampaigns,
   runCheckStalledGuests,
 } = await import("@/lib/campaigns.js");
 
@@ -29,7 +30,7 @@ const {
  */
 function makeChain(result: unknown) {
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "order", "limit", "not", "lt", "in", "insert"]) {
+  for (const method of ["select", "eq", "order", "limit", "not", "lt", "gte", "in", "insert"]) {
     chain[method] = vi.fn(() => chain);
   }
   chain.maybeSingle = vi.fn(() => Promise.resolve(result));
@@ -48,6 +49,7 @@ function makeChain(result: unknown) {
     limit: ReturnType<typeof vi.fn>;
     not: ReturnType<typeof vi.fn>;
     lt: ReturnType<typeof vi.fn>;
+    gte: ReturnType<typeof vi.fn>;
     in: ReturnType<typeof vi.fn>;
     insert: ReturnType<typeof vi.fn>;
     maybeSingle: ReturnType<typeof vi.fn>;
@@ -55,83 +57,180 @@ function makeChain(result: unknown) {
   };
 }
 
-describe("findOrCreateCampaign", () => {
-  let fromMock: ReturnType<typeof vi.fn>;
+// The two real seeded campaigns
+// (supabase/migrations/20260724110000_campaigns_data_driven_targeting.sql),
+// as getRecurringEnabledCampaigns/getCampaignById would return them — used
+// throughout below instead of re-deriving one-off row literals per test.
+const SEASONAL_CAMPAIGN = {
+  id: "campaign-seasonal",
+  name: "Seasonal check-in (automated)",
+  kind: "seasonal_nudge",
+  target_funnel_stage: "new",
+  min_idle_days: 3,
+  target_stay_before: null,
+  min_total_stays: null,
+  discount_percent: null,
+  offer_description: "",
+  message_template:
+    "Hi! Just checking in — no rush at all. [fill in what's happening locally this season]. Happy to help with availability or pricing whenever you're ready!",
+  is_recurring: true,
+  enabled: true,
+};
 
-  beforeEach(() => {
-    fromMock = vi.fn();
-  });
+const STALLED_CAMPAIGN = {
+  id: "campaign-stalled",
+  name: "Stalled booking-link follow-up (automated)",
+  kind: "stalled_link_nudge",
+  target_funnel_stage: "link_sent",
+  min_idle_days: 5,
+  target_stay_before: null,
+  min_total_stays: null,
+  discount_percent: null,
+  offer_description: "",
+  message_template:
+    "Hi! Just following up on the booking link I sent over — still interested in those dates? Happy to answer any questions, or help if anything's changed.",
+  is_recurring: true,
+  enabled: true,
+};
 
-  it("returns the existing campaign's id without inserting when one already exists", async () => {
-    fromMock.mockReturnValueOnce(makeChain({ data: { id: "campaign-1" }, error: null }));
+describe("getRecurringEnabledCampaigns", () => {
+  it("selects campaigns filtered to is_recurring=true and enabled=true", async () => {
+    const chain = makeChain({ data: [SEASONAL_CAMPAIGN, STALLED_CAMPAIGN], error: null });
+    const fromMock = vi.fn(() => chain);
     const supabase = { from: fromMock } as never;
 
-    const id = await findOrCreateCampaign(supabase, "seasonal_nudge");
+    const campaigns = await getRecurringEnabledCampaigns(supabase);
 
-    expect(id).toBe("campaign-1");
-    expect(fromMock).toHaveBeenCalledTimes(1);
+    expect(campaigns).toEqual([SEASONAL_CAMPAIGN, STALLED_CAMPAIGN]);
     expect(fromMock).toHaveBeenCalledWith("campaigns");
+    expect(chain.eq).toHaveBeenCalledWith("is_recurring", true);
+    expect(chain.eq).toHaveBeenCalledWith("enabled", true);
   });
 
-  it("creates a new campaign with the automated name when none exists", async () => {
-    const selectChain = makeChain({ data: null, error: null });
-    const insertChain = makeChain({ data: { id: "campaign-new" }, error: null });
-    fromMock.mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain);
-    const supabase = { from: fromMock } as never;
+  it("throws when the query errors", async () => {
+    const chain = makeChain({ data: null, error: { message: "boom" } });
+    const supabase = { from: vi.fn(() => chain) } as never;
 
-    const id = await findOrCreateCampaign(supabase, "stalled_link_nudge");
-
-    expect(id).toBe("campaign-new");
-    expect(fromMock).toHaveBeenCalledTimes(2);
-    expect(insertChain.insert).toHaveBeenCalledWith({
-      kind: "stalled_link_nudge",
-      name: "Stalled booking-link follow-up (automated)",
-    });
-  });
-
-  it("throws when the select errors", async () => {
-    fromMock.mockReturnValueOnce(makeChain({ data: null, error: { message: "boom" } }));
-    const supabase = { from: fromMock } as never;
-
-    await expect(findOrCreateCampaign(supabase, "seasonal_nudge")).rejects.toThrow("boom");
+    await expect(getRecurringEnabledCampaigns(supabase)).rejects.toThrow("boom");
   });
 });
 
-describe("getSeasonalNudgeCandidates", () => {
-  it("queries funnel_stage='new' with a non-null, >3-day-stale last_interaction_at", async () => {
+describe("getCampaignById", () => {
+  it("returns the matching campaign row", async () => {
+    const chain = makeChain({ data: SEASONAL_CAMPAIGN, error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+
+    const campaign = await getCampaignById(supabase, "campaign-seasonal");
+
+    expect(campaign).toEqual(SEASONAL_CAMPAIGN);
+    expect(chain.eq).toHaveBeenCalledWith("id", "campaign-seasonal");
+  });
+
+  it("returns null when no row matches", async () => {
+    const chain = makeChain({ data: null, error: null });
+    const supabase = { from: vi.fn(() => chain) } as never;
+
+    const campaign = await getCampaignById(supabase, "missing-id");
+
+    expect(campaign).toBeNull();
+  });
+
+  it("throws when the query errors", async () => {
+    const chain = makeChain({ data: null, error: { message: "boom" } });
+    const supabase = { from: vi.fn(() => chain) } as never;
+
+    await expect(getCampaignById(supabase, "campaign-seasonal")).rejects.toThrow("boom");
+  });
+});
+
+describe("getCampaignCandidates", () => {
+  it("filters by target_funnel_stage and min_idle_days for the seasonal_nudge campaign shape", async () => {
     const chain = makeChain({ data: [{ id: "guest-1", phone: "+351920742845" }], error: null });
     const fromMock = vi.fn(() => chain);
     const supabase = { from: fromMock } as never;
 
-    const candidates = await getSeasonalNudgeCandidates(supabase);
+    const candidates = await getCampaignCandidates(supabase, SEASONAL_CAMPAIGN);
 
     expect(candidates).toEqual([{ id: "guest-1", phone: "+351920742845" }]);
     expect(fromMock).toHaveBeenCalledWith("guest_contacts");
     expect(chain.eq).toHaveBeenCalledWith("funnel_stage", "new");
-    expect(chain.not).toHaveBeenCalledWith("last_interaction_at", "is", null);
     expect(chain.lt).toHaveBeenCalledWith("last_interaction_at", expect.any(String));
+  });
+
+  it("filters by target_funnel_stage and min_idle_days for the stalled_link_nudge campaign shape", async () => {
+    const chain = makeChain({ data: [{ id: "guest-2", phone: "+351920000000" }], error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+
+    const candidates = await getCampaignCandidates(supabase, STALLED_CAMPAIGN);
+
+    expect(candidates).toEqual([{ id: "guest-2", phone: "+351920000000" }]);
+    expect(fromMock).toHaveBeenCalledWith("guest_contacts");
+    expect(chain.eq).toHaveBeenCalledWith("funnel_stage", "link_sent");
+    expect(chain.lt).toHaveBeenCalledWith("last_interaction_at", expect.any(String));
+  });
+
+  it("applies target_stay_before as a last_stay_checkout filter when set (future win-back-style campaign)", async () => {
+    const chain = makeChain({ data: [], error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+    const winbackLikeCampaign = {
+      ...SEASONAL_CAMPAIGN,
+      target_funnel_stage: null,
+      min_idle_days: null,
+      target_stay_before: "2026-01-01",
+    };
+
+    await getCampaignCandidates(supabase, winbackLikeCampaign);
+
+    expect(chain.eq).not.toHaveBeenCalled();
+    expect(chain.lt).toHaveBeenCalledWith("last_stay_checkout", "2026-01-01");
+    expect(chain.gte).not.toHaveBeenCalled();
+  });
+
+  it("applies min_total_stays as a total_stays >= filter when set (future winter-program-style campaign targeting every guest with a completed booking)", async () => {
+    const chain = makeChain({ data: [], error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+    const everyPastGuestCampaign = {
+      ...SEASONAL_CAMPAIGN,
+      target_funnel_stage: null,
+      min_idle_days: null,
+      min_total_stays: 1,
+    };
+
+    await getCampaignCandidates(supabase, everyPastGuestCampaign);
+
+    expect(chain.eq).not.toHaveBeenCalled();
+    expect(chain.lt).not.toHaveBeenCalled();
+    expect(chain.gte).toHaveBeenCalledWith("total_stays", 1);
+  });
+
+  it("applies no filters at all when every targeting column is null", async () => {
+    const chain = makeChain({ data: [], error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+    const untargetedCampaign = {
+      ...SEASONAL_CAMPAIGN,
+      target_funnel_stage: null,
+      min_idle_days: null,
+      target_stay_before: null,
+      min_total_stays: null,
+    };
+
+    await getCampaignCandidates(supabase, untargetedCampaign);
+
+    expect(chain.eq).not.toHaveBeenCalled();
+    expect(chain.lt).not.toHaveBeenCalled();
+    expect(chain.gte).not.toHaveBeenCalled();
   });
 
   it("throws when the query errors", async () => {
     const chain = makeChain({ data: null, error: { message: "db down" } });
     const supabase = { from: vi.fn(() => chain) } as never;
 
-    await expect(getSeasonalNudgeCandidates(supabase)).rejects.toThrow("db down");
-  });
-});
-
-describe("getStalledLinkNudgeCandidates", () => {
-  it("queries funnel_stage='link_sent' with a >5-day-stale last_interaction_at", async () => {
-    const chain = makeChain({ data: [{ id: "guest-2", phone: "+351920000000" }], error: null });
-    const fromMock = vi.fn(() => chain);
-    const supabase = { from: fromMock } as never;
-
-    const candidates = await getStalledLinkNudgeCandidates(supabase);
-
-    expect(candidates).toEqual([{ id: "guest-2", phone: "+351920000000" }]);
-    expect(fromMock).toHaveBeenCalledWith("guest_contacts");
-    expect(chain.eq).toHaveBeenCalledWith("funnel_stage", "link_sent");
-    expect(chain.lt).toHaveBeenCalledWith("last_interaction_at", expect.any(String));
+    await expect(getCampaignCandidates(supabase, SEASONAL_CAMPAIGN)).rejects.toThrow("db down");
   });
 });
 
@@ -167,6 +266,113 @@ describe("alreadyNudgedGuestIds", () => {
   });
 });
 
+describe("draftForCampaign", () => {
+  beforeEach(() => {
+    postCampaignDraftMock.mockReset();
+    postCampaignDraftMock.mockResolvedValue({ ok: true });
+  });
+
+  /**
+   * Builds a fromMock that answers each table's queries in the exact
+   * sequence draftForCampaign actually issues them: the candidate select,
+   * a dedup select, then one insert per non-deduped candidate.
+   */
+  function makeSupabase(options: {
+    candidates: Array<{ id: string; phone: string | null; guest_name?: string | null }>;
+    alreadyNudged?: string[];
+  }) {
+    const fromMock = vi.fn();
+    const insertChains: Record<string, ReturnType<typeof makeChain>> = {};
+    fromMock
+      .mockReturnValueOnce(makeChain({ data: options.candidates, error: null }))
+      .mockReturnValueOnce(
+        makeChain({
+          data: (options.alreadyNudged ?? []).map((id) => ({ guest_contact_id: id })),
+          error: null,
+        }),
+      );
+    for (const candidate of options.candidates) {
+      if (!(options.alreadyNudged ?? []).includes(candidate.id)) {
+        const chain = makeChain({ data: { id: `promo-${candidate.id}` }, error: null });
+        insertChains[candidate.id] = chain;
+        fromMock.mockReturnValueOnce(chain);
+      }
+    }
+    return { supabase: { from: fromMock } as never, insertChains };
+  }
+
+  it("drafts a promo code for every true candidate", async () => {
+    const { supabase } = makeSupabase({
+      candidates: [
+        { id: "guest-2", phone: "+351900000002" },
+        { id: "guest-3", phone: "+351900000003" },
+      ],
+    });
+
+    const result = await draftForCampaign(supabase, STALLED_CAMPAIGN);
+
+    expect(result).toEqual({ drafted: 2, skipped: 0 });
+    expect(postCampaignDraftMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips a candidate already nudged for that campaign (dedup guard) and doesn't insert or draft for them", async () => {
+    const { supabase } = makeSupabase({
+      candidates: [
+        { id: "guest-1", phone: "+351900000001" },
+        { id: "guest-4", phone: "+351900000004" },
+      ],
+      alreadyNudged: ["guest-4"],
+    });
+
+    const result = await draftForCampaign(supabase, SEASONAL_CAMPAIGN);
+
+    expect(result).toEqual({ drafted: 1, skipped: 1 });
+    expect(postCampaignDraftMock).toHaveBeenCalledTimes(1);
+    expect(postCampaignDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({ guestPhone: "+351900000001", campaignKind: "seasonal_nudge" }),
+    );
+  });
+
+  it("generates a real, unique-looking hex code and renders message_template for each drafted candidate", async () => {
+    const { supabase, insertChains } = makeSupabase({
+      candidates: [{ id: "guest-1", phone: "+351900000001", guest_name: "Marion" }],
+    });
+
+    await draftForCampaign(supabase, SEASONAL_CAMPAIGN);
+
+    const insertCall = insertChains["guest-1"].insert.mock.calls[0][0];
+    // crypto.randomBytes(6).toString("hex").toUpperCase() -> 12 uppercase hex chars.
+    expect(insertCall.code).toMatch(/^[0-9A-F]{12}$/);
+    expect(insertCall).toEqual(
+      expect.objectContaining({
+        campaign_id: "campaign-seasonal",
+        guest_contact_id: "guest-1",
+        message_text: SEASONAL_CAMPAIGN.message_template,
+      }),
+    );
+
+    const [draftArg] = postCampaignDraftMock.mock.calls[0];
+    expect(draftArg.promoCodeId).toBe("promo-guest-1");
+  });
+
+  it("does not fail the whole run when postCampaignDraft fails for one candidate", async () => {
+    postCampaignDraftMock.mockResolvedValueOnce({
+      ok: false,
+      error: "telegram-router unreachable",
+    });
+    const { supabase } = makeSupabase({
+      candidates: [{ id: "guest-1", phone: "+351900000001" }],
+    });
+
+    const result = await draftForCampaign(supabase, SEASONAL_CAMPAIGN);
+
+    // The promo_codes row is still counted as drafted — postCampaignDraft
+    // failing is a logged warning, not a rollback (see campaigns.ts's
+    // draftForCampaign doc comment).
+    expect(result.drafted).toBe(1);
+  });
+});
+
 describe("runCheckStalledGuests", () => {
   const originalEnv = { ...process.env };
 
@@ -181,9 +387,9 @@ describe("runCheckStalledGuests", () => {
 
   /**
    * Builds a fromMock that answers each table's queries in the exact
-   * sequence runCheckStalledGuests actually issues them: two
-   * find-or-create campaign selects, the two candidate selects, then per
-   * campaign a dedup select and one insert per non-deduped candidate.
+   * sequence runCheckStalledGuests actually issues them: the
+   * getRecurringEnabledCampaigns select, then per campaign a candidate
+   * select, a dedup select, and one insert per non-deduped candidate.
    */
   function makeSupabase(options: {
     seasonalCandidates: Array<{ id: string; phone: string | null }>;
@@ -194,22 +400,17 @@ describe("runCheckStalledGuests", () => {
     const fromMock = vi.fn();
     const insertChains: Record<string, ReturnType<typeof makeChain>> = {};
     fromMock
-      // findOrCreateCampaign("seasonal_nudge") — already exists
-      .mockReturnValueOnce(makeChain({ data: { id: "campaign-seasonal" }, error: null }))
-      // findOrCreateCampaign("stalled_link_nudge") — already exists
-      .mockReturnValueOnce(makeChain({ data: { id: "campaign-stalled" }, error: null }))
-      // getSeasonalNudgeCandidates
+      // getRecurringEnabledCampaigns
+      .mockReturnValueOnce(makeChain({ data: [SEASONAL_CAMPAIGN, STALLED_CAMPAIGN], error: null }))
+      // draftForCampaign(seasonal) -> getCampaignCandidates
       .mockReturnValueOnce(makeChain({ data: options.seasonalCandidates, error: null }))
-      // getStalledLinkNudgeCandidates
-      .mockReturnValueOnce(makeChain({ data: options.stalledCandidates, error: null }))
-      // draftForCandidates(seasonal) -> alreadyNudgedGuestIds
+      // draftForCampaign(seasonal) -> alreadyNudgedGuestIds
       .mockReturnValueOnce(
         makeChain({
           data: (options.seasonalAlreadyNudged ?? []).map((id) => ({ guest_contact_id: id })),
           error: null,
         }),
       );
-    // draftForCandidates(seasonal) -> one insert per non-deduped candidate
     for (const candidate of options.seasonalCandidates) {
       if (!(options.seasonalAlreadyNudged ?? []).includes(candidate.id)) {
         const chain = makeChain({ data: { id: `promo-${candidate.id}` }, error: null });
@@ -217,7 +418,9 @@ describe("runCheckStalledGuests", () => {
         fromMock.mockReturnValueOnce(chain);
       }
     }
-    // draftForCandidates(stalled) -> alreadyNudgedGuestIds
+    // draftForCampaign(stalled) -> getCampaignCandidates
+    fromMock.mockReturnValueOnce(makeChain({ data: options.stalledCandidates, error: null }));
+    // draftForCampaign(stalled) -> alreadyNudgedGuestIds
     fromMock.mockReturnValueOnce(
       makeChain({
         data: (options.stalledAlreadyNudged ?? []).map((id) => ({ guest_contact_id: id })),
@@ -234,7 +437,7 @@ describe("runCheckStalledGuests", () => {
     return { supabase: { from: fromMock } as never, insertChains };
   }
 
-  it("drafts a promo code for every true candidate in both campaigns", async () => {
+  it("drafts a promo code for every true candidate across both recurring+enabled campaigns", async () => {
     const { supabase } = makeSupabase({
       seasonalCandidates: [{ id: "guest-1", phone: "+351900000001" }],
       stalledCandidates: [
@@ -246,9 +449,12 @@ describe("runCheckStalledGuests", () => {
     const summary = await runCheckStalledGuests(supabase);
 
     expect(summary).toEqual({
-      seasonal_nudge_drafted: 1,
-      stalled_link_nudge_drafted: 2,
-      skipped_already_nudged: 0,
+      results: [
+        { campaign_id: "campaign-seasonal", kind: "seasonal_nudge", drafted: 1, skipped: 0 },
+        { campaign_id: "campaign-stalled", kind: "stalled_link_nudge", drafted: 2, skipped: 0 },
+      ],
+      total_drafted: 3,
+      total_skipped_already_nudged: 0,
     });
     expect(postCampaignDraftMock).toHaveBeenCalledTimes(3);
   });
@@ -266,38 +472,18 @@ describe("runCheckStalledGuests", () => {
     const summary = await runCheckStalledGuests(supabase);
 
     expect(summary).toEqual({
-      seasonal_nudge_drafted: 1,
-      stalled_link_nudge_drafted: 0,
-      skipped_already_nudged: 1,
+      results: [
+        { campaign_id: "campaign-seasonal", kind: "seasonal_nudge", drafted: 1, skipped: 1 },
+        { campaign_id: "campaign-stalled", kind: "stalled_link_nudge", drafted: 0, skipped: 0 },
+      ],
+      total_drafted: 1,
+      total_skipped_already_nudged: 1,
     });
     // Only the non-deduped candidate's promo code was drafted.
     expect(postCampaignDraftMock).toHaveBeenCalledTimes(1);
     expect(postCampaignDraftMock).toHaveBeenCalledWith(
       expect.objectContaining({ guestPhone: "+351900000001" }),
     );
-  });
-
-  it("generates a real, unique-looking hex code for each drafted candidate", async () => {
-    const { supabase, insertChains } = makeSupabase({
-      seasonalCandidates: [{ id: "guest-1", phone: "+351900000001" }],
-      stalledCandidates: [],
-    });
-
-    await runCheckStalledGuests(supabase);
-
-    const insertCall = insertChains["guest-1"].insert.mock.calls[0][0];
-    // crypto.randomBytes(6).toString("hex").toUpperCase() -> 12 uppercase hex chars.
-    expect(insertCall.code).toMatch(/^[0-9A-F]{12}$/);
-    expect(insertCall).toEqual(
-      expect.objectContaining({
-        campaign_id: "campaign-seasonal",
-        guest_contact_id: "guest-1",
-        message_text: expect.any(String),
-      }),
-    );
-
-    const [draftArg] = postCampaignDraftMock.mock.calls[0];
-    expect(draftArg.promoCodeId).toBe("promo-guest-1");
   });
 
   it("does not fail the whole cron response when postCampaignDraft fails for one candidate", async () => {
@@ -314,7 +500,7 @@ describe("runCheckStalledGuests", () => {
 
     // The promo_codes row is still counted as drafted — postCampaignDraft
     // failing is a logged warning, not a rollback (see campaigns.ts's
-    // draftForCandidates doc comment).
-    expect(summary.seasonal_nudge_drafted).toBe(1);
+    // draftForCampaign doc comment).
+    expect(summary.total_drafted).toBe(1);
   });
 });

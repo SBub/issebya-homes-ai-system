@@ -67,8 +67,10 @@ describe("GET /api/campaigns/stats", () => {
         { status: "sent", campaigns: { kind: "stalled_link_nudge" } },
         { status: "expired", campaigns: { kind: "stalled_link_nudge" } },
         { status: "expired", campaigns: { kind: "stalled_link_nudge" } },
-        // Rows under kinds outside CampaignKind (allowed by the DB check
-        // constraint) and orphaned rows are silently excluded.
+        // Rows under kinds outside this digest's own fixed allowlist (kind
+        // is unrestricted text now, not a DB check constraint — see
+        // route.ts's DigestCampaignKind comment) and orphaned rows are
+        // silently excluded.
         { status: "issued", campaigns: { kind: "manual" } },
         { status: "issued", campaigns: null },
       ],
