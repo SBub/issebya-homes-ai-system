@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
+import { type Campaign, countUndraftedCandidates } from "@/lib/campaigns";
 import { createAdminClient } from "@/lib/supabase";
 
 /**
@@ -10,7 +11,15 @@ import { createAdminClient } from "@/lib/supabase";
  * separate, later piece of work).
  *
  * Same "select *, order by created_at ascending" convention as
- * GET /api/guest-contacts. Response: `{ campaigns: Campaign[] }`.
+ * GET /api/guest-contacts, plus one extra `candidate_count` field baked into
+ * each row — how many guests countUndraftedCandidates (campaigns.ts) says
+ * this campaign would actually draft for right now, i.e. today's real
+ * "Run now" impact. Computed with one extra query pair per campaign
+ * (reusing the exact getCampaignCandidates/alreadyNudgedGuestIds logic
+ * draftForCampaign itself calls, just without drafting anything) rather
+ * than a separate per-campaign endpoint — acceptable at this table's size,
+ * and keeps the frontend to a single round-trip. Response:
+ * `{ campaigns: (Campaign & { candidate_count: number })[] }`.
  */
 export async function GET(request: NextRequest) {
   const unauthorized = requireApiKey(request);
@@ -28,7 +37,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ campaigns: data ?? [] });
+  const campaigns = (data ?? []) as Campaign[];
+  const campaignsWithCandidateCount: (Campaign & { candidate_count: number })[] = [];
+  for (const campaign of campaigns) {
+    const candidateCount = await countUndraftedCandidates(supabase, campaign);
+    campaignsWithCandidateCount.push({ ...campaign, candidate_count: candidateCount });
+  }
+
+  return NextResponse.json({ campaigns: campaignsWithCandidateCount });
 }
 
 /**

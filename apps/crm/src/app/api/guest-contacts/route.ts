@@ -3,7 +3,7 @@ import { requireApiKey } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase";
 
 const GUEST_CONTACT_COLUMNS =
-  "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, funnel_stage, enabled, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at";
+  "id, phone, guest_name, guest_name_normalized, last_room, last_stay_checkin, last_stay_checkout, total_stays, platform, last_stay_guests, funnel_stage, enabled, last_interaction_at, link_sent_at, stage_updated_at, created_at, updated_at";
 
 /**
  * Lists every guest_contacts row, unfiltered and unpaginated — powers the v1

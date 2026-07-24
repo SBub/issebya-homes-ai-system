@@ -12,6 +12,7 @@ vi.mock("@/lib/telegram-router-client.js", () => ({
 
 const {
   alreadyNudgedGuestIds,
+  countUndraftedCandidates,
   draftForCampaign,
   getCampaignById,
   getCampaignCandidates,
@@ -270,6 +271,75 @@ describe("alreadyNudgedGuestIds", () => {
     expect(fromMock).toHaveBeenCalledWith("promo_codes");
     expect(chain.eq).toHaveBeenCalledWith("campaign_id", "campaign-1");
     expect(chain.in).toHaveBeenCalledWith("guest_contact_id", ["guest-1", "guest-2", "guest-3"]);
+  });
+});
+
+describe("countUndraftedCandidates", () => {
+  /**
+   * Builds a fromMock that answers each table's queries in the exact
+   * sequence countUndraftedCandidates actually issues them: the candidate
+   * select (getCampaignCandidates), then a dedup select
+   * (alreadyNudgedGuestIds) — no insert, unlike draftForCampaign's own
+   * makeSupabase, since this function never drafts anything.
+   */
+  function makeSupabase(options: {
+    candidates: Array<{ id: string; phone: string | null }>;
+    alreadyNudged?: string[];
+  }) {
+    const fromMock = vi.fn();
+    fromMock
+      .mockReturnValueOnce(makeChain({ data: options.candidates, error: null }))
+      .mockReturnValueOnce(
+        makeChain({
+          data: (options.alreadyNudged ?? []).map((id) => ({ guest_contact_id: id })),
+          error: null,
+        }),
+      );
+    return { from: fromMock } as never;
+  }
+
+  it("returns candidates.length minus however many are already nudged", async () => {
+    const supabase = makeSupabase({
+      candidates: [
+        { id: "guest-1", phone: "+351900000001" },
+        { id: "guest-2", phone: "+351900000002" },
+        { id: "guest-3", phone: "+351900000003" },
+      ],
+      alreadyNudged: ["guest-2"],
+    });
+
+    const count = await countUndraftedCandidates(supabase, SEASONAL_CAMPAIGN);
+
+    expect(count).toBe(2);
+  });
+
+  it("returns 0 when every candidate has already been nudged", async () => {
+    const supabase = makeSupabase({
+      candidates: [{ id: "guest-1", phone: "+351900000001" }],
+      alreadyNudged: ["guest-1"],
+    });
+
+    const count = await countUndraftedCandidates(supabase, SEASONAL_CAMPAIGN);
+
+    expect(count).toBe(0);
+  });
+
+  it("returns 0 when there are no candidates at all", async () => {
+    const supabase = makeSupabase({ candidates: [] });
+
+    const count = await countUndraftedCandidates(supabase, SEASONAL_CAMPAIGN);
+
+    expect(count).toBe(0);
+  });
+
+  it("never inserts a promo_codes row or calls postCampaignDraft — no drafting side effect", async () => {
+    const supabase = makeSupabase({
+      candidates: [{ id: "guest-1", phone: "+351900000001" }],
+    });
+
+    await countUndraftedCandidates(supabase, SEASONAL_CAMPAIGN);
+
+    expect(postCampaignDraftMock).not.toHaveBeenCalled();
   });
 });
 

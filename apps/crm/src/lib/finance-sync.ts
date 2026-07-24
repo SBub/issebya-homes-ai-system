@@ -1,8 +1,9 @@
 import { createAdminClient } from "./supabase";
 
 // Populates guest_contacts from apps/finance's finance_bookings history
-// (name, room, stay dates, stay count, platform) so a human can later fill
-// in `phone` manually once they recognize a guest by their WhatsApp number.
+// (name, room, stay dates, stay count, platform, guest count) so a human can
+// later fill in `phone` manually once they recognize a guest by their
+// WhatsApp number.
 // finance_bookings has no phone/email at all — that's the whole reason this
 // sync leaves `phone` untouched rather than trying to derive it.
 //
@@ -19,6 +20,8 @@ export interface FinanceBookingRow {
   checkout_date: string;
   /** finance_bookings.platform — 'airbnb' | 'booking_com' | 'direct'. */
   platform: string;
+  /** finance_bookings.guests — adults + children (infants excluded). */
+  guests: number;
 }
 
 export interface AggregatedGuestContact {
@@ -36,6 +39,8 @@ export interface AggregatedGuestContact {
   totalStays: number;
   /** platform of that same most-recent booking (by checkin_date). */
   platform: string;
+  /** guests of that same most-recent booking (by checkin_date). */
+  lastStayGuests: number;
 }
 
 // Pure — no DB access, so this is unit-testable without touching Supabase.
@@ -75,6 +80,7 @@ export function aggregateFinanceBookings(bookings: FinanceBookingRow[]): Aggrega
       lastStayCheckout: mostRecent.checkout_date,
       totalStays: groupBookings.length,
       platform: mostRecent.platform,
+      lastStayGuests: mostRecent.guests,
     });
   }
 
@@ -102,7 +108,7 @@ export async function syncGuestContactsFromFinance(): Promise<FinanceSyncSummary
 
   const { data: bookings, error: bookingsError } = await supabase
     .from("finance_bookings")
-    .select("guest_name, room, checkin_date, checkout_date, platform");
+    .select("guest_name, room, checkin_date, checkout_date, platform, guests");
   if (bookingsError) throw bookingsError;
 
   const aggregated = aggregateFinanceBookings(bookings ?? []);
@@ -129,6 +135,7 @@ export async function syncGuestContactsFromFinance(): Promise<FinanceSyncSummary
           last_stay_checkout: guest.lastStayCheckout,
           total_stays: guest.totalStays,
           platform: guest.platform,
+          last_stay_guests: guest.lastStayGuests,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existing.id);
@@ -143,6 +150,7 @@ export async function syncGuestContactsFromFinance(): Promise<FinanceSyncSummary
         last_stay_checkout: guest.lastStayCheckout,
         total_stays: guest.totalStays,
         platform: guest.platform,
+        last_stay_guests: guest.lastStayGuests,
       });
       if (insertError) throw insertError;
       created++;

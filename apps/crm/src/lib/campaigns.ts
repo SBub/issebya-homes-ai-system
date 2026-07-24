@@ -41,6 +41,15 @@ export interface Campaign {
   is_recurring: boolean;
   enabled: boolean;
   created_at: string;
+  // Not a real column — never present on a raw `campaigns` row returned by
+  // Supabase, so every function in this file that takes/returns a Campaign
+  // (getCampaignCandidates, draftForCampaign, etc.) neither reads nor
+  // populates it. Optional here for exactly that reason; only
+  // GET /api/campaigns actually fills it in (via countUndraftedCandidates
+  // below) before sending a row to the frontend, whose own Campaign
+  // interface (apps/crm/src/app/page.tsx) declares it required since that
+  // response is the only place a frontend Campaign object ever comes from.
+  candidate_count?: number;
 }
 
 export interface GuestContact {
@@ -179,6 +188,31 @@ export async function alreadyNudgedGuestIds(
     throw new Error(error.message);
   }
   return new Set((data ?? []).map((row: { guest_contact_id: string }) => row.guest_contact_id));
+}
+
+/**
+ * How many guests this campaign would actually draft for right now, if
+ * "Run now" were clicked this instant — i.e. getCampaignCandidates' result
+ * minus whichever of those candidates alreadyNudgedGuestIds says have
+ * already been nudged by this same campaign. Reuses both functions rather
+ * than re-deriving their query logic; deliberately has no drafting side
+ * effect of its own (no promo_codes insert, no postCampaignDraft call) —
+ * it's the same "who qualifies" computation draftForCampaign already does
+ * before it starts writing anything, exposed standalone so GET
+ * /api/campaigns can show a `candidate_count` per row without actually
+ * running the campaign.
+ */
+export async function countUndraftedCandidates(
+  supabase: SupabaseAdminClient,
+  campaign: Campaign,
+): Promise<number> {
+  const candidates = await getCampaignCandidates(supabase, campaign);
+  const alreadyNudged = await alreadyNudgedGuestIds(
+    supabase,
+    campaign.id,
+    candidates.map((candidate) => candidate.id),
+  );
+  return candidates.filter((candidate) => !alreadyNudged.has(candidate.id)).length;
 }
 
 /**

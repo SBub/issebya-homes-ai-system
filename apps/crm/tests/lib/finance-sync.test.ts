@@ -10,6 +10,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-07-19",
         checkout_date: "2026-07-23",
         platform: "airbnb",
+        guests: 2,
       },
       {
         guest_name: "Marion Tremintin",
@@ -17,6 +18,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-08-01",
         checkout_date: "2026-08-05",
         platform: "booking_com",
+        guests: 3,
       },
     ]);
 
@@ -32,6 +34,7 @@ describe("aggregateFinanceBookings", () => {
       // airbnb one — same "most recent by checkin_date" rule as
       // lastRoom/lastStayCheckin/lastStayCheckout.
       platform: "booking_com",
+      lastStayGuests: 3,
     });
   });
 
@@ -43,6 +46,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-09-05",
         checkout_date: "2026-09-08",
         platform: "direct",
+        guests: 1,
       },
     ]);
 
@@ -52,10 +56,11 @@ describe("aggregateFinanceBookings", () => {
       guestNameNormalized: "jane doe",
       totalStays: 1,
       platform: "direct",
+      lastStayGuests: 1,
     });
   });
 
-  it("picks lastRoom/lastStayCheckin/lastStayCheckout/platform from the most recent booking, not input order", () => {
+  it("picks lastRoom/lastStayCheckin/lastStayCheckout/platform/lastStayGuests from the most recent booking, not input order", () => {
     // The most recent booking (by checkin_date) is listed FIRST here, so a
     // buggy implementation that just used the last array element (or the
     // first) instead of comparing dates would get this wrong.
@@ -66,6 +71,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-10-01",
         checkout_date: "2026-10-04",
         platform: "direct",
+        guests: 4,
       },
       {
         guest_name: "repeat guest",
@@ -73,6 +79,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-01-01",
         checkout_date: "2026-01-03",
         platform: "airbnb",
+        guests: 1,
       },
       {
         guest_name: "REPEAT GUEST",
@@ -80,6 +87,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-05-15",
         checkout_date: "2026-05-18",
         platform: "booking_com",
+        guests: 2,
       },
     ]);
 
@@ -92,6 +100,7 @@ describe("aggregateFinanceBookings", () => {
       lastStayCheckout: "2026-10-04",
       totalStays: 3,
       platform: "direct",
+      lastStayGuests: 4,
     });
   });
 
@@ -103,6 +112,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-09-20",
         checkout_date: "2026-09-22",
         platform: "airbnb",
+        guests: 2,
       },
       {
         guest_name: "Peter Novak",
@@ -110,6 +120,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-09-18",
         checkout_date: "2026-09-19",
         platform: "booking_com",
+        guests: 1,
       },
     ]);
 
@@ -128,6 +139,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-07-25",
         checkout_date: "2026-07-28",
         platform: "airbnb",
+        guests: 2,
       },
       {
         guest_name: "john smith",
@@ -135,6 +147,7 @@ describe("aggregateFinanceBookings", () => {
         checkin_date: "2026-08-01",
         checkout_date: "2026-08-03",
         platform: "booking_com",
+        guests: 5,
       },
     ]);
 
@@ -142,5 +155,6 @@ describe("aggregateFinanceBookings", () => {
     expect(result[0].guestNameNormalized).toBe("john smith");
     expect(result[0].totalStays).toBe(2);
     expect(result[0].platform).toBe("booking_com");
+    expect(result[0].lastStayGuests).toBe(5);
   });
 });

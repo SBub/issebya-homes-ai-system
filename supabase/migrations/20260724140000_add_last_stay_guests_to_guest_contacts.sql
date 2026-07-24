@@ -1,0 +1,28 @@
+-- Adds a last_stay_guests column to guest_contacts so the CRM dashboard
+-- (apps/crm/src/app/page.tsx) can show how many people stayed during a
+-- guest's most recent booking.
+--
+-- Carries over finance_bookings.guests verbatim (see
+-- supabase/migrations/20260718213027_finance_bookings.sql, `not null
+-- integer`) rather than recomputing it: apps/finance's CSV parsers
+-- (apps/finance/src/lib/finance/parsers.ts) already populate that column as
+-- `adults + children` (infants excluded, per spec) straight off the
+-- Airbnb/Booking.com export rows, so this is real, already-captured data —
+-- it just never made it to guest_contacts before now, the exact same gap
+-- `platform` had before it was added (see
+-- 20260724100000_add_platform_to_guest_contacts.sql).
+--
+-- Same "most recent by checkin_date" aggregation rule already used for
+-- last_room/platform/last_stay_checkin/last_stay_checkout: when a guest has
+-- multiple finance_bookings rows, the guest count shown here is the one from
+-- their single most recent stay, not a sum or average across every past
+-- stay (see apps/crm/src/lib/finance-sync.ts's aggregateFinanceBookings).
+--
+-- Nullable, matching last_room's own nullability (not last_stay_checkin/
+-- checkout, which are also nullable for the same reason): a phone-only stub
+-- guest created by POST /api/guest-contacts/register has no finance history
+-- at all yet, so there is no stay to report a guest-count for. No default
+-- value makes sense here the way 'direct' does for platform — there's no
+-- "least wrong guess" for a number that simply isn't known yet.
+alter table public.guest_contacts
+  add column last_stay_guests integer;

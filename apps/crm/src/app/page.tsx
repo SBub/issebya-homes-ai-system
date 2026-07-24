@@ -70,6 +70,14 @@ interface GuestContact {
   last_stay_checkin: string | null;
   last_stay_checkout: string | null;
   total_stays: number;
+  // How many people (adults + children, infants excluded) stayed during the
+  // most recent booking — carried over verbatim from finance_bookings.guests
+  // by the same "most recent by checkin_date" sync logic as last_room/
+  // platform/last_stay_checkin/last_stay_checkout (see
+  // apps/crm/src/lib/finance-sync.ts). Null for a phone-only stub guest with
+  // no finance history yet, same reason last_room/last_stay_checkin/
+  // last_stay_checkout are nullable too.
+  last_stay_guests: number | null;
   platform: Platform;
   funnel_stage: FunnelStage;
   last_interaction_at: string | null;
@@ -118,11 +126,24 @@ interface Campaign {
   is_recurring: boolean;
   enabled: boolean;
   created_at: string;
+  // How many guests would actually be drafted right now if "Run now" were
+  // clicked — countUndraftedCandidates' result (apps/crm/src/lib/
+  // campaigns.ts), baked into every row by GET /api/campaigns itself. Always
+  // present on a campaign fetched from that endpoint (unlike campaigns.ts's
+  // own Campaign interface, where this is optional since a raw DB row never
+  // has it) — this is the frontend's own copy of the type, describing only
+  // what the API response actually contains.
+  candidate_count: number;
 }
 
-interface CampaignRunResult {
-  drafted: number;
-  skipped: number;
+// A dismissible toast-style banner — see notifications state below. Kept
+// deliberately tiny (message + a success/error tone) rather than a generic
+// severity enum, since today's only producer (runCampaignNow) only ever has
+// these two outcomes.
+interface Notification {
+  id: string;
+  message: string;
+  tone: "success" | "error";
 }
 
 // Local form state for the "+ New Campaign" dialog — every field is a
@@ -278,6 +299,7 @@ const CRM_COLUMN_WIDTHS: Record<string, number> = {
   platform: 115,
   last_stay_checkin: 120,
   nights: 98,
+  last_stay_guests: 90,
   total_stays: 134,
   last_interaction_at: 173,
 };
@@ -288,6 +310,7 @@ const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
   is_recurring: 100,
   enabled: 85,
   targeting: 159,
+  candidate_count: 118,
   offer: 184,
   message_template: 327,
   actions: 124,
@@ -414,10 +437,34 @@ function formatDateOnly(value: string | null | undefined): string {
 export default function DashboardPage() {
   const [apiKey, setApiKey] = useState("");
 
+  // Fixed-position toast stack (see the Box rendered near the top of the
+  // JSX tree below, outside Tabs.Root so it's visible regardless of which
+  // tab is active) — today's one producer is runCampaignNow's own
+  // success/error paths, replacing what used to be inline "Drafted N,
+  // skipped M" text in the Campaigns table's Actions cell (that text
+  // overflowed the column's fixed 124px width — see CAMPAIGN_COLUMN_WIDTHS
+  // above). showNotification appends and schedules its own auto-dismiss;
+  // dismissNotification additionally backs the banner's own manual "✕".
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((notification) => notification.id !== id));
+  }, []);
+
+  const showNotification = useCallback(
+    (message: string, tone: Notification["tone"]) => {
+      const id = crypto.randomUUID();
+      setNotifications((prev) => [...prev, { id, message, tone }]);
+      setTimeout(() => dismissNotification(id), 5000);
+    },
+    [dismissNotification],
+  );
+
   // Campaigns tab state — kept separate from the CRM tab's guest state
-  // below, both sharing only `apiKey`. campaignRunResults/campaignRunErrors/
-  // campaignRunLoading are keyed by campaign id (one row's "Run now" action
-  // shouldn't affect any other row's own inline result/loading state).
+  // below, both sharing only `apiKey`. campaignRunLoadingIds is keyed by
+  // campaign id (one row's "Run now" action shouldn't affect any other
+  // row's own loading state) — the run's own result/error now surfaces via
+  // showNotification above instead of being kept in per-campaign state here.
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState<string | null>(null);
@@ -425,10 +472,6 @@ export default function DashboardPage() {
   const [campaignToggleErrors, setCampaignToggleErrors] = useState<Record<string, string>>({});
   const [campaignTogglingIds, setCampaignTogglingIds] = useState<Set<string>>(new Set());
   const [campaignRunLoadingIds, setCampaignRunLoadingIds] = useState<Set<string>>(new Set());
-  const [campaignRunResults, setCampaignRunResults] = useState<Record<string, CampaignRunResult>>(
-    {},
-  );
-  const [campaignRunErrors, setCampaignRunErrors] = useState<Record<string, string>>({});
   const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
   // Own sorting state for the Campaigns tab's table — deliberately not
   // shared with the CRM tab's own `sorting` state below (two independent
@@ -626,19 +669,13 @@ export default function DashboardPage() {
   // "Run now" per campaign row — POST /api/campaigns/[id]/run, which only
   // drafts promo codes and pushes them to Telegram for human approval; it
   // never itself sends anything to a guest (see that route's own doc
-  // comment). Result/error is shown inline near the row that triggered it,
-  // keyed by campaign id like every other per-row action state here.
+  // comment). Result/error surfaces as a toast (showNotification above)
+  // rather than inline table text — the Actions column's fixed 124px width
+  // (CAMPAIGN_COLUMN_WIDTHS) can't fit "Drafted N, skipped M" without
+  // overflowing/truncating mid-word.
   const runCampaignNow = useCallback(
     async (campaign: Campaign) => {
       setCampaignRunLoadingIds((prev) => new Set(prev).add(campaign.id));
-      setCampaignRunErrors((prev) => {
-        const { [campaign.id]: _removed, ...rest } = prev;
-        return rest;
-      });
-      setCampaignRunResults((prev) => {
-        const { [campaign.id]: _removed, ...rest } = prev;
-        return rest;
-      });
       try {
         const res = await fetch(`/api/campaigns/${encodeURIComponent(campaign.id)}/run`, {
           method: "POST",
@@ -646,21 +683,18 @@ export default function DashboardPage() {
         });
         const json = await res.json();
         if (!res.ok) {
-          setCampaignRunErrors((prev) => ({
-            ...prev,
-            [campaign.id]: typeof json.error === "string" ? json.error : "Failed to run campaign",
-          }));
+          showNotification(
+            typeof json.error === "string" ? json.error : "Failed to run campaign",
+            "error",
+          );
           return;
         }
-        setCampaignRunResults((prev) => ({
-          ...prev,
-          [campaign.id]: { drafted: json.drafted as number, skipped: json.skipped as number },
-        }));
+        showNotification(
+          `Drafted ${json.drafted as number}, skipped ${json.skipped as number} for ${campaign.name}`,
+          "success",
+        );
       } catch (err) {
-        setCampaignRunErrors((prev) => ({
-          ...prev,
-          [campaign.id]: err instanceof Error ? err.message : "Unknown error",
-        }));
+        showNotification(err instanceof Error ? err.message : "Unknown error", "error");
       } finally {
         setCampaignRunLoadingIds((prev) => {
           const next = new Set(prev);
@@ -669,23 +703,30 @@ export default function DashboardPage() {
         });
       }
     },
-    [apiKey],
+    [apiKey, showNotification],
   );
 
-  // Toggling a guest's enabled Switch (CRM tab) — same confirmation-based
-  // shape as toggleCampaignEnabled above: PATCH /api/guest-contacts/[id]
-  // with { enabled }, Switch only flips once the server confirms, and
-  // guestTogglingIds disables just that row's own Switch while in flight.
+  // Toggling a guest's enabled Switch (CRM tab) — optimistic, unlike
+  // toggleCampaignEnabled above: the local `guests` array's `enabled` value
+  // flips immediately (before the PATCH resolves), rather than waiting for
+  // server confirmation. A failed request reverts that guest's `enabled`
+  // back to whatever it was before the optimistic flip and surfaces the
+  // error via guestToggleErrors, same as before. guestTogglingIds still
+  // disables just that row's own Switch while the request is in flight.
   // This is the UI for the "guest wasn't happy with their stay, don't
   // bother them with campaigns again" case — already enforced server-side
   // by getCampaignCandidates, this just lets it be set.
   const toggleGuestEnabled = useCallback(
     async (guest: GuestContact, nextEnabled: boolean) => {
+      const previousEnabled = guest.enabled;
       setGuestTogglingIds((prev) => new Set(prev).add(guest.id));
       setGuestToggleErrors((prev) => {
         const { [guest.id]: _removed, ...rest } = prev;
         return rest;
       });
+      setGuests((prev) =>
+        prev.map((g) => (g.id === guest.id ? { ...g, enabled: nextEnabled } : g)),
+      );
       try {
         const res = await fetch(`/api/guest-contacts/${encodeURIComponent(guest.id)}`, {
           method: "PATCH",
@@ -698,6 +739,9 @@ export default function DashboardPage() {
             ...prev,
             [guest.id]: typeof json.error === "string" ? json.error : "Failed to save",
           }));
+          setGuests((prev) =>
+            prev.map((g) => (g.id === guest.id ? { ...g, enabled: previousEnabled } : g)),
+          );
           return;
         }
         const updatedEnabled = (json.enabled ?? nextEnabled) as boolean;
@@ -709,6 +753,9 @@ export default function DashboardPage() {
           ...prev,
           [guest.id]: err instanceof Error ? err.message : "Unknown error",
         }));
+        setGuests((prev) =>
+          prev.map((g) => (g.id === guest.id ? { ...g, enabled: previousEnabled } : g)),
+        );
       } finally {
         setGuestTogglingIds((prev) => {
           const next = new Set(prev);
@@ -1056,19 +1103,39 @@ export default function DashboardPage() {
           if (editingGuestId === guest.id) {
             return (
               <Box onClick={(e) => e.stopPropagation()}>
-                <TextField.Root
-                  autoFocus
-                  size="1"
-                  value={editingValue}
-                  disabled={editingSaving}
-                  onChange={(e) => setEditingValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      void commitPhoneEdit(guest.id);
-                    }
-                  }}
-                  onBlur={() => void commitPhoneEdit(guest.id)}
-                />
+                <Flex align="center" gap="1">
+                  <TextField.Root
+                    autoFocus
+                    size="1"
+                    value={editingValue}
+                    disabled={editingSaving}
+                    onChange={(e) => setEditingValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void commitPhoneEdit(guest.id);
+                      } else if (e.key === "Escape") {
+                        closeEditing();
+                      }
+                    }}
+                    onBlur={() => void commitPhoneEdit(guest.id)}
+                  />
+                  <Button
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    aria-label="Cancel edit"
+                    disabled={editingSaving}
+                    // Prevents the TextField from blurring when this button
+                    // is pressed — without this, mousedown-driven focus loss
+                    // fires onBlur (and thus commitPhoneEdit) before this
+                    // button's own onClick ever runs, so the edit would
+                    // still commit instead of being discarded.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => closeEditing()}
+                  >
+                    ✕
+                  </Button>
+                </Flex>
                 {editingError && (
                   <Text as="div" size="1" color="red" mt="1">
                     {editingError}
@@ -1194,6 +1261,22 @@ export default function DashboardPage() {
         },
       },
       {
+        // How many people (adults + children, infants excluded) stayed
+        // during that same most-recent booking — carried over verbatim
+        // from finance_bookings.guests (see
+        // apps/crm/src/lib/finance-sync.ts). Grouped with the other
+        // per-stay detail columns (Last Stay/Nights) rather than Total
+        // Stays, since it describes that one stay, not the guest's history
+        // as a whole. Null for a phone-only stub guest with no finance
+        // history yet, same as Last Stay/Nights above.
+        accessorKey: "last_stay_guests",
+        header: "Guests",
+        cell: (info) => {
+          const guestCount = info.getValue() as number | null;
+          return guestCount === null ? "—" : guestCount;
+        },
+      },
+      {
         accessorKey: "total_stays",
         header: "Total Stays",
       },
@@ -1218,6 +1301,7 @@ export default function DashboardPage() {
       editingSaving,
       editingError,
       commitPhoneEdit,
+      closeEditing,
       startEditingPhone,
       guestTogglingIds,
       guestToggleErrors,
@@ -1244,10 +1328,9 @@ export default function DashboardPage() {
   // accessors) per Campaign rather than GuestContact. Every handler/state
   // referenced in cells below (toggleCampaignEnabled, runCampaignNow,
   // toggleMessageExpanded, campaignTogglingIds, campaignToggleErrors,
-  // campaignRunLoadingIds, campaignRunResults, campaignRunErrors,
-  // expandedMessageIds) is the same state declared earlier in this
-  // component — this is a rendering-structure change only, not new
-  // behavior.
+  // campaignRunLoadingIds, expandedMessageIds) is the same state declared
+  // earlier in this component — this is a rendering-structure change only,
+  // not new behavior.
   const campaignColumns = useMemo<ColumnDef<Campaign>[]>(
     () => [
       {
@@ -1304,6 +1387,18 @@ export default function DashboardPage() {
         cell: (info) => info.getValue() as string,
       },
       {
+        // How many guests match this campaign's targeting criteria right
+        // now and haven't already been nudged by it — i.e. exactly what
+        // clicking "Run now" would draft for this instant. Computed
+        // server-side (GET /api/campaigns's own candidate_count field, via
+        // countUndraftedCandidates in campaigns.ts) rather than re-derived
+        // here, since it depends on live guest_contacts/promo_codes state
+        // this page doesn't otherwise fetch.
+        accessorKey: "candidate_count",
+        header: "Would notify",
+        cell: (info) => info.getValue() as number,
+      },
+      {
         id: "offer",
         accessorFn: (campaign) => summarizeCampaignOffer(campaign),
         header: "Offer",
@@ -1345,15 +1440,16 @@ export default function DashboardPage() {
       {
         // No natural accessor (this column is pure UI action, not a data
         // field) — disable sorting here rather than let the header's
-        // sort-toggle do nothing meaningful.
+        // sort-toggle do nothing meaningful. Run result/error no longer
+        // renders here — see showNotification/runCampaignNow above; this
+        // column's fixed 124px width (CAMPAIGN_COLUMN_WIDTHS) can't fit
+        // "Drafted N, skipped M" without truncating mid-word.
         id: "actions",
         header: "Actions",
         enableSorting: false,
         cell: (info) => {
           const campaign = info.row.original;
           const isRunning = campaignRunLoadingIds.has(campaign.id);
-          const runResult = campaignRunResults[campaign.id];
-          const runError = campaignRunErrors[campaign.id];
           return (
             <Flex align="center" gap="3">
               {campaign.is_recurring === false ? (
@@ -1363,16 +1459,6 @@ export default function DashboardPage() {
               ) : (
                 <Text color="gray" size="2">
                   Runs automatically
-                </Text>
-              )}
-              {runResult && (
-                <Text size="2" color="green">
-                  Drafted {runResult.drafted}, skipped {runResult.skipped}
-                </Text>
-              )}
-              {runError && (
-                <Text size="2" color="red">
-                  {runError}
                 </Text>
               )}
             </Flex>
@@ -1387,8 +1473,6 @@ export default function DashboardPage() {
       expandedMessageIds,
       toggleMessageExpanded,
       campaignRunLoadingIds,
-      campaignRunResults,
-      campaignRunErrors,
       runCampaignNow,
     ],
   );
@@ -1407,6 +1491,46 @@ export default function DashboardPage() {
 
   return (
     <Box p="5">
+      {/* Fixed-position toast stack — rendered here, outside Tabs.Root, so
+          a campaign run's result/error is visible regardless of which tab
+          is active. See showNotification/dismissNotification above. */}
+      <Box
+        style={{
+          position: "fixed",
+          top: 16,
+          right: 16,
+          zIndex: 1000,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          maxWidth: 360,
+        }}
+      >
+        {notifications.map((notification) => (
+          <Card
+            key={notification.id}
+            style={{
+              borderLeft: `3px solid var(--${notification.tone === "success" ? "green" : "red"}-9)`,
+            }}
+          >
+            <Flex justify="between" align="start" gap="3">
+              <Text size="2" color={notification.tone === "success" ? "green" : "red"}>
+                {notification.message}
+              </Text>
+              <Button
+                size="1"
+                variant="ghost"
+                color="gray"
+                aria-label="Dismiss notification"
+                onClick={() => dismissNotification(notification.id)}
+              >
+                ✕
+              </Button>
+            </Flex>
+          </Card>
+        ))}
+      </Box>
+
       <Heading size="6" mb="4">
         CRM Dashboard
       </Heading>
@@ -1823,6 +1947,10 @@ export default function DashboardPage() {
                       />
                       <Text size="2">{newCampaignForm.isRecurring ? "Automated" : "One-off"}</Text>
                     </Flex>
+                    <Text as="div" size="1" color="gray" mt="1">
+                      One-off: runs once, against whichever guests match right now. Automated: keeps
+                      running on a schedule, evaluating newly-matching guests each time.
+                    </Text>
                   </Box>
                   <Box>
                     <Text
