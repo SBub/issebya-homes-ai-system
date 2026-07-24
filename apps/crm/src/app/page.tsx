@@ -25,26 +25,37 @@ import {
   Box,
   Button,
   Card,
+  Dialog,
   Flex,
   Heading,
   Switch,
   Table,
   Tabs,
   Text,
+  TextArea,
   TextField,
 } from "@radix-ui/themes";
 import {
   type ColumnDef,
   type ColumnFiltersState,
-  type FilterFn,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
+  type Row,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { type MouseEvent, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type Dispatch,
+  type MouseEvent,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type FunnelStage = "new" | "informed" | "link_sent" | "booked";
 type Platform = "airbnb" | "booking_com" | "direct";
@@ -64,6 +75,11 @@ interface GuestContact {
   last_interaction_at: string | null;
   link_sent_at: string | null;
   stage_updated_at: string | null;
+  // Whether this guest is eligible for campaign targeting — see
+  // getCampaignCandidates (apps/crm/src/lib/campaigns.ts). Set false for a
+  // guest who wasn't happy with their stay and shouldn't be bothered by
+  // campaigns again; toggled from the CRM tab's own Enabled column below.
+  enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +124,37 @@ interface CampaignRunResult {
   drafted: number;
   skipped: number;
 }
+
+// Local form state for the "+ New Campaign" dialog — every field is a
+// string (including the number/date inputs) so a blank input can be told
+// apart from "0"/an explicit value; createCampaign below parses/omits each
+// one when building the POST body. isRecurring is the one real boolean,
+// since it's driven by a Switch rather than a text input.
+interface NewCampaignForm {
+  name: string;
+  kind: string;
+  isRecurring: boolean;
+  targetFunnelStage: string;
+  minIdleDays: string;
+  targetStayBefore: string;
+  minTotalStays: string;
+  discountPercent: string;
+  offerDescription: string;
+  messageTemplate: string;
+}
+
+const EMPTY_NEW_CAMPAIGN_FORM: NewCampaignForm = {
+  name: "",
+  kind: "",
+  isRecurring: false,
+  targetFunnelStage: "",
+  minIdleDays: "",
+  targetStayBefore: "",
+  minTotalStays: "",
+  discountPercent: "",
+  offerDescription: "",
+  messageTemplate: "",
+};
 
 // Plain-English summary of whichever targeting columns are non-null on a
 // campaign row — joined with a comma when more than one is set. Mirrors
@@ -196,6 +243,20 @@ const ROOM_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "room_2", label: "Room 2" },
 ];
 
+// Campaigns tab's own chip dimensions — values are stringified booleans
+// ("true"/"false") since is_recurring/enabled are boolean columns and
+// filterValueIncludes below compares stringified row values against
+// stringified filter values.
+const CAMPAIGN_TYPE_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "true", label: "Automated" },
+  { value: "false", label: "One-off" },
+];
+
+const CAMPAIGN_ENABLED_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "true", label: "Enabled" },
+  { value: "false", label: "Disabled" },
+];
+
 // Shared day-diff math, used by stayLengthBucket below and the "Nights"
 // table column — a guest missing either date has no computable stay length.
 // Both dates are plain YYYY-MM-DD strings (finance_bookings.checkin_date/
@@ -227,21 +288,67 @@ function stayLengthBucket(guest: GuestContact): StayLengthBucket | null {
   return nights >= 7 ? "long_term" : "short_term";
 }
 
-// Shared OR-within-dimension filter for the stay-length/platform/funnel-stage
-// chip groups below: a row matches a dimension if its column value is one of
-// the values currently toggled on for that dimension (or if none are
-// toggled on at all, per toggleFilterValue dropping empty dimensions from
+// Shared OR-within-dimension filter for every chip-group dimension on this
+// page (CRM tab's stay-length/platform/funnel-stage/room chips, Campaigns
+// tab's type/enabled chips): a row matches a dimension if its column value
+// — stringified, so boolean columns like is_recurring/enabled compare
+// correctly against the string values chip buttons toggle — is one of the
+// values currently toggled on for that dimension (or if none are toggled on
+// at all, per toggleColumnFilterValue dropping empty dimensions from
 // columnFilters entirely). Deliberately not TanStack's built-in
 // `arrIncludesSome` — that filter expects the ROW's own value to be an
 // array and calls `.includes()` on it (right for tag-like columns), whereas
 // every column filtered here holds a single scalar value; the array here is
-// the filter's selected options, not the row's data.
-const filterValueIncludes: FilterFn<GuestContact> = (row, columnId, filterValue: unknown) => {
+// the filter's selected options, not the row's data. Generic over TData so
+// both the GuestContact and Campaign tables share one implementation
+// instead of near-duplicate copies — instantiate as
+// `filterValueIncludes<GuestContact>` / `filterValueIncludes<Campaign>` at
+// each columnDef's `filterFn`.
+function filterValueIncludes<TData>(
+  row: Row<TData>,
+  columnId: string,
+  filterValue: unknown,
+): boolean {
   if (!Array.isArray(filterValue) || filterValue.length === 0) {
     return true;
   }
-  return filterValue.includes(row.getValue(columnId));
-};
+  return filterValue.map(String).includes(String(row.getValue(columnId)));
+}
+
+// Toggles `value` in/out of the active filter set for `columnId`, against
+// whichever ColumnFiltersState setter is passed in — shared by the CRM
+// tab's own columnFilters and the Campaigns tab's own campaignsColumnFilters
+// (see toggleFilterValue/toggleCampaignFilterValue below). Each dimension is
+// one TanStack columnFilters entry. Removing the last value in a dimension
+// drops that entry entirely rather than leaving an empty-array filter
+// around, so an empty dimension truly doesn't filter at all (per
+// filterValueIncludes' own early-return).
+function toggleColumnFilterValue(
+  setFilters: Dispatch<SetStateAction<ColumnFiltersState>>,
+  columnId: string,
+  value: string,
+) {
+  setFilters((prev) => {
+    const existing = prev.find((filter) => filter.id === columnId);
+    const currentValues = Array.isArray(existing?.value) ? (existing.value as string[]) : [];
+    const nextValues = currentValues.includes(value)
+      ? currentValues.filter((v) => v !== value)
+      : [...currentValues, value];
+    const withoutColumn = prev.filter((filter) => filter.id !== columnId);
+    return nextValues.length === 0
+      ? withoutColumn
+      : [...withoutColumn, { id: columnId, value: nextValues }];
+  });
+}
+
+function isColumnFilterValueActive(
+  filters: ColumnFiltersState,
+  columnId: string,
+  value: string,
+): boolean {
+  const existing = filters.find((filter) => filter.id === columnId);
+  return Array.isArray(existing?.value) && (existing.value as string[]).includes(value);
+}
 
 // Hides the stay_length_bucket column from every header/cell render without
 // touching sorting/filtering — TanStack Table's own column-visibility
@@ -291,11 +398,26 @@ export default function DashboardPage() {
   // shared with the CRM tab's own `sorting` state below (two independent
   // useReactTable instances, one per tab).
   const [campaignsSorting, setCampaignsSorting] = useState<SortingState>([]);
+  // Campaigns tab's own filter chips (Type / Enabled) — mirrors the CRM
+  // tab's columnFilters below but kept separate, same reason as
+  // campaignsSorting above.
+  const [campaignsColumnFilters, setCampaignsColumnFilters] = useState<ColumnFiltersState>([]);
+  // "+ New Campaign" dialog state — a plain create form (POST
+  // /api/campaigns), separate from every other Campaigns-tab state above.
+  const [isNewCampaignOpen, setIsNewCampaignOpen] = useState(false);
+  const [newCampaignForm, setNewCampaignForm] = useState<NewCampaignForm>(EMPTY_NEW_CAMPAIGN_FORM);
+  const [newCampaignSubmitting, setNewCampaignSubmitting] = useState(false);
+  const [newCampaignError, setNewCampaignError] = useState<string | null>(null);
 
   const [guests, setGuests] = useState<GuestContact[]>([]);
   const [guestsLoading, setGuestsLoading] = useState(false);
   const [guestsError, setGuestsError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
+  // Per-guest enabled/disabled toggle state — mirrors
+  // campaignTogglingIds/campaignToggleErrors above exactly, just keyed by
+  // guest id instead of campaign id (see toggleGuestEnabled below).
+  const [guestToggleErrors, setGuestToggleErrors] = useState<Record<string, string>>({});
+  const [guestTogglingIds, setGuestTogglingIds] = useState<Set<string>>(new Set());
 
   const [selectedGuestId, setSelectedGuestId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
@@ -356,9 +478,11 @@ export default function DashboardPage() {
   }
 
   // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
-  // against GET /api/campaigns instead — the "explicit load button" pattern
-  // this page uses elsewhere rather than a new auto-fetch convention.
-  async function loadCampaigns() {
+  // against GET /api/campaigns instead. Unlike loadGuests (still behind the
+  // CRM tab's explicit "Load guests" button), this is auto-fetched — see
+  // the useEffect right below — so it's a useCallback rather than a plain
+  // function, to give that effect a stable dependency.
+  const loadCampaigns = useCallback(async () => {
     setCampaignsLoading(true);
     setCampaignsError(null);
     try {
@@ -376,7 +500,32 @@ export default function DashboardPage() {
     } finally {
       setCampaignsLoading(false);
     }
-  }
+  }, [apiKey]);
+
+  // Auto-loads campaigns once apiKey has a value, rather than requiring an
+  // explicit "Load campaigns" click. Debounced (600ms of no further apiKey
+  // changes) rather than firing on the first keystroke that makes apiKey
+  // non-empty — firing immediately on "any non-empty value" was a real bug:
+  // typing (or this page's own automation tooling filling the field
+  // character-by-character) briefly makes apiKey a single incomplete
+  // character, which 401s once, and since apiKey never becomes empty again
+  // afterward, an "empty-to-non-empty transition" guard can never re-fire —
+  // the rest of the real key being typed in would never trigger a retry.
+  // Debouncing avoids needing to detect "done typing" any other way: every
+  // apiKey change resets the timer via the cleanup function, so only a
+  // settled value actually triggers the fetch. hasLoadedCampaigns/
+  // campaignsLoading still guard duplicate/overlapping fetches once a real
+  // attempt is in flight or has already succeeded. The CRM tab's own "Load
+  // guests" button is untouched — this auto-load is Campaigns-only.
+  useEffect(() => {
+    if (apiKey.length === 0 || hasLoadedCampaigns || campaignsLoading) {
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      void loadCampaigns();
+    }, 600);
+    return () => clearTimeout(timeoutId);
+  }, [apiKey, hasLoadedCampaigns, campaignsLoading, loadCampaigns]);
 
   // Toggling a campaign's enabled Switch — confirmation-based (not
   // optimistic): the Switch only flips once PATCH /api/campaigns/[id]
@@ -472,6 +621,148 @@ export default function DashboardPage() {
       }
     },
     [apiKey],
+  );
+
+  // Toggling a guest's enabled Switch (CRM tab) — same confirmation-based
+  // shape as toggleCampaignEnabled above: PATCH /api/guest-contacts/[id]
+  // with { enabled }, Switch only flips once the server confirms, and
+  // guestTogglingIds disables just that row's own Switch while in flight.
+  // This is the UI for the "guest wasn't happy with their stay, don't
+  // bother them with campaigns again" case — already enforced server-side
+  // by getCampaignCandidates, this just lets it be set.
+  const toggleGuestEnabled = useCallback(
+    async (guest: GuestContact, nextEnabled: boolean) => {
+      setGuestTogglingIds((prev) => new Set(prev).add(guest.id));
+      setGuestToggleErrors((prev) => {
+        const { [guest.id]: _removed, ...rest } = prev;
+        return rest;
+      });
+      try {
+        const res = await fetch(`/api/guest-contacts/${encodeURIComponent(guest.id)}`, {
+          method: "PATCH",
+          headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: nextEnabled }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setGuestToggleErrors((prev) => ({
+            ...prev,
+            [guest.id]: typeof json.error === "string" ? json.error : "Failed to save",
+          }));
+          return;
+        }
+        const updatedEnabled = (json.enabled ?? nextEnabled) as boolean;
+        setGuests((prev) =>
+          prev.map((g) => (g.id === guest.id ? { ...g, enabled: updatedEnabled } : g)),
+        );
+      } catch (err) {
+        setGuestToggleErrors((prev) => ({
+          ...prev,
+          [guest.id]: err instanceof Error ? err.message : "Unknown error",
+        }));
+      } finally {
+        setGuestTogglingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(guest.id);
+          return next;
+        });
+      }
+    },
+    [apiKey],
+  );
+
+  // Creates a new campaign (POST /api/campaigns) from the "+ New Campaign"
+  // dialog's form state. Only fields with a value are sent — an empty
+  // optional input is omitted entirely rather than sent as "" or NaN, since
+  // the backend treats undefined/missing as "not set" but would 400 on an
+  // explicit empty string or a malformed type. `enabled` is deliberately
+  // never sent — the backend always defaults new campaigns to enabled.
+  const createCampaign = useCallback(async () => {
+    const name = newCampaignForm.name.trim();
+    const kind = newCampaignForm.kind.trim();
+    const messageTemplate = newCampaignForm.messageTemplate.trim();
+    if (!name || !kind || !messageTemplate) {
+      setNewCampaignError("Name, kind, and message template are required.");
+      return;
+    }
+
+    setNewCampaignSubmitting(true);
+    setNewCampaignError(null);
+    try {
+      const body: Record<string, unknown> = {
+        name,
+        kind,
+        message_template: messageTemplate,
+        is_recurring: newCampaignForm.isRecurring,
+      };
+      const targetFunnelStage = newCampaignForm.targetFunnelStage.trim();
+      if (targetFunnelStage) {
+        body.target_funnel_stage = targetFunnelStage;
+      }
+      if (newCampaignForm.minIdleDays.trim()) {
+        const parsed = Number(newCampaignForm.minIdleDays);
+        if (!Number.isNaN(parsed)) {
+          body.min_idle_days = parsed;
+        }
+      }
+      if (newCampaignForm.targetStayBefore.trim()) {
+        body.target_stay_before = newCampaignForm.targetStayBefore.trim();
+      }
+      if (newCampaignForm.minTotalStays.trim()) {
+        const parsed = Number(newCampaignForm.minTotalStays);
+        if (!Number.isNaN(parsed)) {
+          body.min_total_stays = parsed;
+        }
+      }
+      if (newCampaignForm.discountPercent.trim()) {
+        const parsed = Number(newCampaignForm.discountPercent);
+        if (!Number.isNaN(parsed)) {
+          body.discount_percent = parsed;
+        }
+      }
+      const offerDescription = newCampaignForm.offerDescription.trim();
+      if (offerDescription) {
+        body.offer_description = offerDescription;
+      }
+
+      const res = await fetch("/api/campaigns", {
+        method: "POST",
+        headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setNewCampaignError(
+          typeof json.error === "string" ? json.error : "Failed to create campaign",
+        );
+        return;
+      }
+      setCampaigns((prev) => [...prev, json as Campaign]);
+      setIsNewCampaignOpen(false);
+      setNewCampaignForm(EMPTY_NEW_CAMPAIGN_FORM);
+    } catch (err) {
+      setNewCampaignError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setNewCampaignSubmitting(false);
+    }
+  }, [apiKey, newCampaignForm]);
+
+  // Dialog open/close handler — closing (via Cancel, the X, or a
+  // successful create) always clears the form and any stale error, so
+  // reopening the dialog later starts fresh.
+  const handleNewCampaignOpenChange = useCallback((open: boolean) => {
+    setIsNewCampaignOpen(open);
+    if (!open) {
+      setNewCampaignForm(EMPTY_NEW_CAMPAIGN_FORM);
+      setNewCampaignError(null);
+    }
+  }, []);
+
+  const updateNewCampaignForm = useCallback(
+    <K extends keyof NewCampaignForm>(field: K, value: NewCampaignForm[K]) => {
+      setNewCampaignForm((prev) => ({ ...prev, [field]: value }));
+    },
+    [],
   );
 
   const toggleMessageExpanded = useCallback((campaignId: string) => {
@@ -603,31 +894,33 @@ export default function DashboardPage() {
     [editingValue, apiKey, closeEditing, selectedGuestId, loadConversationsFor],
   );
 
-  // Toggles `value` in/out of the active filter set for `columnId` (one
-  // TanStack columnFilters entry per dimension). Removing the last value in
-  // a dimension drops that entry entirely rather than leaving an
-  // empty-array filter around, so an empty dimension truly doesn't filter
-  // at all (per filterValueIncludes' own early-return).
-  const toggleFilterValue = useCallback((columnId: string, value: string) => {
-    setColumnFilters((prev) => {
-      const existing = prev.find((filter) => filter.id === columnId);
-      const currentValues = Array.isArray(existing?.value) ? (existing.value as string[]) : [];
-      const nextValues = currentValues.includes(value)
-        ? currentValues.filter((v) => v !== value)
-        : [...currentValues, value];
-      const withoutColumn = prev.filter((filter) => filter.id !== columnId);
-      return nextValues.length === 0
-        ? withoutColumn
-        : [...withoutColumn, { id: columnId, value: nextValues }];
-    });
-  }, []);
+  // Thin wrappers around the shared toggleColumnFilterValue/
+  // isColumnFilterValueActive helpers above, bound to this tab's own
+  // columnFilters state. See campaignsColumnFilters' own pair below for the
+  // Campaigns tab's equivalent.
+  const toggleFilterValue = useCallback(
+    (columnId: string, value: string) => toggleColumnFilterValue(setColumnFilters, columnId, value),
+    [],
+  );
 
   const isFilterValueActive = useCallback(
-    (columnId: string, value: string) => {
-      const existing = columnFilters.find((filter) => filter.id === columnId);
-      return Array.isArray(existing?.value) && (existing.value as string[]).includes(value);
-    },
+    (columnId: string, value: string) => isColumnFilterValueActive(columnFilters, columnId, value),
     [columnFilters],
+  );
+
+  // Campaigns tab's own filter-chip toggling (Type / Enabled), against
+  // campaignsColumnFilters instead of the CRM tab's columnFilters — same
+  // shared helpers, separate state.
+  const toggleCampaignFilterValue = useCallback(
+    (columnId: string, value: string) =>
+      toggleColumnFilterValue(setCampaignsColumnFilters, columnId, value),
+    [],
+  );
+
+  const isCampaignFilterValueActive = useCallback(
+    (columnId: string, value: string) =>
+      isColumnFilterValueActive(campaignsColumnFilters, columnId, value),
+    [campaignsColumnFilters],
   );
 
   const columns = useMemo<ColumnDef<GuestContact>[]>(
@@ -691,22 +984,45 @@ export default function DashboardPage() {
       {
         accessorKey: "funnel_stage",
         header: "Funnel Stage",
-        filterFn: filterValueIncludes,
+        filterFn: filterValueIncludes<GuestContact>,
         cell: (info) => {
           const stage = info.getValue() as FunnelStage;
           return <Badge color={FUNNEL_STAGE_COLOR[stage]}>{stage}</Badge>;
         },
       },
       {
+        accessorKey: "enabled",
+        header: "Enabled",
+        cell: (info) => {
+          const guest = info.row.original;
+          const isToggling = guestTogglingIds.has(guest.id);
+          const toggleError = guestToggleErrors[guest.id];
+          return (
+            <Flex direction="column" gap="1" onClick={(e) => e.stopPropagation()}>
+              <Switch
+                checked={guest.enabled}
+                disabled={isToggling}
+                onCheckedChange={(checked) => void toggleGuestEnabled(guest, checked)}
+              />
+              {toggleError && (
+                <Text size="1" color="red">
+                  {toggleError}
+                </Text>
+              )}
+            </Flex>
+          );
+        },
+      },
+      {
         accessorKey: "last_room",
         header: "Last Room",
-        filterFn: filterValueIncludes,
+        filterFn: filterValueIncludes<GuestContact>,
         cell: (info) => (info.getValue() as string | null) ?? "—",
       },
       {
         accessorKey: "platform",
         header: "Platform",
-        filterFn: filterValueIncludes,
+        filterFn: filterValueIncludes<GuestContact>,
         cell: (info) => {
           const platform = info.getValue() as Platform;
           return <Badge color={PLATFORM_COLOR[platform]}>{PLATFORM_LABEL[platform]}</Badge>;
@@ -775,10 +1091,20 @@ export default function DashboardPage() {
         id: "stay_length_bucket",
         accessorFn: stayLengthBucket,
         enableHiding: true,
-        filterFn: filterValueIncludes,
+        filterFn: filterValueIncludes<GuestContact>,
       },
     ],
-    [editingGuestId, editingValue, editingSaving, editingError, commitPhoneEdit, startEditingPhone],
+    [
+      editingGuestId,
+      editingValue,
+      editingSaving,
+      editingError,
+      commitPhoneEdit,
+      startEditingPhone,
+      guestTogglingIds,
+      guestToggleErrors,
+      toggleGuestEnabled,
+    ],
   );
 
   const table = useReactTable({
@@ -819,6 +1145,7 @@ export default function DashboardPage() {
       {
         accessorKey: "is_recurring",
         header: "Type",
+        filterFn: filterValueIncludes<Campaign>,
         cell: (info) => {
           const isRecurring = info.getValue() as boolean;
           return (
@@ -831,6 +1158,7 @@ export default function DashboardPage() {
       {
         accessorKey: "enabled",
         header: "Enabled",
+        filterFn: filterValueIncludes<Campaign>,
         cell: (info) => {
           const campaign = info.row.original;
           const isToggling = campaignTogglingIds.has(campaign.id);
@@ -910,9 +1238,15 @@ export default function DashboardPage() {
           const runError = campaignRunErrors[campaign.id];
           return (
             <Flex align="center" gap="3">
-              <Button size="1" onClick={() => void runCampaignNow(campaign)} disabled={isRunning}>
-                {isRunning ? "Running…" : "Run now"}
-              </Button>
+              {campaign.is_recurring === false ? (
+                <Button size="1" onClick={() => void runCampaignNow(campaign)} disabled={isRunning}>
+                  {isRunning ? "Running…" : "Run now"}
+                </Button>
+              ) : (
+                <Text color="gray" size="2">
+                  Runs automatically
+                </Text>
+              )}
               {runResult && (
                 <Text size="2" color="green">
                   Drafted {runResult.drafted}, skipped {runResult.skipped}
@@ -944,11 +1278,13 @@ export default function DashboardPage() {
   const campaignsTable = useReactTable({
     data: campaigns,
     columns: campaignColumns,
-    state: { sorting: campaignsSorting },
+    state: { sorting: campaignsSorting, columnFilters: campaignsColumnFilters },
     onSortingChange: setCampaignsSorting,
+    onColumnFiltersChange: setCampaignsColumnFilters,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
   });
 
   return (
@@ -992,7 +1328,7 @@ export default function DashboardPage() {
 
           {guests.length > 0 && (
             <>
-              <Flex direction="column" gap="3" mb="4">
+              <Flex wrap="wrap" gap="4" align="start" mb="4">
                 <Box>
                   <Text as="div" size="2" weight="medium" mb="1">
                     Stay length
@@ -1241,10 +1577,189 @@ export default function DashboardPage() {
         </Tabs.Content>
 
         <Tabs.Content value="campaigns">
-          <Flex gap="3" align="end" mb="4">
-            <Button onClick={loadCampaigns} disabled={campaignsLoading || !apiKey}>
-              {campaignsLoading ? "Loading…" : "Load campaigns"}
-            </Button>
+          <Flex justify="between" align="center" mb="4">
+            <Box />
+            <Dialog.Root open={isNewCampaignOpen} onOpenChange={handleNewCampaignOpenChange}>
+              <Dialog.Trigger>
+                <Button>+ New Campaign</Button>
+              </Dialog.Trigger>
+              <Dialog.Content maxWidth="520px">
+                <Dialog.Title>New Campaign</Dialog.Title>
+                <Flex direction="column" gap="3">
+                  <Box>
+                    <Text as="label" size="2" weight="medium" htmlFor="new-campaign-name">
+                      Name
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-name"
+                        value={newCampaignForm.name}
+                        onChange={(e) => updateNewCampaignForm("name", e.target.value)}
+                        placeholder="Campaign name"
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text as="label" size="2" weight="medium" htmlFor="new-campaign-kind">
+                      Kind
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-kind"
+                        value={newCampaignForm.kind}
+                        onChange={(e) => updateNewCampaignForm("kind", e.target.value)}
+                        placeholder="Free-text label, e.g. win-back"
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text as="div" size="2" weight="medium" mb="1">
+                      Type
+                    </Text>
+                    <Flex align="center" gap="2">
+                      <Switch
+                        checked={newCampaignForm.isRecurring}
+                        onCheckedChange={(checked) => updateNewCampaignForm("isRecurring", checked)}
+                      />
+                      <Text size="2">{newCampaignForm.isRecurring ? "Automated" : "One-off"}</Text>
+                    </Flex>
+                  </Box>
+                  <Box>
+                    <Text
+                      as="label"
+                      size="2"
+                      weight="medium"
+                      htmlFor="new-campaign-target-funnel-stage"
+                    >
+                      Target funnel stage (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-target-funnel-stage"
+                        value={newCampaignForm.targetFunnelStage}
+                        onChange={(e) => updateNewCampaignForm("targetFunnelStage", e.target.value)}
+                        placeholder="new / informed / link_sent / booked, or leave blank"
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text as="label" size="2" weight="medium" htmlFor="new-campaign-min-idle-days">
+                      Min idle days (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-min-idle-days"
+                        type="number"
+                        value={newCampaignForm.minIdleDays}
+                        onChange={(e) => updateNewCampaignForm("minIdleDays", e.target.value)}
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text
+                      as="label"
+                      size="2"
+                      weight="medium"
+                      htmlFor="new-campaign-target-stay-before"
+                    >
+                      Target stay before (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-target-stay-before"
+                        type="date"
+                        value={newCampaignForm.targetStayBefore}
+                        onChange={(e) => updateNewCampaignForm("targetStayBefore", e.target.value)}
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text
+                      as="label"
+                      size="2"
+                      weight="medium"
+                      htmlFor="new-campaign-min-total-stays"
+                    >
+                      Min total stays (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-min-total-stays"
+                        type="number"
+                        value={newCampaignForm.minTotalStays}
+                        onChange={(e) => updateNewCampaignForm("minTotalStays", e.target.value)}
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text
+                      as="label"
+                      size="2"
+                      weight="medium"
+                      htmlFor="new-campaign-discount-percent"
+                    >
+                      Discount percent (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-discount-percent"
+                        type="number"
+                        value={newCampaignForm.discountPercent}
+                        onChange={(e) => updateNewCampaignForm("discountPercent", e.target.value)}
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text
+                      as="label"
+                      size="2"
+                      weight="medium"
+                      htmlFor="new-campaign-offer-description"
+                    >
+                      Offer description (optional)
+                    </Text>
+                    <Box mt="1">
+                      <TextField.Root
+                        id="new-campaign-offer-description"
+                        value={newCampaignForm.offerDescription}
+                        onChange={(e) => updateNewCampaignForm("offerDescription", e.target.value)}
+                      />
+                    </Box>
+                  </Box>
+                  <Box>
+                    <Text as="label" size="2" weight="medium" htmlFor="new-campaign-message">
+                      Message template
+                    </Text>
+                    <Box mt="1">
+                      <TextArea
+                        id="new-campaign-message"
+                        value={newCampaignForm.messageTemplate}
+                        onChange={(e) => updateNewCampaignForm("messageTemplate", e.target.value)}
+                        placeholder="Supports {{guest_name}}, {{promo_code}}, {{discount_percent}}, {{offer_description}}"
+                        rows={4}
+                      />
+                    </Box>
+                  </Box>
+                </Flex>
+
+                {newCampaignError && (
+                  <Text as="p" size="2" color="red" mt="3">
+                    {newCampaignError}
+                  </Text>
+                )}
+
+                <Flex gap="3" mt="4" justify="end">
+                  <Dialog.Close>
+                    <Button variant="soft" color="gray" disabled={newCampaignSubmitting}>
+                      Cancel
+                    </Button>
+                  </Dialog.Close>
+                  <Button onClick={() => void createCampaign()} disabled={newCampaignSubmitting}>
+                    {newCampaignSubmitting ? "Creating…" : "Create"}
+                  </Button>
+                </Flex>
+              </Dialog.Content>
+            </Dialog.Root>
           </Flex>
 
           {campaignsError && (
@@ -1253,11 +1768,68 @@ export default function DashboardPage() {
             </Text>
           )}
 
-          {!hasLoadedCampaigns && !campaignsLoading && (
-            <Text color="gray">Click "Load campaigns" to begin.</Text>
+          {!apiKey && !hasLoadedCampaigns && !campaignsLoading && (
+            <Text color="gray">Enter the CRM API key above to load campaigns.</Text>
           )}
+          {campaignsLoading && <Text color="gray">Loading…</Text>}
           {hasLoadedCampaigns && campaigns.length === 0 && (
             <Text color="gray">No campaigns yet.</Text>
+          )}
+
+          {campaigns.length > 0 && (
+            <>
+              <Flex wrap="wrap" gap="4" align="start" mb="4">
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Type
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {CAMPAIGN_TYPE_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isCampaignFilterValueActive("is_recurring", option.value)
+                            ? "solid"
+                            : "soft"
+                        }
+                        onClick={() => toggleCampaignFilterValue("is_recurring", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Enabled
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {CAMPAIGN_ENABLED_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isCampaignFilterValueActive("enabled", option.value) ? "solid" : "soft"
+                        }
+                        onClick={() => toggleCampaignFilterValue("enabled", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+              </Flex>
+
+              <Text as="p" size="2" color="gray" mb="2">
+                Showing {campaignsTable.getFilteredRowModel().rows.length} of {campaigns.length}{" "}
+                campaigns
+              </Text>
+            </>
           )}
 
           {campaigns.length > 0 && (
