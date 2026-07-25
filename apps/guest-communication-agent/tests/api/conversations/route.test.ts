@@ -108,6 +108,7 @@ describe("GET /api/conversations", () => {
           role: "user",
           content: "Hi, is the room available?",
           created_at: "2026-07-20T10:00:05Z",
+          langsmith_run_id: null,
         },
         {
           id: "msg-2",
@@ -115,6 +116,7 @@ describe("GET /api/conversations", () => {
           role: "assistant",
           content: "Yes it is!",
           created_at: "2026-07-20T10:00:10Z",
+          langsmith_run_id: "run-abc",
         },
       ],
       error: null,
@@ -136,12 +138,14 @@ describe("GET /api/conversations", () => {
               role: "user",
               content: "Hi, is the room available?",
               created_at: "2026-07-20T10:00:05Z",
+              langsmith_run_id: null,
             },
             {
               id: "msg-2",
               role: "assistant",
               content: "Yes it is!",
               created_at: "2026-07-20T10:00:10Z",
+              langsmith_run_id: "run-abc",
             },
           ],
         },
@@ -171,6 +175,7 @@ describe("GET /api/conversations", () => {
           role: "user",
           content: "Old conversation message",
           created_at: "2026-07-10T09:05:00Z",
+          langsmith_run_id: null,
         },
         {
           id: "msg-new",
@@ -178,6 +183,7 @@ describe("GET /api/conversations", () => {
           role: "user",
           content: "New conversation message",
           created_at: "2026-07-21T09:05:00Z",
+          langsmith_run_id: null,
         },
       ],
       error: null,
@@ -194,6 +200,7 @@ describe("GET /api/conversations", () => {
         role: "user",
         content: "New conversation message",
         created_at: "2026-07-21T09:05:00Z",
+        langsmith_run_id: null,
       },
     ]);
     expect(json.conversations[1].id).toBe("conv-1");
@@ -202,6 +209,7 @@ describe("GET /api/conversations", () => {
         id: "msg-old",
         role: "user",
         content: "Old conversation message",
+        langsmith_run_id: null,
         created_at: "2026-07-10T09:05:00Z",
       },
     ]);

@@ -97,6 +97,12 @@ interface ConversationMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  // The LangSmith trace/run id this message's turn was generated under, if
+  // any (see GCA's whatsapp_messages.langsmith_run_id migration comment for
+  // which message types get a real value). Null for a guest's own message
+  // and for a proactive/campaign send — the "flag after" eval-feedback
+  // controls below only ever render for a message that actually has one.
+  langsmith_run_id: string | null;
 }
 
 interface Conversation {
@@ -534,6 +540,21 @@ export default function DashboardPage() {
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [conversationsError, setConversationsError] = useState<string | null>(null);
+  // Per-message "flag after" eval-feedback state (thumbs up/down on a past
+  // assistant reply, POST /api/messages/[messageId]/feedback) — mirrors
+  // guestToggleErrors/guestTogglingIds' own "Set of in-flight ids + Record
+  // of per-id errors" shape, just keyed by message id. messageFeedbackMarked
+  // is this feature's own addition: once a message's feedback is
+  // successfully recorded, its score is kept here so the two thumbs buttons
+  // can be replaced with a "Marked" indicator — deliberately client-side/
+  // session-only (per this feature's own design), not re-derived from a
+  // server re-fetch, so it resets on reload same as any other unpersisted
+  // UI state.
+  const [messageFeedbackSubmittingIds, setMessageFeedbackSubmittingIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [messageFeedbackErrors, setMessageFeedbackErrors] = useState<Record<string, string>>({});
+  const [messageFeedbackMarked, setMessageFeedbackMarked] = useState<Record<string, 0 | 1>>({});
   // Mirrors selectedGuestId synchronously, same reason as editingGuestIdRef
   // below. Guards a real race: if a guest is selected (kicking off a
   // conversation-history fetch), then a different guest is selected before
@@ -998,11 +1019,59 @@ export default function DashboardPage() {
     [apiKey],
   );
 
+  // Records the owner's retrospective good/bad call on one past assistant
+  // reply — POST /api/messages/[messageId]/feedback (CRM's own proxy to
+  // GCA's identically-shaped endpoint). Confirmation-based, not optimistic
+  // (mirrors toggleCampaignEnabled, not toggleGuestEnabled): the "Marked"
+  // indicator only replaces the two thumbs buttons once the request
+  // actually succeeds, since a failed flag attempt leaving the buttons in
+  // place (so the owner can just retry) is more useful here than an
+  // optimistic mark that silently reverts.
+  const submitMessageFeedback = useCallback(
+    async (messageId: string, score: 0 | 1) => {
+      setMessageFeedbackSubmittingIds((prev) => new Set(prev).add(messageId));
+      setMessageFeedbackErrors((prev) => {
+        const { [messageId]: _removed, ...rest } = prev;
+        return rest;
+      });
+      try {
+        const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}/feedback`, {
+          method: "POST",
+          headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ score }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setMessageFeedbackErrors((prev) => ({
+            ...prev,
+            [messageId]: typeof json.error === "string" ? json.error : "Failed to record feedback",
+          }));
+          return;
+        }
+        setMessageFeedbackMarked((prev) => ({ ...prev, [messageId]: score }));
+      } catch (err) {
+        setMessageFeedbackErrors((prev) => ({
+          ...prev,
+          [messageId]: err instanceof Error ? err.message : "Unknown error",
+        }));
+      } finally {
+        setMessageFeedbackSubmittingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(messageId);
+          return next;
+        });
+      }
+    },
+    [apiKey],
+  );
+
   async function selectGuest(guest: GuestContact) {
     setSelectedGuestId(guest.id);
     selectedGuestIdRef.current = guest.id;
     setConversations(null);
     setConversationsError(null);
+    setMessageFeedbackErrors({});
+    setMessageFeedbackMarked({});
     if (!guest.phone) {
       // No phone yet — nothing to fetch conversation history for. The
       // detail panel itself still renders (see render logic below), it just
@@ -1022,6 +1091,8 @@ export default function DashboardPage() {
     setConversations(null);
     setConversationsError(null);
     setConversationsLoading(false);
+    setMessageFeedbackErrors({});
+    setMessageFeedbackMarked({});
   }, []);
 
   const startEditingPhone = useCallback((guest: GuestContact, event: MouseEvent) => {
@@ -1868,6 +1939,41 @@ export default function DashboardPage() {
                             <Text as="div" size="2">
                               {message.content}
                             </Text>
+                            {message.role === "assistant" && message.langsmith_run_id && (
+                              <Box mt="1">
+                                {messageFeedbackMarked[message.id] !== undefined ? (
+                                  <Text as="div" size="1" color="gray">
+                                    Marked {messageFeedbackMarked[message.id] === 1 ? "👍" : "👎"}
+                                  </Text>
+                                ) : (
+                                  <Flex gap="2" align="center">
+                                    <Button
+                                      size="1"
+                                      variant="ghost"
+                                      color="gray"
+                                      disabled={messageFeedbackSubmittingIds.has(message.id)}
+                                      onClick={() => void submitMessageFeedback(message.id, 1)}
+                                    >
+                                      👍
+                                    </Button>
+                                    <Button
+                                      size="1"
+                                      variant="ghost"
+                                      color="gray"
+                                      disabled={messageFeedbackSubmittingIds.has(message.id)}
+                                      onClick={() => void submitMessageFeedback(message.id, 0)}
+                                    >
+                                      👎
+                                    </Button>
+                                  </Flex>
+                                )}
+                                {messageFeedbackErrors[message.id] && (
+                                  <Text as="div" size="1" color="red">
+                                    {messageFeedbackErrors[message.id]}
+                                  </Text>
+                                )}
+                              </Box>
+                            )}
                           </Box>
                         ))}
                       </Flex>

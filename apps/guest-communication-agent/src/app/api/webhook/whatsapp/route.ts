@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { AIMessage } from "@langchain/core/messages";
 import { type NextRequest, NextResponse } from "next/server";
 import { graph } from "@/graph/graph";
@@ -73,6 +74,16 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Fixed up front (rather than read back off the trace after the fact) so
+  // this exact UUID becomes that turn's real LangSmith trace/run id —
+  // RunnableConfig's top-level `runId` field (inherited from
+  // BaseCallbackConfig) is what LangChain/LangGraph's tracer uses as the
+  // root run id for the whole graph.invoke() call, instead of generating
+  // its own. Recorded alongside the reply below so the "flag after"
+  // eval-feedback feature (POST /api/messages/[messageId]/feedback) has a
+  // real run id to attach LangSmith feedback to.
+  const runId = crypto.randomUUID();
+
   const result = await graph.invoke(
     { conversationId, phone, incomingMessage },
     // thread_id is required by the compiled graph's MemorySaver
@@ -82,7 +93,7 @@ export async function POST(request: NextRequest) {
     // (see graph.ts's own doc comment) — so reusing conversationId as the
     // thread_id just gives the ephemeral in-memory checkpoint a stable key
     // per conversation; it isn't relied on for persistence across restarts.
-    { configurable: { conversationId, phone, thread_id: conversationId } },
+    { configurable: { conversationId, phone, thread_id: conversationId }, runId },
   );
 
   const lastMessage = result.messages.at(-1);
@@ -91,7 +102,7 @@ export async function POST(request: NextRequest) {
       ? lastMessage.content
       : "Sorry, I couldn't process that — please try again shortly.";
 
-  await recordMessage(conversationId, "assistant", replyText);
+  await recordMessage(conversationId, "assistant", replyText, runId);
 
   // Fire-and-forget: record this turn's guest interaction and, if the
   // tools that fired this turn imply funnel-stage progress, let CRM
