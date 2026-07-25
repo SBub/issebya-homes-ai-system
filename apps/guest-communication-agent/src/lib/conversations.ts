@@ -97,22 +97,34 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
  * simply omit this argument — the insert then omits the column entirely
  * (rather than writing an explicit `null`), matching
  * whatsapp_messages.langsmith_run_id's own nullable, "no value" convention.
+ *
+ * Returns the new row's id — the webhook route's own inbound "user" call
+ * needs it (captured as escalations.trigger_message_id at escalation time,
+ * see @/graph/tools.ts's performEscalation), so this can no longer be a
+ * fire-and-forget void insert. Every other existing caller (this route's own
+ * "assistant" call, POST /api/send) is unaffected by the wider return type —
+ * they simply don't use it.
  */
 export async function recordMessage(
   conversationId: string,
   role: "user" | "assistant",
   content: string,
   langsmithRunId?: string,
-): Promise<void> {
+): Promise<string> {
   const supabase = createAdminClient();
   const insert: Record<string, unknown> = { conversation_id: conversationId, role, content };
   if (langsmithRunId !== undefined) {
     insert.langsmith_run_id = langsmithRunId;
   }
-  const { error } = await supabase.from("whatsapp_messages").insert(insert);
-  if (error) {
+  const { data, error } = await supabase
+    .from("whatsapp_messages")
+    .insert(insert)
+    .select("id")
+    .single();
+  if (error || !data) {
     throw new Error(
-      `Failed to record ${role} message for conversation ${conversationId}: ${error.message}`,
+      `Failed to record ${role} message for conversation ${conversationId}: ${error?.message}`,
     );
   }
+  return data.id;
 }

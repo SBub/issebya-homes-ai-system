@@ -282,7 +282,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Already handled"));
   });
 
-  it("does not resolve, and tells the owner it failed, when the guest send fails", async () => {
+  it("does not send to the guest itself — only calls resolveEscalation directly, no sendGuestMessage relay", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",
       phone_number: "+351920742845",
@@ -291,20 +291,41 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       resolved_at: null,
       answer: null,
     });
-    sendGuestMessageMock.mockResolvedValueOnce({ ok: false, error: "Twilio rejected the number" });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: true });
+
+    await POST(makeReplyRequest("The AC is above the bed", 42));
+
+    expect(sendGuestMessageMock).not.toHaveBeenCalled();
+    expect(resolveEscalationMock).toHaveBeenCalledWith("esc-1", "The AC is above the bed");
+  });
+
+  it("tells the owner the KB write failed when resolveEscalation itself fails (non-409)", async () => {
+    getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
+      id: "esc-1",
+      phone_number: "+351920742845",
+      reason: "Guest asked about the AC",
+      reason_category: "missing_info",
+      resolved_at: null,
+      answer: null,
+    });
+    resolveEscalationMock.mockResolvedValueOnce({
+      ok: false,
+      alreadyResolved: false,
+      error: "boom",
+    });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await POST(makeReplyRequest("The AC is above the bed", 42));
 
     expect(res.status).toBe(200);
-    expect(sendGuestMessageMock).toHaveBeenCalledWith("+351920742845", "The AC is above the bed");
-    expect(resolveEscalationMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Failed to send"));
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to add the answer to the knowledge base"),
+    );
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
 
-  it("sends to the guest, resolves the escalation, and confirms to the owner on full success", async () => {
+  it("resolves the escalation and confirms full success to the owner when sentToGuest is true", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",
       phone_number: "+351920742845",
@@ -313,18 +334,37 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       resolved_at: null,
       answer: null,
     });
-    sendGuestMessageMock.mockResolvedValueOnce({ ok: true });
-    resolveEscalationMock.mockResolvedValueOnce({ ok: true });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: true });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", 42));
     const json = await res.json();
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
-    expect(sendGuestMessageMock).toHaveBeenCalledWith("+351920742845", "The AC is above the bed");
     expect(resolveEscalationMock).toHaveBeenCalledWith("esc-1", "The AC is above the bed");
     expect(sendMessageMock).toHaveBeenCalledWith(
       expect.stringContaining("Sent to guest and added to the knowledge base"),
+    );
+  });
+
+  it("reports a partial success — added to the knowledge base but the guest wasn't reached — when sentToGuest is false", async () => {
+    getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
+      id: "esc-1",
+      phone_number: "+351920742845",
+      reason: "Guest asked about the AC",
+      reason_category: "missing_info",
+      resolved_at: null,
+      answer: null,
+    });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: false });
+
+    const res = await POST(makeReplyRequest("The AC is above the bed", 42));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ ok: true });
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.stringContaining("Added to the knowledge base, but couldn't reach the guest"),
     );
   });
 
@@ -361,31 +401,4 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       );
     });
   }
-
-  it("tells the owner the KB write failed when resolve fails after a successful guest send", async () => {
-    getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
-      id: "esc-1",
-      phone_number: "+351920742845",
-      reason: "Guest asked about the AC",
-      reason_category: "missing_info",
-      resolved_at: null,
-      answer: null,
-    });
-    sendGuestMessageMock.mockResolvedValueOnce({ ok: true });
-    resolveEscalationMock.mockResolvedValueOnce({
-      ok: false,
-      alreadyResolved: false,
-      error: "boom",
-    });
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const res = await POST(makeReplyRequest("The AC is above the bed", 42));
-
-    expect(res.status).toBe(200);
-    expect(sendMessageMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed to add the answer to the knowledge base"),
-    );
-    expect(consoleErrorSpy).toHaveBeenCalled();
-    consoleErrorSpy.mockRestore();
-  });
 });

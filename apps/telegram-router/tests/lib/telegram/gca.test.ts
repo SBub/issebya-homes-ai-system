@@ -147,17 +147,37 @@ describe("resolveEscalation", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("posts the answer and returns ok: true on success", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  it("posts the answer and returns ok: true, sentToGuest: true on full success", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, sentToGuest: true }), { status: 200 }),
+    );
 
     const result = await resolveEscalation("esc-1", "The AC is above the bed");
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, sentToGuest: true });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://localhost:3005/api/escalations/esc-1/resolve");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "X-API-Key": "test-key" });
     expect(JSON.parse(init.body)).toEqual({ answer: "The AC is above the bed" });
+  });
+
+  it("surfaces sentToGuest: false on a partial success (embedded but the guest wasn't reached)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, sentToGuest: false }), { status: 200 }),
+    );
+
+    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+
+    expect(result).toEqual({ ok: true, sentToGuest: false });
+  });
+
+  it("defaults sentToGuest to false when the success body is missing/unparseable", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
+
+    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+
+    expect(result).toEqual({ ok: true, sentToGuest: false });
   });
 
   it("returns ok: false, alreadyResolved: true on a 409, without throwing", async () => {

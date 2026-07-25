@@ -118,6 +118,14 @@ export async function agentNode(
 ): Promise<Partial<GraphStateType>> {
   const stepCount = (state.stepCount ?? 0) + 1;
 
+  // Same config.configurable.triggerMessageId the webhook route threads
+  // through graph.invoke() (see that route's own doc comment) — read once
+  // here and passed into both deterministic safety-net performEscalation
+  // calls below, mirroring how ../tools.ts's getConfigurable extracts it for
+  // the model-driven escalateToOwner tool call.
+  const triggerMessageId = (config.configurable as { triggerMessageId?: string | null } | undefined)
+    ?.triggerMessageId;
+
   // Safety net for pathological cases (a tool that keeps failing, a model
   // that won't stop retrying/reformulating, etc.) — not a change to normal
   // behavior. A typical turn resolves in 1-2 rounds and never comes near
@@ -142,6 +150,7 @@ export async function agentNode(
       // just via a different failure mode (looping instead of an empty
       // result).
       reasonCategory: "missing_info",
+      triggerMessageId: triggerMessageId ?? undefined,
     });
 
     return {
@@ -205,6 +214,7 @@ export async function agentNode(
       // guest-driven, and missing_info is the closest of the four categories
       // — the model failed to produce a real answer for the guest.
       reasonCategory: "missing_info",
+      triggerMessageId: triggerMessageId ?? undefined,
     });
 
     return {

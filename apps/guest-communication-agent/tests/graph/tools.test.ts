@@ -83,6 +83,28 @@ describe("performEscalation", () => {
     });
   }
 
+  it("includes trigger_message_id in the escalations insert when supplied", async () => {
+    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+    mockEq.mockResolvedValueOnce({ error: null });
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
+
+    await performEscalation({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest is asking about the AC",
+      reasonCategory: "missing_info",
+      triggerMessageId: "msg-1",
+    });
+
+    expect(mockInsert).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      phone_number: "+351920742845",
+      reason: "Guest is asking about the AC",
+      reason_category: "missing_info",
+      trigger_message_id: "msg-1",
+    });
+  });
+
   it("skips the nudge (and logs) when the escalations insert itself fails", async () => {
     mockSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

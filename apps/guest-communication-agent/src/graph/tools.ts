@@ -19,10 +19,28 @@ import { searchProperty } from "../tools/search-property";
 interface ToolConfigurable {
   conversationId: string;
   phone: string;
+  // The current turn's inbound whatsapp_messages.id (see
+  // ../app/api/webhook/whatsapp/route.ts's own doc comment on why it's
+  // captured before graph.invoke() is ever called). Optional here as a
+  // defensive fallback only — every real caller of this graph (the webhook
+  // route) always supplies it; this just avoids getConfigurable throwing for
+  // some future/test caller that doesn't.
+  triggerMessageId?: string;
 }
 
+// RunnableConfig.configurable is loosely typed (Record<string, unknown>), so
+// the raw shape read off it allows a null triggerMessageId too (some
+// upstream caller could plausibly write `null` rather than omitting the key)
+// — normalized to `undefined` below so ToolConfigurable itself (and every
+// caller destructuring getConfigurable's return) only ever has to deal with
+// the single "optional string" shape @/graph/tools.ts's performEscalation
+// param expects.
+type RawToolConfigurable = Partial<Omit<ToolConfigurable, "triggerMessageId">> & {
+  triggerMessageId?: string | null;
+};
+
 function getConfigurable(config: RunnableConfig): ToolConfigurable {
-  const configurable = config.configurable as Partial<ToolConfigurable> | undefined;
+  const configurable = config.configurable as RawToolConfigurable | undefined;
   if (!configurable?.conversationId || !configurable?.phone) {
     throw new Error(
       "Missing conversationId/phone in RunnableConfig.configurable — the agent node must pass {configurable: {conversationId, phone}} at invoke time.",
@@ -31,6 +49,7 @@ function getConfigurable(config: RunnableConfig): ToolConfigurable {
   return {
     conversationId: configurable.conversationId,
     phone: configurable.phone,
+    triggerMessageId: configurable.triggerMessageId ?? undefined,
   };
 }
 
@@ -237,8 +256,16 @@ export async function performEscalation(params: {
   phone: string;
   reason: string;
   reasonCategory: EscalationReasonCategory;
+  // The guest's real original message id (whatsapp_messages.id) that
+  // triggered this escalation — distinct from `reason`, which is the
+  // model's own paraphrase of the question, not the guest's literal words.
+  // Optional: only ever supplied by the real webhook-driven call path (see
+  // getConfigurable above); some future/test caller may omit it, in which
+  // case trigger_message_id is left null on the escalations row rather than
+  // forcing a fabricated reference.
+  triggerMessageId?: string;
 }): Promise<void> {
-  const { conversationId, phone, reason, reasonCategory } = params;
+  const { conversationId, phone, reason, reasonCategory, triggerMessageId } = params;
   const supabase = createAdminClient();
 
   const { data, error } = await supabase
@@ -248,6 +275,7 @@ export async function performEscalation(params: {
       phone_number: phone,
       reason,
       reason_category: reasonCategory,
+      ...(triggerMessageId ? { trigger_message_id: triggerMessageId } : {}),
     })
     .select("id")
     .single();
@@ -287,8 +315,14 @@ const escalateToOwner = tool(
     { reason, reason_category }: { reason: string; reason_category: EscalationReasonCategory },
     config: RunnableConfig,
   ) => {
-    const { conversationId, phone } = getConfigurable(config);
-    await performEscalation({ conversationId, phone, reason, reasonCategory: reason_category });
+    const { conversationId, phone, triggerMessageId } = getConfigurable(config);
+    await performEscalation({
+      conversationId,
+      phone,
+      reason,
+      reasonCategory: reason_category,
+      triggerMessageId,
+    });
     return {
       escalated: true,
       message: "The owner has been notified and will be in touch shortly.",

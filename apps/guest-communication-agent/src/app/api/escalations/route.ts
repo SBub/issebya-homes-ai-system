@@ -19,14 +19,15 @@ import { createAdminClient } from "@/lib/supabase";
  * reads better for that use case than a stable-since-creation ordering.
  *
  * Response: `{ escalations: [{ id, conversation_id, phone_number, reason,
- * reason_category, created_at }] }`. reason_category is null for the one
- * pre-existing row that predates that column (see
+ * reason_category, created_at, resolved_at, answer }] }`. reason_category is
+ * null for the one pre-existing row that predates that column (see
  * supabase/migrations/20260725100000_add_reason_category_to_escalations.sql)
  * and a real enum value for every escalation created since — see
  * @/graph/tools.ts's escalateToOwner/performEscalation for where it's
- * populated. resolved_at exists on the underlying table but is deliberately
- * omitted here: nothing in this pass reads or writes it (no "mark as
- * resolved" feature yet), so it isn't part of this response's contract.
+ * populated. resolved_at/answer are set once a missing_info escalation has
+ * been resolved (see POST /api/escalations/[id]/resolve) — both are null
+ * until then, and stay null forever for the other three categories, which
+ * have no resolution flow.
  */
 export async function GET(request: NextRequest) {
   const unauthorized = requireApiKey(request);
@@ -37,7 +38,9 @@ export async function GET(request: NextRequest) {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("escalations")
-    .select("id, conversation_id, phone_number, reason, reason_category, created_at")
+    .select(
+      "id, conversation_id, phone_number, reason, reason_category, created_at, resolved_at, answer",
+    )
     .order("created_at", { ascending: false });
 
   if (error) {

@@ -27,7 +27,7 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
 }));
 
-const { getOrCreateActiveConversation } = await import("@/lib/conversations.js");
+const { getOrCreateActiveConversation, recordMessage } = await import("@/lib/conversations.js");
 
 describe("getOrCreateActiveConversation", () => {
   beforeEach(() => {
@@ -112,6 +112,63 @@ describe("getOrCreateActiveConversation", () => {
 
     await expect(getOrCreateActiveConversation("+351920742845")).rejects.toThrow(
       "Failed to create whatsapp_conversation for +351920742845: boom",
+    );
+  });
+});
+
+// recordMessage now returns the new row's id (instead of void) — the
+// webhook route's own inbound "user" call needs it (captured as
+// escalations.trigger_message_id at escalation time, see
+// @/graph/tools.ts's performEscalation) — so this exercises its
+// insert().select("id").single() chain, the same shape as
+// getOrCreateActiveConversation's own create branch above, just against
+// `whatsapp_messages` instead of `whatsapp_conversations`.
+describe("recordMessage", () => {
+  beforeEach(() => {
+    insertSelectSingleMock.mockReset();
+    insertSelectMock.mockClear();
+    insertMock.mockClear();
+    fromMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the new whatsapp_messages row's id", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-1" }, error: null });
+
+    const result = await recordMessage("convo-1", "user", "Hi, is room 1 free?");
+
+    expect(fromMock).toHaveBeenCalledWith("whatsapp_messages");
+    expect(insertMock).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      role: "user",
+      content: "Hi, is room 1 free?",
+    });
+    expect(insertSelectMock).toHaveBeenCalledWith("id");
+    expect(result).toBe("msg-1");
+  });
+
+  it("includes langsmith_run_id in the insert when supplied", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-2" }, error: null });
+
+    const result = await recordMessage("convo-1", "assistant", "Yes, room 1 is free!", "run-1");
+
+    expect(insertMock).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      role: "assistant",
+      content: "Yes, room 1 is free!",
+      langsmith_run_id: "run-1",
+    });
+    expect(result).toBe("msg-2");
+  });
+
+  it("throws when the insert fails", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+
+    await expect(recordMessage("convo-1", "user", "Hi")).rejects.toThrow(
+      "Failed to record user message for conversation convo-1: boom",
     );
   });
 });

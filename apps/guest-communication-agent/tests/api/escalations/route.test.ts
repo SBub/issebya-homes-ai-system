@@ -52,7 +52,7 @@ describe("GET /api/escalations", () => {
     expect(json).toEqual({ escalations: [] });
   });
 
-  it("returns every row, newest first", async () => {
+  it("returns every row, newest first, including resolved_at/answer", async () => {
     const row = {
       id: "esc-1",
       conversation_id: "convo-1",
@@ -60,6 +60,8 @@ describe("GET /api/escalations", () => {
       reason: "Guest asked about AC, couldn't find it in the knowledge base",
       reason_category: "missing_info",
       created_at: "2026-07-25T09:00:00Z",
+      resolved_at: "2026-07-25T10:00:00Z",
+      answer: "The AC is above the bed",
     };
     orderMock.mockResolvedValueOnce({ data: [row], error: null });
 
@@ -68,7 +70,7 @@ describe("GET /api/escalations", () => {
 
     expect(json).toEqual({ escalations: [row] });
     expect(selectMock).toHaveBeenCalledWith(
-      "id, conversation_id, phone_number, reason, reason_category, created_at",
+      "id, conversation_id, phone_number, reason, reason_category, created_at, resolved_at, answer",
     );
     expect(orderMock).toHaveBeenCalledWith("created_at", { ascending: false });
   });

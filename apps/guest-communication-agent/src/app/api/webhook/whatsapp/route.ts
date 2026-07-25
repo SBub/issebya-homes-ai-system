@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
   }
 
   const { conversationId, isNew } = await getOrCreateActiveConversation(phone);
-  await recordMessage(conversationId, "user", incomingMessage);
+  const userMessageId = await recordMessage(conversationId, "user", incomingMessage);
 
   // Fire-and-forget: register a phone-keyed CRM stub the moment this guest's
   // first conversation starts. Never blocks/fails the guest-facing reply —
@@ -93,7 +93,23 @@ export async function POST(request: NextRequest) {
     // (see graph.ts's own doc comment) — so reusing conversationId as the
     // thread_id just gives the ephemeral in-memory checkpoint a stable key
     // per conversation; it isn't relied on for persistence across restarts.
-    { configurable: { conversationId, phone, thread_id: conversationId }, runId },
+    //
+    // triggerMessageId is this turn's own inbound whatsapp_messages.id
+    // (captured just above, before any tool call can fire) — threaded through
+    // so a mid-turn escalateToOwner call (@/graph/tools.ts's performEscalation)
+    // can store it on the escalations row as trigger_message_id. That's what
+    // lets a later missing_info resolution re-invoke this same graph with the
+    // guest's real original question text, instead of the model's own
+    // paraphrased `reason` — see @/lib/resume-conversation.ts.
+    {
+      configurable: {
+        conversationId,
+        phone,
+        thread_id: conversationId,
+        triggerMessageId: userMessageId,
+      },
+      runId,
+    },
   );
 
   const lastMessage = result.messages.at(-1);

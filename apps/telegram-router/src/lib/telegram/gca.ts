@@ -100,16 +100,26 @@ export async function getEscalationByTelegramMessageId(
 }
 
 export type ResolveEscalationResult =
-  | { ok: true }
+  | { ok: true; sentToGuest: boolean }
   | { ok: false; alreadyResolved: boolean; error?: string };
 
 /**
- * Calls GCA's POST /api/escalations/:id/resolve, right after a successful
- * sendGuestMessage delivery of the owner's answer — persists the answer and
- * writes the new knowledge-base entry on GCA's side (see that route's own
- * doc comment for why it doesn't send the WhatsApp message itself). Mirrors
- * ./crm.ts's markPromoCodeRejected shape: a 409 (already resolved — a
- * double reply or a Telegram webhook retry racing this same escalation) is
+ * Calls GCA's POST /api/escalations/:id/resolve — the single call that now
+ * handles the whole missing_info resolution flow on GCA's side: persists the
+ * answer, writes the new knowledge-base entry, and (best-effort) re-invokes
+ * GCA's own agent graph to actually reply to the guest in its own voice (see
+ * that route's own doc comment, and @/lib/resume-conversation.ts in GCA, for
+ * why this endpoint owns the guest-facing send now instead of
+ * telegram-router relaying the owner's raw text via sendGuestMessage).
+ *
+ * `sentToGuest` on a successful (`ok: true`) response reports whether that
+ * proactive re-invocation actually delivered a reply to the guest — the
+ * caller uses it to tell the owner the truth (full success vs. "added to the
+ * knowledge base, but the guest wasn't reached") rather than assuming success
+ * whenever the resolve call itself returns 200.
+ *
+ * Mirrors ./crm.ts's markPromoCodeRejected shape: a 409 (already resolved —
+ * a double reply or a Telegram webhook retry racing this same escalation) is
  * an expected outcome the caller must branch on, not an exception, so it's
  * returned as `{ ok: false, alreadyResolved: true }` rather than thrown.
  */
@@ -144,5 +154,6 @@ export async function resolveEscalation(
       error: `GCA resolve for escalation ${escalationId} failed (${res.status}): ${await res.text()}`,
     };
   }
-  return { ok: true };
+  const body = (await res.json().catch(() => ({}))) as { sentToGuest?: boolean };
+  return { ok: true, sentToGuest: body.sentToGuest ?? false };
 }

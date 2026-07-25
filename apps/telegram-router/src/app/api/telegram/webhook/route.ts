@@ -134,21 +134,28 @@ async function handleNudgeReject(
  * normal reply) — so the caller must fall through to its own existing
  * command/social-post dispatch rather than swallowing the message here.
  * Returns `true` once a real escalation nudge is matched, whatever the
- * outcome (already resolved / wrong category / guest-send failed / resolved
- * successfully) — all of those are "handled" as far as the caller's own
- * dispatch is concerned, even though only the last one is a full success.
+ * outcome (already resolved / wrong category / resolve failed / resolved
+ * successfully but guest unreachable / full success) — all of those are
+ * "handled" as far as the caller's own dispatch is concerned, even though
+ * only the last one is a full success.
+ *
+ * No longer relays the owner's raw text to the guest itself: GCA's own
+ * POST /api/escalations/:id/resolve now embeds the answer into the
+ * knowledge base AND re-invokes GCA's real agent graph to compose and send
+ * the guest's actual reply (see that route's own doc comment and
+ * @/lib/resume-conversation.ts in GCA) — a single resolveEscalation call
+ * covers both, so sendGuestMessage is no longer part of this flow at all
+ * (it's still used elsewhere, by handleNudgeApprove, for its own unrelated
+ * purpose).
  *
  * Safety-critical: only missing_info escalations have a real reply/resolve
- * action (the answer gets relayed to the guest over WhatsApp via
- * sendGuestMessage, then embedded in the knowledge base via
- * resolveEscalation, which itself validates reason_category ===
- * "missing_info" and would 400 on anything else — but only *after* the
- * guest-facing send already happened). Now that every category gets a
- * telegram_message_id (previously only missing_info did, which is what made
- * omitting this check safe before), an owner reply to an
- * unhappy_guest/wants_human/complaint nudge — even an internal note never
- * meant for the guest — must NOT be relayed or sent to resolveEscalation at
- * all. This check must run before either of those calls.
+ * action — resolveEscalation itself validates reason_category ===
+ * "missing_info" and would 400 on anything else, but that check must still
+ * run here first: now that every category gets a telegram_message_id
+ * (previously only missing_info did, which is what made omitting this check
+ * safe before), an owner reply to an unhappy_guest/wants_human/complaint
+ * nudge — even an internal note never meant for the guest — must NOT be sent
+ * to resolveEscalation at all.
  */
 async function handleEscalationReply(
   message: NonNullable<TelegramUpdate["message"]>,
@@ -183,38 +190,32 @@ async function handleEscalationReply(
 
   if (escalation.reason_category !== "missing_info") {
     // No automatic reply/resolve action exists for these categories — do
-    // NOT call sendGuestMessage or resolveEscalation. See this function's
-    // own doc comment for why this guard is safety-critical.
+    // NOT call resolveEscalation. See this function's own doc comment for
+    // why this guard is safety-critical.
     await sendMessage(
       "Noted — this escalation type doesn't have an automatic reply/resolve action yet.",
     );
     return true;
   }
 
-  const sendResult = await sendGuestMessage(escalation.phone_number, answer);
-  if (!sendResult.ok) {
-    // Do NOT call GCA's resolve endpoint on a send failure — the escalation
-    // stays unresolved so this can be retried by replying again, same
-    // "don't mark done on a failed send" contract as handleNudgeApprove.
-    console.error(
-      `[telegram-router] escalation reply send failed for ${escalation.id}:`,
-      sendResult.error,
-    );
-    await sendMessage("Failed to send to guest — try replying again.");
-    return true;
-  }
-
   const resolveResult = await resolveEscalation(escalation.id, answer);
   if (!resolveResult.ok) {
-    // The guest already has their answer at this point (sendResult.ok was
-    // true above) — this is only GCA's own persist-and-embed step failing,
-    // not a failed delivery, so the owner is told the truth (sent, KB write
-    // failed) rather than the full success message, which would be wrong.
     console.error(
       `[telegram-router] escalation resolve failed for ${escalation.id}:`,
       resolveResult.error,
     );
-    await sendMessage("Sent to guest, but failed to add the answer to the knowledge base.");
+    await sendMessage("Failed to add the answer to the knowledge base — try replying again.");
+    return true;
+  }
+
+  if (!resolveResult.sentToGuest) {
+    // The KB write/resolution succeeded (resolveResult.ok is true), but
+    // GCA's own proactive re-invocation didn't reach the guest — honest
+    // partial-success message rather than the full-success one, which would
+    // be wrong here.
+    await sendMessage(
+      "Added to the knowledge base, but couldn't reach the guest — you may want to follow up directly.",
+    );
     return true;
   }
 
