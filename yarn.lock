@@ -5794,6 +5794,7 @@ __metadata:
     next: "npm:^16.2.1"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
+    tsx: "npm:^4.23.1"
     typescript: "npm:^5.9.3"
     vitest: "npm:^4.1.10"
     zod: "npm:^4.4.3"
