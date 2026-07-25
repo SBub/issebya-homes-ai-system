@@ -66,6 +66,10 @@ import {
 type FunnelStage = "new" | "informed" | "link_sent" | "booked";
 type Platform = "airbnb" | "booking_com" | "direct";
 type StayLengthBucket = "long_term" | "short_term";
+// Derived purely for the Escalations tab's "Resolved" filter chips — see
+// escalationResolutionStatus/the hidden `resolved` column below, same
+// "string-enum bucket derived from a real column" shape as StayLengthBucket.
+type EscalationResolutionStatus = "resolved" | "open";
 
 interface GuestContact {
   id: string;
@@ -178,6 +182,13 @@ interface Escalation {
   // escalateToOwner's own required Zod field.
   reason_category: "unhappy_guest" | "wants_human" | "complaint" | "missing_info" | null;
   created_at: string;
+  // Both populated by GCA's owner-reply flow on Telegram once a human
+  // answers a missing_info (or other) escalation — see GET
+  // /api/escalations' own doc comment (apps/guest-communication-agent). Null
+  // together for every still-open escalation; resolved_at is set the moment
+  // an owner's reply is recorded, answer holds that reply's text.
+  resolved_at: string | null;
+  answer: string | null;
 }
 
 // A dismissible toast-style banner — see notifications state below. Kept
@@ -345,6 +356,22 @@ const ESCALATION_REASON_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "missing_info", label: "Missing info" },
 ];
 
+// "Resolved" filter chips for the Escalations tab — filters against the
+// hidden `resolved` derived column (see escalationResolutionStatus and
+// ESCALATIONS_COLUMN_VISIBILITY below), not resolved_at directly:
+// resolved_at is a nullable timestamp, and filterValueIncludes compares
+// stringified row values against stringified filter values, so filtering on
+// the raw timestamp would require every distinct timestamp to be listed as
+// its own filter option. Bucketing to "resolved"/"open" first keeps this on
+// the same shared filterValueIncludes/toggleColumnFilterValue machinery as
+// every other chip-group filter on this page (reason_category above,
+// stay_length_bucket/platform/funnel_stage on the CRM tab) without touching
+// that shared helper.
+const ESCALATION_RESOLVED_FILTER_OPTIONS: { value: EscalationResolutionStatus; label: string }[] = [
+  { value: "resolved", label: "Resolved" },
+  { value: "open", label: "Open" },
+];
+
 // Badge color per reason_category — chosen to read distinctly at a glance:
 // missing_info is this feature's whole reason for existing (the
 // knowledge-base-gap signal), so it gets its own color (purple) rather than
@@ -413,6 +440,7 @@ const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
 const ESCALATION_COLUMN_WIDTHS: Record<string, number> = {
   phone_number: 150,
   reason_category: 150,
+  resolved_at: 150,
   reason: 400,
   conversation_id: 290,
   created_at: 170,
@@ -517,6 +545,19 @@ function isColumnFilterValueActive(
 // once, outside the component: static, since nothing on this page ever
 // offers to toggle it back on.
 const COLUMN_VISIBILITY = { stay_length_bucket: false };
+
+// Same "hidden derived filter-only column" trick as stay_length_bucket
+// above, for the Escalations tab's own resolved/open bucket (see the hidden
+// `resolved` column in escalationColumns and ESCALATION_RESOLVED_FILTER_OPTIONS).
+const ESCALATIONS_COLUMN_VISIBILITY = { resolved: false };
+
+// Buckets an escalation's nullable resolved_at timestamp into the
+// "resolved"/"open" string enum the hidden `resolved` column filters on —
+// mirrors stayLengthBucket's own "derive a filterable bucket from a real
+// column" shape further below.
+function escalationResolutionStatus(escalation: Escalation): EscalationResolutionStatus {
+  return escalation.resolved_at !== null ? "resolved" : "open";
+}
 
 function formatDate(value: string | null | undefined): string {
   if (!value) {
@@ -2030,19 +2071,61 @@ export default function DashboardPage() {
         },
       },
       {
+        // resolved_at itself isn't filtered on directly (see the hidden
+        // `resolved` column below/its own comment) — this column is purely
+        // the at-a-glance Badge, same green-solid/gray-soft "status Badge"
+        // convention as FUNNEL_STAGE_COLOR elsewhere on this page.
+        accessorKey: "resolved_at",
+        header: "Resolved",
+        cell: (info) => {
+          const resolvedAt = info.getValue() as string | null;
+          return resolvedAt !== null ? (
+            <Badge color="green" variant="solid">
+              Resolved
+            </Badge>
+          ) : (
+            <Badge color="gray" variant="soft">
+              Open
+            </Badge>
+          );
+        },
+      },
+      {
         // Free-text explanation — can run long, so this just lets it wrap
         // within the column's own fixed width (ESCALATION_COLUMN_WIDTHS)
         // rather than truncating or requiring a clamp/expand interaction —
         // simplest option that still keeps every other column's width
         // stable (see CRM_COLUMN_WIDTHS' own comment on why fixed widths
-        // matter here at all).
+        // matter here at all). Also renders the recorded owner answer, when
+        // present, as a second/muted line under the reason itself — same
+        // "secondary text in gray under the primary line" convention as the
+        // conversation panel's "Marked 👍/👎" + comment-in-gray feedback
+        // display further below, rather than a separate column (keeps
+        // unresolved rows, which have no answer, at their existing row
+        // height).
         accessorKey: "reason",
         header: "Reason",
-        cell: (info) => (
-          <Text as="div" size="2" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-            {info.getValue() as string}
-          </Text>
-        ),
+        cell: (info) => {
+          const escalation = info.row.original;
+          return (
+            <Box>
+              <Text as="div" size="2" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                {info.getValue() as string}
+              </Text>
+              {escalation.answer !== null && (
+                <Text
+                  as="div"
+                  size="1"
+                  color="gray"
+                  mt="1"
+                  style={{ whiteSpace: "normal", wordBreak: "break-word" }}
+                >
+                  Answer: {escalation.answer}
+                </Text>
+              )}
+            </Box>
+          );
+        },
       },
       {
         // Raw conversation id, not a link — there's no per-conversation
@@ -2055,6 +2138,16 @@ export default function DashboardPage() {
         header: "Created",
         cell: (info) => formatDate(info.getValue() as string),
       },
+      {
+        // Hidden derived column — see escalationResolutionStatus's own
+        // comment above. Exists only to be filtered via columnFilters (see
+        // ESCALATIONS_COLUMN_VISIBILITY), never rendered as a header/cell —
+        // same trick as the CRM tab's own hidden stay_length_bucket column.
+        id: "resolved",
+        accessorFn: escalationResolutionStatus,
+        enableHiding: true,
+        filterFn: filterValueIncludes<Escalation>,
+      },
     ],
     [],
   );
@@ -2065,6 +2158,7 @@ export default function DashboardPage() {
     state: {
       sorting: escalationsSorting,
       columnFilters: escalationsColumnFilters,
+      columnVisibility: ESCALATIONS_COLUMN_VISIBILITY,
       pagination: escalationsPagination,
     },
     onSortingChange: setEscalationsSorting,
@@ -2944,6 +3038,27 @@ export default function DashboardPage() {
                             : "soft"
                         }
                         onClick={() => toggleEscalationFilterValue("reason_category", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Resolved
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {ESCALATION_RESOLVED_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isEscalationFilterValueActive("resolved", option.value) ? "solid" : "soft"
+                        }
+                        onClick={() => toggleEscalationFilterValue("resolved", option.value)}
                       >
                         {option.label}
                       </Button>
