@@ -29,9 +29,14 @@ interface MessageRow {
  * Guarded by requireApiKey (X-API-Key against
  * GUEST_COMMUNICATION_AGENT_API_KEY), same as POST /api/send.
  *
- * Request body: `{ score: 0 | 1 }` — binary only, no open-ended reason/
- * comment field in this v1 (see this feature's own design notes). 400 if
- * `score` is missing or anything other than exactly `0` or `1`.
+ * Request body: `{ score: 0 | 1, comment?: string }` — score is still
+ * required and binary-only. `comment` is this feature's free-text
+ * enrichment (still tied to the one binary score, no per-dimension
+ * classifiers): optional, but if present it must be a string (400
+ * otherwise). A whitespace-only or empty comment is treated the same as no
+ * comment at all — trimmed and omitted from the LangSmith call entirely,
+ * matching this repo's "only include a field when it has a real value"
+ * convention, rather than ever sending `comment: ""` through.
  *
  * Looks up whatsapp_messages by [messageId] for its own langsmith_run_id:
  *   - 404 (`{ error: "Message not found" }`) if no such message exists.
@@ -43,8 +48,9 @@ interface MessageRow {
  *     comment).
  *
  * Otherwise calls the LangSmith client's own createFeedback(runId, key,
- * { score }) — 500 with the underlying error message on a LangSmith API
- * failure (a real external call that can fail), `{ ok: true }` (200) on
+ * { score }) — or { score, comment } when a real (non-empty, trimmed)
+ * comment was given — 500 with the underlying error message on a LangSmith
+ * API failure (a real external call that can fail), `{ ok: true }` (200) on
  * success.
  */
 export async function POST(
@@ -63,6 +69,12 @@ export async function POST(
   if (score !== 0 && score !== 1) {
     return NextResponse.json({ error: "score must be exactly 0 or 1" }, { status: 400 });
   }
+
+  const rawComment = body?.comment;
+  if (rawComment !== undefined && typeof rawComment !== "string") {
+    return NextResponse.json({ error: "comment must be a string" }, { status: 400 });
+  }
+  const comment = typeof rawComment === "string" ? rawComment.trim() : "";
 
   const supabase = createAdminClient();
   const { data: message, error: selectError } = await supabase
@@ -88,7 +100,11 @@ export async function POST(
   }
 
   try {
-    await langsmithClient.createFeedback(langsmithRunId, FEEDBACK_KEY, { score });
+    await langsmithClient.createFeedback(
+      langsmithRunId,
+      FEEDBACK_KEY,
+      comment ? { score, comment } : { score },
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

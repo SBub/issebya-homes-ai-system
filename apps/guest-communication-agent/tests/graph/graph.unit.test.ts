@@ -189,6 +189,10 @@ describe("agentNode step cap", () => {
       expect.objectContaining({
         conversation_id: "convo-cap-test",
         phone_number: "+351900000099",
+        // Deterministic safety-net escalation, not a model tool call — see
+        // agent.ts's own comment on why missing_info is the closest fit of
+        // the four categories for this path.
+        reason_category: "missing_info",
       }),
     );
     expect(sendTelegramNotification).toHaveBeenCalledTimes(1);

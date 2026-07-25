@@ -149,6 +149,31 @@ interface Campaign {
   has_run: boolean;
 }
 
+// Escalations tab — a browsable, filterable log over escalations rows
+// created by apps/guest-communication-agent's own escalateToOwner tool /
+// performEscalation (see that app's src/graph/tools.ts). Deliberately
+// separate from the existing eval-feedback feature (the conversation
+// history panel's thumbs-up/down controls further below): that feature
+// judges reply *quality* after the fact; this tab instead shows *why* the
+// agent handed a conversation off to the owner in the first place —
+// specifically, whether it was because of a real property-knowledge-base
+// gap (reason_category: "missing_info") as opposed to an unhappy guest, a
+// request for a human, or an unrelated complaint. No join to guest_contacts
+// here (see GET /api/escalations's own doc comment) — just the raw phone
+// number, and no "mark as resolved" workflow, just a log.
+interface Escalation {
+  id: string;
+  conversation_id: string;
+  phone_number: string;
+  reason: string;
+  // Nullable: the one escalations row that predates this column (see
+  // supabase/migrations/20260725100000_add_reason_category_to_escalations.sql)
+  // has no category — every row created since always has one, enforced by
+  // escalateToOwner's own required Zod field.
+  reason_category: "unhappy_guest" | "wants_human" | "complaint" | "missing_info" | null;
+  created_at: string;
+}
+
 // A dismissible toast-style banner — see notifications state below. Kept
 // deliberately tiny (message + a success/error tone) rather than a generic
 // severity enum, since today's only producer (runCampaignNow) only ever has
@@ -302,6 +327,44 @@ const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "false", label: "Not run" },
 ];
 
+// Escalations tab's own "Reason" chip group — human-readable labels for
+// Escalation.reason_category's four enum values (see that interface's own
+// comment for why it's nullable). No option for the null/uncategorized case
+// — there's exactly one such row today (predating the column entirely) and
+// it isn't worth a permanent fifth filter chip for that.
+const ESCALATION_REASON_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "unhappy_guest", label: "Unhappy guest" },
+  { value: "wants_human", label: "Wants human" },
+  { value: "complaint", label: "Complaint" },
+  { value: "missing_info", label: "Missing info" },
+];
+
+// Badge color per reason_category — chosen to read distinctly at a glance:
+// missing_info is this feature's whole reason for existing (the
+// knowledge-base-gap signal), so it gets its own color (purple) rather than
+// blending in with the other three. Uncategorized (null, the one
+// pre-existing row) falls back to gray in the cell renderer below rather
+// than needing an entry here.
+const ESCALATION_REASON_CATEGORY_COLOR: Record<
+  "unhappy_guest" | "wants_human" | "complaint" | "missing_info",
+  "orange" | "blue" | "red" | "purple"
+> = {
+  unhappy_guest: "orange",
+  wants_human: "blue",
+  complaint: "red",
+  missing_info: "purple",
+};
+
+const ESCALATION_REASON_CATEGORY_LABEL: Record<
+  "unhappy_guest" | "wants_human" | "complaint" | "missing_info",
+  string
+> = {
+  unhappy_guest: "Unhappy guest",
+  wants_human: "Wants human",
+  complaint: "Complaint",
+  missing_info: "Missing info",
+};
+
 // Explicit per-column pixel widths, applied alongside `tableLayout: "fixed"`
 // on each table's Table.Root below. Radix's Table.Root otherwise renders a
 // plain HTML <table> with the browser default `table-layout: auto`, which
@@ -339,6 +402,14 @@ const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
   offer: 184,
   message_template: 327,
   actions: 124,
+};
+
+const ESCALATION_COLUMN_WIDTHS: Record<string, number> = {
+  phone_number: 150,
+  reason_category: 150,
+  reason: 400,
+  conversation_id: 290,
+  created_at: 170,
 };
 
 // Shared day-diff math, used by stayLengthBucket below and the "Nights"
@@ -540,21 +611,36 @@ export default function DashboardPage() {
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [conversationsError, setConversationsError] = useState<string | null>(null);
-  // Per-message "flag after" eval-feedback state (thumbs up/down on a past
-  // assistant reply, POST /api/messages/[messageId]/feedback) — mirrors
-  // guestToggleErrors/guestTogglingIds' own "Set of in-flight ids + Record
-  // of per-id errors" shape, just keyed by message id. messageFeedbackMarked
-  // is this feature's own addition: once a message's feedback is
-  // successfully recorded, its score is kept here so the two thumbs buttons
-  // can be replaced with a "Marked" indicator — deliberately client-side/
+  // Per-message "flag after" eval-feedback state (score + optional free-text
+  // comment on a past assistant reply, POST
+  // /api/messages/[messageId]/feedback) — mirrors guestToggleErrors/
+  // guestTogglingIds' own "Set of in-flight ids + Record of per-id errors"
+  // shape, just keyed by message id. messageFeedbackMarked is this feature's
+  // own addition: once a message's feedback is successfully recorded, its
+  // score + comment are kept here so the "Add feedback" affordance can be
+  // replaced with a "Marked" indicator — deliberately client-side/
   // session-only (per this feature's own design), not re-derived from a
   // server re-fetch, so it resets on reload same as any other unpersisted
   // UI state.
+  //
+  // messageFeedbackDraft tracks which message currently has its feedback box
+  // open plus the in-progress score/comment for it — comment is the primary,
+  // focused control in this box (a TextArea), with score picked via a
+  // secondary pair of Good/Bad pills; score starts unset (`null`) since
+  // there's no default good/bad implied by simply opening the box, and
+  // Submit stays disabled until one is picked (the endpoint's own score
+  // field is still required, never optional). Keyed by message id, entry
+  // absent entirely when that message's box is closed.
   const [messageFeedbackSubmittingIds, setMessageFeedbackSubmittingIds] = useState<Set<string>>(
     new Set(),
   );
   const [messageFeedbackErrors, setMessageFeedbackErrors] = useState<Record<string, string>>({});
-  const [messageFeedbackMarked, setMessageFeedbackMarked] = useState<Record<string, 0 | 1>>({});
+  const [messageFeedbackMarked, setMessageFeedbackMarked] = useState<
+    Record<string, { score: 0 | 1; comment: string }>
+  >({});
+  const [messageFeedbackDraft, setMessageFeedbackDraft] = useState<
+    Record<string, { score: 0 | 1 | null; comment: string } | undefined>
+  >({});
   // Mirrors selectedGuestId synchronously, same reason as editingGuestIdRef
   // below. Guards a real race: if a guest is selected (kicking off a
   // conversation-history fetch), then a different guest is selected before
@@ -569,6 +655,22 @@ export default function DashboardPage() {
   // option values for that dimension (see toggleFilterValue and
   // filterValueIncludes above).
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Escalations tab state — separate from both the CRM tab's guest state and
+  // the Campaigns tab's own state above, sharing only `apiKey`. Explicit
+  // "Load escalations" button (not auto-loaded like Campaigns) — there's no
+  // established reason to auto-load this tab, and the explicit-button
+  // pattern (see loadGuests below) is this file's original/more common
+  // convention.
+  const [escalations, setEscalations] = useState<Escalation[]>([]);
+  const [escalationsLoading, setEscalationsLoading] = useState(false);
+  const [escalationsError, setEscalationsError] = useState<string | null>(null);
+  const [hasLoadedEscalations, setHasLoadedEscalations] = useState(false);
+  // Own sorting/filter state for the Escalations tab's table — mirrors
+  // campaignsSorting/campaignsColumnFilters' own "separate instance per tab"
+  // pattern above.
+  const [escalationsSorting, setEscalationsSorting] = useState<SortingState>([]);
+  const [escalationsColumnFilters, setEscalationsColumnFilters] = useState<ColumnFiltersState>([]);
 
   // Inline phone edit — only one cell can be in edit mode at a time, tracked
   // by guest id rather than per-row state.
@@ -606,6 +708,32 @@ export default function DashboardPage() {
       setGuestsError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setGuestsLoading(false);
+    }
+  }
+
+  // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
+  // against GET /api/escalations (CRM's own proxy to GCA's identically-named
+  // endpoint) instead — same explicit-button convention as loadGuests, not
+  // auto-fetched like loadCampaigns below.
+  async function loadEscalations() {
+    setEscalationsLoading(true);
+    setEscalationsError(null);
+    try {
+      const res = await fetch("/api/escalations", { headers: { "X-API-Key": apiKey } });
+      const json = await res.json();
+      if (!res.ok) {
+        setEscalationsError(
+          typeof json.error === "string" ? json.error : "Failed to load escalations",
+        );
+        setEscalations([]);
+        return;
+      }
+      setEscalations((json.escalations ?? []) as Escalation[]);
+      setHasLoadedEscalations(true);
+    } catch (err) {
+      setEscalationsError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setEscalationsLoading(false);
     }
   }
 
@@ -1019,16 +1147,62 @@ export default function DashboardPage() {
     [apiKey],
   );
 
-  // Records the owner's retrospective good/bad call on one past assistant
-  // reply — POST /api/messages/[messageId]/feedback (CRM's own proxy to
-  // GCA's identically-shaped endpoint). Confirmation-based, not optimistic
-  // (mirrors toggleCampaignEnabled, not toggleGuestEnabled): the "Marked"
-  // indicator only replaces the two thumbs buttons once the request
-  // actually succeeds, since a failed flag attempt leaving the buttons in
-  // place (so the owner can just retry) is more useful here than an
-  // optimistic mark that silently reverts.
+  // Opens the feedback box for one message — comment-first (an empty
+  // TextArea is the star of this box), score unset until the owner picks a
+  // Good/Bad pill. Clears any stale error from a prior failed attempt on
+  // this same message, same "clear before retrying" convention as
+  // submitMessageFeedback below.
+  const openMessageFeedbackDraft = useCallback((messageId: string) => {
+    setMessageFeedbackDraft((prev) => ({ ...prev, [messageId]: { score: null, comment: "" } }));
+    setMessageFeedbackErrors((prev) => {
+      const { [messageId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  const closeMessageFeedbackDraft = useCallback((messageId: string) => {
+    setMessageFeedbackDraft((prev) => {
+      const { [messageId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  const setMessageFeedbackDraftScore = useCallback((messageId: string, score: 0 | 1) => {
+    setMessageFeedbackDraft((prev) => ({
+      ...prev,
+      [messageId]: { score, comment: prev[messageId]?.comment ?? "" },
+    }));
+  }, []);
+
+  const setMessageFeedbackDraftComment = useCallback((messageId: string, comment: string) => {
+    setMessageFeedbackDraft((prev) => ({
+      ...prev,
+      [messageId]: { score: prev[messageId]?.score ?? null, comment },
+    }));
+  }, []);
+
+  // Records the owner's retrospective good/bad call (plus optional free-text
+  // comment) on one past assistant reply — POST
+  // /api/messages/[messageId]/feedback (CRM's own proxy to GCA's
+  // identically-shaped endpoint). Reads score/comment off the message's own
+  // open draft rather than taking them as params, since the single Submit
+  // button in the feedback box is the only caller. Confirmation-based, not
+  // optimistic (mirrors toggleCampaignEnabled, not toggleGuestEnabled): the
+  // "Marked" indicator only replaces the feedback box once the request
+  // actually succeeds, since a failed attempt leaving the box in place (so
+  // the owner can just retry) is more useful here than an optimistic mark
+  // that silently reverts. Comment is trimmed and only sent when non-empty
+  // — same "only include a field when it has a real value" convention as
+  // the GCA endpoint's own validation.
   const submitMessageFeedback = useCallback(
-    async (messageId: string, score: 0 | 1) => {
+    async (messageId: string) => {
+      const draft = messageFeedbackDraft[messageId];
+      if (!draft || draft.score === null) {
+        return;
+      }
+      const { score } = draft;
+      const comment = draft.comment.trim();
+
       setMessageFeedbackSubmittingIds((prev) => new Set(prev).add(messageId));
       setMessageFeedbackErrors((prev) => {
         const { [messageId]: _removed, ...rest } = prev;
@@ -1038,7 +1212,7 @@ export default function DashboardPage() {
         const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}/feedback`, {
           method: "POST",
           headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ score }),
+          body: JSON.stringify(comment ? { score, comment } : { score }),
         });
         const json = await res.json();
         if (!res.ok) {
@@ -1048,7 +1222,11 @@ export default function DashboardPage() {
           }));
           return;
         }
-        setMessageFeedbackMarked((prev) => ({ ...prev, [messageId]: score }));
+        setMessageFeedbackMarked((prev) => ({ ...prev, [messageId]: { score, comment } }));
+        setMessageFeedbackDraft((prev) => {
+          const { [messageId]: _removed, ...rest } = prev;
+          return rest;
+        });
       } catch (err) {
         setMessageFeedbackErrors((prev) => ({
           ...prev,
@@ -1062,7 +1240,7 @@ export default function DashboardPage() {
         });
       }
     },
-    [apiKey],
+    [apiKey, messageFeedbackDraft],
   );
 
   async function selectGuest(guest: GuestContact) {
@@ -1072,6 +1250,7 @@ export default function DashboardPage() {
     setConversationsError(null);
     setMessageFeedbackErrors({});
     setMessageFeedbackMarked({});
+    setMessageFeedbackDraft({});
     if (!guest.phone) {
       // No phone yet — nothing to fetch conversation history for. The
       // detail panel itself still renders (see render logic below), it just
@@ -1093,6 +1272,7 @@ export default function DashboardPage() {
     setConversationsLoading(false);
     setMessageFeedbackErrors({});
     setMessageFeedbackMarked({});
+    setMessageFeedbackDraft({});
   }, []);
 
   const startEditingPhone = useCallback((guest: GuestContact, event: MouseEvent) => {
@@ -1176,6 +1356,22 @@ export default function DashboardPage() {
     (columnId: string, value: string) =>
       isColumnFilterValueActive(campaignsColumnFilters, columnId, value),
     [campaignsColumnFilters],
+  );
+
+  // Escalations tab's own filter-chip toggling (Reason), against
+  // escalationsColumnFilters instead of either tab's own filters above —
+  // same shared helpers, separate state, same "instantiate for a new TData"
+  // convention as filterValueIncludes<Escalation> below.
+  const toggleEscalationFilterValue = useCallback(
+    (columnId: string, value: string) =>
+      toggleColumnFilterValue(setEscalationsColumnFilters, columnId, value),
+    [],
+  );
+
+  const isEscalationFilterValueActive = useCallback(
+    (columnId: string, value: string) =>
+      isColumnFilterValueActive(escalationsColumnFilters, columnId, value),
+    [escalationsColumnFilters],
   );
 
   const columns = useMemo<ColumnDef<GuestContact>[]>(
@@ -1598,6 +1794,75 @@ export default function DashboardPage() {
     getFilteredRowModel: getFilteredRowModel(),
   });
 
+  // Escalations tab's own columns — mirrors the CRM/Campaigns tabs' own
+  // `columns`/`campaignColumns` useMemo above in shape/conventions, over
+  // Escalation rows. No per-row action/edit affordances here (this is a
+  // read-only log, unlike the other two tabs), so every column is a plain
+  // accessor + cell renderer.
+  const escalationColumns = useMemo<ColumnDef<Escalation>[]>(
+    () => [
+      {
+        accessorKey: "phone_number",
+        header: "Phone",
+      },
+      {
+        accessorKey: "reason_category",
+        header: "Reason category",
+        filterFn: filterValueIncludes<Escalation>,
+        cell: (info) => {
+          const category = info.getValue() as Escalation["reason_category"];
+          if (category === null) {
+            return <Badge color="gray">Uncategorized</Badge>;
+          }
+          return (
+            <Badge color={ESCALATION_REASON_CATEGORY_COLOR[category]}>
+              {ESCALATION_REASON_CATEGORY_LABEL[category]}
+            </Badge>
+          );
+        },
+      },
+      {
+        // Free-text explanation — can run long, so this just lets it wrap
+        // within the column's own fixed width (ESCALATION_COLUMN_WIDTHS)
+        // rather than truncating or requiring a clamp/expand interaction —
+        // simplest option that still keeps every other column's width
+        // stable (see CRM_COLUMN_WIDTHS' own comment on why fixed widths
+        // matter here at all).
+        accessorKey: "reason",
+        header: "Reason",
+        cell: (info) => (
+          <Text as="div" size="2" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+            {info.getValue() as string}
+          </Text>
+        ),
+      },
+      {
+        // Raw conversation id, not a link — there's no per-conversation
+        // detail view in this app to deep-link into yet.
+        accessorKey: "conversation_id",
+        header: "Conversation",
+      },
+      {
+        accessorKey: "created_at",
+        header: "Created",
+        cell: (info) => formatDate(info.getValue() as string),
+      },
+    ],
+    [],
+  );
+
+  const escalationsTable = useReactTable({
+    data: escalations,
+    columns: escalationColumns,
+    state: { sorting: escalationsSorting, columnFilters: escalationsColumnFilters },
+    onSortingChange: setEscalationsSorting,
+    onColumnFiltersChange: setEscalationsColumnFilters,
+    getRowId: (row) => row.id,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+  });
+
   return (
     <Box p="5">
       {/* Fixed-position toast stack — rendered here, outside Tabs.Root, so
@@ -1668,6 +1933,7 @@ export default function DashboardPage() {
         <Tabs.List mb="4">
           <Tabs.Trigger value="crm">CRM</Tabs.Trigger>
           <Tabs.Trigger value="campaigns">Campaigns</Tabs.Trigger>
+          <Tabs.Trigger value="escalations">Escalations</Tabs.Trigger>
         </Tabs.List>
 
         <Tabs.Content value="crm">
@@ -1942,30 +2208,89 @@ export default function DashboardPage() {
                             {message.role === "assistant" && message.langsmith_run_id && (
                               <Box mt="1">
                                 {messageFeedbackMarked[message.id] !== undefined ? (
-                                  <Text as="div" size="1" color="gray">
-                                    Marked {messageFeedbackMarked[message.id] === 1 ? "👍" : "👎"}
-                                  </Text>
-                                ) : (
-                                  <Flex gap="2" align="center">
-                                    <Button
+                                  <Box>
+                                    <Text as="div" size="1" color="gray">
+                                      Marked{" "}
+                                      {messageFeedbackMarked[message.id].score === 1 ? "👍" : "👎"}
+                                    </Text>
+                                    {messageFeedbackMarked[message.id].comment && (
+                                      <Text as="div" size="1" color="gray">
+                                        {messageFeedbackMarked[message.id].comment}
+                                      </Text>
+                                    )}
+                                  </Box>
+                                ) : messageFeedbackDraft[message.id] !== undefined ? (
+                                  <Flex direction="column" gap="1" style={{ maxWidth: 320 }}>
+                                    <TextArea
                                       size="1"
-                                      variant="ghost"
-                                      color="gray"
+                                      placeholder="What was good or bad about this reply? (optional)"
+                                      value={messageFeedbackDraft[message.id]?.comment ?? ""}
+                                      onChange={(event) =>
+                                        setMessageFeedbackDraftComment(
+                                          message.id,
+                                          event.target.value,
+                                        )
+                                      }
                                       disabled={messageFeedbackSubmittingIds.has(message.id)}
-                                      onClick={() => void submitMessageFeedback(message.id, 1)}
-                                    >
-                                      👍
-                                    </Button>
-                                    <Button
-                                      size="1"
-                                      variant="ghost"
-                                      color="gray"
-                                      disabled={messageFeedbackSubmittingIds.has(message.id)}
-                                      onClick={() => void submitMessageFeedback(message.id, 0)}
-                                    >
-                                      👎
-                                    </Button>
+                                    />
+                                    <Flex gap="2" align="center">
+                                      <Button
+                                        size="1"
+                                        variant={
+                                          messageFeedbackDraft[message.id]?.score === 1
+                                            ? "solid"
+                                            : "soft"
+                                        }
+                                        color="gray"
+                                        disabled={messageFeedbackSubmittingIds.has(message.id)}
+                                        onClick={() => setMessageFeedbackDraftScore(message.id, 1)}
+                                      >
+                                        👍 Good
+                                      </Button>
+                                      <Button
+                                        size="1"
+                                        variant={
+                                          messageFeedbackDraft[message.id]?.score === 0
+                                            ? "solid"
+                                            : "soft"
+                                        }
+                                        color="gray"
+                                        disabled={messageFeedbackSubmittingIds.has(message.id)}
+                                        onClick={() => setMessageFeedbackDraftScore(message.id, 0)}
+                                      >
+                                        👎 Bad
+                                      </Button>
+                                      <Button
+                                        size="1"
+                                        disabled={
+                                          messageFeedbackDraft[message.id]?.score === null ||
+                                          messageFeedbackDraft[message.id]?.score === undefined ||
+                                          messageFeedbackSubmittingIds.has(message.id)
+                                        }
+                                        onClick={() => void submitMessageFeedback(message.id)}
+                                      >
+                                        Submit
+                                      </Button>
+                                      <Button
+                                        size="1"
+                                        variant="ghost"
+                                        color="gray"
+                                        disabled={messageFeedbackSubmittingIds.has(message.id)}
+                                        onClick={() => closeMessageFeedbackDraft(message.id)}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    </Flex>
                                   </Flex>
+                                ) : (
+                                  <Button
+                                    size="1"
+                                    variant="ghost"
+                                    color="gray"
+                                    onClick={() => openMessageFeedbackDraft(message.id)}
+                                  >
+                                    Add feedback
+                                  </Button>
                                 )}
                                 {messageFeedbackErrors[message.id] && (
                                   <Text as="div" size="1" color="red">
@@ -2340,6 +2665,107 @@ export default function DashboardPage() {
                 ))}
               </Table.Body>
             </Table.Root>
+          )}
+        </Tabs.Content>
+
+        <Tabs.Content value="escalations">
+          <Flex gap="3" align="end" mb="4">
+            <Button onClick={() => void loadEscalations()} disabled={escalationsLoading || !apiKey}>
+              {escalationsLoading ? "Loading…" : "Load escalations"}
+            </Button>
+          </Flex>
+
+          {escalationsError && (
+            <Text as="p" color="red" mb="3">
+              {escalationsError}
+            </Text>
+          )}
+
+          {!hasLoadedEscalations && !escalationsLoading && (
+            <Text color="gray">Enter the CRM API key above and click "Load escalations".</Text>
+          )}
+          {hasLoadedEscalations && escalations.length === 0 && (
+            <Text color="gray">No escalations yet.</Text>
+          )}
+
+          {escalations.length > 0 && (
+            <>
+              <Flex wrap="wrap" gap="7" align="start" mb="4">
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Reason
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {ESCALATION_REASON_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={
+                          isEscalationFilterValueActive("reason_category", option.value)
+                            ? "solid"
+                            : "soft"
+                        }
+                        onClick={() => toggleEscalationFilterValue("reason_category", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+              </Flex>
+
+              <Text as="p" size="2" color="gray" mb="2">
+                Showing {escalationsTable.getFilteredRowModel().rows.length} of {escalations.length}{" "}
+                escalations
+              </Text>
+
+              <Table.Root variant="surface" style={{ tableLayout: "fixed" }}>
+                <Table.Header>
+                  {escalationsTable.getHeaderGroups().map((headerGroup) => (
+                    <Table.Row key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => {
+                        const sortState = header.column.getIsSorted();
+                        return (
+                          <Table.ColumnHeaderCell
+                            key={header.id}
+                            onClick={header.column.getToggleSortingHandler()}
+                            style={{
+                              cursor: "pointer",
+                              userSelect: "none",
+                              width: ESCALATION_COLUMN_WIDTHS[header.column.id],
+                            }}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            <span
+                              style={{
+                                display: "inline-block",
+                                width: "1em",
+                                textAlign: "center",
+                              }}
+                            >
+                              {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
+                            </span>
+                          </Table.ColumnHeaderCell>
+                        );
+                      })}
+                    </Table.Row>
+                  ))}
+                </Table.Header>
+                <Table.Body>
+                  {escalationsTable.getRowModel().rows.map((row) => (
+                    <Table.Row key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      ))}
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            </>
           )}
         </Tabs.Content>
       </Tabs.Root>

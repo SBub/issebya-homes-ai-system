@@ -133,6 +133,15 @@ export async function agentNode(
       conversationId,
       phone,
       reason: `Agent reasoning loop exceeded ${MAX_AGENT_STEPS} rounds without reaching a final answer.`,
+      // Not one of the four guest-driven triggers escalateToOwner's schema
+      // documents (the guest didn't do anything in particular here) — this
+      // is a deterministic safety net, not a model judgment call. Of the
+      // four categories, missing_info is the closest fit: the agent is
+      // fundamentally failing to land on a real answer for the guest's
+      // question, the same shape as answerPropertyQuestion coming up empty,
+      // just via a different failure mode (looping instead of an empty
+      // result).
+      reasonCategory: "missing_info",
     });
 
     return {
@@ -192,6 +201,10 @@ export async function agentNode(
       phone,
       reason:
         "Model returned an empty reply twice in a row (a known reasoning-model reliability issue, see agent-node-behavior.md).",
+      // Same reasoning as the step-cap safety net above: deterministic, not
+      // guest-driven, and missing_info is the closest of the four categories
+      // — the model failed to produce a real answer for the guest.
+      reasonCategory: "missing_info",
     });
 
     return {

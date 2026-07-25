@@ -74,6 +74,16 @@ describe("POST /api/messages/[messageId]/feedback", () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when comment is present but not a string", async () => {
+    const res = await POST(makeRequest({ score: 1, comment: 42 }), makeParams("msg-1"));
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json).toEqual({ error: "comment must be a string" });
+    expect(fromMock).not.toHaveBeenCalled();
+    expect(createFeedbackMock).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when no message matches messageId", async () => {
     maybeSingleMock.mockResolvedValueOnce({ data: null, error: null });
 
@@ -105,6 +115,44 @@ describe("POST /api/messages/[messageId]/feedback", () => {
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
+    expect(createFeedbackMock).toHaveBeenCalledWith("run-abc", "human_approval", { score: 1 });
+  });
+
+  it("includes comment in the LangSmith call when a non-empty comment is provided", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: { langsmith_run_id: "run-abc" }, error: null });
+    createFeedbackMock.mockResolvedValueOnce({});
+
+    const res = await POST(
+      makeRequest({ score: 0, comment: "gave wrong AC info" }),
+      makeParams("msg-1"),
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ ok: true });
+    expect(createFeedbackMock).toHaveBeenCalledWith("run-abc", "human_approval", {
+      score: 0,
+      comment: "gave wrong AC info",
+    });
+  });
+
+  it("omits comment from the LangSmith call when comment is absent", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: { langsmith_run_id: "run-abc" }, error: null });
+    createFeedbackMock.mockResolvedValueOnce({});
+
+    const res = await POST(makeRequest({ score: 1 }), makeParams("msg-1"));
+
+    expect(res.status).toBe(200);
+    expect(createFeedbackMock).toHaveBeenCalledWith("run-abc", "human_approval", { score: 1 });
+  });
+
+  it("omits comment from the LangSmith call when comment is whitespace-only", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: { langsmith_run_id: "run-abc" }, error: null });
+    createFeedbackMock.mockResolvedValueOnce({});
+
+    const res = await POST(makeRequest({ score: 1, comment: "   \n\t  " }), makeParams("msg-1"));
+
+    expect(res.status).toBe(200);
     expect(createFeedbackMock).toHaveBeenCalledWith("run-abc", "human_approval", { score: 1 });
   });
 

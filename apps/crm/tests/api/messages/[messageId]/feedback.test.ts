@@ -58,6 +58,21 @@ describe("POST /api/messages/[messageId]/feedback", () => {
     expect(init.body).toBe(JSON.stringify({ score: 1 }));
   });
 
+  it("forwards additional body fields (e.g. comment) to GCA unchanged", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const res = await POST(
+      makeRequest({ score: 0, comment: "gave wrong AC info" }),
+      makeParams("msg-1"),
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ ok: true });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(JSON.stringify({ score: 0, comment: "gave wrong AC info" }));
+  });
+
   it("returns GCA's response body and status as-is on a non-2xx response", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(

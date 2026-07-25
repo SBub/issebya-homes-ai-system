@@ -1,0 +1,37 @@
+-- Adds escalations.reason_category: a structured classification of *why* an
+-- escalation happened, alongside the existing free-text `reason` column.
+-- Backs the new categorized-escalation-tracking feature (GET
+-- /api/escalations in both apps/guest-communication-agent and apps/crm, plus
+-- the CRM dashboard's new "Escalations" tab) — deliberately separate from
+-- the existing eval-feedback feature (POST
+-- /api/messages/[messageId]/feedback), which judges reply *quality*. This
+-- instead classifies escalations by *cause*, so the owner can see how many
+-- were driven by a real property-knowledge-base gap (missing_info) as
+-- opposed to an unhappy guest, a request for a human, or an unrelated
+-- complaint.
+--
+-- escalateToOwner's own tool description already named four real triggers in
+-- one free-text `reason` field ("guest is upset, asks for a human, has a
+-- complaint, or asks something you cannot answer") — this column makes that
+-- same four-way distinction structured instead of buried in prose, mirroring
+-- them 1:1 in the check constraint below.
+--
+-- Nullable, no default — deliberately, and unlike e.g.
+-- guest_contacts.platform defaulting to 'direct' (see
+-- supabase/migrations/20260724100000_add_platform_to_guest_contacts.sql,
+-- where 'direct' was a genuinely reasonable guess for pre-existing rows),
+-- there is no reasonable default for this column. Checked local dev data
+-- first: exactly one escalations row exists today, a real "guest asked two
+-- questions I can't answer" escalation from before this column existed. Its
+-- free-text reason reads like a missing_info case to a human, but nothing in
+-- a SQL migration can reliably classify historical free text into one of
+-- four categories without guessing — and a wrong guess baked permanently
+-- into the data is worse than an honest, visible null. Leaving it null is a
+-- truthful "not categorized (predates this column)" rather than a fabricated
+-- category. Every escalation created from now on always populates this
+-- (escalateToOwner's Zod schema requires reason_category — see
+-- apps/guest-communication-agent/src/graph/tools.ts's escalateToOwner and
+-- performEscalation), so no further backfill is needed going forward.
+alter table public.escalations
+  add column reason_category text
+  check (reason_category in ('unhappy_guest', 'wants_human', 'complaint', 'missing_info'));

@@ -185,6 +185,22 @@ const answerPropertyQuestion = tool(
   },
 );
 
+// Structured classification of *why* an escalation happened, alongside the
+// existing free-text `reason` string — see
+// supabase/migrations/20260725100000_add_reason_category_to_escalations.sql
+// for the full rationale. Kept as its own named schema (rather than inlined
+// into escalateToOwner's schema object below) so the same enum/type can be
+// reused by nodes/agent.ts's own deterministic performEscalation call sites
+// (the step-cap and empty-reply safety nets), which never go through this
+// tool's schema validation at all.
+const escalationReasonCategorySchema = z.enum([
+  "unhappy_guest",
+  "wants_human",
+  "complaint",
+  "missing_info",
+]);
+export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySchema>;
+
 // The escalations DB insert is portable (createAdminClient). The Telegram
 // notification is a scoped duplicate of the source's own
 // apps/website/src/lib/telegram.ts — see ../lib/telegram.ts.
@@ -199,13 +215,15 @@ export async function performEscalation(params: {
   conversationId: string;
   phone: string;
   reason: string;
+  reasonCategory: EscalationReasonCategory;
 }): Promise<void> {
-  const { conversationId, phone, reason } = params;
+  const { conversationId, phone, reason, reasonCategory } = params;
   const supabase = createAdminClient();
   await supabase.from("escalations").insert({
     conversation_id: conversationId,
     phone_number: phone,
     reason,
+    reason_category: reasonCategory,
   });
   // "View conversation: <dashboard link>" removed deliberately — there is no
   // apps/crm-dashboard in this repo yet (that only exists in
@@ -217,9 +235,12 @@ export async function performEscalation(params: {
 }
 
 const escalateToOwner = tool(
-  async ({ reason }: { reason: string }, config: RunnableConfig) => {
+  async (
+    { reason, reason_category }: { reason: string; reason_category: EscalationReasonCategory },
+    config: RunnableConfig,
+  ) => {
     const { conversationId, phone } = getConfigurable(config);
-    await performEscalation({ conversationId, phone, reason });
+    await performEscalation({ conversationId, phone, reason, reasonCategory: reason_category });
     return {
       escalated: true,
       message: "The owner has been notified and will be in touch shortly.",
@@ -228,9 +249,12 @@ const escalateToOwner = tool(
   {
     name: "escalateToOwner",
     description:
-      "Alert the owner and hand off the conversation. Use when the guest is upset, asks for a human, has a complaint, or asks something you cannot answer.",
+      "Alert the owner and hand off the conversation. Use when the guest is upset, asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those four this is via reason_category.",
     schema: z.object({
       reason: z.string().describe("Brief description of why escalation is needed"),
+      reason_category: escalationReasonCategorySchema.describe(
+        "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use unhappy_guest/wants_human/complaint for everything else.",
+      ),
     }),
   },
 );
