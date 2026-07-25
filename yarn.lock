@@ -6080,6 +6080,7 @@ __metadata:
     "@biomejs/biome": "npm:^2.5.4"
     knip: "npm:^6.27.0"
     lefthook: "npm:^2.1.10"
+    tsx: "npm:^4.23.1"
     turbo: "npm:^2.10.5"
   languageName: unknown
   linkType: soft
