@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Same "mock the module boundary" approach as tests/graph/graph.unit.test.ts's
-// own createAdminClient/telegram mocks — this file isolates performEscalation
-// itself rather than driving it indirectly through agentNode's step-cap
-// branch.
+// own createAdminClient/telegram-router mocks — this file isolates
+// performEscalation itself rather than driving it indirectly through
+// agentNode's step-cap branch.
 const mockSingle = vi.fn();
 const mockSelect = vi.fn(() => ({ single: mockSingle }));
 const mockInsert = vi.fn(() => ({ select: mockSelect }));
@@ -17,11 +17,6 @@ vi.mock("@/lib/supabase.js", () => ({
   // (its own singleton pattern) — must be present here too, same reasoning
   // as graph.unit.test.ts's own supabase mock.
   createClient: vi.fn(),
-}));
-
-const sendTelegramNotificationMock = vi.fn();
-vi.mock("@/lib/telegram.js", () => ({
-  sendTelegramNotification: sendTelegramNotificationMock,
 }));
 
 const sendEscalationNudgeMock = vi.fn();
@@ -39,7 +34,6 @@ describe("performEscalation", () => {
     mockEq.mockReset();
     mockUpdate.mockClear();
     mockFrom.mockClear();
-    sendTelegramNotificationMock.mockReset();
     sendEscalationNudgeMock.mockReset();
   });
 
@@ -47,9 +41,20 @@ describe("performEscalation", () => {
     vi.clearAllMocks();
   });
 
-  for (const reasonCategory of ["unhappy_guest", "wants_human", "complaint"] as const) {
-    it(`sends the raw Telegram notification unchanged for ${reasonCategory}`, async () => {
-      mockInsert.mockReturnValueOnce({ select: mockSelect });
+  // All four categories now share the exact same insert -> nudge ->
+  // store-telegram_message_id path — see @/graph/tools.ts's performEscalation
+  // doc comment for why the old two-branch shape (missing_info vs. the
+  // other three via a raw sendTelegramNotification bypass) was unified.
+  for (const reasonCategory of [
+    "unhappy_guest",
+    "wants_human",
+    "complaint",
+    "missing_info",
+  ] as const) {
+    it(`inserts, nudges via telegram-router, and stores telegram_message_id for ${reasonCategory}`, async () => {
+      mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+      mockEq.mockResolvedValueOnce({ error: null });
+      sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
 
       await performEscalation({
         conversationId: "convo-1",
@@ -65,45 +70,18 @@ describe("performEscalation", () => {
         reason: "Guest is upset about noise",
         reason_category: reasonCategory,
       });
-      expect(sendTelegramNotificationMock).toHaveBeenCalledWith(
-        "Guest +351920742845 needs you: Guest is upset about noise\n\nConversation: convo-1",
-      );
-      // The non-missing_info path never selects the row back or touches
-      // telegram-router — no correlation id is ever needed for these three.
-      expect(mockSelect).not.toHaveBeenCalled();
-      expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
-      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockSelect).toHaveBeenCalledWith("id");
+      expect(sendEscalationNudgeMock).toHaveBeenCalledWith({
+        escalationId: "esc-1",
+        phone: "+351920742845",
+        reason: "Guest is upset about noise",
+        reasonCategory,
+        conversationId: "convo-1",
+      });
+      expect(mockUpdate).toHaveBeenCalledWith({ telegram_message_id: 777 });
+      expect(mockEq).toHaveBeenCalledWith("id", "esc-1");
     });
   }
-
-  it("inserts, nudges via telegram-router, and stores telegram_message_id for missing_info", async () => {
-    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
-    mockEq.mockResolvedValueOnce({ error: null });
-    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
-
-    await performEscalation({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      reason: "Guest asked about the AC, couldn't find it in the knowledge base",
-      reasonCategory: "missing_info",
-    });
-
-    expect(mockInsert).toHaveBeenCalledWith({
-      conversation_id: "convo-1",
-      phone_number: "+351920742845",
-      reason: "Guest asked about the AC, couldn't find it in the knowledge base",
-      reason_category: "missing_info",
-    });
-    expect(mockSelect).toHaveBeenCalledWith("id");
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith({
-      escalationId: "esc-1",
-      phone: "+351920742845",
-      reason: "Guest asked about the AC, couldn't find it in the knowledge base",
-    });
-    expect(mockUpdate).toHaveBeenCalledWith({ telegram_message_id: 777 });
-    expect(mockEq).toHaveBeenCalledWith("id", "esc-1");
-    expect(sendTelegramNotificationMock).not.toHaveBeenCalled();
-  });
 
   it("skips the nudge (and logs) when the escalations insert itself fails", async () => {
     mockSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });

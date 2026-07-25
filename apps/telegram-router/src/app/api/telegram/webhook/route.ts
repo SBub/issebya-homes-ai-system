@@ -120,12 +120,12 @@ async function handleNudgeReject(
 }
 
 /**
- * Owner replied to a previous missing_info escalation nudge with free text —
- * the actual answer to the guest's question. Unlike nudge_approve/reject,
- * this isn't a button tap, so there's no callback_data to dispatch on; the
- * correlation key is Telegram's own `reply_to_message.message_id` (the
- * message being replied to), matched against GCA's escalations.telegram_
- * message_id via GET /api/escalations/by-telegram-message-id/:id.
+ * Owner replied to a previous escalation nudge with free text. Unlike
+ * nudge_approve/reject, this isn't a button tap, so there's no
+ * callback_data to dispatch on; the correlation key is Telegram's own
+ * `reply_to_message.message_id` (the message being replied to), matched
+ * against GCA's escalations.telegram_message_id via
+ * GET /api/escalations/by-telegram-message-id/:id.
  *
  * Returns `false` when that lookup 404s (or the message isn't a reply with
  * text at all): this message has nothing to do with an escalation — the
@@ -134,9 +134,21 @@ async function handleNudgeReject(
  * normal reply) — so the caller must fall through to its own existing
  * command/social-post dispatch rather than swallowing the message here.
  * Returns `true` once a real escalation nudge is matched, whatever the
- * outcome (already resolved / guest-send failed / resolved successfully) —
- * all of those are "handled" as far as the caller's own dispatch is
- * concerned, even though only the last one is a full success.
+ * outcome (already resolved / wrong category / guest-send failed / resolved
+ * successfully) — all of those are "handled" as far as the caller's own
+ * dispatch is concerned, even though only the last one is a full success.
+ *
+ * Safety-critical: only missing_info escalations have a real reply/resolve
+ * action (the answer gets relayed to the guest over WhatsApp via
+ * sendGuestMessage, then embedded in the knowledge base via
+ * resolveEscalation, which itself validates reason_category ===
+ * "missing_info" and would 400 on anything else — but only *after* the
+ * guest-facing send already happened). Now that every category gets a
+ * telegram_message_id (previously only missing_info did, which is what made
+ * omitting this check safe before), an owner reply to an
+ * unhappy_guest/wants_human/complaint nudge — even an internal note never
+ * meant for the guest — must NOT be relayed or sent to resolveEscalation at
+ * all. This check must run before either of those calls.
  */
 async function handleEscalationReply(
   message: NonNullable<TelegramUpdate["message"]>,
@@ -166,6 +178,16 @@ async function handleEscalationReply(
 
   if (escalation.resolved_at) {
     await sendMessage("Already handled — this escalation was already resolved.");
+    return true;
+  }
+
+  if (escalation.reason_category !== "missing_info") {
+    // No automatic reply/resolve action exists for these categories — do
+    // NOT call sendGuestMessage or resolveEscalation. See this function's
+    // own doc comment for why this guard is safety-critical.
+    await sendMessage(
+      "Noted — this escalation type doesn't have an automatic reply/resolve action yet.",
+    );
     return true;
   }
 

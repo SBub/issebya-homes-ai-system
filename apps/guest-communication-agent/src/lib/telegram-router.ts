@@ -1,3 +1,5 @@
+import type { EscalationReasonCategory } from "../graph/tools";
+
 export interface EscalationNudgeResult {
   ok: boolean;
   telegramMessageId?: number;
@@ -6,11 +8,15 @@ export interface EscalationNudgeResult {
 
 /**
  * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
- * which composes and sends the actual Telegram message inviting the owner
- * to reply with an answer — see ../graph/tools.ts's performEscalation,
- * the only caller, which routes missing_info escalations here instead of
- * the raw sendTelegramNotification bypass every other escalation category
- * still uses.
+ * which composes and sends the actual Telegram message notifying the owner
+ * — see ../graph/tools.ts's performEscalation, the only caller, which now
+ * routes all four escalation categories here (this used to be missing_info
+ * only, with the other three bypassing telegram-router entirely via a raw
+ * fetch straight to the Telegram Bot API — see ../lib/telegram.ts's
+ * now-deleted sendTelegramNotification). reasonCategory/conversationId are
+ * passed through so the route can compose a category-appropriate message —
+ * missing_info gets a reply-inviting message, the other three get a plain
+ * one-way alert.
  *
  * Mirrors apps/crm's src/lib/telegram-router-client.ts's postCampaignDraft
  * resilience shape exactly: by the time this is called the escalations row
@@ -20,12 +26,16 @@ export interface EscalationNudgeResult {
  * fail the whole escalation over a best-effort notification step. Unlike
  * postCampaignDraft, the success path here returns telegram-router's own
  * telegramMessageId so the caller can store it on the escalation row (the
- * correlation key the owner's later free-text reply gets matched against).
+ * correlation key the owner's later free-text reply gets matched against —
+ * see the webhook's handleEscalationReply, which now guards on
+ * reason_category before treating a reply as a missing_info answer).
  */
 export async function sendEscalationNudge(params: {
   escalationId: string;
   phone: string;
   reason: string;
+  reasonCategory: EscalationReasonCategory;
+  conversationId: string;
 }): Promise<EscalationNudgeResult> {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;

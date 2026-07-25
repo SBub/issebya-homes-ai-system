@@ -328,6 +328,40 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     );
   });
 
+  // Safety-critical: before performEscalation was unified across all four
+  // escalation categories, only missing_info escalations ever got a
+  // telegram_message_id, so nothing else could ever reach this branch at
+  // all — safety by omission. Now that every category gets one, a reply to
+  // an unhappy_guest/wants_human/complaint nudge must be explicitly refused
+  // here rather than relayed to the guest (sendGuestMessage) or sent to
+  // GCA's resolve endpoint (resolveEscalation) — which would otherwise
+  // relay verbatim to the guest over WhatsApp before resolveEscalation's own
+  // reason_category === "missing_info" validation ever gets a chance to
+  // reject it.
+  for (const reasonCategory of ["unhappy_guest", "wants_human", "complaint"] as const) {
+    it(`does NOT relay to the guest or resolve when replying to a ${reasonCategory} escalation nudge`, async () => {
+      getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
+        id: "esc-1",
+        phone_number: "+351920742845",
+        reason: "Guest is upset about noise",
+        reason_category: reasonCategory,
+        resolved_at: null,
+        answer: null,
+      });
+
+      const res = await POST(makeReplyRequest("Just give them a discount", 42));
+      const json = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(json).toEqual({ ok: true });
+      expect(sendGuestMessageMock).not.toHaveBeenCalled();
+      expect(resolveEscalationMock).not.toHaveBeenCalled();
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        expect.stringContaining("doesn't have an automatic reply/resolve action"),
+      );
+    });
+  }
+
   it("tells the owner the KB write failed when resolve fails after a successful guest send", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",

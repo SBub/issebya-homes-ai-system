@@ -21,12 +21,10 @@ vi.mock("@/lib/supabase.js", () => ({
   // leaving createClient undefined and crashing that unrelated import chain.
   createClient: vi.fn(),
 }));
-vi.mock("@/lib/telegram.js", () => ({
-  sendTelegramNotification: vi.fn(),
-}));
-// missing_info escalations (the agentNode step-cap test below is one) now
-// route through this instead of sendTelegramNotification — see
-// @/graph/tools.ts's performEscalation.
+// Every escalation category (the agentNode step-cap test below produces a
+// missing_info one) routes its owner notification through telegram-router
+// now — see @/graph/tools.ts's performEscalation. The old raw
+// sendTelegramNotification bypass (@/lib/telegram.ts) is deleted.
 vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: vi.fn(),
 }));
@@ -41,7 +39,6 @@ vi.mock("@/lib/crm.js", () => ({
 }));
 
 const { createAdminClient } = await import("@/lib/supabase.js");
-const { sendTelegramNotification } = await import("@/lib/telegram.js");
 const { sendEscalationNudge } = await import("@/lib/telegram-router.js");
 const { lookupGuestContact } = await import("@/lib/crm.js");
 
@@ -213,14 +210,18 @@ describe("agentNode step cap", () => {
         reason_category: "missing_info",
       }),
     );
-    // missing_info now routes through telegram-router's nudge endpoint
-    // instead of the raw sendTelegramNotification bypass (that path is
-    // untouched for the other three categories only).
+    // Every category (missing_info included) now routes through
+    // telegram-router's nudge endpoint — the old raw sendTelegramNotification
+    // bypass is deleted entirely.
     expect(sendEscalationNudge).toHaveBeenCalledWith(
-      expect.objectContaining({ escalationId: "esc-cap-test", phone: "+351900000099" }),
+      expect.objectContaining({
+        escalationId: "esc-cap-test",
+        phone: "+351900000099",
+        reasonCategory: "missing_info",
+        conversationId: "convo-cap-test",
+      }),
     );
     expect(mockUpdate).toHaveBeenCalledWith({ telegram_message_id: 4242 });
-    expect(sendTelegramNotification).not.toHaveBeenCalled();
 
     expect(result.messages).toHaveLength(1);
     const [message] = result.messages as AIMessage[];
