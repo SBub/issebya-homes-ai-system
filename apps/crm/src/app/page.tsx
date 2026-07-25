@@ -273,6 +273,9 @@ const CAMPAIGN_TYPE_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "false", label: "One-off" },
 ];
 
+// Shared by both tabs' own "Enabled" chip group (Campaigns tab's
+// campaign.enabled, CRM tab's guest.enabled) — same shape/labels for both,
+// so this one constant covers both rather than a near-duplicate copy.
 const CAMPAIGN_ENABLED_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "true", label: "Enabled" },
   { value: "false", label: "Disabled" },
@@ -1178,6 +1181,7 @@ export default function DashboardPage() {
       {
         accessorKey: "enabled",
         header: "Enabled",
+        filterFn: filterValueIncludes<GuestContact>,
         cell: (info) => {
           const guest = info.row.original;
           const isToggling = guestTogglingIds.has(guest.id);
@@ -1187,6 +1191,7 @@ export default function DashboardPage() {
               <Switch
                 checked={guest.enabled}
                 disabled={isToggling}
+                style={{ cursor: isToggling ? "wait" : "pointer" }}
                 onCheckedChange={(checked) => void toggleGuestEnabled(guest, checked)}
               />
               {toggleError && (
@@ -1369,6 +1374,7 @@ export default function DashboardPage() {
               <Switch
                 checked={campaign.enabled}
                 disabled={isToggling}
+                style={{ cursor: isToggling ? "wait" : "pointer" }}
                 onCheckedChange={(checked) => void toggleCampaignEnabled(campaign, checked)}
               />
               {toggleError && (
@@ -1645,6 +1651,25 @@ export default function DashboardPage() {
                         highContrast
                         variant={isFilterValueActive("last_room", option.value) ? "solid" : "soft"}
                         onClick={() => toggleFilterValue("last_room", option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </Flex>
+                </Box>
+                <Box>
+                  <Text as="div" size="2" weight="medium" mb="1">
+                    Enabled
+                  </Text>
+                  <Flex gap="2" wrap="wrap">
+                    {CAMPAIGN_ENABLED_FILTER_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        size="1"
+                        color="gray"
+                        highContrast
+                        variant={isFilterValueActive("enabled", option.value) ? "solid" : "soft"}
+                        onClick={() => toggleFilterValue("enabled", option.value)}
                       >
                         {option.label}
                       </Button>

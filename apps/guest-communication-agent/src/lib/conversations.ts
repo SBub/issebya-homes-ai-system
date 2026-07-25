@@ -21,15 +21,57 @@ export interface ActiveConversation {
   isNew: boolean;
 }
 
-/** Finds the guest's currently-active conversation, or starts a new one. */
+/**
+ * Finds the guest's currently-active conversation, or starts a new one.
+ *
+ * Phone form reconciliation: Twilio's inbound webhook always stores
+ * whatsapp_conversations.phone_number with a "whatsapp:" prefix (the raw
+ * `From` field, passed straight through by
+ * apps/.../api/webhook/whatsapp/route.ts). Other callers — notably POST
+ * /api/send's proactive sends — pass the bare/normalized form instead (e.g.
+ * "+351920742845", CRM's stored form). Looking the existing row up with a
+ * plain `.eq("phone_number", phone)` therefore missed a guest's real active
+ * conversation whenever it was stored under the other form, silently
+ * creating a second, disconnected conversation row instead — the same
+ * "check both forms" reconciliation GET /api/conversations already does for
+ * reads (see that route's own doc comment) is applied here for the
+ * find-or-create write path too. `phoneForms` is deduped so an
+ * already-prefixed `phone` (the inbound webhook's case today) doesn't pass
+ * the same value twice into `.in(...)` — harmless for Postgres either way,
+ * but avoids the redundant array entry.
+ *
+ * When no existing conversation is found under either form, the new row is
+ * inserted under the prefixed form specifically (not whatever raw form was
+ * passed in) — so a bare-form caller like POST /api/send converges on the
+ * same stored form the inbound webhook already uses, and a guest's future
+ * reply (which always arrives prefixed, via Twilio) finds this conversation
+ * instead of fragmenting it further.
+ *
+ * Deliberately `.order(...).limit(1)` rather than `.maybeSingle()` alone on
+ * the raw `.in(...)` query: exactly this fragmentation bug can (and, in
+ * practice while diagnosing it, did) leave more than one row "active" for
+ * the same guest under different stored phone forms. An unqualified
+ * `.maybeSingle()` errors out on >1 row, which — if that error goes
+ * unchecked — falls through to the insert branch and creates yet another
+ * duplicate, compounding the exact problem this fix exists to stop. Taking
+ * the most-recently-started active row instead degrades gracefully in that
+ * already-fragmented state (same "most recent first" convention GET
+ * /api/conversations already orders by) while behaving identically to
+ * before when only one active row exists, which is the normal case.
+ */
 export async function getOrCreateActiveConversation(phone: string): Promise<ActiveConversation> {
   const supabase = createAdminClient();
+
+  const prefixedPhone = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
+  const phoneForms = Array.from(new Set([phone, prefixedPhone]));
 
   const { data: existing } = await supabase
     .from("whatsapp_conversations")
     .select("id")
-    .eq("phone_number", phone)
+    .in("phone_number", phoneForms)
     .eq("status", "active")
+    .order("started_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (existing) {
     return { conversationId: existing.id, isNew: false };
@@ -37,7 +79,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
 
   const { data: created, error } = await supabase
     .from("whatsapp_conversations")
-    .insert({ phone_number: phone })
+    .insert({ phone_number: prefixedPhone })
     .select("id")
     .single();
   if (error || !created) {
