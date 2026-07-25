@@ -50,8 +50,6 @@ const openrouter = createOpenAI({
 type DocumentMetadata = {
   source: string;
   section: string;
-  type: string;
-  topics: string[];
   content_hash: string;
 };
 
