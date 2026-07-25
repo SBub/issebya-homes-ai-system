@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
-import { type Campaign, countUndraftedCandidates } from "@/lib/campaigns";
+import { type Campaign, campaignHasBeenRun, countUndraftedCandidates } from "@/lib/campaigns";
 import { createAdminClient } from "@/lib/supabase";
 
 /**
@@ -11,15 +11,19 @@ import { createAdminClient } from "@/lib/supabase";
  * separate, later piece of work).
  *
  * Same "select *, order by created_at ascending" convention as
- * GET /api/guest-contacts, plus one extra `candidate_count` field baked into
- * each row — how many guests countUndraftedCandidates (campaigns.ts) says
- * this campaign would actually draft for right now, i.e. today's real
- * "Run now" impact. Computed with one extra query pair per campaign
- * (reusing the exact getCampaignCandidates/alreadyNudgedGuestIds logic
- * draftForCampaign itself calls, just without drafting anything) rather
- * than a separate per-campaign endpoint — acceptable at this table's size,
- * and keeps the frontend to a single round-trip. Response:
- * `{ campaigns: (Campaign & { candidate_count: number })[] }`.
+ * GET /api/guest-contacts, plus two extra fields baked into each row:
+ * `candidate_count` — how many guests countUndraftedCandidates (campaigns.ts)
+ * says this campaign would actually draft for right now, i.e. today's real
+ * "Run now" impact — and `has_run` — whether campaignHasBeenRun
+ * (campaigns.ts) finds any promo_codes row at all for this campaign, i.e.
+ * whether draftForCampaign has ever produced a draft for it (one-off or
+ * recurring alike). Both are computed with one extra query pair/query per
+ * campaign (reusing the exact getCampaignCandidates/alreadyNudgedGuestIds
+ * logic draftForCampaign itself calls for candidate_count, plus a cheap
+ * existence check for has_run) rather than a separate per-campaign endpoint
+ * — acceptable at this table's size, and keeps the frontend to a single
+ * round-trip. Response:
+ * `{ campaigns: (Campaign & { candidate_count: number; has_run: boolean })[] }`.
  */
 export async function GET(request: NextRequest) {
   const unauthorized = requireApiKey(request);
@@ -38,10 +42,18 @@ export async function GET(request: NextRequest) {
   }
 
   const campaigns = (data ?? []) as Campaign[];
-  const campaignsWithCandidateCount: (Campaign & { candidate_count: number })[] = [];
+  const campaignsWithCandidateCount: (Campaign & {
+    candidate_count: number;
+    has_run: boolean;
+  })[] = [];
   for (const campaign of campaigns) {
     const candidateCount = await countUndraftedCandidates(supabase, campaign);
-    campaignsWithCandidateCount.push({ ...campaign, candidate_count: candidateCount });
+    const hasRun = await campaignHasBeenRun(supabase, campaign.id);
+    campaignsWithCandidateCount.push({
+      ...campaign,
+      candidate_count: candidateCount,
+      has_run: hasRun,
+    });
   }
 
   return NextResponse.json({ campaigns: campaignsWithCandidateCount });

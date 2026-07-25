@@ -12,6 +12,7 @@ vi.mock("@/lib/telegram-router-client.js", () => ({
 
 const {
   alreadyNudgedGuestIds,
+  campaignHasBeenRun,
   countUndraftedCandidates,
   draftForCampaign,
   getCampaignById,
@@ -271,6 +272,47 @@ describe("alreadyNudgedGuestIds", () => {
     expect(fromMock).toHaveBeenCalledWith("promo_codes");
     expect(chain.eq).toHaveBeenCalledWith("campaign_id", "campaign-1");
     expect(chain.in).toHaveBeenCalledWith("guest_contact_id", ["guest-1", "guest-2", "guest-3"]);
+  });
+});
+
+describe("campaignHasBeenRun", () => {
+  it("returns true when promo_codes has at least one row for this campaign", async () => {
+    const chain = makeChain({ count: 1, error: null });
+    const fromMock = vi.fn(() => chain);
+    const supabase = { from: fromMock } as never;
+
+    const result = await campaignHasBeenRun(supabase, "campaign-seasonal");
+
+    expect(result).toBe(true);
+    expect(fromMock).toHaveBeenCalledWith("promo_codes");
+    expect(chain.select).toHaveBeenCalledWith("id", { count: "exact", head: true });
+    expect(chain.eq).toHaveBeenCalledWith("campaign_id", "campaign-seasonal");
+    expect(chain.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("returns false when promo_codes has no row for this campaign", async () => {
+    const chain = makeChain({ count: 0, error: null });
+    const supabase = { from: vi.fn(() => chain) } as never;
+
+    const result = await campaignHasBeenRun(supabase, "campaign-winter");
+
+    expect(result).toBe(false);
+  });
+
+  it("returns false when count is null", async () => {
+    const chain = makeChain({ count: null, error: null });
+    const supabase = { from: vi.fn(() => chain) } as never;
+
+    const result = await campaignHasBeenRun(supabase, "campaign-winter");
+
+    expect(result).toBe(false);
+  });
+
+  it("throws when the query errors", async () => {
+    const chain = makeChain({ count: null, error: { message: "boom" } });
+    const supabase = { from: vi.fn(() => chain) } as never;
+
+    await expect(campaignHasBeenRun(supabase, "campaign-seasonal")).rejects.toThrow("boom");
   });
 });
 

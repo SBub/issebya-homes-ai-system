@@ -27,7 +27,7 @@ const { GET } = await import("@/app/api/campaigns/route.js");
  */
 function makeQueryChain(result: unknown) {
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "lt", "gte", "in"]) {
+  for (const method of ["select", "eq", "lt", "gte", "in", "limit"]) {
     chain[method] = vi.fn(() => chain);
   }
   // biome-ignore lint/suspicious/noThenProperty: see tests/lib/campaigns.test.ts's own makeChain
@@ -73,7 +73,7 @@ describe("GET /api/campaigns", () => {
     expect(json).toEqual({ campaigns: [] });
   });
 
-  it("returns every row with every real column plus a candidate_count, ordered by created_at ascending", async () => {
+  it("returns every row with every real column plus a candidate_count and has_run, ordered by created_at ascending", async () => {
     const row = {
       id: "campaign-seasonal",
       name: "Seasonal check-in (automated)",
@@ -93,7 +93,9 @@ describe("GET /api/campaigns", () => {
     // countUndraftedCandidates -> getCampaignCandidates (guest_contacts),
     // then alreadyNudgedGuestIds (promo_codes) — one extra query pair for
     // this single campaign row. Two candidates, one already nudged, so
-    // candidate_count should come back as 1.
+    // candidate_count should come back as 1. campaignHasBeenRun then issues
+    // its own promo_codes existence check (has_run should come back true,
+    // since this campaign's own promo_codes rows already surfaced above).
     const candidatesChain = makeQueryChain({
       data: [
         { id: "guest-1", phone: "+351900000001" },
@@ -105,19 +107,55 @@ describe("GET /api/campaigns", () => {
       data: [{ guest_contact_id: "guest-2" }],
       error: null,
     });
+    const hasRunChain = makeQueryChain({ count: 1, error: null });
     fromMock
       .mockReturnValueOnce({ select: selectMock })
       .mockReturnValueOnce(candidatesChain as never)
-      .mockReturnValueOnce(alreadyNudgedChain as never);
+      .mockReturnValueOnce(alreadyNudgedChain as never)
+      .mockReturnValueOnce(hasRunChain as never);
 
     const res = await GET(makeRequest());
     const json = await res.json();
 
-    expect(json).toEqual({ campaigns: [{ ...row, candidate_count: 1 }] });
+    expect(json).toEqual({ campaigns: [{ ...row, candidate_count: 1, has_run: true }] });
     expect(selectMock).toHaveBeenCalledWith("*");
     expect(orderMock).toHaveBeenCalledWith("created_at", { ascending: true });
     expect(fromMock).toHaveBeenCalledWith("guest_contacts");
     expect(fromMock).toHaveBeenCalledWith("promo_codes");
+  });
+
+  it("returns has_run: false for a campaign with no promo_codes rows at all", async () => {
+    const row = {
+      id: "campaign-winter",
+      name: "Winter lock-in program",
+      kind: "winter_lockin_program",
+      target_funnel_stage: null,
+      min_idle_days: null,
+      target_stay_before: null,
+      min_total_stays: 1,
+      discount_percent: 15,
+      offer_description: "",
+      message_template: "Lock in winter rates.",
+      is_recurring: true,
+      enabled: true,
+      created_at: "2026-07-24T00:00:00Z",
+    };
+    orderMock.mockResolvedValueOnce({ data: [row], error: null });
+    // candidates is empty, so alreadyNudgedGuestIds short-circuits without
+    // querying promo_codes at all (see its own "no candidate ids" early
+    // return in campaigns.ts) — only two more fromMock calls happen here:
+    // guest_contacts (candidates) and promo_codes (campaignHasBeenRun).
+    const candidatesChain = makeQueryChain({ data: [], error: null });
+    const hasRunChain = makeQueryChain({ count: 0, error: null });
+    fromMock
+      .mockReturnValueOnce({ select: selectMock })
+      .mockReturnValueOnce(candidatesChain as never)
+      .mockReturnValueOnce(hasRunChain as never);
+
+    const res = await GET(makeRequest());
+    const json = await res.json();
+
+    expect(json).toEqual({ campaigns: [{ ...row, candidate_count: 0, has_run: false }] });
   });
 
   it("returns a 500 with the error message on a Supabase error", async () => {

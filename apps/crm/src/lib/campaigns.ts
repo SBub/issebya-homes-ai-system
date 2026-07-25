@@ -50,6 +50,14 @@ export interface Campaign {
   // interface (apps/crm/src/app/page.tsx) declares it required since that
   // response is the only place a frontend Campaign object ever comes from.
   candidate_count?: number;
+  // Same "not a real column, optional here, required on the frontend's own
+  // copy" pattern as candidate_count above — whether this campaign has ever
+  // had draftForCampaign produce at least one promo_codes row, regardless of
+  // that row's status (issued/sent/redeemed/expired/rejected all count; see
+  // campaignHasBeenRun below). Applies uniformly to one-off and recurring
+  // campaigns: a recurring campaign only just enabled, with no cron tick yet,
+  // has none either.
+  has_run?: boolean;
 }
 
 export interface GuestContact {
@@ -213,6 +221,37 @@ export async function countUndraftedCandidates(
     candidates.map((candidate) => candidate.id),
   );
   return candidates.filter((candidate) => !alreadyNudged.has(candidate.id)).length;
+}
+
+/**
+ * Cheap existence check: has draftForCampaign ever produced at least one
+ * promo_codes row for this campaign, regardless of that row's status
+ * (issued/sent/redeemed/expired/rejected all count the same — same
+ * "any row at all" dedup philosophy as alreadyNudgedGuestIds above, just
+ * campaign-wide instead of per-guest). Applies uniformly to one-off and
+ * recurring campaigns: a recurring campaign that's been running via cron for
+ * weeks has plenty of promo_codes rows, while one just created/enabled but
+ * not yet ticked by the cron has none.
+ *
+ * Uses count-only/head-only select + limit(1) so it never fetches full rows
+ * — this only needs to know "any row at all", not their contents. Powers GET
+ * /api/campaigns's own `has_run` field (see route.ts), computed per-row
+ * alongside candidate_count.
+ */
+export async function campaignHasBeenRun(
+  supabase: SupabaseAdminClient,
+  campaignId: string,
+): Promise<boolean> {
+  const { count, error } = await supabase
+    .from("promo_codes")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (count ?? 0) > 0;
 }
 
 /**

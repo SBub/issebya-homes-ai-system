@@ -134,6 +134,13 @@ interface Campaign {
   // has it) — this is the frontend's own copy of the type, describing only
   // what the API response actually contains.
   candidate_count: number;
+  // Whether this campaign has ever produced at least one promo_codes row
+  // (campaignHasBeenRun, apps/crm/src/lib/campaigns.ts) — true regardless of
+  // that row's status, and regardless of one-off vs. recurring. Same
+  // "optional on campaigns.ts's own Campaign, required here" pattern as
+  // candidate_count above, since GET /api/campaigns is the only place a
+  // frontend Campaign object ever comes from.
+  has_run: boolean;
 }
 
 // A dismissible toast-style banner — see notifications state below. Kept
@@ -281,6 +288,14 @@ const CAMPAIGN_ENABLED_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "false", label: "Disabled" },
 ];
 
+// Campaigns tab's own "Run status" chip group — has_run is a boolean column
+// (see Campaign interface above), same stringified-boolean convention as
+// CAMPAIGN_TYPE_FILTER_OPTIONS/CAMPAIGN_ENABLED_FILTER_OPTIONS above.
+const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "true", label: "Run" },
+  { value: "false", label: "Not run" },
+];
+
 // Explicit per-column pixel widths, applied alongside `tableLayout: "fixed"`
 // on each table's Table.Root below. Radix's Table.Root otherwise renders a
 // plain HTML <table> with the browser default `table-layout: auto`, which
@@ -312,6 +327,7 @@ const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
   kind: 187,
   is_recurring: 100,
   enabled: 85,
+  has_run: 95,
   targeting: 159,
   candidate_count: 118,
   offer: 184,
@@ -1387,6 +1403,22 @@ export default function DashboardPage() {
         },
       },
       {
+        // Whether this campaign has ever produced at least one promo_codes
+        // row (has_run, computed server-side by campaignHasBeenRun — see
+        // GET /api/campaigns's own doc comment in
+        // apps/crm/src/app/api/campaigns/route.ts), regardless of that row's
+        // status and regardless of one-off vs. recurring. Real, visible
+        // column (not just a filter-only field) — every other filterable
+        // dimension on this table (Type, Enabled) has one too.
+        accessorKey: "has_run",
+        header: "Run?",
+        filterFn: filterValueIncludes<Campaign>,
+        cell: (info) => {
+          const hasRun = info.getValue() as boolean;
+          return <Badge color={hasRun ? "green" : "gray"}>{hasRun ? "Run" : "Not run"}</Badge>;
+        },
+      },
+      {
         id: "targeting",
         accessorFn: (campaign) => summarizeCampaignTargeting(campaign),
         header: "Targeting",
@@ -1890,6 +1922,27 @@ export default function DashboardPage() {
                             isCampaignFilterValueActive("enabled", option.value) ? "solid" : "soft"
                           }
                           onClick={() => toggleCampaignFilterValue("enabled", option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Flex>
+                  </Box>
+                  <Box>
+                    <Text as="div" size="2" weight="medium" mb="1">
+                      Run status
+                    </Text>
+                    <Flex gap="2" wrap="wrap">
+                      {RUN_STATUS_FILTER_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          size="1"
+                          color="gray"
+                          highContrast
+                          variant={
+                            isCampaignFilterValueActive("has_run", option.value) ? "solid" : "soft"
+                          }
+                          onClick={() => toggleCampaignFilterValue("has_run", option.value)}
                         >
                           {option.label}
                         </Button>
