@@ -56,6 +56,21 @@ export const GraphState = Annotation.Root({
     reducer: (_, next) => next,
     default: () => 0,
   }),
+  // Set true for exactly one turn when this turn's escalation (whether the
+  // model's own escalateToOwner tool call or one of agent.ts's two
+  // deterministic safety nets) was categorized missing_info. Same "last
+  // write wins" reducer shape as stepCount above — a plain boolean, not part
+  // of `messages`, so it doesn't interact with MessagesAnnotation's
+  // append-only reducer at all. Consumed by the webhook route
+  // (../app/api/webhook/whatsapp/route.ts) to suppress that turn's
+  // guest-facing reply: a missing_info escalation means the guest should
+  // hear nothing until the owner answers and
+  // ../lib/resume-conversation.ts's proactive re-invocation sends the real
+  // answer, not this turn's interim "let me check with the owner" text.
+  missingInfoEscalated: Annotation<boolean>({
+    reducer: (_, next) => next,
+    default: () => false,
+  }),
 });
 
 export type GraphStateType = typeof GraphState.State;

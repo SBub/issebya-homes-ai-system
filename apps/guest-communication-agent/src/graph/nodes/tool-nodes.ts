@@ -106,7 +106,45 @@ export const getPricingNode = makeToolNode(getToolByName("getPricing"));
 export const checkAvailabilityNode = makeToolNode(getToolByName("checkAvailability"));
 export const sendBookingLinkNode = makeToolNode(getToolByName("sendBookingLink"));
 export const answerPropertyQuestionNode = makeToolNode(getToolByName("answerPropertyQuestion"));
-export const escalateToOwnerNode = makeToolNode(getToolByName("escalateToOwner"));
+
+// escalateToOwnerNode can't be built via makeToolNode like the other four —
+// makeToolNode's factory only ever returns `{ messages: [message] }`, with
+// no way to inspect the tool call's own args afterward. This node needs to
+// do exactly that: escalateToOwner is the only tool whose outcome should
+// ever suppress the guest-facing reply (see state.ts's missingInfoEscalated
+// doc comment and the webhook route that consumes it), and whether it
+// should is only knowable from `call.args.reason_category` — a
+// missing_info escalation means the guest hears nothing until the owner
+// answers and ../lib/resume-conversation.ts's proactive re-invocation sends
+// the real one; the other three categories (unhappy_guest/wants_human/
+// complaint) are unaffected and keep sending whatever the model composed.
+// Otherwise identical to makeToolNode's own tool-invocation shape: same
+// findOwnToolCall lookup, same tool.invoke() call shape, same
+// conversationId/phone -> config.configurable merge (state wins by default,
+// caller-supplied config.configurable still overrides on key collision).
+const escalateToOwnerTool = getToolByName("escalateToOwner");
+
+export async function escalateToOwnerNode(
+  state: GraphStateType,
+  config: RunnableConfig,
+): Promise<Partial<GraphStateType>> {
+  const call = findOwnToolCall(state, escalateToOwnerTool.name);
+  const message = (await escalateToOwnerTool.invoke(
+    { ...call, type: "tool_call" },
+    {
+      ...config,
+      configurable: {
+        conversationId: state.conversationId,
+        phone: state.phone,
+        ...config.configurable,
+      },
+    },
+  )) as ToolMessage;
+  return {
+    messages: [message],
+    missingInfoEscalated: call.args.reason_category === "missing_info",
+  };
+}
 
 type ToolNodeName =
   | "getPricingStub"

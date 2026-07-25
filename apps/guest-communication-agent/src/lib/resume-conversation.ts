@@ -54,7 +54,8 @@ export interface ResumeConversationResult {
  * prompt (the model's own prior "let me check with the owner" reply sits in
  * between) rather than a duplicate non-sequitur.
  *
- * Never throws — every failure mode (empty/non-string graph output, a
+ * Never throws — every failure mode (a second-order missing_info escalation
+ * during this very re-invocation, empty/non-string graph output, a
  * non-AIMessage last message, a Twilio send failure) is returned as
  * `{ ok: false, error }` instead, since this runs inside an HTTP route
  * handler (the resolve route) that must report success/failure to its own
@@ -78,6 +79,19 @@ export async function resumeConversationWithAnswer(params: {
     );
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  // The rare case where this re-invoked turn itself escalates again as
+  // missing_info (e.g. the model still can't compose an answer even with
+  // the freshly-embedded content) — same principle as the webhook route's
+  // own suppression: a still-unhelpful "let me check with the owner" reply
+  // must never be sent to a guest who's already waiting on an answer, so
+  // this is treated as a failure rather than proceeding to send it.
+  if (result.missingInfoEscalated) {
+    return {
+      ok: false,
+      error: "Graph escalated again during re-invocation instead of producing a real answer",
+    };
   }
 
   const lastMessage = result.messages.at(-1);

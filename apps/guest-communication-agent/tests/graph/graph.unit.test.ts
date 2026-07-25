@@ -188,6 +188,7 @@ describe("agentNode step cap", () => {
       messages: [new AIMessage({ content: "looping..." })],
       conversationId: "convo-cap-test",
       phone: "+351900000099",
+      incomingMessage: "Is there a juicer in the kitchen?",
       guestContext: null,
       // Already at the cap — this call would be round 9, one past MAX_AGENT_STEPS (8).
       stepCount: 8,
@@ -208,6 +209,10 @@ describe("agentNode step cap", () => {
         // agent.ts's own comment on why missing_info is the closest fit of
         // the four categories for this path.
         reason_category: "missing_info",
+        // The owner-facing reason must include the guest's real question,
+        // not just a generic technical description of the failure mode —
+        // see agent.ts's own comment on this.
+        reason: expect.stringContaining('Guest asked: "Is there a juicer in the kitchen?"'),
       }),
     );
     // Every category (missing_info included) now routes through
@@ -228,6 +233,9 @@ describe("agentNode step cap", () => {
     expect(message.tool_calls ?? []).toHaveLength(0);
     expect(message.content).toMatch(/owner/i);
     expect(result.stepCount).toBe(9);
+    // Signals the webhook route to suppress this interim message from ever
+    // reaching the guest — see state.ts's missingInfoEscalated doc comment.
+    expect(result.missingInfoEscalated).toBe(true);
   });
 });
 
@@ -293,6 +301,7 @@ describe("loadContext ordering", () => {
       messages: [],
       guestContext: null,
       stepCount: 0,
+      missingInfoEscalated: false,
     } as GraphStateType;
 
     const result = await loadContext(state);
@@ -326,6 +335,7 @@ describe("loadContext ordering", () => {
       messages: [],
       guestContext: null,
       stepCount: 0,
+      missingInfoEscalated: false,
     } as GraphStateType;
 
     const result = await loadContext(state);

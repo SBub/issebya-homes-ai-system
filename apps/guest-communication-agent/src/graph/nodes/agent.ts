@@ -140,7 +140,12 @@ export async function agentNode(
     await performEscalation({
       conversationId,
       phone,
-      reason: `Agent reasoning loop exceeded ${MAX_AGENT_STEPS} rounds without reaching a final answer.`,
+      // Leads with the guest's actual current-turn question (state.incomingMessage
+      // — see state.ts's own doc comment) rather than just the technical
+      // failure description: the owner sees this exact string in the
+      // Telegram nudge and needs to know what to actually answer, not just
+      // that the agent looped.
+      reason: `Guest asked: "${state.incomingMessage}" — agent reasoning loop exceeded ${MAX_AGENT_STEPS} rounds without reaching a final answer.`,
       // Not one of the four guest-driven triggers escalateToOwner's schema
       // documents (the guest didn't do anything in particular here) — this
       // is a deterministic safety net, not a model judgment call. Of the
@@ -160,6 +165,10 @@ export async function agentNode(
         ),
       ],
       stepCount,
+      // Always missing_info for this branch (see reasonCategory above) — the
+      // webhook route uses this to suppress the interim message above from
+      // ever reaching the guest.
+      missingInfoEscalated: true,
     };
   }
 
@@ -208,8 +217,11 @@ export async function agentNode(
     await performEscalation({
       conversationId,
       phone,
-      reason:
-        "Model returned an empty reply twice in a row (a known reasoning-model reliability issue, see agent-node-behavior.md).",
+      // Same rationale as the step-cap branch above: leads with the guest's
+      // actual question (state.incomingMessage) so the owner knows what to
+      // answer, keeping the existing technical detail as useful context
+      // rather than the only thing the owner sees.
+      reason: `Guest asked: "${state.incomingMessage}" — model returned an empty reply twice in a row (a known reasoning-model reliability issue, see agent-node-behavior.md).`,
       // Same reasoning as the step-cap safety net above: deterministic, not
       // guest-driven, and missing_info is the closest of the four categories
       // — the model failed to produce a real answer for the guest.
@@ -224,6 +236,10 @@ export async function agentNode(
         ),
       ],
       stepCount,
+      // Always missing_info for this branch (see reasonCategory above) — the
+      // webhook route uses this to suppress the interim message above from
+      // ever reaching the guest.
+      missingInfoEscalated: true,
     };
   }
 

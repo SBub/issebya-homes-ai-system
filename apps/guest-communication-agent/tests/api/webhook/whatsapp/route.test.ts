@@ -130,4 +130,43 @@ describe("POST /api/webhook/whatsapp", () => {
     expect(res.status).toBe(401);
     expect(graphInvokeMock).not.toHaveBeenCalled();
   });
+
+  it("returns a message-bearing TwiML response for a normal turn", async () => {
+    const res = await POST(
+      makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
+    );
+
+    const body = await res.text();
+    expect(body).toBe("<Response><Message>Yes, room 1 is available!</Message></Response>");
+  });
+
+  it("suppresses the guest-facing reply (empty TwiML) when missingInfoEscalated is true, while still recording the message", async () => {
+    graphInvokeMock.mockResolvedValue({
+      messages: [
+        new AIMessage(
+          "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
+        ),
+      ],
+      missingInfoEscalated: true,
+    });
+
+    const res = await POST(
+      makeRequest({ From: "whatsapp:+351920742845", Body: "Is there a juicer in the kitchen?" }),
+    );
+
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    // Valid, empty TwiML — Twilio relays nothing to the guest this turn.
+    expect(body).toBe("<Response></Response>");
+
+    // The interim reply is still recorded for internal/CRM visibility, even
+    // though the guest never sees it live — see the route's own doc comment.
+    expect(recordMessageMock).toHaveBeenNthCalledWith(
+      2,
+      "convo-1",
+      "assistant",
+      "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
+      expect.any(String),
+    );
+  });
 });

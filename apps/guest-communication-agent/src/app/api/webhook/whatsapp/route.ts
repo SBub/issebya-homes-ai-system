@@ -32,6 +32,18 @@ function escapeXml(text: string): string {
  * bot token/chat ID) rather than through apps/telegram-router, unlike every
  * other app in this monorepo. Left as the source behaves for this faithful
  * port; revisit separately.
+ *
+ * When this turn's `result.missingInfoEscalated` comes back true (a
+ * missing_info escalation fired this turn — either the model's own
+ * escalateToOwner tool call, or one of agent.ts's two deterministic safety
+ * nets), the reply is deliberately never delivered to the guest: it's still
+ * recorded via recordMessage for internal/CRM visibility (useful for the
+ * owner reviewing history), but the TwiML response sent back to Twilio is an
+ * empty `<Response></Response>` rather than one carrying the interim
+ * "let me check with the owner" text. The guest hears nothing until the
+ * owner actually answers on Telegram and GCA's proactive re-invocation
+ * (@/lib/resume-conversation.ts's resumeConversationWithAnswer) sends the
+ * real answer through this same graph.
  */
 export async function POST(request: NextRequest) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -135,7 +147,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  return new NextResponse(`<Response><Message>${escapeXml(replyText)}</Message></Response>`, {
+  // A missing_info escalation's interim reply is recorded above for internal
+  // visibility but deliberately never delivered to the guest — the guest
+  // hears nothing until the owner answers on Telegram and GCA's proactive
+  // re-invocation (@/lib/resume-conversation.ts) sends the real answer. An
+  // empty <Response></Response> is valid TwiML that sends no message, so
+  // Twilio doesn't relay replyText to the guest for this turn.
+  const twiml = result.missingInfoEscalated
+    ? "<Response></Response>"
+    : `<Response><Message>${escapeXml(replyText)}</Message></Response>`;
+
+  return new NextResponse(twiml, {
     status: 200,
     headers: { "Content-Type": "text/xml" },
   });

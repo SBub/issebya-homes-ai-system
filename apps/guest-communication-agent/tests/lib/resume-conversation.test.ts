@@ -93,6 +93,30 @@ describe("resumeConversationWithAnswer", () => {
     expect(recordMessageMock).not.toHaveBeenCalled();
   });
 
+  it("returns ok:false and does not send/record when the re-invoked turn escalates again as missing_info", async () => {
+    graphInvokeMock.mockResolvedValueOnce({
+      messages: [
+        new AIMessage(
+          "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
+        ),
+      ],
+      missingInfoEscalated: true,
+    });
+
+    const result = await resumeConversationWithAnswer({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      triggerMessageContent: "Is there a swimming pool?",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Graph escalated again during re-invocation instead of producing a real answer",
+    });
+    expect(sendWhatsAppMessageMock).not.toHaveBeenCalled();
+    expect(recordMessageMock).not.toHaveBeenCalled();
+  });
+
   it("returns ok:false when the last message isn't an AIMessage", async () => {
     graphInvokeMock.mockResolvedValueOnce({
       messages: [new ToolMessage({ content: "some tool result", tool_call_id: "call_1" })],
