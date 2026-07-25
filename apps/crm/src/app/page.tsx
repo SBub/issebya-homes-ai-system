@@ -4,9 +4,10 @@
 // guest_contacts (GET /api/guest-contacts), clicking a row shows that
 // guest's full CRM fields plus their WhatsApp conversation history (GET
 // /api/guest-contacts/[id]/conversations, which proxies server-side to
-// apps/guest-communication-agent). No search/pagination — deferred to a
-// later pass. Phone is the one inline-editable field (PATCH
-// /api/guest-contacts/[id]) — no editing of name/funnel stage/etc.
+// apps/guest-communication-agent). No search — deferred to a later pass
+// (every table below does paginate, 20 rows/page, see TABLE_PAGE_SIZE).
+// Phone is the one inline-editable field (PATCH /api/guest-contacts/[id])
+// — no editing of name/funnel stage/etc.
 //
 // Selection is keyed on guest_contacts.id (always present), not phone —
 // phone can be null (a guest synced from finance history with no WhatsApp
@@ -18,7 +19,9 @@
 // pattern (password-style input, held in local state, sent as X-API-Key on
 // every fetch) — this page only ever talks to CRM's own endpoints above, so
 // only CRM_API_KEY ever reaches the browser. GCA's own API key stays
-// entirely server-side, inside the proxy route.
+// entirely server-side, inside the proxy route. Lives behind a small modal
+// (see the Dialog.Root near the page header below) rather than a permanent
+// input, so it doesn't take up space once entered.
 
 import {
   Badge,
@@ -41,7 +44,10 @@ import {
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
+  getPaginationRowModel,
   getSortedRowModel,
+  type PaginationState,
+  type Table as ReactTableInstance,
   type Row,
   type SortingState,
   useReactTable,
@@ -530,8 +536,82 @@ function formatDateOnly(value: string | null | undefined): string {
   return new Date(value).toLocaleDateString();
 }
 
+// Default page size shared by all three tables (CRM tab's guests,
+// Campaigns, Escalations) — same mechanism wired into every
+// useReactTable instance below even though Campaigns/Escalations rarely
+// have more than 20 rows today, so the three tables stay consistent
+// rather than only the guest table supporting pagination.
+const TABLE_PAGE_SIZE = 20;
+
+// "Showing X–Y of Z <label>" range text for one table's current page,
+// against its own *filtered* row count (not the unfiltered total) — e.g.
+// "1–20 of 47". Generic over TData so the same helper covers the guest,
+// campaign, and escalation tables, mirroring filterValueIncludes' own
+// "one generic implementation, instantiated per TData" convention above.
+function paginationRangeText<TData>(table: ReactTableInstance<TData>): string {
+  const filteredCount = table.getFilteredRowModel().rows.length;
+  if (filteredCount === 0) {
+    return "0 of 0";
+  }
+  const { pageIndex, pageSize } = table.getState().pagination;
+  const start = pageIndex * pageSize + 1;
+  const end = Math.min(filteredCount, (pageIndex + 1) * pageSize);
+  return `${start}–${end} of ${filteredCount}`;
+}
+
+// Shared Previous/Next + "Page X of Y" control, rendered below each of the
+// three tables — extracted once rather than three near-identical copies,
+// same reasoning as filterValueIncludes/toggleColumnFilterValue above.
+// TanStack's own standard pagination API (getCanPreviousPage/
+// getCanNextPage/previousPage/nextPage/getPageCount) — no custom paging
+// logic here.
+function PaginationControls<TData>({ table }: { table: ReactTableInstance<TData> }) {
+  return (
+    <Flex align="center" gap="3" mt="3">
+      <Button
+        size="1"
+        variant="soft"
+        color="gray"
+        onClick={() => table.previousPage()}
+        disabled={!table.getCanPreviousPage()}
+      >
+        Previous
+      </Button>
+      <Text size="2" color="gray">
+        Page {table.getState().pagination.pageIndex + 1} of {Math.max(table.getPageCount(), 1)}
+      </Text>
+      <Button
+        size="1"
+        variant="soft"
+        color="gray"
+        onClick={() => table.nextPage()}
+        disabled={!table.getCanNextPage()}
+      >
+        Next
+      </Button>
+    </Flex>
+  );
+}
+
 export default function DashboardPage() {
   const [apiKey, setApiKey] = useState("");
+  // API key now lives behind a modal (see Dialog.Root near the page header
+  // in the JSX below) instead of a permanent input+button row above the
+  // tabs. Starts `true` so a fresh visit (apiKey is always "" on mount)
+  // still prompts for a key immediately, matching the old page's
+  // always-visible input. apiKeyDraft is the modal's own local form field
+  // — only committed to `apiKey` (and only then triggers loadGuests) on
+  // submit, so a half-typed key never leaks into `apiKey` (and thus into
+  // every fetch's X-API-Key header) before the user actually confirms it.
+  const [isApiKeyDialogOpen, setIsApiKeyDialogOpen] = useState(true);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+
+  // Which tab is currently active — needed (unlike before) so the
+  // Escalations tab can auto-load itself the first time it becomes active
+  // (see the effect near loadEscalations below). Controlled Tabs.Root
+  // (value/onValueChange) instead of the previous uncontrolled
+  // defaultValue="crm", purely so this component can observe tab changes.
+  const [activeTab, setActiveTab] = useState("crm");
 
   // Fixed-position toast stack (see the Box rendered near the top of the
   // JSX tree below, outside Tabs.Root so it's visible regardless of which
@@ -577,6 +657,25 @@ export default function DashboardPage() {
   // tab's columnFilters below but kept separate, same reason as
   // campaignsSorting above.
   const [campaignsColumnFilters, setCampaignsColumnFilters] = useState<ColumnFiltersState>([]);
+  // Campaigns tab's own pagination state — mirrors the CRM tab's
+  // `pagination` above (own instance, same TABLE_PAGE_SIZE default and
+  // same reset-on-filter-change effect), kept separate per the "own state
+  // per tab" convention this file already follows for sorting/filters.
+  const [campaignsPagination, setCampaignsPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: TABLE_PAGE_SIZE,
+  });
+  // Same render-time "reset page to 0 when the filter chips change"
+  // pattern as `pagination`/`prevColumnFilters` above — own instance, kept
+  // separate per this file's own per-tab state convention.
+  const [prevCampaignsColumnFilters, setPrevCampaignsColumnFilters] =
+    useState(campaignsColumnFilters);
+  if (campaignsColumnFilters !== prevCampaignsColumnFilters) {
+    setPrevCampaignsColumnFilters(campaignsColumnFilters);
+    if (campaignsPagination.pageIndex !== 0) {
+      setCampaignsPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    }
+  }
   // "+ New Campaign" dialog state — a plain create form (POST
   // /api/campaigns), separate from every other Campaigns-tab state above.
   const [isNewCampaignOpen, setIsNewCampaignOpen] = useState(false);
@@ -655,13 +754,40 @@ export default function DashboardPage() {
   // option values for that dimension (see toggleFilterValue and
   // filterValueIncludes above).
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  // Pagination state for the guest table — TanStack owns pageIndex/pageSize
+  // once wired into useReactTable below (state.pagination +
+  // onPaginationChange), same as sorting/columnFilters above. Reset back to
+  // page 1 whenever a filter chip changes (see the effect below) — since
+  // columnFilters is this file's own externally-managed state rather than
+  // TanStack's, its own automatic page-reset-on-filter-change behavior
+  // isn't guaranteed to fire, so this is done explicitly instead of relying
+  // on it.
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: TABLE_PAGE_SIZE,
+  });
+  // Tracks the columnFilters reference last seen, purely to detect "a
+  // filter chip just changed" during render (not in an Effect — per
+  // React's own guidance on adjusting state in response to a prop/state
+  // change, this avoids an extra post-render pass). When it has, this
+  // resets pageIndex back to 0 in the same render pass, right here, rather
+  // than relying on TanStack's own auto-reset-on-filter-change behavior —
+  // that behavior isn't guaranteed once columnFilters is externally
+  // managed state (as it is here) rather than owned by the table itself.
+  const [prevColumnFilters, setPrevColumnFilters] = useState(columnFilters);
+  if (columnFilters !== prevColumnFilters) {
+    setPrevColumnFilters(columnFilters);
+    if (pagination.pageIndex !== 0) {
+      setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    }
+  }
 
   // Escalations tab state — separate from both the CRM tab's guest state and
-  // the Campaigns tab's own state above, sharing only `apiKey`. Explicit
-  // "Load escalations" button (not auto-loaded like Campaigns) — there's no
-  // established reason to auto-load this tab, and the explicit-button
-  // pattern (see loadGuests below) is this file's original/more common
-  // convention.
+  // the Campaigns tab's own state above, sharing only `apiKey`. Auto-loaded
+  // the first time the Escalations tab becomes active (see the effect near
+  // loadEscalations below) rather than an explicit button — no established
+  // reason to require a manual click here, once activeTab makes "the owner
+  // just opened this tab" observable.
   const [escalations, setEscalations] = useState<Escalation[]>([]);
   const [escalationsLoading, setEscalationsLoading] = useState(false);
   const [escalationsError, setEscalationsError] = useState<string | null>(null);
@@ -671,6 +797,22 @@ export default function DashboardPage() {
   // pattern above.
   const [escalationsSorting, setEscalationsSorting] = useState<SortingState>([]);
   const [escalationsColumnFilters, setEscalationsColumnFilters] = useState<ColumnFiltersState>([]);
+  // Escalations tab's own pagination state — same pattern/default as
+  // `pagination`/`campaignsPagination` above.
+  const [escalationsPagination, setEscalationsPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: TABLE_PAGE_SIZE,
+  });
+  // Same render-time reset-page-to-0-on-filter-change pattern as
+  // `pagination`/`campaignsPagination` above.
+  const [prevEscalationsColumnFilters, setPrevEscalationsColumnFilters] =
+    useState(escalationsColumnFilters);
+  if (escalationsColumnFilters !== prevEscalationsColumnFilters) {
+    setPrevEscalationsColumnFilters(escalationsColumnFilters);
+    if (escalationsPagination.pageIndex !== 0) {
+      setEscalationsPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    }
+  }
 
   // Inline phone edit — only one cell can be in edit mode at a time, tracked
   // by guest id rather than per-row state.
@@ -691,11 +833,17 @@ export default function DashboardPage() {
     setEditingGuestId(null);
   }, []);
 
-  async function loadGuests() {
+  // keyOverride lets the API-key modal's submit call this with the
+  // just-entered key directly, rather than relying on `apiKey` state
+  // (setApiKey + loadGuests() in the same handler would otherwise read
+  // the stale pre-update `apiKey` from this render's closure, since state
+  // updates aren't visible until the next render).
+  async function loadGuests(keyOverride?: string) {
+    const key = keyOverride ?? apiKey;
     setGuestsLoading(true);
     setGuestsError(null);
     try {
-      const res = await fetch("/api/guest-contacts", { headers: { "X-API-Key": apiKey } });
+      const res = await fetch("/api/guest-contacts", { headers: { "X-API-Key": key } });
       const json = await res.json();
       if (!res.ok) {
         setGuestsError(typeof json.error === "string" ? json.error : "Failed to load guests");
@@ -711,11 +859,43 @@ export default function DashboardPage() {
     }
   }
 
+  // API-key modal's own open/close handler — mirrors
+  // handleNewCampaignOpenChange's own shape further below. Re-syncs
+  // apiKeyDraft from the committed apiKey every time the modal opens (not
+  // just on first mount) so reopening it later "to change the key" (per
+  // this modal's own doc comment above) starts from today's real value
+  // rather than whatever was last typed and abandoned.
+  function handleApiKeyDialogOpenChange(open: boolean) {
+    setIsApiKeyDialogOpen(open);
+    if (open) {
+      setApiKeyDraft(apiKey);
+    }
+  }
+
+  // Submits the API-key modal: commits the draft to `apiKey`, closes the
+  // modal, and loads guests — the same "entering a key loads the CRM tab's
+  // guest list" behavior this page has always had, just relocated behind
+  // the modal instead of a permanent button. Passes the just-typed key
+  // straight to loadGuests (see that function's own comment) rather than
+  // relying on the `apiKey` state update having landed yet.
+  function submitApiKey() {
+    const key = apiKeyDraft.trim();
+    if (!key) {
+      return;
+    }
+    setApiKey(key);
+    setIsApiKeyDialogOpen(false);
+    void loadGuests(key);
+  }
+
   // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
   // against GET /api/escalations (CRM's own proxy to GCA's identically-named
-  // endpoint) instead — same explicit-button convention as loadGuests, not
-  // auto-fetched like loadCampaigns below.
-  async function loadEscalations() {
+  // endpoint) instead. Auto-loaded the first time the Escalations tab
+  // becomes active (see the effect below, right after loadCampaigns' own
+  // auto-load effect) rather than behind an explicit button — a useCallback,
+  // same reason loadCampaigns is one, to give that effect a stable
+  // dependency.
+  const loadEscalations = useCallback(async () => {
     setEscalationsLoading(true);
     setEscalationsError(null);
     try {
@@ -735,7 +915,7 @@ export default function DashboardPage() {
     } finally {
       setEscalationsLoading(false);
     }
-  }
+  }, [apiKey]);
 
   // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
   // against GET /api/campaigns instead. Unlike loadGuests (still behind the
@@ -786,6 +966,26 @@ export default function DashboardPage() {
     }, 600);
     return () => clearTimeout(timeoutId);
   }, [apiKey, hasLoadedCampaigns, campaignsLoading, loadCampaigns]);
+
+  // Auto-loads escalations the first time the Escalations tab becomes
+  // active — not on initial page load (activeTab starts "crm"), and not
+  // every time the owner switches back to a tab already loaded once
+  // (hasLoadedEscalations/escalationsLoading guard duplicate/overlapping
+  // fetches, same as loadCampaigns' own auto-load effect above). No
+  // debounce needed here (unlike that effect) — apiKey is only ever set
+  // once, atomically, by the API-key modal's submit handler below, never
+  // typed character-by-character into a field this effect watches.
+  useEffect(() => {
+    if (
+      activeTab !== "escalations" ||
+      apiKey.length === 0 ||
+      hasLoadedEscalations ||
+      escalationsLoading
+    ) {
+      return;
+    }
+    void loadEscalations();
+  }, [activeTab, apiKey, hasLoadedEscalations, escalationsLoading, loadEscalations]);
 
   // Toggling a campaign's enabled Switch — confirmation-based (not
   // optimistic): the Switch only flips once PATCH /api/campaigns/[id]
@@ -1600,13 +1800,15 @@ export default function DashboardPage() {
   const table = useReactTable({
     data: guests,
     columns,
-    state: { sorting, columnFilters, columnVisibility: COLUMN_VISIBILITY },
+    state: { sorting, columnFilters, columnVisibility: COLUMN_VISIBILITY, pagination },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
+    onPaginationChange: setPagination,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   const selectedGuest = guests.find((guest) => guest.id === selectedGuestId) ?? null;
@@ -1785,13 +1987,19 @@ export default function DashboardPage() {
   const campaignsTable = useReactTable({
     data: campaigns,
     columns: campaignColumns,
-    state: { sorting: campaignsSorting, columnFilters: campaignsColumnFilters },
+    state: {
+      sorting: campaignsSorting,
+      columnFilters: campaignsColumnFilters,
+      pagination: campaignsPagination,
+    },
     onSortingChange: setCampaignsSorting,
     onColumnFiltersChange: setCampaignsColumnFilters,
+    onPaginationChange: setCampaignsPagination,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   // Escalations tab's own columns — mirrors the CRM/Campaigns tabs' own
@@ -1854,13 +2062,19 @@ export default function DashboardPage() {
   const escalationsTable = useReactTable({
     data: escalations,
     columns: escalationColumns,
-    state: { sorting: escalationsSorting, columnFilters: escalationsColumnFilters },
+    state: {
+      sorting: escalationsSorting,
+      columnFilters: escalationsColumnFilters,
+      pagination: escalationsPagination,
+    },
     onSortingChange: setEscalationsSorting,
     onColumnFiltersChange: setEscalationsColumnFilters,
+    onPaginationChange: setEscalationsPagination,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -1905,31 +2119,55 @@ export default function DashboardPage() {
         ))}
       </Box>
 
-      <Heading size="6" mb="4">
-        CRM Dashboard
-      </Heading>
-
-      <Flex gap="3" align="end" mb="5">
-        <Box>
-          <Text as="label" htmlFor="api-key" size="2" weight="medium">
-            CRM API Key
-          </Text>
-          <Box mt="1">
-            <TextField.Root
-              id="api-key"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="X-API-Key"
-            />
-          </Box>
-        </Box>
-        <Button onClick={loadGuests} disabled={guestsLoading || !apiKey}>
-          {guestsLoading ? "Loading…" : "Load guests"}
-        </Button>
+      <Flex justify="between" align="center" mb="5">
+        <Heading size="6">CRM Dashboard</Heading>
+        <Dialog.Root open={isApiKeyDialogOpen} onOpenChange={handleApiKeyDialogOpenChange}>
+          <Dialog.Trigger>
+            <Button
+              size="1"
+              variant={apiKey ? "soft" : "solid"}
+              color={apiKey ? "gray" : undefined}
+            >
+              {apiKey ? "⚙ Change API key" : "Sign in"}
+            </Button>
+          </Dialog.Trigger>
+          <Dialog.Content maxWidth="420px">
+            <Dialog.Title>CRM API Key</Dialog.Title>
+            <Box>
+              <Text as="label" htmlFor="api-key" size="2" weight="medium">
+                CRM API Key
+              </Text>
+              <Box mt="1">
+                <TextField.Root
+                  id="api-key"
+                  type="password"
+                  autoFocus
+                  value={apiKeyDraft}
+                  onChange={(e) => setApiKeyDraft(e.target.value)}
+                  placeholder="X-API-Key"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      submitApiKey();
+                    }
+                  }}
+                />
+              </Box>
+            </Box>
+            <Flex gap="3" mt="4" justify="end">
+              <Dialog.Close>
+                <Button variant="soft" color="gray">
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button onClick={submitApiKey} disabled={guestsLoading || !apiKeyDraft.trim()}>
+                {guestsLoading ? "Loading…" : "Load guests"}
+              </Button>
+            </Flex>
+          </Dialog.Content>
+        </Dialog.Root>
       </Flex>
 
-      <Tabs.Root defaultValue="crm">
+      <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
         <Tabs.List mb="4">
           <Tabs.Trigger value="crm">CRM</Tabs.Trigger>
           <Tabs.Trigger value="campaigns">Campaigns</Tabs.Trigger>
@@ -2048,7 +2286,7 @@ export default function DashboardPage() {
               </Flex>
 
               <Text as="p" size="2" color="gray" mb="2">
-                Showing {table.getFilteredRowModel().rows.length} of {guests.length} guests
+                Showing {paginationRangeText(table)} guests
               </Text>
             </>
           )}
@@ -2056,7 +2294,9 @@ export default function DashboardPage() {
           <Flex gap="5" align="start">
             <Box flexGrow="1" style={{ minWidth: 0 }}>
               {!hasLoaded && !guestsLoading && (
-                <Text color="gray">Enter the CRM API key and click "Load guests" to begin.</Text>
+                <Text color="gray">
+                  Click "Sign in" above to enter your CRM API key and load guests.
+                </Text>
               )}
               {hasLoaded && guests.length === 0 && <Text color="gray">No guests yet.</Text>}
               {guests.length > 0 && (
@@ -2113,6 +2353,7 @@ export default function DashboardPage() {
                   </Table.Body>
                 </Table.Root>
               )}
+              {guests.length > 0 && <PaginationControls table={table} />}
             </Box>
 
             {selectedGuestId && (
@@ -2606,7 +2847,7 @@ export default function DashboardPage() {
           )}
 
           {!apiKey && !hasLoadedCampaigns && !campaignsLoading && (
-            <Text color="gray">Enter the CRM API key above to load campaigns.</Text>
+            <Text color="gray">Sign in with your CRM API key above to load campaigns.</Text>
           )}
           {campaignsLoading && <Text color="gray">Loading…</Text>}
           {hasLoadedCampaigns && campaigns.length === 0 && (
@@ -2615,8 +2856,7 @@ export default function DashboardPage() {
 
           {campaigns.length > 0 && (
             <Text as="p" size="2" color="gray" mb="2">
-              Showing {campaignsTable.getFilteredRowModel().rows.length} of {campaigns.length}{" "}
-              campaigns
+              Showing {paginationRangeText(campaignsTable)} campaigns
             </Text>
           )}
 
@@ -2666,24 +2906,20 @@ export default function DashboardPage() {
               </Table.Body>
             </Table.Root>
           )}
+          {campaigns.length > 0 && <PaginationControls table={campaignsTable} />}
         </Tabs.Content>
 
         <Tabs.Content value="escalations">
-          <Flex gap="3" align="end" mb="4">
-            <Button onClick={() => void loadEscalations()} disabled={escalationsLoading || !apiKey}>
-              {escalationsLoading ? "Loading…" : "Load escalations"}
-            </Button>
-          </Flex>
-
           {escalationsError && (
             <Text as="p" color="red" mb="3">
               {escalationsError}
             </Text>
           )}
 
-          {!hasLoadedEscalations && !escalationsLoading && (
-            <Text color="gray">Enter the CRM API key above and click "Load escalations".</Text>
+          {!apiKey && !hasLoadedEscalations && !escalationsLoading && (
+            <Text color="gray">Sign in with your CRM API key above to load escalations.</Text>
           )}
+          {escalationsLoading && <Text color="gray">Loading…</Text>}
           {hasLoadedEscalations && escalations.length === 0 && (
             <Text color="gray">No escalations yet.</Text>
           )}
@@ -2717,8 +2953,7 @@ export default function DashboardPage() {
               </Flex>
 
               <Text as="p" size="2" color="gray" mb="2">
-                Showing {escalationsTable.getFilteredRowModel().rows.length} of {escalations.length}{" "}
-                escalations
+                Showing {paginationRangeText(escalationsTable)} escalations
               </Text>
 
               <Table.Root variant="surface" style={{ tableLayout: "fixed" }}>
@@ -2765,6 +3000,7 @@ export default function DashboardPage() {
                   ))}
                 </Table.Body>
               </Table.Root>
+              <PaginationControls table={escalationsTable} />
             </>
           )}
         </Tabs.Content>
