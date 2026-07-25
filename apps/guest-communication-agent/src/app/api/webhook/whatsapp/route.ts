@@ -36,14 +36,20 @@ function escapeXml(text: string): string {
  * When this turn's `result.missingInfoEscalated` comes back true (a
  * missing_info escalation fired this turn — either the model's own
  * escalateToOwner tool call, or one of agent.ts's two deterministic safety
- * nets), the reply is deliberately never delivered to the guest: it's still
- * recorded via recordMessage for internal/CRM visibility (useful for the
- * owner reviewing history), but the TwiML response sent back to Twilio is an
- * empty `<Response></Response>` rather than one carrying the interim
- * "let me check with the owner" text. The guest hears nothing until the
- * owner actually answers on Telegram and GCA's proactive re-invocation
- * (@/lib/resume-conversation.ts's resumeConversationWithAnswer) sends the
- * real answer through this same graph.
+ * nets), the interim reply is never delivered to the guest (empty
+ * `<Response></Response>` TwiML) AND never recorded into whatsapp_messages
+ * at all. Recording was tried first (kept for internal/CRM visibility) but
+ * caused a real failure: when the owner later answers on Telegram and GCA's
+ * proactive re-invocation (@/lib/resume-conversation.ts's
+ * resumeConversationWithAnswer) re-invokes this same graph with the guest's
+ * original question, load_context (@/graph/nodes/load-context.ts) loads that
+ * recorded interim reply ("I couldn't find an answer... I've let the owner
+ * know") as history sitting right before the repeated question — and a real
+ * test showed the model reading that as "I already told them I'd check",
+ * skipping answerPropertyQuestion entirely on the re-invocation and
+ * escalating a second time instead of finding the freshly-embedded answer.
+ * Not recording the interim turn at all avoids that trap: the re-invocation
+ * sees the guest's own question with nothing misleading in between.
  */
 export async function POST(request: NextRequest) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -130,7 +136,12 @@ export async function POST(request: NextRequest) {
       ? lastMessage.content
       : "Sorry, I couldn't process that — please try again shortly.";
 
-  await recordMessage(conversationId, "assistant", replyText, runId);
+  // Skipped entirely (not just undelivered) for a missing_info escalation —
+  // see this route's own doc comment above for why recording it broke the
+  // later re-invocation.
+  if (!result.missingInfoEscalated) {
+    await recordMessage(conversationId, "assistant", replyText, runId);
+  }
 
   // Fire-and-forget: record this turn's guest interaction and, if the
   // tools that fired this turn imply funnel-stage progress, let CRM
@@ -147,12 +158,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // A missing_info escalation's interim reply is recorded above for internal
-  // visibility but deliberately never delivered to the guest — the guest
-  // hears nothing until the owner answers on Telegram and GCA's proactive
-  // re-invocation (@/lib/resume-conversation.ts) sends the real answer. An
-  // empty <Response></Response> is valid TwiML that sends no message, so
-  // Twilio doesn't relay replyText to the guest for this turn.
+  // A missing_info escalation's interim reply is deliberately never
+  // delivered to the guest (see this route's own header doc comment) — the
+  // guest hears nothing until the owner answers on Telegram and GCA's
+  // proactive re-invocation (@/lib/resume-conversation.ts) sends the real
+  // answer. An empty <Response></Response> is valid TwiML that sends no
+  // message, so Twilio doesn't relay replyText to the guest for this turn.
   const twiml = result.missingInfoEscalated
     ? "<Response></Response>"
     : `<Response><Message>${escapeXml(replyText)}</Message></Response>`;

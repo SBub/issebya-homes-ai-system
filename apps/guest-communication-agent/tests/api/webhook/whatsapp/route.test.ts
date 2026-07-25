@@ -140,7 +140,7 @@ describe("POST /api/webhook/whatsapp", () => {
     expect(body).toBe("<Response><Message>Yes, room 1 is available!</Message></Response>");
   });
 
-  it("suppresses the guest-facing reply (empty TwiML) when missingInfoEscalated is true, while still recording the message", async () => {
+  it("suppresses the guest-facing reply (empty TwiML) and never records it when missingInfoEscalated is true", async () => {
     graphInvokeMock.mockResolvedValue({
       messages: [
         new AIMessage(
@@ -159,14 +159,17 @@ describe("POST /api/webhook/whatsapp", () => {
     // Valid, empty TwiML — Twilio relays nothing to the guest this turn.
     expect(body).toBe("<Response></Response>");
 
-    // The interim reply is still recorded for internal/CRM visibility, even
-    // though the guest never sees it live — see the route's own doc comment.
+    // Not recorded at all (not just undelivered) — a real test showed
+    // recording it here poisoned the later re-invocation's loaded history
+    // (the model read its own "I've let the owner know" reply as "already
+    // handled" and skipped re-searching) — see the route's own doc comment.
+    // Only the guest's own inbound message (call #1) is ever recorded.
+    expect(recordMessageMock).toHaveBeenCalledTimes(1);
     expect(recordMessageMock).toHaveBeenNthCalledWith(
-      2,
+      1,
       "convo-1",
-      "assistant",
-      "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-      expect.any(String),
+      "user",
+      "Is there a juicer in the kitchen?",
     );
   });
 });
