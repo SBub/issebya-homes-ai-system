@@ -919,6 +919,16 @@ export default function DashboardPage() {
   // the modal instead of a permanent button. Passes the just-typed key
   // straight to loadGuests (see that function's own comment) rather than
   // relying on the `apiKey` state update having landed yet.
+  // Resets Campaigns/Escalations' own hasLoaded*/​*Error state on every
+  // submit, not just the first — hasLoadedCampaigns/hasLoadedEscalations are
+  // now set on *any* completed attempt (success or failure, see
+  // loadCampaigns/loadEscalations' own doc comments on why), so without this
+  // reset, correcting a bad key here would leave those two tabs permanently
+  // stuck showing their first attempt's stale error: their auto-load effects
+  // guard on hasLoaded* already being true and would never fire again for
+  // the corrected key. loadGuests itself needs no equivalent reset — it's
+  // never behind an effect that re-fires on hasLoaded flipping back to
+  // false, so calling it again below with the new key is already enough.
   function submitApiKey() {
     const key = apiKeyDraft.trim();
     if (!key) {
@@ -926,16 +936,33 @@ export default function DashboardPage() {
     }
     setApiKey(key);
     setIsApiKeyDialogOpen(false);
+    setHasLoadedCampaigns(false);
+    setCampaignsError(null);
+    setHasLoadedEscalations(false);
+    setEscalationsError(null);
     void loadGuests(key);
   }
 
-  // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
-  // against GET /api/escalations (CRM's own proxy to GCA's identically-named
-  // endpoint) instead. Auto-loaded the first time the Escalations tab
-  // becomes active (see the effect below, right after loadCampaigns' own
-  // auto-load effect) rather than behind an explicit button — a useCallback,
-  // same reason loadCampaigns is one, to give that effect a stable
-  // dependency.
+  // Mirrors loadGuests' own loading/error/hasLoaded pattern, just against GET
+  // /api/escalations (CRM's own proxy to GCA's identically-named endpoint)
+  // instead — with one deliberate difference: hasLoadedEscalations is set in
+  // `finally`, unconditionally, rather than only after a successful
+  // response. Setting it only on success used to mean a failed attempt (a
+  // stale/invalid API key 401ing, or a network error) left
+  // hasLoadedEscalations false forever — so once escalationsLoading reset to
+  // false in that same `finally`, the auto-load effect below would see its
+  // own guard (activeTab === "escalations", apiKey set, hasLoadedEscalations
+  // still false, escalationsLoading now false again) pass and immediately
+  // re-fire, fail again, and repeat — an unthrottled infinite retry loop
+  // firing as fast as each response came back (confirmed live: over a
+  // thousand back-to-back 401s within a few seconds of opening the
+  // Escalations tab with a bad key). A failed attempt still counts as "we
+  // tried" — escalationsError already surfaces the failure to the owner, and
+  // there's no reason to keep silently hammering the endpoint every render.
+  // Auto-loaded the first time the Escalations tab becomes active (see the
+  // effect below, right after loadCampaigns' own auto-load effect) rather
+  // than behind an explicit button — a useCallback, same reason loadCampaigns
+  // is one, to give that effect a stable dependency.
   const loadEscalations = useCallback(async () => {
     setEscalationsLoading(true);
     setEscalationsError(null);
@@ -950,19 +977,25 @@ export default function DashboardPage() {
         return;
       }
       setEscalations((json.escalations ?? []) as Escalation[]);
-      setHasLoadedEscalations(true);
     } catch (err) {
       setEscalationsError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setEscalationsLoading(false);
+      setHasLoadedEscalations(true);
     }
   }, [apiKey]);
 
-  // Mirrors loadGuests' own loading/error/hasLoaded pattern exactly, just
-  // against GET /api/campaigns instead. Unlike loadGuests (still behind the
-  // CRM tab's explicit "Load guests" button), this is auto-fetched — see
-  // the useEffect right below — so it's a useCallback rather than a plain
-  // function, to give that effect a stable dependency.
+  // Mirrors loadGuests' own loading/error/hasLoaded pattern, just against GET
+  // /api/campaigns instead — same "hasLoadedCampaigns is set in `finally`,
+  // unconditionally" fix as loadEscalations above, for the identical
+  // infinite-retry-loop reason (a failed attempt left hasLoadedCampaigns
+  // false forever, so the auto-load effect below would keep re-firing every
+  // time campaignsLoading reset to false — just slower here, gated by the
+  // effect's own 600ms timer instead of firing immediately). Unlike
+  // loadGuests (still behind the CRM tab's explicit "Load guests" button),
+  // this is auto-fetched — see the useEffect right below — so it's a
+  // useCallback rather than a plain function, to give that effect a stable
+  // dependency.
   const loadCampaigns = useCallback(async () => {
     setCampaignsLoading(true);
     setCampaignsError(null);
@@ -975,37 +1008,36 @@ export default function DashboardPage() {
         return;
       }
       setCampaigns((json.campaigns ?? []) as Campaign[]);
-      setHasLoadedCampaigns(true);
     } catch (err) {
       setCampaignsError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setCampaignsLoading(false);
+      setHasLoadedCampaigns(true);
     }
   }, [apiKey]);
 
   // Auto-loads campaigns once apiKey has a value, rather than requiring an
-  // explicit "Load campaigns" click. Debounced (600ms of no further apiKey
-  // changes) rather than firing on the first keystroke that makes apiKey
-  // non-empty — firing immediately on "any non-empty value" was a real bug:
-  // typing (or this page's own automation tooling filling the field
-  // character-by-character) briefly makes apiKey a single incomplete
-  // character, which 401s once, and since apiKey never becomes empty again
-  // afterward, an "empty-to-non-empty transition" guard can never re-fire —
-  // the rest of the real key being typed in would never trigger a retry.
-  // Debouncing avoids needing to detect "done typing" any other way: every
-  // apiKey change resets the timer via the cleanup function, so only a
-  // settled value actually triggers the fetch. hasLoadedCampaigns/
-  // campaignsLoading still guard duplicate/overlapping fetches once a real
-  // attempt is in flight or has already succeeded. The CRM tab's own "Load
-  // guests" button is untouched — this auto-load is Campaigns-only.
+  // explicit "Load campaigns" click. No debounce here (unlike a prior version
+  // of this effect) — that debounce (600ms of no further apiKey changes) was
+  // built for a since-removed permanent input where apiKey changed on every
+  // keystroke (firing on a single half-typed character would 401, and an
+  // "empty-to-non-empty transition" guard could never re-fire once apiKey
+  // stopped being empty). apiKey is now only ever set once, atomically, by
+  // the API-key modal's submit handler below (see submitApiKey) — never
+  // typed character-by-character into a field this effect watches — so
+  // there's nothing left to debounce against; the modal's own apiKeyDraft
+  // field absorbs every keystroke instead, same reasoning as the
+  // Escalations auto-load effect below never having needed a debounce.
+  // hasLoadedCampaigns/campaignsLoading still guard duplicate/overlapping
+  // fetches once a real attempt is in flight or has already been attempted
+  // (successfully or not — see loadCampaigns' own hasLoadedCampaigns
+  // comment). The CRM tab's own "Load guests" button is untouched — this
+  // auto-load is Campaigns-only.
   useEffect(() => {
     if (apiKey.length === 0 || hasLoadedCampaigns || campaignsLoading) {
       return;
     }
-    const timeoutId = setTimeout(() => {
-      void loadCampaigns();
-    }, 600);
-    return () => clearTimeout(timeoutId);
+    void loadCampaigns();
   }, [apiKey, hasLoadedCampaigns, campaignsLoading, loadCampaigns]);
 
   // Auto-loads escalations the first time the Escalations tab becomes
@@ -1013,9 +1045,9 @@ export default function DashboardPage() {
   // every time the owner switches back to a tab already loaded once
   // (hasLoadedEscalations/escalationsLoading guard duplicate/overlapping
   // fetches, same as loadCampaigns' own auto-load effect above). No
-  // debounce needed here (unlike that effect) — apiKey is only ever set
-  // once, atomically, by the API-key modal's submit handler below, never
-  // typed character-by-character into a field this effect watches.
+  // debounce needed here (unlike that effect used to have) — apiKey is only
+  // ever set once, atomically, by the API-key modal's submit handler below,
+  // never typed character-by-character into a field this effect watches.
   useEffect(() => {
     if (
       activeTab !== "escalations" ||
