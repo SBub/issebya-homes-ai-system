@@ -10,7 +10,11 @@ import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/te
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { sendDigestNow } from "@/lib/telegram/digest";
-import { sendGuestMessage } from "@/lib/telegram/gca";
+import {
+  getEscalationByTelegramMessageId,
+  resolveEscalation,
+  sendGuestMessage,
+} from "@/lib/telegram/gca";
 import { runCheckHealth } from "@/lib/telegram/health-monitor";
 import { renderHealthSummary } from "@/lib/telegram/health-targets";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
@@ -115,6 +119,87 @@ async function handleNudgeReject(
   }
 }
 
+/**
+ * Owner replied to a previous missing_info escalation nudge with free text —
+ * the actual answer to the guest's question. Unlike nudge_approve/reject,
+ * this isn't a button tap, so there's no callback_data to dispatch on; the
+ * correlation key is Telegram's own `reply_to_message.message_id` (the
+ * message being replied to), matched against GCA's escalations.telegram_
+ * message_id via GET /api/escalations/by-telegram-message-id/:id.
+ *
+ * Returns `false` when that lookup 404s (or the message isn't a reply with
+ * text at all): this message has nothing to do with an escalation — the
+ * webhook receives every message in the chat, including replies to
+ * unrelated things (a reminder's "Done" prompt, a campaign nudge, or just a
+ * normal reply) — so the caller must fall through to its own existing
+ * command/social-post dispatch rather than swallowing the message here.
+ * Returns `true` once a real escalation nudge is matched, whatever the
+ * outcome (already resolved / guest-send failed / resolved successfully) —
+ * all of those are "handled" as far as the caller's own dispatch is
+ * concerned, even though only the last one is a full success.
+ */
+async function handleEscalationReply(
+  message: NonNullable<TelegramUpdate["message"]>,
+): Promise<boolean> {
+  const replyToId = message.reply_to_message?.message_id;
+  const answer = message.text;
+  if (replyToId === undefined || !answer) {
+    return false;
+  }
+
+  let escalation: Awaited<ReturnType<typeof getEscalationByTelegramMessageId>>;
+  try {
+    escalation = await getEscalationByTelegramMessageId(replyToId);
+  } catch (err) {
+    // A real failure to reach GCA (not a 404) — can't tell whether this
+    // reply was actually meant for an escalation, so fail open: log and let
+    // the caller fall through to its normal dispatch rather than risk
+    // silently eating an unrelated message the owner expects a response to.
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[telegram-router] escalation lookup failed:", errorMessage);
+    return false;
+  }
+
+  if (!escalation) {
+    return false;
+  }
+
+  if (escalation.resolved_at) {
+    await sendMessage("Already handled — this escalation was already resolved.");
+    return true;
+  }
+
+  const sendResult = await sendGuestMessage(escalation.phone_number, answer);
+  if (!sendResult.ok) {
+    // Do NOT call GCA's resolve endpoint on a send failure — the escalation
+    // stays unresolved so this can be retried by replying again, same
+    // "don't mark done on a failed send" contract as handleNudgeApprove.
+    console.error(
+      `[telegram-router] escalation reply send failed for ${escalation.id}:`,
+      sendResult.error,
+    );
+    await sendMessage("Failed to send to guest — try replying again.");
+    return true;
+  }
+
+  const resolveResult = await resolveEscalation(escalation.id, answer);
+  if (!resolveResult.ok) {
+    // The guest already has their answer at this point (sendResult.ok was
+    // true above) — this is only GCA's own persist-and-embed step failing,
+    // not a failed delivery, so the owner is told the truth (sent, KB write
+    // failed) rather than the full success message, which would be wrong.
+    console.error(
+      `[telegram-router] escalation resolve failed for ${escalation.id}:`,
+      resolveResult.error,
+    );
+    await sendMessage("Sent to guest, but failed to add the answer to the knowledge base.");
+    return true;
+  }
+
+  await sendMessage("✅ Sent to guest and added to the knowledge base.");
+  return true;
+}
+
 /** Sends a social reply with the shared retry-once + durable-fallback behavior. */
 async function sendSocialReply(text: string): Promise<void> {
   const result = await sendWithRetry(() => sendMessage(text));
@@ -177,6 +262,19 @@ export async function POST(request: NextRequest) {
   if (update?.callback_query) {
     await handleCallbackQuery(update.callback_query);
     return NextResponse.json({ ok: true });
+  }
+
+  if (update?.message?.reply_to_message && update.message.text) {
+    // Checked before the command/social-post dispatch below, alongside
+    // (not replacing) the callback_query branch above — but only
+    // short-circuits when this really was a reply to one of GCA's
+    // escalation nudges. A 404 from the lookup means "unrelated reply," so
+    // handleEscalationReply returns false and this falls through to the
+    // rest of the existing dispatch unchanged.
+    const handled = await handleEscalationReply(update.message);
+    if (handled) {
+      return NextResponse.json({ ok: true });
+    }
   }
 
   if (update && isCronListCommand(update)) {

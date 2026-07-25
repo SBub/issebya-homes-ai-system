@@ -24,6 +24,12 @@ vi.mock("@/lib/supabase.js", () => ({
 vi.mock("@/lib/telegram.js", () => ({
   sendTelegramNotification: vi.fn(),
 }));
+// missing_info escalations (the agentNode step-cap test below is one) now
+// route through this instead of sendTelegramNotification — see
+// @/graph/tools.ts's performEscalation.
+vi.mock("@/lib/telegram-router.js", () => ({
+  sendEscalationNudge: vi.fn(),
+}));
 // loadGuestInfo (@/lib/db.ts) no longer queries Supabase directly — the
 // guest_contacts table now lives in apps/crm, and db.ts calls
 // @/lib/crm.ts's lookupGuestContact() over HTTP instead. Mock that function
@@ -36,6 +42,7 @@ vi.mock("@/lib/crm.js", () => ({
 
 const { createAdminClient } = await import("@/lib/supabase.js");
 const { sendTelegramNotification } = await import("@/lib/telegram.js");
+const { sendEscalationNudge } = await import("@/lib/telegram-router.js");
 const { lookupGuestContact } = await import("@/lib/crm.js");
 
 // Proves the graph compiles and is structurally sound — nodes/edges wired
@@ -164,10 +171,21 @@ describe("agentNode step cap", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("escalates instead of calling the model once MAX_AGENT_STEPS is exceeded", async () => {
-    const mockInsert = vi.fn().mockResolvedValue({ error: null });
+    // missing_info escalations insert-then-select the new row's id (needed
+    // to correlate the owner's later Telegram reply — see
+    // @/graph/tools.ts's performEscalation), then update it once the nudge
+    // has an id of its own — unlike the other three categories' plain
+    // fire-and-forget insert, so this mock chains insert().select().single()
+    // and a separate update().eq().
+    const mockSingle = vi.fn().mockResolvedValue({ data: { id: "esc-cap-test" }, error: null });
+    const mockSelect = vi.fn().mockReturnValue({ single: mockSingle });
+    const mockInsert = vi.fn().mockReturnValue({ select: mockSelect });
+    const mockEq = vi.fn().mockResolvedValue({ error: null });
+    const mockUpdate = vi.fn().mockReturnValue({ eq: mockEq });
     vi.mocked(createAdminClient).mockReturnValue({
-      from: vi.fn().mockReturnValue({ insert: mockInsert }),
+      from: vi.fn().mockReturnValue({ insert: mockInsert, update: mockUpdate }),
     } as unknown as ReturnType<typeof createAdminClient>);
+    vi.mocked(sendEscalationNudge).mockResolvedValue({ ok: true, telegramMessageId: 4242 });
 
     const state = {
       messages: [new AIMessage({ content: "looping..." })],
@@ -195,7 +213,14 @@ describe("agentNode step cap", () => {
         reason_category: "missing_info",
       }),
     );
-    expect(sendTelegramNotification).toHaveBeenCalledTimes(1);
+    // missing_info now routes through telegram-router's nudge endpoint
+    // instead of the raw sendTelegramNotification bypass (that path is
+    // untouched for the other three categories only).
+    expect(sendEscalationNudge).toHaveBeenCalledWith(
+      expect.objectContaining({ escalationId: "esc-cap-test", phone: "+351900000099" }),
+    );
+    expect(mockUpdate).toHaveBeenCalledWith({ telegram_message_id: 4242 });
+    expect(sendTelegramNotification).not.toHaveBeenCalled();
 
     expect(result.messages).toHaveLength(1);
     const [message] = result.messages as AIMessage[];

@@ -16,6 +16,12 @@ interface TelegramMessage {
   message_id: number;
   chat: { id: number };
   text?: string;
+  /** Present when this message is itself a reply to another message — the
+   * escalation-nudge reply flow (../../app/api/telegram/webhook/route.ts's
+   * new reply-to-nudge branch) matches `reply_to_message.message_id`
+   * against an escalation's stored `telegram_message_id` to correlate the
+   * owner's free-text answer back to the nudge it's replying to. */
+  reply_to_message?: { message_id: number };
 }
 
 interface TelegramCallbackQuery {

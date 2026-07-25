@@ -3,6 +3,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase";
 import { sendTelegramNotification } from "@/lib/telegram";
+import { sendEscalationNudge } from "@/lib/telegram-router";
 import { searchProperty } from "../tools/search-property";
 
 // Ported from issebya-homes-website's apps/guest-communication-agent's own
@@ -201,16 +202,32 @@ const escalationReasonCategorySchema = z.enum([
 ]);
 export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySchema>;
 
-// The escalations DB insert is portable (createAdminClient). The Telegram
-// notification is a scoped duplicate of the source's own
-// apps/website/src/lib/telegram.ts — see ../lib/telegram.ts.
+// The escalations DB insert is portable (createAdminClient). For the other
+// three categories, the Telegram notification is still the scoped duplicate
+// of the source's own apps/website/src/lib/telegram.ts — see
+// ../lib/telegram.ts — kept exactly as before, untouched by the missing_info
+// work below.
+//
+// missing_info is the one category with a human-in-the-loop resolution path:
+// the owner can reply to the nudge with the actual answer, which then (a)
+// reaches the guest over GCA/Twilio and (b) gets embedded into the property
+// knowledge base — see POST /api/escalations/by-telegram-message-id/[id] and
+// POST /api/escalations/[id]/resolve, plus apps/telegram-router's
+// POST /api/escalation-nudges and its webhook's new reply-to-nudge branch.
+// That round trip needs a real correlation id (Telegram's own
+// reply_to_message.message_id), which only exists once the nudge has
+// actually been sent — hence `.select("id").single()` here (unlike the
+// other three categories, which never need the row back) and the nudge
+// send happening inside this same function rather than deferred to a
+// caller.
 //
 // Exported (rather than kept private inside the `tool()` closure below) so
-// the agent node's own step-cap safety net (see nodes/agent.ts's
-// MAX_AGENT_STEPS) can trigger the exact same real escalation — DB insert +
-// Telegram notification — without duplicating this logic inline. The model
-// never sees this function directly; only the `escalateToOwner` tool below
-// is exposed to it.
+// the agent node's own step-cap/empty-reply safety nets (see nodes/agent.ts's
+// MAX_AGENT_STEPS) can trigger the exact same real escalation — including
+// the missing_info nudge round trip, since both safety nets classify as
+// missing_info too — without duplicating this logic inline. The model never
+// sees this function directly; only the `escalateToOwner` tool below is
+// exposed to it.
 export async function performEscalation(params: {
   conversationId: string;
   phone: string;
@@ -219,19 +236,57 @@ export async function performEscalation(params: {
 }): Promise<void> {
   const { conversationId, phone, reason, reasonCategory } = params;
   const supabase = createAdminClient();
-  await supabase.from("escalations").insert({
-    conversation_id: conversationId,
-    phone_number: phone,
-    reason,
-    reason_category: reasonCategory,
-  });
-  // "View conversation: <dashboard link>" removed deliberately — there is no
-  // apps/crm-dashboard in this repo yet (that only exists in
-  // issebya-homes-website, not ported), so the link was dead. Come back to
-  // this once a real dashboard exists here — see project_gca_migration.md.
-  await sendTelegramNotification(
-    `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`,
-  );
+
+  if (reasonCategory !== "missing_info") {
+    await supabase.from("escalations").insert({
+      conversation_id: conversationId,
+      phone_number: phone,
+      reason,
+      reason_category: reasonCategory,
+    });
+    // "View conversation: <dashboard link>" removed deliberately — there is
+    // no apps/crm-dashboard in this repo yet (that only exists in
+    // issebya-homes-website, not ported), so the link was dead. Come back to
+    // this once a real dashboard exists here — see project_gca_migration.md.
+    await sendTelegramNotification(
+      `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`,
+    );
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("escalations")
+    .insert({
+      conversation_id: conversationId,
+      phone_number: phone,
+      reason,
+      reason_category: reasonCategory,
+    })
+    .select("id")
+    .single();
+
+  if (error || !data) {
+    console.error("[escalations] insert failed, skipping owner nudge:", error?.message);
+    return;
+  }
+
+  const nudgeResult = await sendEscalationNudge({ escalationId: data.id, phone, reason });
+  if (!nudgeResult.ok) {
+    console.error("[escalations] telegram-router nudge failed:", nudgeResult.error);
+    return;
+  }
+
+  // telegramMessageId can be missing even on a nominally-ok result (e.g.
+  // telegram-router itself isn't configured — see sendMessage's own
+  // token/chatId no-op in apps/telegram-router/src/lib/telegram/telegram.ts)
+  // — nothing to correlate a reply against in that case, so leave
+  // telegram_message_id null rather than writing a meaningless value.
+  if (nudgeResult.telegramMessageId != null) {
+    await supabase
+      .from("escalations")
+      .update({ telegram_message_id: nudgeResult.telegramMessageId })
+      .eq("id", data.id);
+  }
 }
 
 const escalateToOwner = tool(
