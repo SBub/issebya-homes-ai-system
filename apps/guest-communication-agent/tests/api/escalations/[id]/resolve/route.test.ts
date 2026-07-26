@@ -130,7 +130,7 @@ describe("POST /api/escalations/[id]/resolve", () => {
 
   it("returns 400 when the escalation isn't a missing_info category", async () => {
     maybeSingleMock.mockResolvedValueOnce({
-      data: { id: "esc-1", reason_category: "unhappy_guest", resolved_at: null },
+      data: { id: "esc-1", reason_category: "wants_human", resolved_at: null },
       error: null,
     });
 

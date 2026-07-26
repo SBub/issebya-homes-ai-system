@@ -212,23 +212,22 @@ const answerPropertyQuestion = tool(
 // reused by nodes/agent.ts's own deterministic performEscalation call sites
 // (the step-cap and empty-reply safety nets), which never go through this
 // tool's schema validation at all.
-const escalationReasonCategorySchema = z.enum([
-  "unhappy_guest",
-  "wants_human",
-  "complaint",
-  "missing_info",
-]);
+const escalationReasonCategorySchema = z.enum(["wants_human", "complaint", "missing_info"]);
 export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySchema>;
 
 // The escalations DB insert and the owner notification are now unified
-// across all four categories — all four insert the row, select its id back,
-// and push a nudge through apps/telegram-router's POST /api/escalation-nudges
-// (see ../lib/telegram-router.ts's sendEscalationNudge). This replaces the
-// prior two-branch shape where only missing_info went through
-// telegram-router and the other three categories bypassed it entirely with
-// a raw fetch straight to the Telegram Bot API (../lib/telegram.ts's
-// sendTelegramNotification, now deleted) — a long-flagged inconsistency
-// with the rest of this repo's "one app owns all Telegram I/O" pattern.
+// across all three categories — all three insert the row, select its id
+// back, and push a nudge through apps/telegram-router's
+// POST /api/escalation-nudges (see ../lib/telegram-router.ts's
+// sendEscalationNudge). This replaces the prior two-branch shape where only
+// missing_info went through telegram-router and the other categories
+// bypassed it entirely with a raw fetch straight to the Telegram Bot API
+// (../lib/telegram.ts's sendTelegramNotification, now deleted) — a
+// long-flagged inconsistency with the rest of this repo's "one app owns all
+// Telegram I/O" pattern. (A fourth category, unhappy_guest, existed at the
+// time this was unified but was removed 2026-07-26 — general guest
+// unhappiness is now handled by the agent's own conversational judgment via
+// the system prompt, not a recorded escalation.)
 //
 // missing_info is still the one category with a human-in-the-loop
 // resolution path: the owner can reply to the nudge with the actual answer,
@@ -331,11 +330,11 @@ const escalateToOwner = tool(
   {
     name: "escalateToOwner",
     description:
-      "Alert the owner and hand off the conversation. Use when the guest is upset, asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those four this is via reason_category.",
+      "Alert the owner and hand off the conversation. Use when the guest asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those three this is via reason_category.",
     schema: z.object({
       reason: z.string().describe("Brief description of why escalation is needed"),
       reason_category: escalationReasonCategorySchema.describe(
-        "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use unhappy_guest/wants_human/complaint for everything else.",
+        "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use wants_human/complaint for everything else.",
       ),
     }),
   },

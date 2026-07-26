@@ -41,16 +41,11 @@ describe("performEscalation", () => {
     vi.clearAllMocks();
   });
 
-  // All four categories now share the exact same insert -> nudge ->
+  // All three categories now share the exact same insert -> nudge ->
   // store-telegram_message_id path — see @/graph/tools.ts's performEscalation
   // doc comment for why the old two-branch shape (missing_info vs. the
-  // other three via a raw sendTelegramNotification bypass) was unified.
-  for (const reasonCategory of [
-    "unhappy_guest",
-    "wants_human",
-    "complaint",
-    "missing_info",
-  ] as const) {
+  // other two via a raw sendTelegramNotification bypass) was unified.
+  for (const reasonCategory of ["wants_human", "complaint", "missing_info"] as const) {
     it(`inserts, nudges via telegram-router, and stores telegram_message_id for ${reasonCategory}`, async () => {
       mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
       mockEq.mockResolvedValueOnce({ error: null });

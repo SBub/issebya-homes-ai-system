@@ -39,8 +39,8 @@ flowchart TB
         MATCH["match_documents RPC<br/>(unfiltered similarity search —<br/>type-based filtering was tried,<br/>removed after real false negatives)"]
     end
 
-    subgraph Escalation["performEscalation — unified across all four categories"]
-        PERF_ESC["performEscalation<br/>(unhappy_guest / wants_human /<br/>complaint / missing_info)"]
+    subgraph Escalation["performEscalation — unified across all three categories"]
+        PERF_ESC["performEscalation<br/>(wants_human / complaint /<br/>missing_info)"]
         ESC_ROW[("escalations row<br/>+ telegram_message_id")]
         NUDGE["POST /api/escalation-nudges<br/>(apps/telegram-router)"]
     end

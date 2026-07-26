@@ -167,8 +167,8 @@ interface Campaign {
 // judges reply *quality* after the fact; this tab instead shows *why* the
 // agent handed a conversation off to the owner in the first place —
 // specifically, whether it was because of a real property-knowledge-base
-// gap (reason_category: "missing_info") as opposed to an unhappy guest, a
-// request for a human, or an unrelated complaint. No join to guest_contacts
+// gap (reason_category: "missing_info") as opposed to a request for a
+// human or an unrelated complaint. No join to guest_contacts
 // here (see GET /api/escalations's own doc comment) — just the raw phone
 // number, and no "mark as resolved" workflow, just a log.
 interface Escalation {
@@ -180,7 +180,7 @@ interface Escalation {
   // supabase/migrations/20260725100000_add_reason_category_to_escalations.sql)
   // has no category — every row created since always has one, enforced by
   // escalateToOwner's own required Zod field.
-  reason_category: "unhappy_guest" | "wants_human" | "complaint" | "missing_info" | null;
+  reason_category: "wants_human" | "complaint" | "missing_info" | null;
   created_at: string;
   // Both populated by GCA's owner-reply flow on Telegram once a human
   // answers a missing_info (or other) escalation — see GET
@@ -345,12 +345,11 @@ const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 // Escalations tab's own "Reason" chip group — human-readable labels for
-// Escalation.reason_category's four enum values (see that interface's own
+// Escalation.reason_category's three enum values (see that interface's own
 // comment for why it's nullable). No option for the null/uncategorized case
 // — there's exactly one such row today (predating the column entirely) and
-// it isn't worth a permanent fifth filter chip for that.
+// it isn't worth a permanent fourth filter chip for that.
 const ESCALATION_REASON_FILTER_OPTIONS: { value: string; label: string }[] = [
-  { value: "unhappy_guest", label: "Unhappy guest" },
   { value: "wants_human", label: "Wants human" },
   { value: "complaint", label: "Complaint" },
   { value: "missing_info", label: "Missing info" },
@@ -375,24 +374,22 @@ const ESCALATION_RESOLVED_FILTER_OPTIONS: { value: EscalationResolutionStatus; l
 // Badge color per reason_category — chosen to read distinctly at a glance:
 // missing_info is this feature's whole reason for existing (the
 // knowledge-base-gap signal), so it gets its own color (purple) rather than
-// blending in with the other three. Uncategorized (null, the one
+// blending in with the other two. Uncategorized (null, the one
 // pre-existing row) falls back to gray in the cell renderer below rather
 // than needing an entry here.
 const ESCALATION_REASON_CATEGORY_COLOR: Record<
-  "unhappy_guest" | "wants_human" | "complaint" | "missing_info",
-  "orange" | "blue" | "red" | "purple"
+  "wants_human" | "complaint" | "missing_info",
+  "blue" | "red" | "purple"
 > = {
-  unhappy_guest: "orange",
   wants_human: "blue",
   complaint: "red",
   missing_info: "purple",
 };
 
 const ESCALATION_REASON_CATEGORY_LABEL: Record<
-  "unhappy_guest" | "wants_human" | "complaint" | "missing_info",
+  "wants_human" | "complaint" | "missing_info",
   string
 > = {
-  unhappy_guest: "Unhappy guest",
   wants_human: "Wants human",
   complaint: "Complaint",
   missing_info: "Missing info",

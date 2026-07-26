@@ -116,8 +116,8 @@ export const answerPropertyQuestionNode = makeToolNode(getToolByName("answerProp
 // should is only knowable from `call.args.reason_category` — a
 // missing_info escalation means the guest hears nothing until the owner
 // answers and ../lib/resume-conversation.ts's proactive re-invocation sends
-// the real one; the other three categories (unhappy_guest/wants_human/
-// complaint) are unaffected and keep sending whatever the model composed.
+// the real one; the other two categories (wants_human/complaint) are
+// unaffected and keep sending whatever the model composed.
 // Otherwise identical to makeToolNode's own tool-invocation shape: same
 // findOwnToolCall lookup, same tool.invoke() call shape, same
 // conversationId/phone -> config.configurable merge (state wins by default,

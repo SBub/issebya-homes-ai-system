@@ -368,17 +368,17 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     );
   });
 
-  // Safety-critical: before performEscalation was unified across all four
+  // Safety-critical: before performEscalation was unified across all three
   // escalation categories, only missing_info escalations ever got a
   // telegram_message_id, so nothing else could ever reach this branch at
   // all — safety by omission. Now that every category gets one, a reply to
-  // an unhappy_guest/wants_human/complaint nudge must be explicitly refused
-  // here rather than relayed to the guest (sendGuestMessage) or sent to
-  // GCA's resolve endpoint (resolveEscalation) — which would otherwise
-  // relay verbatim to the guest over WhatsApp before resolveEscalation's own
+  // a wants_human/complaint nudge must be explicitly refused here rather
+  // than relayed to the guest (sendGuestMessage) or sent to GCA's resolve
+  // endpoint (resolveEscalation) — which would otherwise relay verbatim to
+  // the guest over WhatsApp before resolveEscalation's own
   // reason_category === "missing_info" validation ever gets a chance to
   // reject it.
-  for (const reasonCategory of ["unhappy_guest", "wants_human", "complaint"] as const) {
+  for (const reasonCategory of ["wants_human", "complaint"] as const) {
     it(`does NOT relay to the guest or resolve when replying to a ${reasonCategory} escalation nudge`, async () => {
       getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
         id: "esc-1",

@@ -26,7 +26,7 @@ const { escalateToOwnerNode } = await import("@/graph/nodes/tool-nodes.js");
 // it can inspect the tool call's own reason_category arg and surface
 // missingInfoEscalated — see tool-nodes.ts's own doc comment on why. These
 // tests cover that new behavior: true only for missing_info, false/omitted
-// for the other three escalation categories (whose guest-facing behavior
+// for the other two escalation categories (whose guest-facing behavior
 // must stay untouched).
 describe("escalateToOwnerNode", () => {
   beforeEach(() => {
@@ -74,7 +74,7 @@ describe("escalateToOwnerNode", () => {
     expect(message.name).toBe("escalateToOwner");
   });
 
-  it.each(["unhappy_guest", "wants_human", "complaint"])(
+  it.each(["wants_human", "complaint"])(
     "returns missingInfoEscalated: false for reason_category %s",
     async (reasonCategory) => {
       const result = await escalateToOwnerNode(stateWithEscalateCall(reasonCategory), {});

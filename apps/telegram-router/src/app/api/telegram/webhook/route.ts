@@ -153,9 +153,9 @@ async function handleNudgeReject(
  * "missing_info" and would 400 on anything else, but that check must still
  * run here first: now that every category gets a telegram_message_id
  * (previously only missing_info did, which is what made omitting this check
- * safe before), an owner reply to an unhappy_guest/wants_human/complaint
- * nudge — even an internal note never meant for the guest — must NOT be sent
- * to resolveEscalation at all.
+ * safe before), an owner reply to a wants_human/complaint nudge — even an
+ * internal note never meant for the guest — must NOT be sent to
+ * resolveEscalation at all.
  */
 async function handleEscalationReply(
   message: NonNullable<TelegramUpdate["message"]>,
