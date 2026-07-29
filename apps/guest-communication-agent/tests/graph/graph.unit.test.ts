@@ -171,7 +171,7 @@ describe("agentNode step cap", () => {
     // missing_info escalations insert-then-select the new row's id (needed
     // to correlate the owner's later Telegram reply — see
     // @/graph/tools.ts's performEscalation), then update it once the nudge
-    // has an id of its own — unlike the other three categories' plain
+    // has an id of its own — unlike the other two categories' plain
     // fire-and-forget insert, so this mock chains insert().select().single()
     // and a separate update().eq().
     const mockSingle = vi.fn().mockResolvedValue({ data: { id: "esc-cap-test" }, error: null });
@@ -207,7 +207,7 @@ describe("agentNode step cap", () => {
         phone_number: "+351900000099",
         // Deterministic safety-net escalation, not a model tool call — see
         // agent.ts's own comment on why missing_info is the closest fit of
-        // the four categories for this path.
+        // the three categories for this path.
         reason_category: "missing_info",
         // The owner-facing reason must include the guest's real question,
         // not just a generic technical description of the failure mode —

@@ -48,7 +48,7 @@ interface EscalationRow {
  *
  * - 404 (`{ error: "Escalation not found" }`) if no such escalation.
  * - 400 (`{ error: "..." }`) if `answer` is missing/blank, or if the
- *   escalation's reason_category isn't "missing_info" — the other three
+ *   escalation's reason_category isn't "missing_info" — the other two
  *   categories have no resolution flow (see @/graph/tools.ts's
  *   performEscalation), so there is nothing for this endpoint to do for
  *   them.

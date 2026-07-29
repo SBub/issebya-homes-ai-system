@@ -80,8 +80,13 @@ describe("POST /api/escalation-nudges", () => {
     expect(text.toLowerCase()).toContain("reply");
   });
 
-  for (const reasonCategory of ["wants_human", "complaint"] as const) {
-    it(`sends a plain one-way alert with no reply invitation for ${reasonCategory}`, async () => {
+  const nonMissingInfoCases = [
+    { reasonCategory: "wants_human", prefix: "🙋 Wants human" },
+    { reasonCategory: "complaint", prefix: "⚠️ Complaint" },
+  ] as const;
+
+  for (const { reasonCategory, prefix } of nonMissingInfoCases) {
+    it(`sends a plain one-way alert with its own "${prefix}" prefix for ${reasonCategory}`, async () => {
       const res = await POST(
         makeRequest({
           ...validBody,
@@ -95,11 +100,24 @@ describe("POST /api/escalation-nudges", () => {
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       const [text] = sendMessageMock.mock.calls[0];
       expect(text).toBe(
-        "Guest +351920742845 needs you: Guest is upset about noise\n\nConversation: convo-1",
+        `${prefix}\nGuest +351920742845 needs you: Guest is upset about noise\n\nConversation: convo-1`,
       );
       expect(text.toLowerCase()).not.toContain("reply to this message");
     });
   }
+
+  it("gives wants_human and complaint distinct prefixes rather than identical wording", async () => {
+    const texts: string[] = [];
+    for (const reasonCategory of ["wants_human", "complaint"] as const) {
+      sendMessageMock.mockClear();
+      await POST(
+        makeRequest({ ...validBody, reasonCategory, reason: "Guest is upset about noise" }),
+      );
+      texts.push(sendMessageMock.mock.calls[0][0]);
+    }
+    const [wantsHumanText, complaintText] = texts;
+    expect(wantsHumanText).not.toBe(complaintText);
+  });
 
   it("returns 500 with the error when the send fails even after retry", async () => {
     sendMessageMock.mockResolvedValue({ ok: false, error: "Telegram down" });

@@ -26,7 +26,7 @@ import { createAdminClient } from "@/lib/supabase";
  * @/graph/tools.ts's escalateToOwner/performEscalation for where it's
  * populated. resolved_at/answer are set once a missing_info escalation has
  * been resolved (see POST /api/escalations/[id]/resolve) — both are null
- * until then, and stay null forever for the other three categories, which
+ * until then, and stay null forever for the other two categories, which
  * have no resolution flow.
  */
 export async function GET(request: NextRequest) {

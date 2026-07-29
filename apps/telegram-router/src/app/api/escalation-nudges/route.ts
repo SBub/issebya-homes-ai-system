@@ -7,10 +7,10 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  * performEscalation (see @/graph/tools.ts) — this router owns all Telegram
  * I/O, so every escalation category pushes its owner notification through
  * here rather than GCA talking to Telegram itself. This used to be
- * missing_info only, with the other three categories bypassing this router
+ * missing_info only, with the other two categories bypassing this router
  * entirely via a raw fetch straight to the Telegram Bot API
  * (sendTelegramNotification, now deleted from GCA) — that bypass is gone,
- * this route is now the sole channel for all four categories.
+ * this route is now the sole channel for all three categories.
  *
  * Guarded by requireApiKey (X-API-Key against TELEGRAM_ROUTER_API_KEY),
  * same shape as ../campaign-drafts/route.ts's own guard.
@@ -26,14 +26,18 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  * below) — it preserves the "Conversation: <id>" detail the old
  * sendTelegramNotification bypass's message included.
  *
- * Composes the message per reasonCategory:
- *  - missing_info: a plain message (no buttons — the owner is expected to
- *    reply with free text, not tap anything) inviting a reply — unchanged
- *    from before this route handled every category.
- *  - anything else: a plain one-way alert with no reply invitation, matching
- *    the wording of the old sendTelegramNotification bypass. These three
- *    categories have no automatic reply/resolve action (see the webhook
- *    route's handleEscalationReply guard), so no reply is ever invited.
+ * Composes a distinct message per reasonCategory, each with its own
+ * emoji + short label prefix so the owner can tell them apart in Telegram
+ * itself, without opening the CRM:
+ *  - missing_info: "🔍 Missing info" — a plain message (no buttons — the
+ *    owner is expected to reply with free text, not tap anything) inviting a
+ *    reply — unchanged from before this route handled every category.
+ *  - wants_human: "🙋 Wants human" — a plain one-way alert, no reply
+ *    invitation.
+ *  - complaint: "⚠️ Complaint" — a plain one-way alert, no reply invitation.
+ *  wants_human and complaint have no automatic reply/resolve action (see the
+ *  webhook route's handleEscalationReply guard), so neither ever invites a
+ *  reply; they differ from each other only in the prefix, not in structure.
  *
  * Sent via the same sendMessage/sendWithRetry every other Telegram send in
  * this router uses.
@@ -80,10 +84,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const text =
-    reasonCategory === "missing_info"
-      ? `🔍 Missing info\nGuest ${phone} asked: "${reason}"\n\nReply to this message with the answer — I'll send it to the guest and add it to the knowledge base.`
-      : `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+  let text: string;
+  switch (reasonCategory) {
+    case "missing_info":
+      text = `🔍 Missing info\nGuest ${phone} asked: "${reason}"\n\nReply to this message with the answer — I'll send it to the guest and add it to the knowledge base.`;
+      break;
+    case "wants_human":
+      text = `🙋 Wants human\nGuest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+      break;
+    case "complaint":
+      text = `⚠️ Complaint\nGuest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+      break;
+    default:
+      text = `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+  }
 
   const result = await sendWithRetry(() => sendMessage(text));
   if (!result.ok) {

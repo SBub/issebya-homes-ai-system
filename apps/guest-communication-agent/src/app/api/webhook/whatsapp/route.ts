@@ -27,11 +27,10 @@ function escapeXml(text: string): string {
  * org/prompt, a real inbound message fails at that step — expected, not a
  * port bug; see that file's own doc comment.
  *
- * Ported as-is, not yet decided: escalateToOwner (@/graph/tools.ts) and
- * agent.ts's step-cap safety net send Telegram notifications directly (own
- * bot token/chat ID) rather than through apps/telegram-router, unlike every
- * other app in this monorepo. Left as the source behaves for this faithful
- * port; revisit separately.
+ * escalateToOwner (@/graph/tools.ts) and agent.ts's two deterministic safety
+ * nets all notify the owner via apps/telegram-router's
+ * POST /api/escalation-nudges — see @/lib/telegram-router.ts's
+ * sendEscalationNudge for the actual mechanism.
  *
  * When this turn's `result.missingInfoEscalated` comes back true (a
  * missing_info escalation fired this turn — either the model's own

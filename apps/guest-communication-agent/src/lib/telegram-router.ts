@@ -10,13 +10,13 @@ export interface EscalationNudgeResult {
  * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
  * which composes and sends the actual Telegram message notifying the owner
  * — see ../graph/tools.ts's performEscalation, the only caller, which now
- * routes all four escalation categories here (this used to be missing_info
- * only, with the other three bypassing telegram-router entirely via a raw
+ * routes all three escalation categories here (this used to be missing_info
+ * only, with the other two bypassing telegram-router entirely via a raw
  * fetch straight to the Telegram Bot API — see ../lib/telegram.ts's
  * now-deleted sendTelegramNotification). reasonCategory/conversationId are
  * passed through so the route can compose a category-appropriate message —
- * missing_info gets a reply-inviting message, the other three get a plain
- * one-way alert.
+ * missing_info gets a reply-inviting message, the other two get a plain
+ * one-way alert with their own distinguishing prefix.
  *
  * Mirrors apps/crm's src/lib/telegram-router-client.ts's postCampaignDraft
  * resilience shape exactly: by the time this is called the escalations row
