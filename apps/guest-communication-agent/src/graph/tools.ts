@@ -244,6 +244,17 @@ export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySc
 // a reply to a non-missing_info nudge can't be mistakenly treated as an
 // answer to relay/resolve — see that function's own doc comment).
 //
+// wants_human/complaint, by contrast, are auto-resolved the moment they're
+// created (resolved_at set below, at insert time) — there is no further
+// owner action to wait for. The system prompt now already handles the
+// guest-facing side of both categories on its own (acknowledge the specific
+// issue, don't promise a remedy, tell the guest it's flagged for the
+// owner), so this no longer needs the "owner replies on Telegram to
+// manually close it out" flow that was originally planned. The nudge is
+// still sent — the owner still needs to know — but nothing downstream is
+// waiting on a reply to it. `answer` stays null for these rows: there's no
+// owner-contributed text to store, only `resolved_at`.
+//
 // Exported (rather than kept private inside the `tool()` closure below) so
 // the agent node's own step-cap/empty-reply safety nets (see nodes/agent.ts's
 // MAX_AGENT_STEPS) can trigger the exact same real escalation — including
@@ -275,6 +286,7 @@ export async function performEscalation(params: {
       reason,
       reason_category: reasonCategory,
       ...(triggerMessageId ? { trigger_message_id: triggerMessageId } : {}),
+      ...(reasonCategory !== "missing_info" ? { resolved_at: new Date().toISOString() } : {}),
     })
     .select("id")
     .single();

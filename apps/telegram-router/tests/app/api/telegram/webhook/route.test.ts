@@ -368,24 +368,24 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     );
   });
 
-  // Safety-critical: before performEscalation was unified across all three
-  // escalation categories, only missing_info escalations ever got a
-  // telegram_message_id, so nothing else could ever reach this branch at
-  // all — safety by omission. Now that every category gets one, a reply to
-  // a wants_human/complaint nudge must be explicitly refused here rather
-  // than relayed to the guest (sendGuestMessage) or sent to GCA's resolve
-  // endpoint (resolveEscalation) — which would otherwise relay verbatim to
-  // the guest over WhatsApp before resolveEscalation's own
-  // reason_category === "missing_info" validation ever gets a chance to
-  // reject it.
+  // GCA's performEscalation now inserts wants_human/complaint escalations
+  // with resolved_at already set at creation time (see
+  // apps/guest-communication-agent/src/graph/tools.ts) — there's no
+  // remaining owner action for a reply to trigger, so any real reply to one
+  // of these nudges hits the resolved_at check above first ("Already
+  // handled") rather than a category-specific branch. The old
+  // "doesn't have an automatic reply/resolve action yet" branch/test was
+  // removed as dead code: it's unreachable for any escalation created after
+  // this change (see this function's own doc comment for the one residual
+  // edge case — a pre-change unresolved row — and why that's acceptable).
   for (const reasonCategory of ["wants_human", "complaint"] as const) {
-    it(`does NOT relay to the guest or resolve when replying to a ${reasonCategory} escalation nudge`, async () => {
+    it(`tells the owner it's already handled, without resolving, when replying to an auto-resolved ${reasonCategory} escalation nudge`, async () => {
       getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
         id: "esc-1",
         phone_number: "+351920742845",
         reason: "Guest is upset about noise",
         reason_category: reasonCategory,
-        resolved_at: null,
+        resolved_at: "2026-07-29T10:00:00Z",
         answer: null,
       });
 
@@ -396,9 +396,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       expect(json).toEqual({ ok: true });
       expect(sendGuestMessageMock).not.toHaveBeenCalled();
       expect(resolveEscalationMock).not.toHaveBeenCalled();
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        expect.stringContaining("doesn't have an automatic reply/resolve action"),
-      );
+      expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Already handled"));
     });
   }
 });
