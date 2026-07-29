@@ -368,35 +368,60 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     );
   });
 
-  // GCA's performEscalation now inserts wants_human/complaint escalations
-  // with resolved_at already set at creation time (see
+  // GCA's performEscalation always inserts wants_human escalations with
+  // resolved_at already set at creation time (see
   // apps/guest-communication-agent/src/graph/tools.ts) — there's no
   // remaining owner action for a reply to trigger, so any real reply to one
   // of these nudges hits the resolved_at check above first ("Already
-  // handled") rather than a category-specific branch. The old
-  // "doesn't have an automatic reply/resolve action yet" branch/test was
-  // removed as dead code: it's unreachable for any escalation created after
-  // this change (see this function's own doc comment for the one residual
-  // edge case — a pre-change unresolved row — and why that's acceptable).
-  for (const reasonCategory of ["wants_human", "complaint"] as const) {
-    it(`tells the owner it's already handled, without resolving, when replying to an auto-resolved ${reasonCategory} escalation nudge`, async () => {
-      getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
-        id: "esc-1",
-        phone_number: "+351920742845",
-        reason: "Guest is upset about noise",
-        reason_category: reasonCategory,
-        resolved_at: "2026-07-29T10:00:00Z",
-        answer: null,
-      });
-
-      const res = await POST(makeReplyRequest("Just give them a discount", 42));
-      const json = await res.json();
-
-      expect(res.status).toBe(200);
-      expect(json).toEqual({ ok: true });
-      expect(sendGuestMessageMock).not.toHaveBeenCalled();
-      expect(resolveEscalationMock).not.toHaveBeenCalled();
-      expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Already handled"));
+  // handled") before it could ever reach a category-specific branch.
+  it("tells the owner it's already handled, without resolving, when replying to an auto-resolved wants_human escalation nudge", async () => {
+    getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
+      id: "esc-1",
+      phone_number: "+351920742845",
+      reason: "Guest is upset about noise",
+      reason_category: "wants_human",
+      resolved_at: "2026-07-29T10:00:00Z",
+      answer: null,
     });
-  }
+
+    const res = await POST(makeReplyRequest("Just give them a discount", 42));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ ok: true });
+    expect(sendGuestMessageMock).not.toHaveBeenCalled();
+    expect(resolveEscalationMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Already handled"));
+  });
+
+  // complaint reverted to being createable unresolved — per the owner, "it
+  // shouldn't be resolved automatically for now, I don't yet know how to
+  // resolve this." Safety-critical: a reply to an unresolved complaint
+  // escalation must be refused via its own reason_category guard, ahead of
+  // resolveEscalation, rather than relayed to the guest (sendGuestMessage)
+  // or sent to GCA's resolve endpoint (resolveEscalation) — which would
+  // otherwise relay verbatim to the guest over WhatsApp before
+  // resolveEscalation's own reason_category === "missing_info" validation
+  // ever gets a chance to reject it.
+  it("does NOT relay to the guest or resolve when replying to an unresolved complaint escalation nudge", async () => {
+    getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
+      id: "esc-1",
+      phone_number: "+351920742845",
+      reason: "Guest is upset about noise",
+      reason_category: "complaint",
+      resolved_at: null,
+      answer: null,
+    });
+
+    const res = await POST(makeReplyRequest("Just give them a discount", 42));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ ok: true });
+    expect(sendGuestMessageMock).not.toHaveBeenCalled();
+    expect(resolveEscalationMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.stringContaining("doesn't have an automatic reply/resolve action"),
+    );
+  });
 });

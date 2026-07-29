@@ -239,21 +239,35 @@ export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySc
 // round trip needs a real correlation id (Telegram's own
 // reply_to_message.message_id), which only exists once the nudge has
 // actually been sent — hence `.select("id").single()` and storing
-// telegram_message_id below for every category now, not just missing_info
-// (the webhook's handleEscalationReply guards on reason_category itself so
-// a reply to a non-missing_info nudge can't be mistakenly treated as an
-// answer to relay/resolve — see that function's own doc comment).
+// telegram_message_id below for every category now, not just missing_info.
+// A reply to a wants_human nudge can't be mistakenly treated as an answer
+// to relay/resolve because it's always pre-resolved by insert time (see the
+// wants_human paragraph below, caught by the webhook's resolved_at check);
+// a reply to a complaint nudge is guarded explicitly, by reason_category,
+// in the webhook's handleEscalationReply itself — see that function's own
+// doc comment for both.
 //
-// wants_human/complaint, by contrast, are auto-resolved the moment they're
-// created (resolved_at set below, at insert time) — there is no further
-// owner action to wait for. The system prompt now already handles the
-// guest-facing side of both categories on its own (acknowledge the specific
-// issue, don't promise a remedy, tell the guest it's flagged for the
-// owner), so this no longer needs the "owner replies on Telegram to
-// manually close it out" flow that was originally planned. The nudge is
-// still sent — the owner still needs to know — but nothing downstream is
-// waiting on a reply to it. `answer` stays null for these rows: there's no
-// owner-contributed text to store, only `resolved_at`.
+// wants_human, by contrast, is auto-resolved the moment it's created
+// (resolved_at set below, at insert time) — there is no further owner
+// action to wait for. The system prompt now already handles the
+// guest-facing side of this category on its own (acknowledge that a human
+// has been looped in, don't promise a specific timeline), so this no longer
+// needs the "owner replies on Telegram to manually close it out" flow that
+// was originally planned for it. The nudge is still sent — the owner still
+// needs to know — but nothing downstream is waiting on a reply to it.
+// `answer` stays null for these rows: there's no owner-contributed text to
+// store, only `resolved_at`.
+//
+// complaint was briefly auto-resolved the same way, then reverted: per the
+// owner, "it shouldn't be resolved automatically for now, I don't yet know
+// how to resolve this" — there's no undecided *guest-facing* handling here
+// (the system prompt already covers that part fine), the open question is
+// what the owner-side resolution mechanism should even be. So complaint
+// goes back to being inserted with resolved_at left unset, exactly like
+// missing_info's insert below — though for a different reason:
+// missing_info awaits a real answer via the HITL flow (see the paragraph
+// above), while complaint awaits a resolution mechanism that simply hasn't
+// been decided yet.
 //
 // Exported (rather than kept private inside the `tool()` closure below) so
 // the agent node's own step-cap/empty-reply safety nets (see nodes/agent.ts's
@@ -286,7 +300,7 @@ export async function performEscalation(params: {
       reason,
       reason_category: reasonCategory,
       ...(triggerMessageId ? { trigger_message_id: triggerMessageId } : {}),
-      ...(reasonCategory !== "missing_info" ? { resolved_at: new Date().toISOString() } : {}),
+      ...(reasonCategory === "wants_human" ? { resolved_at: new Date().toISOString() } : {}),
     })
     .select("id")
     .single();
@@ -344,7 +358,11 @@ const escalateToOwner = tool(
     description:
       "Alert the owner and hand off the conversation. Use when the guest asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those three this is via reason_category.",
     schema: z.object({
-      reason: z.string().describe("Brief description of why escalation is needed"),
+      reason: z
+        .string()
+        .describe(
+          "Brief description of why escalation is needed. For missing_info and complaint, a short paraphrase of the guest's question/issue is enough. For wants_human specifically, this text becomes the entire context an owner sees in the Telegram alert (shown as \"Guest {phone} needs you: {reason}\") — write more than the bare trigger phrase: summarize what's been discussed so far (topic, any relevant details the guest already shared, their name if known) and specifically why they're asking to speak with a person, so the owner can pick up the conversation without it reading blank.",
+        ),
       reason_category: escalationReasonCategorySchema.describe(
         "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use wants_human/complaint for everything else.",
       ),

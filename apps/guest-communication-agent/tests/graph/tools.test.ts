@@ -72,34 +72,57 @@ describe("performEscalation", () => {
     });
   }
 
-  // wants_human/complaint are now auto-resolved the instant they're created
-  // (no owner action left to wait for — the system prompt already handles
-  // the guest-facing side of both categories); missing_info is the one
-  // category whose resolution genuinely depends on a later owner reply (see
-  // resume-conversation.ts's real HITL flow), so its insert must still leave
-  // resolved_at unset.
-  for (const reasonCategory of ["wants_human", "complaint"] as const) {
-    it(`inserts ${reasonCategory} escalations with resolved_at already set`, async () => {
-      mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
-      mockEq.mockResolvedValueOnce({ error: null });
-      sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
+  // wants_human is auto-resolved the instant it's created (no owner action
+  // left to wait for — the system prompt already handles its guest-facing
+  // side); complaint and missing_info both leave resolved_at unset, though
+  // for different reasons — missing_info's resolution genuinely depends on
+  // a later owner reply (see resume-conversation.ts's real HITL flow), while
+  // complaint awaits a resolution mechanism the owner hasn't decided on yet
+  // ("it shouldn't be resolved automatically for now, I don't yet know how
+  // to resolve this").
+  it("inserts wants_human escalations with resolved_at already set", async () => {
+    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+    mockEq.mockResolvedValueOnce({ error: null });
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
 
-      await performEscalation({
-        conversationId: "convo-1",
-        phone: "+351920742845",
-        reason: "Guest is upset about noise",
-        reasonCategory,
-      });
-
-      expect(mockInsert).toHaveBeenCalledWith({
-        conversation_id: "convo-1",
-        phone_number: "+351920742845",
-        reason: "Guest is upset about noise",
-        reason_category: reasonCategory,
-        resolved_at: expect.any(String),
-      });
+    await performEscalation({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest is upset about noise",
+      reasonCategory: "wants_human",
     });
-  }
+
+    expect(mockInsert).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      phone_number: "+351920742845",
+      reason: "Guest is upset about noise",
+      reason_category: "wants_human",
+      resolved_at: expect.any(String),
+    });
+  });
+
+  it("inserts complaint escalations without resolved_at (left unset — no resolution mechanism decided yet)", async () => {
+    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+    mockEq.mockResolvedValueOnce({ error: null });
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
+
+    await performEscalation({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest is upset about noise",
+      reasonCategory: "complaint",
+    });
+
+    // toHaveBeenCalledWith does a deep-equal on the whole object, so this
+    // also proves resolved_at is absent from the insert payload — were it
+    // present (with any value), this exact-shape match would fail.
+    expect(mockInsert).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      phone_number: "+351920742845",
+      reason: "Guest is upset about noise",
+      reason_category: "complaint",
+    });
+  });
 
   it("inserts missing_info escalations without resolved_at (left unset for the real owner-reply HITL flow)", async () => {
     mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });

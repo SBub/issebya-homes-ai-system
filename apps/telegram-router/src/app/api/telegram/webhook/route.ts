@@ -134,10 +134,10 @@ async function handleNudgeReject(
  * normal reply) — so the caller must fall through to its own existing
  * command/social-post dispatch rather than swallowing the message here.
  * Returns `true` once a real escalation nudge is matched, whatever the
- * outcome (already resolved / resolve failed / resolved successfully but
- * guest unreachable / full success) — all of those are "handled" as far as
- * the caller's own dispatch is concerned, even though only the last one is a
- * full success.
+ * outcome (already resolved / wrong category / resolve failed / resolved
+ * successfully but guest unreachable / full success) — all of those are
+ * "handled" as far as the caller's own dispatch is concerned, even though
+ * only the last one is a full success.
  *
  * No longer relays the owner's raw text to the guest itself: GCA's own
  * POST /api/escalations/:id/resolve now embeds the answer into the
@@ -149,26 +149,28 @@ async function handleNudgeReject(
  * purpose).
  *
  * Safety-critical: only missing_info escalations ever have a real
- * reply/resolve action. That used to require its own explicit
- * reason_category guard here, ahead of the resolved_at check, because a
- * wants_human/complaint escalation could sit unresolved indefinitely — an
- * owner reply to one of those needed to be refused before ever reaching
- * resolveEscalation. That is no longer possible: GCA's performEscalation
- * (apps/guest-communication-agent/src/graph/tools.ts) now inserts
- * wants_human/complaint escalations with resolved_at already set at
- * creation time — the system prompt handles the guest-facing side of both
- * categories on its own, so there is nothing left for an owner reply to
- * resolve. Any real reply to one of those nudges therefore always hits the
- * resolved_at branch below first ("Already handled"); missing_info is the
- * only category that can ever actually be unresolved when a reply arrives,
- * so the resolved_at check alone is sufficient and the old category-specific
- * branch was removed as dead code. (A wants_human/complaint escalation row
- * created before this change shipped, and still unresolved, is the one
- * residual edge case — see resolveEscalation's own reason_category ===
- * "missing_info" guard, which still independently rejects it with a 400
- * rather than relaying or resolving anything; the owner just sees a
- * slightly less specific "failed" message in that narrow, self-limiting
- * case instead of the old bespoke one.)
+ * reply/resolve action — but the other two categories reach that guarantee
+ * through two different mechanisms now, not one shared branch:
+ *
+ * - wants_human never needs an explicit guard here. GCA's performEscalation
+ *   (apps/guest-communication-agent/src/graph/tools.ts) always inserts it
+ *   with resolved_at already set at creation time — the system prompt
+ *   handles its guest-facing side on its own, so there is nothing left for
+ *   an owner reply to resolve. Any real reply to a wants_human nudge
+ *   therefore always hits the resolved_at branch below first ("Already
+ *   handled") before it could ever reach a category check.
+ * - complaint genuinely still needs the explicit reason_category guard
+ *   below, ahead of resolveEscalation. Per the owner, "it shouldn't be
+ *   resolved automatically for now, I don't yet know how to resolve this" —
+ *   so unlike wants_human, a complaint escalation is inserted with
+ *   resolved_at left unset (same as missing_info's insert, but awaiting a
+ *   decided resolution mechanism rather than an owner-supplied answer) and
+ *   could sit unresolved indefinitely. An owner reply to one must be
+ *   refused before ever reaching resolveEscalation, since resolveEscalation
+ *   itself would otherwise 400 only after already being called — this guard
+ *   is what keeps that call from happening at all.
+ * - missing_info has its own real resolve path entirely (this whole
+ *   function's non-guard branches below), independent of both of the above.
  */
 async function handleEscalationReply(
   message: NonNullable<TelegramUpdate["message"]>,
@@ -198,6 +200,17 @@ async function handleEscalationReply(
 
   if (escalation.resolved_at) {
     await sendMessage("Already handled — this escalation was already resolved.");
+    return true;
+  }
+
+  if (escalation.reason_category === "complaint") {
+    // No automatic reply/resolve action exists for this category — do NOT
+    // call resolveEscalation. See this function's own doc comment for why
+    // this guard is safety-critical (and why wants_human never reaches this
+    // point at all).
+    await sendMessage(
+      "Noted — this escalation type doesn't have an automatic reply/resolve action yet.",
+    );
     return true;
   }
 
