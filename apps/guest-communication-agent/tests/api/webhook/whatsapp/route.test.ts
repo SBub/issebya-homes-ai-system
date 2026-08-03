@@ -1,15 +1,14 @@
-import { AIMessage } from "@langchain/core/messages";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mocks the module boundary for every dependency this route touches, same
 // "mock the shared factory/module, not the network" convention as every
 // other route test in this app. verifyTwilioSignature is stubbed to always
-// pass so these tests can focus on the graph.invoke() wiring, in particular
-// this route's new triggerMessageId threading (see @/lib/conversations.js's
+// pass so these tests can focus on the runAgentTurn() wiring, in particular
+// this route's triggerMessageId threading (see @/lib/conversations.js's
 // recordMessage now returning the new whatsapp_messages row's id, and
-// @/graph/tools.ts's performEscalation, which is what actually consumes
-// configurable.triggerMessageId mid-graph).
+// @/agent/tools/escalation.ts's performEscalation, which is what actually
+// consumes configurable.triggerMessageId mid-turn).
 const verifyTwilioSignatureMock = vi.fn(() => true);
 vi.mock("@/lib/twilio.js", () => ({
   verifyTwilioSignature: verifyTwilioSignatureMock,
@@ -34,9 +33,9 @@ vi.mock("@/lib/funnel-stage.js", () => ({
   deriveStageHint: deriveStageHintMock,
 }));
 
-const graphInvokeMock = vi.fn();
-vi.mock("@/graph/graph.js", () => ({
-  graph: { invoke: graphInvokeMock },
+const runAgentTurnMock = vi.fn();
+vi.mock("@/agent/run-turn.js", () => ({
+  runAgentTurn: runAgentTurnMock,
 }));
 
 const { POST } = await import("@/app/api/webhook/whatsapp/route.js");
@@ -64,7 +63,7 @@ describe("POST /api/webhook/whatsapp", () => {
     registerGuestContactMock.mockReset();
     touchGuestContactMock.mockReset();
     deriveStageHintMock.mockReset();
-    graphInvokeMock.mockReset();
+    runAgentTurnMock.mockReset();
 
     getOrCreateActiveConversationMock.mockResolvedValue({
       conversationId: "convo-1",
@@ -74,8 +73,8 @@ describe("POST /api/webhook/whatsapp", () => {
     recordMessageMock.mockResolvedValueOnce("msg-assistant-1");
     touchGuestContactMock.mockResolvedValue({ ok: true });
     deriveStageHintMock.mockReturnValue(undefined);
-    graphInvokeMock.mockResolvedValue({
-      messages: [new AIMessage("Yes, room 1 is available!")],
+    runAgentTurnMock.mockResolvedValue({
+      messages: [{ role: "assistant", content: "Yes, room 1 is available!" }],
     });
   });
 
@@ -90,25 +89,17 @@ describe("POST /api/webhook/whatsapp", () => {
 
     expect(res.status).toBe(200);
     expect(recordMessageMock).toHaveBeenNthCalledWith(1, "convo-1", "user", "Is room 1 free?");
-    expect(graphInvokeMock).toHaveBeenCalledWith(
+    expect(runAgentTurnMock).toHaveBeenCalledWith(
       {
         conversationId: "convo-1",
         phone: "whatsapp:+351920742845",
         incomingMessage: "Is room 1 free?",
       },
-      expect.objectContaining({
-        configurable: expect.objectContaining({
-          conversationId: "convo-1",
-          phone: "whatsapp:+351920742845",
-          thread_id: "convo-1",
-          triggerMessageId: "msg-user-1",
-        }),
-        runId: expect.any(String),
-      }),
+      { triggerMessageId: "msg-user-1" },
     );
   });
 
-  it("still records the assistant reply after the graph call, unaffected by the id-returning recordMessage change", async () => {
+  it("still records the assistant reply after the agent turn, unaffected by the id-returning recordMessage change", async () => {
     await POST(makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }));
 
     expect(recordMessageMock).toHaveBeenNthCalledWith(
@@ -128,7 +119,7 @@ describe("POST /api/webhook/whatsapp", () => {
     );
 
     expect(res.status).toBe(401);
-    expect(graphInvokeMock).not.toHaveBeenCalled();
+    expect(runAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("returns a message-bearing TwiML response for a normal turn", async () => {
@@ -141,11 +132,13 @@ describe("POST /api/webhook/whatsapp", () => {
   });
 
   it("suppresses the guest-facing reply (empty TwiML) and never records it when missingInfoEscalated is true", async () => {
-    graphInvokeMock.mockResolvedValue({
+    runAgentTurnMock.mockResolvedValue({
       messages: [
-        new AIMessage(
-          "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-        ),
+        {
+          role: "assistant",
+          content:
+            "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
+        },
       ],
       missingInfoEscalated: true,
     });

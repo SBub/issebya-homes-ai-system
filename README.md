@@ -132,16 +132,21 @@ Telegram knowledge at all — `apps/telegram-router` is the only caller, authent
 
 Guest-Comms Agent (`GCA` in `docs/agent-architecture.mmd`) — ported (2026-07-20) from
 `issebya-homes-website` once that repo's merge conflict was resolved. Faithful port, not a
-redesign: same LangGraph.js graph (`src/graph/` — `load_context -> agent <-> 5 tools ->
-END`; see that source repo's own extensive doc comments, preserved here), same tools
-(pricing, availability, booking links, property Q&A via pgvector, escalate-to-owner). Its
+redesign: same reasoning/tools as the source repo, same tools (pricing, availability,
+booking links, property Q&A via pgvector, escalate-to-owner). Originally ported as a
+LangGraph.js `StateGraph`; simplified 2026-08-03 to a single plain async tool-calling loop
+(`src/agent/run-turn.ts`'s `runAgentTurn` — `loadContext -> model <-> 5 tools -> final
+reply`) once it was clear GCA is, and is staying, a single agent with no multi-agent
+routing/supervision, so the graph machinery wasn't earning its keep — same runtime
+behavior, just without the StateGraph/node/checkpointer ceremony (see
+`docs/agent-architecture-details.md`'s GCA section for the full history). Its
 only real dependency the destination lacked was `packages/shared`'s two Supabase client
 factories, inlined directly (`src/lib/supabase.ts`) since this monorepo has no `packages/*`
 workspace — otherwise a straight copy, including keeping Supabase-JS (`.from()`/`.rpc()`)
 rather than rewriting to this repo's usual raw `pg.Pool` convention.
 
 `POST /api/webhook/whatsapp` validates a real `X-Twilio-Signature` (`src/lib/twilio.ts`,
-hand-implemented HMAC-SHA1, no `twilio` SDK dependency) and invokes the graph for real —
+hand-implemented HMAC-SHA1, no `twilio` SDK dependency) and runs the agent turn for real —
 verified live end-to-end (signature check -> conversation created/looked-up -> inbound
 message recorded -> graph reaches the agent node).
 

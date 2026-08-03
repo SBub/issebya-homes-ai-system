@@ -6,8 +6,8 @@ import { createAdminClient } from "./supabase";
 // repo's @issebya/shared/supabase -> this repo's inlined ./supabase). Both
 // are pure Postgres queries via createAdminClient(), no other deps.
 // Postgres remains the system of record for conversation history/context;
-// this graph loads that context itself, in load_context (see
-// ../graph/nodes/load-context.ts) — the caller only supplies
+// the agent loads that context itself, in loadContext (see
+// ../agent/load-context.ts) — the caller only supplies
 // conversationId/phone/incomingMessage, it doesn't pre-assemble history.
 //
 // Note: loadGuestMemory (guest_memory.summary lookup) was intentionally
@@ -32,7 +32,7 @@ interface MessageRow {
 
 // Fetches the most recent RECENT_MESSAGE_LIMIT messages for a conversation,
 // returned oldest-first so callers can convert them straight into a
-// chronologically-ordered LangChain message list (see nodes/load-context.ts
+// chronologically-ordered LangChain message list (see ../agent/load-context.ts
 // for why ordering matters here). Must query `created_at DESC` + `limit` to
 // actually get the tail end of a long conversation, then reverse back to
 // ascending order — querying ascending+limit (an earlier version of this

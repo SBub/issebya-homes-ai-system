@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // path) and the embedding call — same "mock the shared factory, not the
 // network" approach as every other route test in this app, plus a stub for
 // ai's embed() so no real OpenRouter call happens, and a stub for
-// resumeConversationWithAnswer so no real graph.invoke()/Twilio send happens.
+// resumeConversationWithAnswer so no real runAgentTurn()/Twilio send happens.
 const maybeSingleMock = vi.fn();
 const eqSelectMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const selectMock = vi.fn(() => ({ eq: eqSelectMock }));

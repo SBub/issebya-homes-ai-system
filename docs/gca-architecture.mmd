@@ -12,18 +12,37 @@ config:
 %% everything below sits inside that one green box in the system-level diagram.
 %% Full narrative history: docs/agent-architecture-details.md plus this session's work
 %% (comment threads on tools.ts/agent.ts/embed.ts/the escalation-nudges route/webhook).
+%% As of 2026-08-03 this is a plain async tool-calling loop (src/agent/run-turn.ts's
+%% runAgentTurn), not a LangGraph StateGraph — the node/edge machinery was replaced
+%% because GCA is (and is staying) a single agent with no multi-agent routing/
+%% supervision/fan-out, so it wasn't earning its keep. Same runtime behavior as before,
+%% including the "every tool loops back for another model round" shape below.
+%% Also as of 2026-08-03, the model round itself runs on Vercel AI SDK's generateText
+%% (the "ai" package + @ai-sdk/openai, pointed at OpenRouter) instead of
+%% @langchain/openai's ChatOpenAI — tools are now AI SDK tool() objects whose execute
+%% functions AI SDK dispatches automatically (T_BOOK/T_ESC are built fresh per turn via
+%% a closure-based factory carrying conversationId/phone/triggerMessageId, replacing
+%% LangChain's RunnableConfig.configurable threading). One narrow LangChain usage
+%% remains: @langchain/core/load + @langchain/core/prompts, only to deserialize the
+%% LangSmith Prompt Hub commit pulled below into plain system-prompt text — see
+%% agent-architecture-details.md for the full narrative, including a known gap this
+%% migration did NOT fix: the AGENT -. "recorded via langsmith_run_id" .-> LANGSMITH_FB
+%% edge below no longer corresponds to a real LangSmith run (AI SDK has no
+%% LangChain-style automatic LangSmith tracing), so that edge is now aspirational, not
+%% live — kept green below pending a product decision on how (or whether) to restore
+%% real trace correlation, not because it's still actually true.
 flowchart TB
     GUEST(["Guest / WhatsApp"])
     OWNER(["Owner"])
 
     subgraph Inbound["Inbound"]
-        TWILIO_WEBHOOK["POST /api/webhook/whatsapp<br/>(validates X-Twilio-Signature,<br/>generates a runId, invokes the graph)"]
+        TWILIO_WEBHOOK["POST /api/webhook/whatsapp<br/>(validates X-Twilio-Signature,<br/>generates a runId, calls runAgentTurn)"]
     end
 
-    subgraph LangGraphFlow["LangGraph: START -&gt; load_context -&gt; agent &lt;-&gt; tool nodes -&gt; END"]
-        LOAD["load_context<br/>(loads whatsapp_conversations/messages<br/>+ guest info via CRM lookup)"]
-        AGENT["agent<br/>(pulls system prompt from LangSmith<br/>Prompt Hub: whatsapp-booking-agent:production)"]
-        T_PRICE["getPricingStub<br/>(hardcoded flat rate, not a real pricing source)"]
+    subgraph AgentLoop["runAgentTurn: loadContext, then loop { model &lt;-&gt; tools } until a final reply"]
+        LOAD["loadContext<br/>(loads whatsapp_conversations/messages<br/>+ guest info via CRM lookup)"]
+        AGENT["model round<br/>(pulls system prompt from LangSmith<br/>Prompt Hub: whatsapp-booking-agent:production)"]
+        T_PRICE["getPricing<br/>(hardcoded flat rate, not a real pricing source)"]
         T_AVAIL["checkAvailability<br/>(GET /api/availability)"]
         T_BOOK["sendBookingLink<br/>(writes booking_link_requests)"]
         T_KB["answerPropertyQuestion"]

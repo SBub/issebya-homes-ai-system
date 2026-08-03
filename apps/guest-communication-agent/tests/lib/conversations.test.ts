@@ -119,7 +119,7 @@ describe("getOrCreateActiveConversation", () => {
 // recordMessage now returns the new row's id (instead of void) — the
 // webhook route's own inbound "user" call needs it (captured as
 // escalations.trigger_message_id at escalation time, see
-// @/graph/tools.ts's performEscalation) — so this exercises its
+// @/agent/tools/escalation.ts's performEscalation) — so this exercises its
 // insert().select("id").single() chain, the same shape as
 // getOrCreateActiveConversation's own create branch above, just against
 // `whatsapp_messages` instead of `whatsapp_conversations`.

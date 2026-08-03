@@ -1,4 +1,4 @@
-import type { EscalationReasonCategory } from "../graph/tools";
+import type { EscalationReasonCategory } from "../agent/tools/escalation";
 
 export interface EscalationNudgeResult {
   ok: boolean;
@@ -9,7 +9,7 @@ export interface EscalationNudgeResult {
 /**
  * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
  * which composes and sends the actual Telegram message notifying the owner
- * — see ../graph/tools.ts's performEscalation, the only caller, which now
+ * — see ../agent/tools/escalation.ts's performEscalation, the only caller, which now
  * routes all three escalation categories here (this used to be missing_info
  * only, with the other two bypassing telegram-router entirely via a raw
  * fetch straight to the Telegram Bot API — see ../lib/telegram.ts's

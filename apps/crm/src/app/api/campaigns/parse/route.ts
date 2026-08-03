@@ -2,10 +2,10 @@ import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
 
 // CRM's first LLM integration — deliberately NOT LangChain/any agent SDK
-// (that machinery lives in apps/guest-communication-agent's src/graph/nodes/
-// agent.ts because GCA needs a full multi-turn tool-calling agent with a
-// live-pulled system prompt). This is a single one-shot "extract structured
-// JSON from free text" call, so a plain fetch against OpenRouter's
+// (that machinery lives in apps/guest-communication-agent's
+// src/agent/run-turn.ts because GCA needs a full multi-turn tool-calling
+// agent loop with a live-pulled system prompt). This is a single one-shot
+// "extract structured JSON from free text" call, so a plain fetch against OpenRouter's
 // OpenAI-compatible /chat/completions endpoint is all it needs — same
 // "plain fetch over SDK" convention as src/lib/telegram-router-client.ts and
 // apps/guest-communication-agent's src/lib/twilio-send.ts. Same model as

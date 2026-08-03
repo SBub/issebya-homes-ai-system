@@ -4,7 +4,7 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
 
 /**
  * Inbound endpoint for apps/guest-communication-agent's own
- * performEscalation (see @/graph/tools.ts) — this router owns all Telegram
+ * performEscalation (see @/agent/tools/escalation.ts) — this router owns all Telegram
  * I/O, so every escalation category pushes its owner notification through
  * here rather than GCA talking to Telegram itself. This used to be
  * missing_info only, with the other two categories bypassing this router

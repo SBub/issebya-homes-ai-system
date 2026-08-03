@@ -23,7 +23,7 @@ export function crmConfigured(): boolean {
  * other cross-app call in this repo (apps/finance's Telegram/CRM-sync calls,
  * all fire-and-forget side effects after a DB write that's already
  * committed), this function sits directly in GCA's real conversational
- * request path — src/graph/nodes/load-context.ts's loadContext() calls it
+ * request path — src/agent/load-context.ts's loadContext() calls it
  * on every single turn, before the agent can reply at all. A CRM outage
  * must NOT break GCA's ability to reply to a guest. So: if CRM is
  * unconfigured, if the fetch itself fails (network error, CRM down), or if
@@ -119,7 +119,7 @@ export interface GuestContactTouchResult {
  *
  * Same resilience shape as registerGuestContact above, not
  * lookupGuestContact's: this is not in the live reply-blocking path either
- * (the webhook route calls it after graph.invoke() has already produced the
+ * (the webhook route calls it after runAgentTurn() has already produced the
  * TwiML reply), so it never throws — `{ ok: true }` on success or when CRM
  * isn't configured, `{ ok: false, error }` on failure for the caller to log.
  */

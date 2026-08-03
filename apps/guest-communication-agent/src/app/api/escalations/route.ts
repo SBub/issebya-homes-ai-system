@@ -23,7 +23,7 @@ import { createAdminClient } from "@/lib/supabase";
  * null for the one pre-existing row that predates that column (see
  * supabase/migrations/20260725100000_add_reason_category_to_escalations.sql)
  * and a real enum value for every escalation created since — see
- * @/graph/tools.ts's escalateToOwner/performEscalation for where it's
+ * @/agent/tools/escalation.ts's escalateToOwner/performEscalation for where it's
  * populated. resolved_at/answer are set once a missing_info escalation has
  * been resolved (see POST /api/escalations/[id]/resolve) — both are null
  * until then, and stay null forever for the other two categories, which

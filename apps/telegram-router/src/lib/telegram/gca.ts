@@ -106,8 +106,8 @@ export type ResolveEscalationResult =
 /**
  * Calls GCA's POST /api/escalations/:id/resolve — the single call that now
  * handles the whole missing_info resolution flow on GCA's side: persists the
- * answer, writes the new knowledge-base entry, and (best-effort) re-invokes
- * GCA's own agent graph to actually reply to the guest in its own voice (see
+ * answer, writes the new knowledge-base entry, and (best-effort) re-runs
+ * GCA's own agent turn to actually reply to the guest in its own voice (see
  * that route's own doc comment, and @/lib/resume-conversation.ts in GCA, for
  * why this endpoint owns the guest-facing send now instead of
  * telegram-router relaying the owner's raw text via sendGuestMessage).

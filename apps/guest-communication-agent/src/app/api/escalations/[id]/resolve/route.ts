@@ -38,7 +38,7 @@ interface EscalationRow {
  * guest-facing reply — replacing the old raw-relay responsibility that used
  * to sit in telegram-router's own sendGuestMessage call before it invoked
  * this endpoint. Once the owner's answer is embedded into the knowledge
- * base, GCA's real LangGraph graph (@/graph/graph.ts) is re-invoked with the
+ * base, GCA's real agent turn (@/agent/run-turn.ts) is re-run with the
  * guest's original question (not the model's paraphrased `reason`), so the
  * same agent/system-prompt/tools that handle a normal turn composes and
  * sends its own reply — see @/lib/resume-conversation.ts for the full
@@ -49,7 +49,7 @@ interface EscalationRow {
  * - 404 (`{ error: "Escalation not found" }`) if no such escalation.
  * - 400 (`{ error: "..." }`) if `answer` is missing/blank, or if the
  *   escalation's reason_category isn't "missing_info" — the other two
- *   categories have no resolution flow (see @/graph/tools.ts's
+ *   categories have no resolution flow (see @/agent/tools/escalation.ts's
  *   performEscalation), so there is nothing for this endpoint to do for
  *   them.
  * - 409 (`{ error: "Escalation already resolved" }`) if `resolved_at` is
@@ -70,7 +70,7 @@ interface EscalationRow {
  *   If `trigger_message_id` is set, the referenced whatsapp_messages row's
  *   `content` (the guest's actual original message, not `reason`'s
  *   paraphrase of it) is looked up and passed to
- *   resumeConversationWithAnswer, which re-invokes the graph and sends the
+ *   resumeConversationWithAnswer, which re-runs the agent turn and sends the
  *   guest their real answer. If `trigger_message_id` is null (an escalation
  *   from before this column existed, or a deterministic safety-net one that
  *   somehow lacks a clean trigger message), the re-invocation is skipped
@@ -78,9 +78,9 @@ interface EscalationRow {
  *   optional reference on old data.
  *
  *   Returns `{ ok: true, sentToGuest: boolean }` — `sentToGuest` is `true`
- *   only when the graph re-invocation actually ran and successfully
+ *   only when the agent re-invocation actually ran and successfully
  *   delivered a reply; `false` covers both "skipped, no trigger message" and
- *   "attempted but failed" (Twilio send failure, bad graph output, etc.) —
+ *   "attempted but failed" (Twilio send failure, bad agent output, etc.) —
  *   the caller (telegram-router) uses this to tell the owner whether the
  *   guest actually got a reply, not just whether the KB write succeeded.
  *

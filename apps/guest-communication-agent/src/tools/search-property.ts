@@ -16,7 +16,7 @@
  * 1. No `filter.type` parameter. The original exposed an optional
  *    `filter: { type: 'room_info' | 'pricing' | ... }` for narrowing
  *    `match_documents` results. This tool's `answerPropertyQuestion` wrapper
- *    (see ../graph/tools.ts) had already stopped exposing that parameter to
+ *    (see ../agent/tools/property-question.ts) had already stopped exposing that parameter to
  *    the model before this extraction, after two confirmed bugs traced back
  *    to it: the model guessing a type that didn't match how a chunk was
  *    actually classified silently excluded real, relevant content a query

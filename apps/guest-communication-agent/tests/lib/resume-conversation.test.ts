@@ -1,16 +1,15 @@
-import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mocks the module boundary for every dependency resumeConversationWithAnswer
 // touches — same "mock the shared module, not the network/LLM" approach as
-// every other test in this app. graph.invoke is mocked wholesale (this is
-// NOT a graph-behavior test — graph.unit.test.ts already covers that); this
-// file only proves resumeConversationWithAnswer's own wiring: how it calls
-// the graph, how it extracts a reply, and how it maps every failure mode to
-// `{ ok: false, error }` instead of throwing.
-const graphInvokeMock = vi.fn();
-vi.mock("@/graph/graph.js", () => ({
-  graph: { invoke: graphInvokeMock },
+// every other test in this app. runAgentTurn is mocked wholesale (this is
+// NOT an agent-behavior test — tests/agent/run-turn.test.ts already covers
+// that); this file only proves resumeConversationWithAnswer's own wiring:
+// how it calls the agent, how it extracts a reply, and how it maps every
+// failure mode to `{ ok: false, error }` instead of throwing.
+const runAgentTurnMock = vi.fn();
+vi.mock("@/agent/run-turn.js", () => ({
+  runAgentTurn: runAgentTurnMock,
 }));
 
 const recordMessageMock = vi.fn();
@@ -27,7 +26,7 @@ const { resumeConversationWithAnswer } = await import("@/lib/resume-conversation
 
 describe("resumeConversationWithAnswer", () => {
   beforeEach(() => {
-    graphInvokeMock.mockReset();
+    runAgentTurnMock.mockReset();
     recordMessageMock.mockReset();
     sendWhatsAppMessageMock.mockReset();
   });
@@ -36,9 +35,9 @@ describe("resumeConversationWithAnswer", () => {
     vi.restoreAllMocks();
   });
 
-  it("invokes the graph with the trigger message as incomingMessage, sends the reply, and records it", async () => {
-    graphInvokeMock.mockResolvedValueOnce({
-      messages: [new AIMessage("Yes, we do have a swimming pool!")],
+  it("invokes runAgentTurn with the trigger message as incomingMessage, sends the reply, and records it", async () => {
+    runAgentTurnMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: "Yes, we do have a swimming pool!" }],
     });
     sendWhatsAppMessageMock.mockResolvedValueOnce({ ok: true });
     recordMessageMock.mockResolvedValueOnce("msg-assistant-1");
@@ -51,21 +50,11 @@ describe("resumeConversationWithAnswer", () => {
 
     expect(result).toEqual({ ok: true });
 
-    expect(graphInvokeMock).toHaveBeenCalledWith(
-      {
-        conversationId: "convo-1",
-        phone: "+351920742845",
-        incomingMessage: "Is there a swimming pool?",
-      },
-      expect.objectContaining({
-        configurable: {
-          conversationId: "convo-1",
-          phone: "+351920742845",
-          thread_id: "convo-1",
-        },
-        runId: expect.any(String),
-      }),
-    );
+    expect(runAgentTurnMock).toHaveBeenCalledWith({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      incomingMessage: "Is there a swimming pool?",
+    });
 
     expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
       "+351920742845",
@@ -79,8 +68,8 @@ describe("resumeConversationWithAnswer", () => {
     );
   });
 
-  it("returns ok:false when the graph throws", async () => {
-    graphInvokeMock.mockRejectedValueOnce(new Error("graph boom"));
+  it("returns ok:false when runAgentTurn throws", async () => {
+    runAgentTurnMock.mockRejectedValueOnce(new Error("graph boom"));
 
     const result = await resumeConversationWithAnswer({
       conversationId: "convo-1",
@@ -94,11 +83,13 @@ describe("resumeConversationWithAnswer", () => {
   });
 
   it("returns ok:false and does not send/record when the re-invoked turn escalates again as missing_info", async () => {
-    graphInvokeMock.mockResolvedValueOnce({
+    runAgentTurnMock.mockResolvedValueOnce({
       messages: [
-        new AIMessage(
-          "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-        ),
+        {
+          role: "assistant",
+          content:
+            "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
+        },
       ],
       missingInfoEscalated: true,
     });
@@ -117,9 +108,21 @@ describe("resumeConversationWithAnswer", () => {
     expect(recordMessageMock).not.toHaveBeenCalled();
   });
 
-  it("returns ok:false when the last message isn't an AIMessage", async () => {
-    graphInvokeMock.mockResolvedValueOnce({
-      messages: [new ToolMessage({ content: "some tool result", tool_call_id: "call_1" })],
+  it('returns ok:false when the last message isn\'t a role: "assistant" message', async () => {
+    runAgentTurnMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call_1",
+              toolName: "getPricing",
+              output: { type: "text", value: "result" },
+            },
+          ],
+        },
+      ],
     });
 
     const result = await resumeConversationWithAnswer({
@@ -132,9 +135,9 @@ describe("resumeConversationWithAnswer", () => {
     expect(sendWhatsAppMessageMock).not.toHaveBeenCalled();
   });
 
-  it("returns ok:false when the AIMessage content isn't a string", async () => {
-    graphInvokeMock.mockResolvedValueOnce({
-      messages: [new AIMessage({ content: [{ type: "text", text: "hi" }] })],
+  it("returns ok:false when the assistant message content isn't a string", async () => {
+    runAgentTurnMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "hi" }] }],
     });
 
     const result = await resumeConversationWithAnswer({
@@ -148,8 +151,8 @@ describe("resumeConversationWithAnswer", () => {
   });
 
   it("returns ok:false with the Twilio error, and does not record the message, when the send fails", async () => {
-    graphInvokeMock.mockResolvedValueOnce({
-      messages: [new AIMessage("Yes, we do have a swimming pool!")],
+    runAgentTurnMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: "Yes, we do have a swimming pool!" }],
     });
     sendWhatsAppMessageMock.mockResolvedValueOnce({
       ok: false,

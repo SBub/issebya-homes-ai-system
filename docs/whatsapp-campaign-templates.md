@@ -213,7 +213,7 @@ from the template-drafting and code-scaffolding work this pass covers.
    in the full `params` object (`Object.fromEntries(new URLSearchParams(rawBody))`) but
    are never referenced anywhere in this file. A button tap today is invisible as a button
    tap: it flows through as an ordinary inbound message whose `Body` happens to be "Yes,
-   send it" or "No thanks," handled by the same `graph.invoke(...)` call as any other
+   send it" or "No thanks," handled by the same `runAgentTurn(...)` call as any other
    message. **This route will need updating** — to read `ButtonPayload` and branch on it —
    before anything can programmatically detect a template-button "yes" rather than
    relying on the conversational AI to notice the guest said yes. That update is not part

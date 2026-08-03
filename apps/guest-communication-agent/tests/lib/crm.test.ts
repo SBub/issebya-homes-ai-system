@@ -182,7 +182,7 @@ describe("touchGuestContact", () => {
   });
 
   // Same resilience shape as registerGuestContact above — this fires after
-  // graph.invoke() has already produced the guest-facing reply, not in the
+  // runAgentTurn() has already produced the guest-facing reply, not in the
   // reply-blocking path, so it returns { ok: ... } rather than throwing.
 
   it("no-ops (ok: true) when not configured, without calling fetch", async () => {

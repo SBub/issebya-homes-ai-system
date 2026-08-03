@@ -141,7 +141,7 @@ async function handleNudgeReject(
  *
  * No longer relays the owner's raw text to the guest itself: GCA's own
  * POST /api/escalations/:id/resolve now embeds the answer into the
- * knowledge base AND re-invokes GCA's real agent graph to compose and send
+ * knowledge base AND re-runs GCA's real agent turn to compose and send
  * the guest's actual reply (see that route's own doc comment and
  * @/lib/resume-conversation.ts in GCA) — a single resolveEscalation call
  * covers both, so sendGuestMessage is no longer part of this flow at all
@@ -153,7 +153,7 @@ async function handleNudgeReject(
  * through two different mechanisms now, not one shared branch:
  *
  * - wants_human never needs an explicit guard here. GCA's performEscalation
- *   (apps/guest-communication-agent/src/graph/tools.ts) always inserts it
+ *   (apps/guest-communication-agent/src/agent/tools/escalation.ts) always inserts it
  *   with resolved_at already set at creation time — the system prompt
  *   handles its guest-facing side on its own, so there is nothing left for
  *   an owner reply to resolve. Any real reply to a wants_human nudge

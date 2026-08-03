@@ -370,7 +370,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
 
   // GCA's performEscalation always inserts wants_human escalations with
   // resolved_at already set at creation time (see
-  // apps/guest-communication-agent/src/graph/tools.ts) — there's no
+  // apps/guest-communication-agent/src/agent/tools/escalation.ts) — there's no
   // remaining owner action for a reply to trigger, so any real reply to one
   // of these nudges hits the resolved_at check above first ("Already
   // handled") before it could ever reach a category-specific branch.

@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same "mock the module boundary" approach as tests/graph/graph.unit.test.ts's
-// own createAdminClient/telegram-router mocks — this file isolates
-// performEscalation itself rather than driving it indirectly through
-// agentNode's step-cap branch.
+// Same "mock the module boundary" approach as the rest of tests/agent/ —
+// this file isolates performEscalation itself rather than driving it
+// indirectly through runAgentTurn's step-cap branch.
 const mockSingle = vi.fn();
 const mockSelect = vi.fn(() => ({ single: mockSingle }));
 const mockInsert = vi.fn(() => ({ select: mockSelect }));
@@ -13,9 +12,9 @@ const mockFrom = vi.fn(() => ({ insert: mockInsert, update: mockUpdate }));
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
-  // ../tools/search-property.ts imports createClient() at module load time
-  // (its own singleton pattern) — must be present here too, same reasoning
-  // as graph.unit.test.ts's own supabase mock.
+  // ../../tools/search-property.ts imports createClient() at module load
+  // time (its own singleton pattern) — must be present here too, same
+  // reasoning as run-turn.test.ts's own supabase mock.
   createClient: vi.fn(),
 }));
 
@@ -24,7 +23,7 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
-const { performEscalation } = await import("@/graph/tools.js");
+const { performEscalation } = await import("@/agent/tools/escalation.js");
 
 describe("performEscalation", () => {
   beforeEach(() => {
@@ -41,10 +40,9 @@ describe("performEscalation", () => {
     vi.clearAllMocks();
   });
 
-  // All three categories now share the exact same insert -> nudge ->
-  // store-telegram_message_id path — see @/graph/tools.ts's performEscalation
-  // doc comment for why the old two-branch shape (missing_info vs. the
-  // other two via a raw sendTelegramNotification bypass) was unified.
+  // All three categories share the exact same insert -> nudge ->
+  // store-telegram_message_id path — see @/agent/tools/escalation.ts's
+  // performEscalation doc comment.
   for (const reasonCategory of ["wants_human", "complaint", "missing_info"] as const) {
     it(`inserts, nudges via telegram-router, and stores telegram_message_id for ${reasonCategory}`, async () => {
       mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });

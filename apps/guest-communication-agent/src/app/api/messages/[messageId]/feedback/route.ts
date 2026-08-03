@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase";
 
-// Module-level client, same construction as @/graph/nodes/agent.ts's own
+// Module-level client, same construction as @/agent/run-turn.ts's own
 // langsmithClient — reused across requests rather than built per-call.
 const langsmithClient = new Client({ apiKey: process.env.LANGSMITH_API_KEY });
 
@@ -43,7 +43,7 @@ interface MessageRow {
  *   - 400 (`{ error: "This message has no recorded trace to attach
  *     feedback to" }`) if langsmith_run_id is null — a guest's own message
  *     or a proactive/campaign send (POST /api/send), neither of which ever
- *     touches graph.invoke() and so has nothing in LangSmith to attach
+ *     touches runAgentTurn() and so has nothing in LangSmith to attach
  *     feedback to (see whatsapp_messages.langsmith_run_id's own migration
  *     comment).
  *
