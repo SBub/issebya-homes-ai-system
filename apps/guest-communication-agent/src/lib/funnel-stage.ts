@@ -5,9 +5,9 @@ import type { FunnelStageHint } from "@/lib/crm";
 // opposed to escalateToOwner, which isn't part of this funnel-stage model
 // and deliberately produces no stageHint). These are the tools' real,
 // LLM-facing names — the Record key each tool is registered under in
-// run-turn.ts's buildAgentTools (AI SDK's ToolSet has no separate node-id
-// concept the way the old LangGraph port did, so there is nothing else this
-// could mean).
+// run-turn.ts's module-level `tools` ToolSet (AI SDK's ToolSet has no
+// separate node-id concept the way the old LangGraph port did, so there is
+// nothing else this could mean).
 const INFORMED_TOOL_NAMES = new Set(["getPricing", "checkAvailability", "answerPropertyQuestion"]);
 
 function isToolResultPart(part: ToolResultPart | { type: string }): part is ToolResultPart {

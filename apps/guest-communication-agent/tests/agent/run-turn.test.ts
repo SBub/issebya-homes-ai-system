@@ -11,14 +11,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // @/lib/supabase), telegram-router, LangSmith's Prompt Hub, and the model
 // call itself (generateText, mocked the same "mock the module boundary, not
 // the network" way tests/api/escalations/[id]/resolve/route.test.ts mocks
-// ai's embed()). Real tool implementations (getPricing, sendBookingLink,
-// escalateToOwner) still run for real against those mocked boundaries: AI
-// SDK dispatches each round's tool calls automatically via every tool's own
-// `execute` (see run-turn.ts's buildAgentTools), so this suite's mocked
-// generateText implementation calls those real `execute` functions itself
-// wherever the old code's real invokeTool() used to — same effective
-// coverage, just relocated to mirror where tool dispatch now actually
-// happens.
+// ai's embed()). Every tool in src/agent/tools/*.ts is now a schema-only
+// `tool()` declaration with no `execute` — dispatch is manual, done by
+// run-turn.ts's own runToolCall() — so this file's mocked generateText
+// implementation only ever needs to return the shape a real generateText
+// call would ({ text, toolCalls, response }); it never calls a tool's
+// `execute` itself (there is none). Real tool implementations
+// (runGetPricing, runSendBookingLink, runEscalateToOwner) still run for
+// real, exercised by run-turn.ts's real runToolCall() dispatch against the
+// mocked Supabase/telegram-router boundaries below — same effective
+// coverage as before, just exercised through the real dispatch path instead
+// of this test file calling `execute` itself.
 const loadContextMock = vi.fn();
 vi.mock("@/agent/load-context.js", () => ({
   loadContext: loadContextMock,
@@ -45,9 +48,9 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
   // ../../tools/search-property.ts imports createClient() at module load
   // time (its own singleton pattern) as a transitive dependency of
-  // answerPropertyQuestion, which run-turn.ts always imports into
-  // buildAgentTools — must be present here even though no test below
-  // actually calls that tool.
+  // answerPropertyQuestion, which run-turn.ts always imports into its
+  // module-level `tools` ToolSet — must be present here even though no test
+  // below actually calls that tool.
   createClient: vi.fn(() => ({})),
 }));
 
@@ -77,8 +80,8 @@ vi.mock("@langchain/core/load", () => ({
   load: vi.fn().mockResolvedValue({ invoke: promptTemplateInvokeMock }),
 }));
 
-// Only generateText is mocked — tool()/stepCountIs()/everything else "ai"
-// exports stays real, since run-turn.ts's own buildAgentTools and every
+// Only generateText is mocked — tool()/everything else "ai" exports stays
+// real, since run-turn.ts's own module-level `tools` ToolSet and every
 // tools/*.ts file build real AI SDK tool objects with it.
 const generateTextMock = vi.fn();
 vi.mock("ai", async (importOriginal) => {
@@ -97,8 +100,6 @@ const { runAgentTurn, sanitizeReplyText } = await import("@/agent/run-turn.js");
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
 
-type MockToolSet = Record<string, { execute?: (input: unknown, options: unknown) => unknown }>;
-
 function textResponse(text: string) {
   return {
     text,
@@ -111,33 +112,17 @@ function emptyResponse() {
   return { text: "", toolCalls: [] as unknown[], response: { messages: [] as ModelMessage[] } };
 }
 
-// Builds a mocked generateText round result for one or more tool calls.
-// Actually runs each call's real `execute` (the real tools built by
-// run-turn.ts's buildAgentTools, closing over this turn's
-// conversationId/phone/triggerMessageId) against this file's mocked
-// Supabase/telegram-router boundaries — see this file's own header comment
-// for why that's the right place for "tools run for real" coverage to live
-// now that AI SDK owns tool dispatch instead of run-turn.ts's own
-// (now-removed) invokeTool().
-async function toolCallResponse(
-  tools: MockToolSet,
+// Builds a mocked generateText round result for one or more tool calls —
+// just the { text, toolCalls, response } shape a real generateText call
+// returns when the model requests tool calls but none of `tools` has an
+// `execute` (see this file's own header comment). response.messages only
+// ever carries the assistant message with the tool-call parts, no tool-role
+// result message: that's built for real by run-turn.ts's own runToolCall()
+// dispatch + toolResultMessage(), exercised against this file's mocked
+// Supabase/telegram-router boundaries, not faked here.
+function toolCallResponse(
   calls: Array<{ toolName: string; input: Record<string, unknown>; toolCallId: string }>,
 ) {
-  const toolResultParts = await Promise.all(
-    calls.map(async (call) => {
-      const output = await tools[call.toolName]?.execute?.(call.input, {
-        toolCallId: call.toolCallId,
-        messages: [],
-      });
-      return {
-        type: "tool-result" as const,
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        output: { type: "json" as const, value: output },
-      };
-    }),
-  );
-
   return {
     text: "",
     toolCalls: calls.map((call) => ({ type: "tool-call" as const, ...call })),
@@ -147,7 +132,6 @@ async function toolCallResponse(
           role: "assistant" as const,
           content: calls.map((call) => ({ type: "tool-call" as const, ...call })),
         },
-        { role: "tool" as const, content: toolResultParts },
       ] as ModelMessage[],
     },
   };
@@ -217,8 +201,8 @@ describe("runAgentTurn", () => {
 
   it("fans out to every tool call in one round and correlates tool results by tool_call_id, then loops back to the model", async () => {
     generateTextMock
-      .mockImplementationOnce(({ tools }) =>
-        toolCallResponse(tools, [
+      .mockResolvedValueOnce(
+        toolCallResponse([
           { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_price" },
           {
             toolName: "sendBookingLink",
@@ -268,8 +252,8 @@ describe("runAgentTurn", () => {
     // Model always responds with a (harmless, pure) tool call so the loop
     // keeps running round after round without ever producing a final reply
     // — the same "pathological, won't stop" case the step cap exists for.
-    generateTextMock.mockImplementation(({ tools }) =>
-      toolCallResponse(tools, [
+    generateTextMock.mockImplementation(() =>
+      toolCallResponse([
         { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_loop" },
       ]),
     );
@@ -355,8 +339,8 @@ describe("runAgentTurn", () => {
 
   it("keeps missingInfoEscalated sticky and keeps looping (getting a real, if discarded, reply) after a missing_info escalateToOwner call", async () => {
     generateTextMock
-      .mockImplementationOnce(({ tools }) =>
-        toolCallResponse(tools, [
+      .mockResolvedValueOnce(
+        toolCallResponse([
           {
             toolName: "escalateToOwner",
             input: { reason: "Guest asked about the sauna", reason_category: "missing_info" },
@@ -392,8 +376,8 @@ describe("runAgentTurn", () => {
 
   it("does not set missingInfoEscalated for wants_human/complaint escalateToOwner calls", async () => {
     generateTextMock
-      .mockImplementationOnce(({ tools }) =>
-        toolCallResponse(tools, [
+      .mockResolvedValueOnce(
+        toolCallResponse([
           {
             toolName: "escalateToOwner",
             input: { reason: "Guest wants a human", reason_category: "wants_human" },
@@ -416,12 +400,28 @@ describe("runAgentTurn", () => {
   });
 
   // The old LangChain-based loop had its own findToolByName()/invokeTool()
-  // step and threw its own error for an unknown tool name. That dispatch
-  // responsibility now lives entirely inside AI SDK's generateText (mocked
-  // wholesale above) — an unknown-tool-name case is no longer something
-  // run-turn.ts's own code path can produce or is responsible for handling,
-  // so there is no equivalent "throws for an unrecognized tool name" case
-  // left to test at this boundary.
+  // step that threw its own error for an unknown tool name. That guard
+  // briefly became moot once dispatch moved entirely inside AI SDK's
+  // generateText (every tool had its own `execute`), but is relevant again
+  // now that run-turn.ts's runToolCall() owns dispatch itself — restoring
+  // the equivalent test here. generateText is mocked wholesale in this
+  // file, so nothing stops it from "returning" a tool call for a name
+  // outside the real `tools` ToolSet the way a misbehaving/adversarial model
+  // response in principle could; runToolCall()'s default case is what
+  // guards against that.
+  it("throws for an unrecognized tool call name", async () => {
+    generateTextMock.mockResolvedValueOnce(
+      toolCallResponse([{ toolName: "bogusTool", input: {}, toolCallId: "call_bogus" }]),
+    );
+
+    await expect(
+      runAgentTurn({
+        conversationId: "convo-bogus",
+        phone: "+351900000005",
+        incomingMessage: "Whatever",
+      }),
+    ).rejects.toThrow(/unknown tool name.*bogusTool/i);
+  });
 });
 
 describe("sanitizeReplyText", () => {

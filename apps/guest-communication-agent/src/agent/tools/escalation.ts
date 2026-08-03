@@ -101,41 +101,48 @@ export async function performEscalation(params: {
   }
 }
 
-// A factory rather than a single module-level instance (unlike
-// pricing.ts/availability.ts/property-question.ts) because this tool needs
-// conversationId/phone/triggerMessageId to attribute the escalation to the
-// right guest/conversation — run-turn.ts's buildAgentTools calls this fresh
-// every turn, closing over that turn's context instead of threading it
-// through per-call config the way LangChain's RunnableConfig.configurable
-// used to.
-export function createEscalateToOwnerTool(context: ToolContext) {
-  const { conversationId, phone, triggerMessageId } = context;
+const escalateToOwnerSchema = z.object({
+  reason: z
+    .string()
+    .describe(
+      "Brief description of why escalation is needed. For missing_info and complaint, a short paraphrase of the guest's question/issue is enough. For wants_human specifically, this text becomes the entire context an owner sees in the Telegram alert (shown as \"Guest {phone} needs you: {reason}\") — write more than the bare trigger phrase: summarize what's been discussed so far (topic, any relevant details the guest already shared, their name if known) and specifically why they're asking to speak with a person, so the owner can pick up the conversation without it reading blank.",
+    ),
+  reason_category: escalationReasonCategorySchema.describe(
+    "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use wants_human/complaint for everything else.",
+  ),
+});
 
-  return tool({
-    description:
-      "Alert the owner and hand off the conversation. Use when the guest asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those three this is via reason_category.",
-    inputSchema: z.object({
-      reason: z
-        .string()
-        .describe(
-          "Brief description of why escalation is needed. For missing_info and complaint, a short paraphrase of the guest's question/issue is enough. For wants_human specifically, this text becomes the entire context an owner sees in the Telegram alert (shown as \"Guest {phone} needs you: {reason}\") — write more than the bare trigger phrase: summarize what's been discussed so far (topic, any relevant details the guest already shared, their name if known) and specifically why they're asking to speak with a person, so the owner can pick up the conversation without it reading blank.",
-        ),
-      reason_category: escalationReasonCategorySchema.describe(
-        "Which kind of escalation this is — missing_info specifically means you couldn't find an answer to the guest's question in the property knowledge base (answerPropertyQuestion came back empty/insufficient); use wants_human/complaint for everything else.",
-      ),
-    }),
-    execute: async ({ reason, reason_category }) => {
-      await performEscalation({
-        conversationId,
-        phone,
-        reason,
-        reasonCategory: reason_category,
-        triggerMessageId,
-      });
-      return {
-        escalated: true,
-        message: "The owner has been notified and will be in touch shortly.",
-      };
-    },
+// Schema-only declaration — no `execute`. Dispatch is manual: run-turn.ts's
+// own tool-call step looks up runEscalateToOwner below by tool name and
+// calls it directly with this turn's ToolContext (conversationId/phone/
+// triggerMessageId) passed as a second argument, rather than delegating to
+// AI SDK's internal per-tool execution or (the old approach) closing that
+// context over a per-turn factory function. Since the context is now
+// threaded through the dispatcher's call instead of a closure, this can be a
+// single module-level instance reused across turns, same as
+// pricing.ts/availability.ts/property-question.ts.
+export const escalateToOwner = tool({
+  description:
+    "Alert the owner and hand off the conversation. Use when the guest asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those three this is via reason_category.",
+  inputSchema: escalateToOwnerSchema,
+});
+
+// The real implementation, called by run-turn.ts's dispatcher with this
+// tool call's already-validated input plus the turn's ToolContext.
+export async function runEscalateToOwner(
+  args: z.infer<typeof escalateToOwnerSchema>,
+  context: ToolContext,
+) {
+  const { conversationId, phone, triggerMessageId } = context;
+  await performEscalation({
+    conversationId,
+    phone,
+    reason: args.reason,
+    reasonCategory: args.reason_category,
+    triggerMessageId,
   });
+  return {
+    escalated: true,
+    message: "The owner has been notified and will be in touch shortly.",
+  };
 }

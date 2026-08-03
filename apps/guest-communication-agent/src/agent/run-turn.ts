@@ -1,15 +1,15 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { load } from "@langchain/core/load";
 import * as prompts from "@langchain/core/prompts";
-import { generateText, type ModelMessage, stepCountIs } from "ai";
+import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { Client } from "langsmith";
 import { loadContext } from "@/agent/load-context";
-import { checkAvailability } from "@/agent/tools/availability";
-import { createSendBookingLinkTool } from "@/agent/tools/booking";
+import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
+import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
-import { createEscalateToOwnerTool, performEscalation } from "@/agent/tools/escalation";
-import { getPricing } from "@/agent/tools/pricing";
-import { answerPropertyQuestion } from "@/agent/tools/property-question";
+import { escalateToOwner, performEscalation, runEscalateToOwner } from "@/agent/tools/escalation";
+import { getPricing, runGetPricing } from "@/agent/tools/pricing";
+import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 
 // This is GCA's whole reasoning loop: build the message list, then
 // repeatedly { call the model -> run any tool calls it asked for -> feed
@@ -24,14 +24,26 @@ import { answerPropertyQuestion } from "@/agent/tools/property-question";
 // simplification, not a behavior change.
 //
 // As of the LangChain -> Vercel AI SDK migration, the model call itself
-// (generateText, from "ai") also runs each round's tool_calls automatically
-// via each tool's own `execute` — see buildAgentTools below — rather than
-// this file manually dispatching them the way invokeTool() used to. This
-// loop still drives the round-by-round control flow itself (stopWhen:
-// stepCountIs(1) caps generateText to exactly one model call + its tool
-// executions per invocation, never AI SDK's own multi-step auto-looping)
-// so the step-cap/empty-reply-retry/sticky-missingInfoEscalated semantics
-// below stay exactly as deliberate and inspectable as they were before.
+// (generateText, from "ai") no longer runs tool_calls for us — every tool in
+// src/agent/tools/*.ts is a schema-only `tool()` declaration (description +
+// inputSchema, no `execute`), so generateText only ever returns the model's
+// requested tool calls, never their results. Dispatch is manual: modelTurn()
+// below makes exactly one generateText call, and runToolCall() looks up the
+// matching run<ToolName> implementation function by name and calls it
+// directly with this turn's ToolContext. This mirrors the modelTurn/toolStep/
+// runTool split in the reference harness
+// (harness-engineering/harness/runtime.ts) minus everything that harness
+// needed and GCA doesn't: no durable-workflow step checkpointing (GCA isn't a durable workflow), no
+// event-bus emission, no memory compaction (GCA's history is small and
+// reloaded fresh every turn via loadContext, not accumulated across an
+// unbounded number of turns in-process), no multi-agent handoff (GCA is a
+// single agent), and no human-in-the-loop approval gating (no tool here is
+// irreversible enough to need it). This file's own while loop drives the
+// round-by-round control flow (one modelTurn() call per round, never AI
+// SDK's own multi-step auto-looping — moot now anyway since no tool has an
+// `execute` for AI SDK to auto-run) so the step-cap/empty-reply-retry/
+// sticky-missingInfoEscalated semantics below stay exactly as deliberate and
+// inspectable as they were before.
 //
 // Stateless per-invocation: the caller passes conversationId/phone/
 // incomingMessage every turn, and loadContext (@/agent/load-context.ts)
@@ -62,7 +74,7 @@ const SYSTEM_PROMPT_IDENTIFIER =
 
 // Deterministic ceiling on reasoning rounds (loop iterations, not tool
 // calls — one round can dispatch several tool calls in parallel, run via
-// each tool's own `execute`, see buildAgentTools below). 8 gives headroom
+// runToolCall() below, see that function's own comment). 8 gives headroom
 // for all 5 tools to each be tried once, plus 2 retry/reformulation rounds,
 // plus 1 final text-only round.
 const MAX_AGENT_STEPS = 8;
@@ -103,23 +115,104 @@ const MAX_OUTPUT_TOKENS = 1000;
 // file for these (see src/agent/tools/*.ts): each is imported directly from
 // its own file and assembled here.
 //
-// Built fresh every runAgentTurn() call (not module-level singletons) since
-// sendBookingLink/escalateToOwner need this turn's conversationId/phone/
-// triggerMessageId closed over — AI SDK's tool `execute` only ever receives
-// { toolCallId, messages, abortSignal, experimental_context }, no arbitrary
-// per-call config bag the way LangChain's RunnableConfig.configurable was,
-// so closures are the natural replacement. getPricing/checkAvailability/
-// answerPropertyQuestion need no per-turn context, so they stay the same
-// module-level instances every turn reuses (see their own files' comments);
-// only the object literal collecting all 5 into one ToolSet is rebuilt each
-// call.
-function buildAgentTools(context: ToolContext) {
+// A single module-level instance, unlike the old per-turn buildAgentTools()
+// factory — every tool here is now a schema-only declaration (no `execute`
+// closing over conversationId/phone/triggerMessageId), so there is nothing
+// turn-specific left to bind at tool-build time. That context is threaded
+// through runToolCall()'s ToolContext argument instead, at dispatch time,
+// once per round.
+const tools = {
+  getPricing,
+  checkAvailability,
+  answerPropertyQuestion,
+  sendBookingLink,
+  escalateToOwner,
+} satisfies ToolSet;
+
+// One raw model call per round — mirrors the reference harness's modelTurn
+// (harness-engineering/harness/runtime.ts), minus its durable-workflow step wrapper and
+// event-bus streaming (see this file's header comment for what wasn't
+// ported). Since none of `tools` has an `execute`, generateText here only
+// ever returns the model's requested tool calls (if any) plus its own
+// assistant message with the matching tool-call parts in
+// `response.messages` — it never runs those calls or produces any tool-role
+// result message itself. Turning those calls into results is runToolCall()'s
+// job, driven by this file's own while loop below.
+interface ModelTurnResult {
+  text: string;
+  toolCalls: Array<{ toolCallId: string; toolName: string; input: Record<string, unknown> }>;
+  response: { messages: ModelMessage[] };
+}
+
+async function modelTurn(system: string, messages: ModelMessage[]): Promise<ModelTurnResult> {
+  const result = await generateText({
+    model,
+    system,
+    messages,
+    tools,
+    // maxOutputTokens is explicit — see its own module-level constant's
+    // comment for why.
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+  });
+
   return {
-    getPricing,
-    checkAvailability,
-    answerPropertyQuestion,
-    sendBookingLink: createSendBookingLinkTool(context),
-    escalateToOwner: createEscalateToOwnerTool(context),
+    text: result.text,
+    toolCalls: result.toolCalls.map((call) => ({
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      input: call.input as Record<string, unknown>,
+    })),
+    response: { messages: result.response.messages },
+  };
+}
+
+// Manual by-name tool-call dispatcher — mirrors the reference harness's
+// runTool (harness-engineering/harness/tools.ts, imported into its
+// toolStep). Looks up the matching run<ToolName> implementation function
+// (each exported alongside its schema-only `tool()` declaration from its own
+// src/agent/tools/*.ts file) and calls it directly with this already-
+// validated input, passing `context` through to the two tools that need it
+// (sendBookingLink, escalateToOwner). Throws on an unrecognized tool name —
+// the old LangChain-based loop's findToolByName()/invokeTool() step had the
+// same guard; it became moot for a while once dispatch moved entirely inside
+// AI SDK's generateText, and is relevant again now that this file owns
+// dispatch itself.
+async function runToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ToolContext,
+): Promise<unknown> {
+  switch (toolName) {
+    case "getPricing":
+      return runGetPricing(input as Parameters<typeof runGetPricing>[0]);
+    case "checkAvailability":
+      return runCheckAvailability(input as Parameters<typeof runCheckAvailability>[0]);
+    case "answerPropertyQuestion":
+      return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
+    case "sendBookingLink":
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
+    case "escalateToOwner":
+      return runEscalateToOwner(input as Parameters<typeof runEscalateToOwner>[0], context);
+    default:
+      throw new Error(`Unknown tool name: "${toolName}"`);
+  }
+}
+
+// Builds this round's tool-result ModelMessage from every tool call's
+// output, batched into a single "tool" role message with one content part
+// per call — the same shape AI SDK itself produces when a step dispatches
+// multiple tool calls at once (and what the guest-turn history stored before
+// this manual-dispatch change), so downstream history/replay code doesn't
+// need to special-case single- vs multi-call rounds.
+function toolResultMessage(calls: ModelTurnResult["toolCalls"], outputs: unknown[]): ModelMessage {
+  return {
+    role: "tool",
+    content: calls.map((call, i) => ({
+      type: "tool-result",
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      output: { type: "json", value: outputs[i] as JSONValue },
+    })),
   };
 }
 
@@ -185,8 +278,8 @@ export interface RunAgentTurnConfig {
   // Same triggerMessageId the webhook route used to thread through
   // RunnableConfig.configurable — this turn's own inbound whatsapp_messages
   // row id, passed to both the model-driven escalateToOwner tool (via
-  // buildAgentTools' closure) and run-turn.ts's own deterministic
-  // performEscalation safety-net calls below.
+  // runToolCall()'s ToolContext argument) and run-turn.ts's own
+  // deterministic performEscalation safety-net calls below.
   triggerMessageId?: string;
 }
 
@@ -222,10 +315,11 @@ export async function runAgentTurn(
   const { conversationId, phone, incomingMessage } = input;
   const { triggerMessageId } = config;
 
-  // Built once per turn — see buildAgentTools' own comment for why this
-  // needs to be a closure-based factory rather than the old module-level
-  // singleton tools.
-  const tools = buildAgentTools({ conversationId, phone, triggerMessageId });
+  // Threaded into runToolCall() below for the two tools that need it
+  // (sendBookingLink, escalateToOwner) — see this file's module-level
+  // `tools` comment for why this no longer needs to be a closure-based
+  // per-turn tool factory.
+  const toolContext: ToolContext = { conversationId, phone, triggerMessageId };
 
   const { historyMessages, guestContext } = await loadContext({ conversationId, phone });
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
@@ -297,23 +391,11 @@ export async function runAgentTurn(
     // passes through, and why nothing past this line ever sees it.
     const system = promptValue.toChatMessages()[0].content as string;
 
-    const invokeModel = () =>
-      generateText({
-        model,
-        system,
-        messages,
-        tools,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        // Exactly one model call + that round's own tool executions per
-        // invokeModel() call — this file's own while loop drives further
-        // rounds, not AI SDK's built-in multi-step auto-looping (which
-        // would remove the hook this loop needs for the empty-reply-retry
-        // and step-cap branches below). stepCountIs(1) is also
-        // generateText's own default, but spelled out here since it's
-        // load-bearing for this loop's control flow, not an incidental
-        // default.
-        stopWhen: stepCountIs(1),
-      });
+    // Exactly one model call per invokeModel() call — this file's own while
+    // loop drives further rounds itself, one modelTurn() per round (see
+    // modelTurn's own comment for why this is safe now that no tool has an
+    // `execute` for AI SDK to auto-run beyond this single call anyway).
+    const invokeModel = () => modelTurn(system, messages);
 
     let result = await invokeModel();
 
@@ -372,13 +454,22 @@ export async function runAgentTurn(
       return { messages, stepCount, missingInfoEscalated };
     }
 
-    // Tool calls this round already ran for real (each tool's own execute,
-    // see buildAgentTools above) as part of the generateText() call itself
-    // — AI SDK's automatic per-step tool dispatch replaces the old manual
-    // invokeTool()/Promise.all fan-out. response.messages carries this
-    // round's real assistant message (with its tool-call parts) plus the
-    // matching tool-result message(s), already correlated by tool_call_id.
-    messages = [...messages, ...result.response.messages];
+    // response.messages carries this round's real assistant message (with
+    // its tool-call parts), but — unlike the old AI SDK auto-dispatch
+    // version of this file — no tool-result message, since none of `tools`
+    // has an `execute` for generateText to run. Dispatch each call for real
+    // via runToolCall() (see its own comment), in parallel same as AI SDK's
+    // own per-step fan-out did, then build and append this round's
+    // tool-result message ourselves, correlated by tool_call_id the same
+    // way.
+    const toolOutputs = await Promise.all(
+      result.toolCalls.map((call) => runToolCall(call.toolName, call.input, toolContext)),
+    );
+    messages = [
+      ...messages,
+      ...result.response.messages,
+      toolResultMessage(result.toolCalls, toolOutputs),
+    ];
 
     const escalateCall = result.toolCalls.find((call) => call.toolName === "escalateToOwner");
     const escalateArgs = escalateCall?.input as { reason_category?: string } | undefined;
