@@ -7,15 +7,15 @@ import { loadContext } from "@/agent/load-context";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
-import { escalateToOwner, performEscalation, runEscalateToOwner } from "@/agent/tools/escalation";
+import { escalateToOwner, runEscalateToOwner } from "@/agent/tools/escalation";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
-// model and dispatch any tool calls it requested, until a final text reply,
-// the step cap, or the empty-reply safety net fires. Stateless per
-// invocation — loadContext reloads guest history fresh from Postgres every
-// turn, which remains the system of record, not any state held here.
+// model and dispatch any tool calls it requested, until a final text reply
+// or the step cap fires. Stateless per invocation — loadContext reloads
+// guest history fresh from Postgres every turn, which remains the system of
+// record, not any state held here.
 
 const MODEL = "deepseek/deepseek-v4-pro";
 // Pinned to the `production` tag so a new prompt commit needs an explicit
@@ -151,10 +151,6 @@ export function sanitizeReplyText(text: string): string {
     .replace(/\*([^*\n]+)\*/g, "$1");
 }
 
-function isEmptyResponse(result: { text: string; toolCalls: unknown[] }): boolean {
-  return result.text.trim() === "" && result.toolCalls.length === 0;
-}
-
 export interface RunAgentTurnInput {
   conversationId: string;
   phone: string;
@@ -206,83 +202,14 @@ export async function runAgentTurn(
   let stepCount = 0;
   let missingInfoEscalated = false;
 
-  while (true) {
+  while (stepCount < MAX_AGENT_STEPS) {
     stepCount++;
-
-    // Safety net for pathological cases (a tool that keeps failing, a model
-    // that won't stop retrying/reformulating). A typical turn resolves in
-    // 1-2 rounds and never reaches this branch. When it does, skip the model
-    // call and perform a real escalation — the same DB insert + Telegram
-    // notification escalateToOwner gives when the model chooses to escalate
-    // itself, just triggered deterministically instead.
-    if (stepCount > MAX_AGENT_STEPS) {
-      await performEscalation({
-        conversationId,
-        phone,
-        // Leads with the guest's actual question, not just the failure
-        // description, since the owner sees this string in the Telegram
-        // nudge and needs to know what to answer.
-        reason: `Guest asked: "${incomingMessage}" — agent reasoning loop exceeded ${MAX_AGENT_STEPS} rounds without reaching a final answer.`,
-        // missing_info is the closest fit of the three categories: the
-        // agent is failing to land on a real answer, just via looping
-        // instead of an empty tool result.
-        reasonCategory: "missing_info",
-        triggerMessageId,
-      });
-
-      return {
-        messages: [
-          ...messages,
-          {
-            role: "assistant",
-            content:
-              "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-          },
-        ],
-        stepCount,
-        // Always missing_info here — the webhook route uses this to
-        // suppress the interim message above from ever reaching the guest.
-        missingInfoEscalated: true,
-      };
-    }
 
     const promptTemplate = await pullSystemPromptTemplate();
     const promptValue = await promptTemplate.invoke({ guest_memory_block: guestMemoryBlock });
     const system = promptValue.toChatMessages()[0].content as string;
 
-    const invokeModel = () => modelTurn(system, messages);
-
-    let result = await invokeModel();
-
-    // One retry, since the empty-reply failure mode isn't fully
-    // deterministic; if it recurs, treat it like the MAX_AGENT_STEPS case
-    // and escalate for real rather than sending the guest nothing.
-    if (isEmptyResponse(result)) {
-      result = await invokeModel();
-    }
-
-    if (isEmptyResponse(result)) {
-      await performEscalation({
-        conversationId,
-        phone,
-        reason: `Guest asked: "${incomingMessage}" — model returned an empty reply twice in a row (a known reasoning-model reliability issue, see agent-node-behavior.md).`,
-        reasonCategory: "missing_info",
-        triggerMessageId,
-      });
-
-      return {
-        messages: [
-          ...messages,
-          {
-            role: "assistant",
-            content:
-              "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-          },
-        ],
-        stepCount,
-        missingInfoEscalated: true,
-      };
-    }
+    const result = await modelTurn(system, messages);
 
     if (result.toolCalls.length === 0) {
       messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
@@ -310,4 +237,6 @@ export async function runAgentTurn(
     }
     // Loop continues — do not return early here.
   }
+
+  return { messages, stepCount, missingInfoEscalated };
 }

@@ -83,10 +83,6 @@ function textResponse(text: string) {
   };
 }
 
-function emptyResponse() {
-  return { text: "", toolCalls: [] as unknown[], response: { messages: [] as ModelMessage[] } };
-}
-
 // Builds a mocked generateText round result for one or more tool calls.
 // response.messages only carries the assistant message with the tool-call
 // parts, no tool-result message — that's built for real by run-turn.ts's
@@ -259,50 +255,6 @@ describe("runAgentTurn", () => {
     const last = result.messages.at(-1);
     expect(last?.role).toBe("assistant");
     expect(last?.content).toMatch(/owner/i);
-  });
-
-  it("escalates as missing_info after two consecutive empty model replies in the same round", async () => {
-    generateTextMock.mockResolvedValueOnce(emptyResponse()).mockResolvedValueOnce(emptyResponse());
-
-    const result = await runAgentTurn({
-      conversationId: "convo-empty",
-      phone: "+351900000001",
-      incomingMessage: "Is there a swimming pool?",
-    });
-
-    // Initial call plus its one retry, both within round 1 — the
-    // empty-reply safety net, not the step cap.
-    expect(generateTextMock).toHaveBeenCalledTimes(2);
-    expect(result.stepCount).toBe(1);
-    expect(result.missingInfoEscalated).toBe(true);
-
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversation_id: "convo-empty",
-        reason_category: "missing_info",
-        reason: expect.stringContaining('Guest asked: "Is there a swimming pool?"'),
-      }),
-    );
-    const last = result.messages.at(-1);
-    expect(last?.content).toMatch(/owner/i);
-  });
-
-  it("recovers without escalating when the model's empty reply is followed by a real one on retry", async () => {
-    generateTextMock
-      .mockResolvedValueOnce(emptyResponse())
-      .mockResolvedValueOnce(textResponse("Yes, we have a pool!"));
-
-    const result = await runAgentTurn({
-      conversationId: "convo-retry-ok",
-      phone: "+351900000001",
-      incomingMessage: "Is there a swimming pool?",
-    });
-
-    expect(generateTextMock).toHaveBeenCalledTimes(2);
-    expect(result.stepCount).toBe(1);
-    expect(result.missingInfoEscalated).toBe(false);
-    expect(mockEscInsert).not.toHaveBeenCalled();
-    expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Yes, we have a pool!" });
   });
 
   it("keeps missingInfoEscalated sticky and keeps looping (getting a real, if discarded, reply) after a missing_info escalateToOwner call", async () => {
