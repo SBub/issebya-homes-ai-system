@@ -207,7 +207,6 @@ export interface RunAgentTurnConfig {
 
 export interface RunAgentTurnResult {
   messages: ModelMessage[];
-  missingInfoEscalated: boolean;
   stepCount: number;
 }
 
@@ -216,13 +215,17 @@ export interface RunAgentTurnResult {
 //
 // Control flow to preserve carefully: after ANY tool call (including
 // wants_human/complaint/missing_info) the loop goes back for another model
-// round. missingInfoEscalated is STICKY — once a missing_info tool call
-// happens, it stays true for the rest of this function's return even though
-// the loop keeps running and the model may go on to compose real text
-// afterward. The caller (the webhook route) only reads the final
-// missingInfoEscalated/messages once the loop ends, so that extra text is
-// simply discarded when the flag is true. This is deliberate, not a bug —
-// do not "simplify" it away.
+// round — including missing_info, whose runMissingInfo tool implementation
+// (@/agent/tools/missing-info.ts) now genuinely suspends this whole call via
+// a real DBOS.recv() wait (this function runs inside a DBOS workflow — see
+// @/agent/run-guest-turn.ts) until the owner's reply arrives or a timeout
+// falls back to a graceful "owner notified" tool result. Either way, once
+// that tool call resolves, the loop goes back to the model for a real final
+// reply — there is no separate, discarded "interim" reply to special-case
+// here anymore (see @/agent/run-guest-turn.ts's header comment for the
+// fuller history: this function used to also return a stale
+// `missingInfoEscalated` flag for exactly that now-obsolete purpose, since
+// removed).
 export async function runAgentTurn(
   input: RunAgentTurnInput,
   config: RunAgentTurnConfig = {},
@@ -241,7 +244,6 @@ export async function runAgentTurn(
   const guestMemoryBlock = guestContext ?? "No prior guest information available.";
 
   let stepCount = 0;
-  let missingInfoEscalated = false;
 
   while (stepCount < MAX_AGENT_STEPS) {
     stepCount++;
@@ -254,8 +256,7 @@ export async function runAgentTurn(
 
     if (result.toolCalls.length === 0) {
       messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
-      // NOT forced to false — sticky, see this function's doc comment.
-      return { messages, stepCount, missingInfoEscalated };
+      return { messages, stepCount };
     }
 
     // response.messages carries this round's assistant message (with its
@@ -285,11 +286,8 @@ export async function runAgentTurn(
       toolResultMessage(result.toolCalls, toolOutputs),
     ];
 
-    if (result.toolCalls.some((call) => call.toolName === "missing_info")) {
-      missingInfoEscalated = true;
-    }
     // Loop continues — do not return early here.
   }
 
-  return { messages, stepCount, missingInfoEscalated };
+  return { messages, stepCount };
 }

@@ -1,24 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mocks every real external boundary this file's functions touch: Postgres
-// (@/lib/supabase, routed by table name — escalations, documents,
-// whatsapp_messages), telegram-router (the escalation nudge), the embedding
-// call (ai's embed + @ai-sdk/openai's createOpenAI), and
-// resumeConversationWithAnswer (@/lib/resume-conversation — its own real
-// behavior is covered by tests/lib/resume-conversation.test.ts, not here).
+// (@/lib/supabase, routed by table name — escalations, documents), the
+// embedding call (ai's embed + @ai-sdk/openai's createOpenAI), and DBOS
+// itself (@dbos-inc/dbos-sdk) — the real suspend/resume mechanism
+// (DBOS.recv/DBOS.send/DBOS.workflowID) this file now drives, mocked at the
+// module boundary so this suite never touches a real DBOS/Postgres
+// connection, same convention as every other external boundary here.
 const mockEscSingle = vi.fn();
 const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
-const mockEscInsert = vi.fn(() => ({ select: mockEscSelect }));
+const mockEscInsert = vi.fn((_row: Record<string, unknown>) => ({ select: mockEscSelect }));
 const mockEscEq = vi.fn();
 const mockEscUpdate = vi.fn(() => ({ eq: mockEscEq }));
 
 const mockDocInsert = vi.fn();
 
-// Return shape varies by table (escalations/documents/whatsapp_messages),
-// kept as `any` on purpose rather than fighting a union type across every
-// test below that swaps in a different per-table mock.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockFrom = vi.fn((table: string): any => {
+const mockFrom = vi.fn((table: string) => {
   if (table === "escalations") return { insert: mockEscInsert, update: mockEscUpdate };
   if (table === "documents") return { insert: mockDocInsert };
   throw new Error(`missing-info.test.ts mockFrom: unexpected table "${table}"`);
@@ -33,11 +30,6 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
-const resumeConversationWithAnswerMock = vi.fn();
-vi.mock("@/lib/resume-conversation.js", () => ({
-  resumeConversationWithAnswer: resumeConversationWithAnswerMock,
-}));
-
 const embedMock = vi.fn();
 vi.mock("ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("ai")>();
@@ -47,29 +39,62 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ embedding: (model: string) => model }),
 }));
 
+let mockDbosWorkflowId: string | undefined;
+const dbosRecvMock = vi.fn();
+const dbosSendMock = vi.fn();
+vi.mock("@dbos-inc/dbos-sdk", () => ({
+  DBOS: {
+    get workflowID() {
+      return mockDbosWorkflowId;
+    },
+    recv: dbosRecvMock,
+    send: dbosSendMock,
+  },
+}));
+
 const {
   runMissingInfo,
   waitForMissingInfoReply,
-  HitlNotImplementedError,
   handleMissingInfoNoReply,
+  handleMissingInfoReplyReceived,
 } = await import("@/agent/tools/missing-info.js");
 
 const toolContext = { conversationId: "convo-1", phone: "+351920742845" };
 
-describe("waitForMissingInfoReply (stub)", () => {
-  it("always throws HitlNotImplementedError — no real suspend/wait exists yet", async () => {
+const MISSING_INFO_REPLY_TOPIC = "missing_info_reply";
+const MISSING_INFO_REPLY_TIMEOUT_SECONDS = 24 * 60 * 60;
+
+describe("waitForMissingInfoReply", () => {
+  beforeEach(() => {
+    dbosRecvMock.mockReset();
+  });
+
+  it("calls DBOS.recv with the missing_info_reply topic and the configured timeout, returning a real answer as-is", async () => {
+    dbosRecvMock.mockResolvedValueOnce("The AC is above the bed");
+
+    const result = await waitForMissingInfoReply("esc-1");
+
+    expect(dbosRecvMock).toHaveBeenCalledWith(
+      MISSING_INFO_REPLY_TOPIC,
+      MISSING_INFO_REPLY_TIMEOUT_SECONDS,
+    );
+    expect(result).toBe("The AC is above the bed");
+  });
+
+  it("returns null and calls handleMissingInfoNoReply when DBOS.recv times out (resolves null)", async () => {
+    dbosRecvMock.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await expect(waitForMissingInfoReply("esc-1")).rejects.toThrow(HitlNotImplementedError);
-    await expect(waitForMissingInfoReply("esc-1")).rejects.toThrow(/esc-1/);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
+    const result = await waitForMissingInfoReply("esc-1");
 
+    expect(result).toBeNull();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
     consoleWarnSpy.mockRestore();
   });
 });
 
-describe("handleMissingInfoNoReply (stub)", () => {
-  it("resolves without doing anything real yet — just logs that it's a stub", async () => {
+describe("handleMissingInfoNoReply", () => {
+  it("resolves after logging — no DB/DBOS side effects (see waitForMissingInfoReply, the only real caller)", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(handleMissingInfoNoReply("esc-1")).resolves.toBeUndefined();
@@ -83,6 +108,7 @@ describe("handleMissingInfoNoReply (stub)", () => {
 describe("runMissingInfo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDbosWorkflowId = undefined;
     mockEscSingle.mockResolvedValue({ data: { id: "esc-1" }, error: null });
     mockEscEq.mockResolvedValue({ error: null });
     sendEscalationNudgeMock.mockResolvedValue({ ok: true, telegramMessageId: 4242 });
@@ -93,7 +119,7 @@ describe("runMissingInfo", () => {
   });
 
   it("step 1 (real): inserts the escalation and sends the Telegram nudge exactly like the other escalation tools", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
@@ -111,29 +137,41 @@ describe("runMissingInfo", () => {
     );
   });
 
-  it("steps 2-3 (stub): falls back to the real, already-working owner-notified response since waitForMissingInfoReply always throws, and never reaches the embedding step", async () => {
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("reads DBOS.workflowID and includes it as workflow_id in the escalation insert when set", async () => {
+    mockDbosWorkflowId = "wf-abc-123";
+    dbosRecvMock.mockResolvedValueOnce(null);
 
-    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(result).toEqual({
-      escalated: true,
-      message: "The owner has been notified and will be in touch shortly.",
-    });
-    // Step 3 (embed the reply into the KB) is unreachable today — the
-    // stub's expected failure is caught before it, so no embedding/document
-    // write and no resumeConversationWithAnswer call ever happen.
-    expect(embedMock).not.toHaveBeenCalled();
-    expect(mockDocInsert).not.toHaveBeenCalled();
-    expect(resumeConversationWithAnswerMock).not.toHaveBeenCalled();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("falling back to the real owner-notified response"),
+    expect(mockEscInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ workflow_id: "wf-abc-123" }),
     );
   });
 
-  it("skips the stub wait entirely (and still returns the fallback message) when the escalation insert itself failed", async () => {
-    mockEscSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
-    vi.spyOn(console, "error").mockImplementation(() => {});
+  it("omits workflow_id from the escalation insert when DBOS.workflowID is undefined (no live workflow context)", async () => {
+    dbosRecvMock.mockResolvedValueOnce(null);
+
+    await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+
+    const insertArg = mockEscInsert.mock.calls[0][0];
+    expect(insertArg).not.toHaveProperty("workflow_id");
+  });
+
+  it("returns the answer directly as its own tool result when DBOS.recv resolves with a real answer — no re-embedding at this call site", async () => {
+    dbosRecvMock.mockResolvedValueOnce("The AC is above the bed");
+
+    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+
+    expect(result).toEqual({ escalated: true, answer: "The AC is above the bed" });
+    // The embedding already happened on the resolve-route side (see
+    // handleMissingInfoReplyReceived's own tests below) BEFORE DBOS.send
+    // delivered this answer here — runMissingInfo must not re-embed.
+    expect(embedMock).not.toHaveBeenCalled();
+    expect(mockDocInsert).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the owner-notified response when DBOS.recv times out (resolves null)", async () => {
+    dbosRecvMock.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
@@ -142,16 +180,21 @@ describe("runMissingInfo", () => {
       escalated: true,
       message: "The owner has been notified and will be in touch shortly.",
     });
-    // No escalation id means nothing to wait on — waitForMissingInfoReply
-    // (and its console.warn) is never even called in this branch.
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
+    consoleWarnSpy.mockRestore();
   });
 
-  it("HitlNotImplementedError is a distinct, named Error subclass — runMissingInfo's catch only swallows this specific expected stub failure, not genuine bugs", () => {
-    const err = new HitlNotImplementedError("esc-x");
-    expect(err).toBeInstanceOf(Error);
-    expect(err.name).toBe("HitlNotImplementedError");
-    expect(err.message).toContain("esc-x");
+  it("skips the DBOS.recv wait entirely (and still returns the fallback message) when the escalation insert itself failed", async () => {
+    mockEscSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+
+    expect(result).toEqual({
+      escalated: true,
+      message: "The owner has been notified and will be in touch shortly.",
+    });
+    // No escalation id means nothing to wait on — DBOS.recv is never called.
+    expect(dbosRecvMock).not.toHaveBeenCalled();
   });
 });
 
@@ -163,18 +206,14 @@ describe("handleMissingInfoReplyReceived", () => {
     mockEscEq.mockResolvedValue({ error: null });
   });
 
-  it("embeds the answer, inserts into documents, and resolves the escalation, returning sentToGuest:false when there's no triggerMessageId", async () => {
-    const { handleMissingInfoReplyReceived } = await import("@/agent/tools/missing-info.js");
-
+  it("embeds the answer, inserts into documents, and resolves the escalation, then calls DBOS.send with the workflow id and returns resumed:true", async () => {
     const result = await handleMissingInfoReplyReceived({
       escalationId: "esc-1",
       answer: "The AC is above the bed",
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      triggerMessageId: null,
+      workflowId: "wf-abc-123",
     });
 
-    expect(result).toEqual({ sentToGuest: false });
+    expect(result).toEqual({ resumed: true });
     expect(embedMock).toHaveBeenCalledWith(
       expect.objectContaining({ value: "The AC is above the bed" }),
     );
@@ -188,73 +227,66 @@ describe("handleMissingInfoReplyReceived", () => {
       expect.objectContaining({ answer: "The AC is above the bed" }),
     );
     expect(mockEscEq).toHaveBeenCalledWith("id", "esc-1");
-    expect(resumeConversationWithAnswerMock).not.toHaveBeenCalled();
+
+    // Order matters (per the app owner): the KB embed/insert and escalation
+    // resolution must both happen BEFORE DBOS.send wakes the workflow.
+    const docInsertOrder = mockDocInsert.mock.invocationCallOrder[0];
+    const escUpdateOrder = mockEscUpdate.mock.invocationCallOrder[0];
+    const sendOrder = dbosSendMock.mock.invocationCallOrder[0];
+    expect(docInsertOrder).toBeLessThan(sendOrder);
+    expect(escUpdateOrder).toBeLessThan(sendOrder);
+
+    expect(dbosSendMock).toHaveBeenCalledWith(
+      "wf-abc-123",
+      "The AC is above the bed",
+      MISSING_INFO_REPLY_TOPIC,
+    );
   });
 
-  it("throws when the documents insert fails, before touching the escalations update", async () => {
-    mockDocInsert.mockResolvedValueOnce({ error: { message: "insert boom" } });
-    const { handleMissingInfoReplyReceived } = await import("@/agent/tools/missing-info.js");
-
-    await expect(
-      handleMissingInfoReplyReceived({
-        escalationId: "esc-1",
-        answer: "The AC is above the bed",
-        conversationId: "convo-1",
-        phone: "+351920742845",
-        triggerMessageId: null,
-      }),
-    ).rejects.toThrow("insert boom");
-
-    expect(mockEscUpdate).not.toHaveBeenCalled();
-  });
-
-  it("throws when the escalations resolution update fails", async () => {
-    mockEscEq.mockResolvedValueOnce({ error: { message: "update boom" } });
-    const { handleMissingInfoReplyReceived } = await import("@/agent/tools/missing-info.js");
-
-    await expect(
-      handleMissingInfoReplyReceived({
-        escalationId: "esc-1",
-        answer: "The AC is above the bed",
-        conversationId: "convo-1",
-        phone: "+351920742845",
-        triggerMessageId: null,
-      }),
-    ).rejects.toThrow("update boom");
-  });
-
-  it("calls resumeConversationWithAnswer when a triggerMessageId is supplied, returning sentToGuest:true on success", async () => {
-    const mockMsgMaybeSingle = vi.fn().mockResolvedValue({
-      data: { content: "Is there a swimming pool?" },
-      error: null,
-    });
-    const mockMsgEq = vi.fn(() => ({ maybeSingle: mockMsgMaybeSingle }));
-    const mockMsgSelect = vi.fn(() => ({ eq: mockMsgEq }));
-    mockFrom.mockImplementation((table: string) => {
-      if (table === "documents") return { insert: mockDocInsert };
-      if (table === "escalations") return { insert: mockEscInsert, update: mockEscUpdate };
-      if (table === "whatsapp_messages") return { select: mockMsgSelect };
-      throw new Error(`unexpected table "${table}"`);
-    });
-    resumeConversationWithAnswerMock.mockResolvedValueOnce({ ok: true });
-
-    const { handleMissingInfoReplyReceived } = await import("@/agent/tools/missing-info.js");
+  it("still embeds and resolves the escalation, but skips DBOS.send and returns resumed:false, when workflowId is null", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const result = await handleMissingInfoReplyReceived({
       escalationId: "esc-1",
       answer: "The AC is above the bed",
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      triggerMessageId: "msg-1",
+      workflowId: null,
     });
 
-    expect(result).toEqual({ sentToGuest: true });
-    expect(mockMsgSelect).toHaveBeenCalledWith("content");
-    expect(mockMsgEq).toHaveBeenCalledWith("id", "msg-1");
-    expect(resumeConversationWithAnswerMock).toHaveBeenCalledWith({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      triggerMessageContent: "Is there a swimming pool?",
-    });
+    expect(result).toEqual({ resumed: false });
+    expect(mockDocInsert).toHaveBeenCalled();
+    expect(mockEscUpdate).toHaveBeenCalled();
+    expect(dbosSendMock).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("throws when the documents insert fails, before touching the escalations update or DBOS.send", async () => {
+    mockDocInsert.mockResolvedValueOnce({ error: { message: "insert boom" } });
+
+    await expect(
+      handleMissingInfoReplyReceived({
+        escalationId: "esc-1",
+        answer: "The AC is above the bed",
+        workflowId: "wf-abc-123",
+      }),
+    ).rejects.toThrow("insert boom");
+
+    expect(mockEscUpdate).not.toHaveBeenCalled();
+    expect(dbosSendMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when the escalations resolution update fails, before DBOS.send", async () => {
+    mockEscEq.mockResolvedValueOnce({ error: { message: "update boom" } });
+
+    await expect(
+      handleMissingInfoReplyReceived({
+        escalationId: "esc-1",
+        answer: "The AC is above the bed",
+        workflowId: "wf-abc-123",
+      }),
+    ).rejects.toThrow("update boom");
+
+    expect(dbosSendMock).not.toHaveBeenCalled();
   });
 });

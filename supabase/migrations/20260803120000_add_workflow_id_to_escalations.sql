@@ -1,0 +1,25 @@
+-- Backs the real DBOS-backed missing_info suspend/resume flow (replacing
+-- the old resumeConversationWithAnswer re-invocation mechanism — see
+-- apps/guest-communication-agent/src/agent/tools/missing-info.ts and
+-- src/agent/run-guest-turn.ts). runAgentTurn now runs as a durable DBOS
+-- workflow (registered as "runGuestTurn"); when the model calls
+-- missing_info and no answer is in the knowledge base, the workflow
+-- genuinely suspends via DBOS.recv() inside runMissingInfo. This column
+-- stores that suspended workflow's DBOS.workflowID (captured at escalation
+-- time by performEscalation, @/agent/tools/escalation-shared.ts), so
+-- POST /api/escalations/[id]/resolve knows which specific suspended
+-- workflow to wake via DBOS.send(workflowId, answer, "missing_info_reply")
+-- once the owner replies on Telegram.
+--
+-- Nullable, same reasoning as trigger_message_id
+-- (20260725120000_add_trigger_message_id_to_escalations.sql): unpopulated
+-- for old rows that predate this column, for the other two escalation
+-- categories (wants_human, complaint — neither needs workflow correlation,
+-- see performEscalation's optional workflowId param), and for any
+-- missing_info escalation created outside a live DBOS workflow context
+-- (DBOS.workflowID reads as undefined). handleMissingInfoReplyReceived
+-- handles a null workflow_id gracefully — it still embeds the answer into
+-- the knowledge base and resolves the escalation, it just logs and skips
+-- the DBOS.send wake-up, since there is no workflow id to address.
+alter table public.escalations
+  add column workflow_id text;

@@ -45,6 +45,27 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
+// run-turn.ts transitively imports missing-info.ts, which now imports
+// @dbos-inc/dbos-sdk for DBOS.workflowID/DBOS.recv — mocked at the module
+// boundary, same convention as generateText/createOpenAI below, so this
+// suite never touches a real DBOS/Postgres connection. workflowID is
+// undefined by default (no live workflow context in these tests, matching
+// how runMissingInfo is actually called here — directly, not through
+// run-guest-turn.ts's registered workflow). recv defaults to resolving
+// null (a timeout), which drives runMissingInfo's real fallback path — the
+// same "owner has been notified" tool result these tests already assert on.
+const dbosRecvMock = vi.fn().mockResolvedValue(null);
+const dbosSendMock = vi.fn();
+vi.mock("@dbos-inc/dbos-sdk", () => ({
+  DBOS: {
+    get workflowID() {
+      return undefined;
+    },
+    recv: dbosRecvMock,
+    send: dbosSendMock,
+  },
+}));
+
 // Mocked as a real constructable class since `new Client(...)` must keep
 // working.
 const pullPromptCommitMock = vi.fn();
@@ -163,7 +184,6 @@ describe("runAgentTurn", () => {
     });
 
     expect(result.stepCount).toBe(1);
-    expect(result.missingInfoEscalated).toBe(false);
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
       content: "The Hairdryer is in the bathroom, just ask if you need help.",
@@ -197,7 +217,6 @@ describe("runAgentTurn", () => {
 
     expect(generateTextMock).toHaveBeenCalledTimes(2);
     expect(result.stepCount).toBe(2);
-    expect(result.missingInfoEscalated).toBe(false);
 
     const toolMessages = result.messages.filter((m) => m.role === "tool");
     expect(toolMessages).toHaveLength(1);
@@ -244,7 +263,6 @@ describe("runAgentTurn", () => {
     // 9th model call.
     expect(generateTextMock).toHaveBeenCalledTimes(8);
     expect(result.stepCount).toBe(8);
-    expect(result.missingInfoEscalated).toBe(false);
     expect(mockEscInsert).not.toHaveBeenCalled();
     expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
 
@@ -252,7 +270,14 @@ describe("runAgentTurn", () => {
     expect(last?.role).toBe("tool");
   });
 
-  it("keeps missingInfoEscalated sticky and keeps looping (getting a real, if discarded, reply) after a missing_info tool call", async () => {
+  it("keeps looping after a missing_info tool call (a real DBOS.recv answer flows back as the tool's own result, and the model composes a real final reply in the same turn)", async () => {
+    // Overrides this suite's default (resolves null, i.e. a timeout) with a
+    // real answer, so runMissingInfo returns { escalated: true, answer }
+    // directly rather than falling back to the "owner notified" message —
+    // see tests/agent/tools/missing-info.test.ts for waitForMissingInfoReply
+    // and handleMissingInfoReplyReceived's own, more focused coverage of
+    // DBOS.recv/DBOS.send's exact wiring.
+    dbosRecvMock.mockResolvedValueOnce("The sauna is on the ground floor.");
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -271,13 +296,13 @@ describe("runAgentTurn", () => {
       incomingMessage: "Is there a sauna?",
     });
 
-    // The loop kept going after the escalation — the model got a second
+    // The loop kept going after the tool call — the model got a second
     // round and composed real text (not an early return right after the
-    // tool call).
+    // tool call). There is no separate "discarded interim reply" branch
+    // anymore (see run-turn.ts's own doc comment) — this second-round text
+    // IS the real reply.
     expect(generateTextMock).toHaveBeenCalledTimes(2);
     expect(result.stepCount).toBe(2);
-    // Sticky: stays true even though a later round produced real text.
-    expect(result.missingInfoEscalated).toBe(true);
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
       content: "Actually, here's the answer about the sauna!",
@@ -285,9 +310,19 @@ describe("runAgentTurn", () => {
     expect(mockEscInsert).toHaveBeenCalledWith(
       expect.objectContaining({ reason_category: "missing_info" }),
     );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as
+      | Array<{ toolCallId: string; output: unknown }>
+      | undefined;
+    const part = parts?.find((p) => p.toolCallId === "call_esc");
+    expect(part?.output).toEqual({
+      type: "json",
+      value: { escalated: true, answer: "The sauna is on the ground floor." },
+    });
   });
 
-  it("does not set missingInfoEscalated for a wants_human tool call", async () => {
+  it("escalates a wants_human tool call as its own reason_category", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -300,19 +335,18 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
 
-    const result = await runAgentTurn({
+    await runAgentTurn({
       conversationId: "convo-wants-human",
       phone: "+351900000003",
       incomingMessage: "I want to talk to a person",
     });
 
-    expect(result.missingInfoEscalated).toBe(false);
     expect(mockEscInsert).toHaveBeenCalledWith(
       expect.objectContaining({ reason_category: "wants_human" }),
     );
   });
 
-  it("does not set missingInfoEscalated for a complaint tool call", async () => {
+  it("escalates a complaint tool call as its own reason_category", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -325,13 +359,12 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("I'm sorry to hear that, I've let the owner know."));
 
-    const result = await runAgentTurn({
+    await runAgentTurn({
       conversationId: "convo-complaint",
       phone: "+351900000004",
       incomingMessage: "The room was really noisy",
     });
 
-    expect(result.missingInfoEscalated).toBe(false);
     expect(mockEscInsert).toHaveBeenCalledWith(
       expect.objectContaining({ reason_category: "complaint" }),
     );

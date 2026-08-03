@@ -224,18 +224,20 @@ async function handleEscalationReply(
     return true;
   }
 
-  if (!resolveResult.sentToGuest) {
-    // The KB write/resolution succeeded (resolveResult.ok is true), but
-    // GCA's own proactive re-invocation didn't reach the guest — honest
-    // partial-success message rather than the full-success one, which would
-    // be wrong here.
+  if (!resolveResult.resumed) {
+    // The KB write/resolution succeeded (resolveResult.ok is true), but GCA
+    // couldn't find a suspended workflow to wake for this escalation —
+    // honest message: we don't know whether/when the guest will hear back.
     await sendMessage(
-      "Added to the knowledge base, but couldn't reach the guest — you may want to follow up directly.",
+      "Added to the knowledge base, but couldn't resume the conversation — you may want to follow up directly.",
     );
     return true;
   }
 
-  await sendMessage("✅ Sent to guest and added to the knowledge base.");
+  // resumed: true only means GCA's workflow was woken up, not that the guest
+  // has been messaged yet — the actual reply happens asynchronously inside
+  // that workflow, which this router has no visibility into.
+  await sendMessage("✅ Added to the knowledge base — the agent will reply to the guest shortly.");
   return true;
 }
 

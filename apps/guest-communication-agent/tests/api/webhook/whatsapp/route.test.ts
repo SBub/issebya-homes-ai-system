@@ -2,8 +2,13 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mocks the module boundary for every dependency this route touches.
-// verifyTwilioSignature always passes so these tests can focus on the
-// runAgentTurn() wiring, in particular triggerMessageId threading.
+// verifyTwilioSignature always passes so these tests can focus on this
+// route's own wiring: recording the inbound message, then starting the
+// durable runGuestTurn workflow (@/agent/run-guest-turn.ts) via
+// DBOS.startWorkflow WITHOUT awaiting it, and always returning empty TwiML
+// immediately — this route no longer awaits runAgentTurn or builds a
+// message-bearing TwiML response at all; see run-guest-turn.ts for where
+// that logic now lives.
 const verifyTwilioSignatureMock = vi.fn(() => true);
 vi.mock("@/lib/twilio.js", () => ({
   verifyTwilioSignature: verifyTwilioSignatureMock,
@@ -17,20 +22,30 @@ vi.mock("@/lib/conversations.js", () => ({
 }));
 
 const registerGuestContactMock = vi.fn();
-const touchGuestContactMock = vi.fn();
 vi.mock("@/lib/crm.js", () => ({
   registerGuestContact: registerGuestContactMock,
-  touchGuestContact: touchGuestContactMock,
 }));
 
-const deriveStageHintMock = vi.fn();
-vi.mock("@/lib/funnel-stage.js", () => ({
-  deriveStageHint: deriveStageHintMock,
+const ensureDbosLaunchedMock = vi.fn();
+vi.mock("@/lib/dbos.js", () => ({
+  ensureDbosLaunched: ensureDbosLaunchedMock,
 }));
 
-const runAgentTurnMock = vi.fn();
-vi.mock("@/agent/run-turn.js", () => ({
-  runAgentTurn: runAgentTurnMock,
+// runGuestTurnWorkflow itself is just a plain marker value here — the real
+// registration (DBOS.registerWorkflow) is exercised in
+// tests/agent/run-guest-turn.test.ts, not this file. This route only needs
+// to prove it passes the right value to DBOS.startWorkflow.
+const runGuestTurnWorkflowMock = { name: "runGuestTurn" };
+vi.mock("@/agent/run-guest-turn.js", () => ({
+  runGuestTurnWorkflow: runGuestTurnWorkflowMock,
+}));
+
+const startWorkflowInnerMock = vi.fn();
+const dbosStartWorkflowMock = vi.fn(() => startWorkflowInnerMock);
+vi.mock("@dbos-inc/dbos-sdk", () => ({
+  DBOS: {
+    startWorkflow: dbosStartWorkflowMock,
+  },
 }));
 
 const { POST } = await import("@/app/api/webhook/whatsapp/route.js");
@@ -56,54 +71,53 @@ describe("POST /api/webhook/whatsapp", () => {
     getOrCreateActiveConversationMock.mockReset();
     recordMessageMock.mockReset();
     registerGuestContactMock.mockReset();
-    touchGuestContactMock.mockReset();
-    deriveStageHintMock.mockReset();
-    runAgentTurnMock.mockReset();
+    ensureDbosLaunchedMock.mockReset();
+    dbosStartWorkflowMock.mockClear();
+    startWorkflowInnerMock.mockReset();
 
     getOrCreateActiveConversationMock.mockResolvedValue({
       conversationId: "convo-1",
       isNew: false,
     });
-    recordMessageMock.mockResolvedValueOnce("msg-user-1");
-    recordMessageMock.mockResolvedValueOnce("msg-assistant-1");
-    touchGuestContactMock.mockResolvedValue({ ok: true });
-    deriveStageHintMock.mockReturnValue(undefined);
-    runAgentTurnMock.mockResolvedValue({
-      messages: [{ role: "assistant", content: "Yes, room 1 is available!" }],
-    });
+    recordMessageMock.mockResolvedValue("msg-user-1");
+    ensureDbosLaunchedMock.mockResolvedValue(undefined);
+    startWorkflowInnerMock.mockResolvedValue({ workflowID: "wf-1" });
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
   });
 
-  it("passes the recorded user message id through as configurable.triggerMessageId", async () => {
+  it("records the inbound message, then starts runGuestTurnWorkflow with the recorded message id as triggerMessageId", async () => {
     const res = await POST(
       makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
     );
 
     expect(res.status).toBe(200);
-    expect(recordMessageMock).toHaveBeenNthCalledWith(1, "convo-1", "user", "Is room 1 free?");
-    expect(runAgentTurnMock).toHaveBeenCalledWith(
-      {
-        conversationId: "convo-1",
-        phone: "whatsapp:+351920742845",
-        incomingMessage: "Is room 1 free?",
-      },
-      { triggerMessageId: "msg-user-1" },
-    );
+    expect(recordMessageMock).toHaveBeenCalledWith("convo-1", "user", "Is room 1 free?");
+    expect(ensureDbosLaunchedMock).toHaveBeenCalled();
+    expect(dbosStartWorkflowMock).toHaveBeenCalledWith(runGuestTurnWorkflowMock);
+    expect(startWorkflowInnerMock).toHaveBeenCalledWith({
+      conversationId: "convo-1",
+      phone: "whatsapp:+351920742845",
+      incomingMessage: "Is room 1 free?",
+      triggerMessageId: "msg-user-1",
+    });
   });
 
-  it("still records the assistant reply after the agent turn, unaffected by the id-returning recordMessage change", async () => {
-    await POST(makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }));
-
-    expect(recordMessageMock).toHaveBeenNthCalledWith(
-      2,
-      "convo-1",
-      "assistant",
-      "Yes, room 1 is available!",
-      expect.any(String),
+  it("always returns empty TwiML, never a message-bearing response", async () => {
+    // The route does `await DBOS.startWorkflow(fn)(input)` (mirrors
+    // harness-engineering/server/index.ts) — that await only waits for the
+    // workflow to be durably STARTED (DBOS's own real semantics), not for
+    // it to finish; startWorkflowInnerMock resolving quickly here mirrors
+    // that real "started" resolution, not the workflow's actual completion.
+    const res = await POST(
+      makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
     );
+
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    expect(body).toBe("<Response></Response>");
   });
 
   it("rejects requests with an invalid Twilio signature", async () => {
@@ -114,46 +128,15 @@ describe("POST /api/webhook/whatsapp", () => {
     );
 
     expect(res.status).toBe(401);
-    expect(runAgentTurnMock).not.toHaveBeenCalled();
+    expect(dbosStartWorkflowMock).not.toHaveBeenCalled();
   });
 
-  it("returns a message-bearing TwiML response for a normal turn", async () => {
-    const res = await POST(
-      makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
-    );
+  it("registers a new guest contact when the conversation is new", async () => {
+    getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1", isNew: true });
+    registerGuestContactMock.mockResolvedValue({ ok: true });
 
-    const body = await res.text();
-    expect(body).toBe("<Response><Message>Yes, room 1 is available!</Message></Response>");
-  });
+    await POST(makeRequest({ From: "whatsapp:+351920742845", Body: "Hi!" }));
 
-  it("suppresses the guest-facing reply (empty TwiML) and never records it when missingInfoEscalated is true", async () => {
-    runAgentTurnMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content:
-            "I'm having trouble finding a complete answer for you right now. I've let the owner know and they'll follow up with you shortly.",
-        },
-      ],
-      missingInfoEscalated: true,
-    });
-
-    const res = await POST(
-      makeRequest({ From: "whatsapp:+351920742845", Body: "Is there a juicer in the kitchen?" }),
-    );
-
-    const body = await res.text();
-    expect(res.status).toBe(200);
-    expect(body).toBe("<Response></Response>");
-
-    // Not recorded at all (see the route's header comment on why). Only the
-    // guest's own inbound message (call #1) is ever recorded.
-    expect(recordMessageMock).toHaveBeenCalledTimes(1);
-    expect(recordMessageMock).toHaveBeenNthCalledWith(
-      1,
-      "convo-1",
-      "user",
-      "Is there a juicer in the kitchen?",
-    );
+    expect(registerGuestContactMock).toHaveBeenCalledWith("whatsapp:+351920742845");
   });
 });

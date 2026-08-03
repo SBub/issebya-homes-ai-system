@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.48",
+    "@dbos-inc/dbos-sdk": "^4.25.14",
     "@langchain/core": "^1.2.1",
     "@supabase/supabase-js": "^2.49.8",
     "ai": "^6.0.138",

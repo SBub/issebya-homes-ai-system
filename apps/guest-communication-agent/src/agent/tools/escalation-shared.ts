@@ -23,8 +23,8 @@ export type EscalationReasonCategory = "wants_human" | "complaint" | "missing_in
 // implementations can all share this one insert-and-nudge path; the model
 // itself never sees this function directly, only the three tool schemas.
 //
-// Returns the new escalations row's id (so missing-info.ts's stub HITL wait
-// step has something to key off of), or null if the insert itself failed
+// Returns the new escalations row's id (so missing-info.ts's real DBOS.recv
+// wait step has something to key off of), or null if the insert itself failed
 // (already logged below) and there is nothing to nudge or wait on.
 export async function performEscalation(params: {
   conversationId: string;
@@ -35,8 +35,16 @@ export async function performEscalation(params: {
   // model's paraphrase). Optional: only the real webhook call path supplies
   // it; other callers leave trigger_message_id null rather than fabricating one.
   triggerMessageId?: string;
+  // The DBOS workflow id of the CURRENTLY RUNNING runGuestTurn workflow
+  // (read via DBOS.workflowID from inside it — see
+  // @/agent/run-guest-turn.ts), so POST /api/escalations/[id]/resolve can
+  // later address the right suspended workflow via DBOS.send. Only
+  // runMissingInfo (missing-info.ts) needs this — wants_human/complaint
+  // have no suspend/resume to correlate back to, so their callers
+  // (wants-human.ts/complaint.ts) simply omit it.
+  workflowId?: string;
 }): Promise<string | null> {
-  const { conversationId, phone, reason, reasonCategory, triggerMessageId } = params;
+  const { conversationId, phone, reason, reasonCategory, triggerMessageId, workflowId } = params;
   const supabase = createAdminClient();
 
   const { data, error } = await supabase
@@ -47,6 +55,7 @@ export async function performEscalation(params: {
       reason,
       reason_category: reasonCategory,
       ...(triggerMessageId ? { trigger_message_id: triggerMessageId } : {}),
+      ...(workflowId ? { workflow_id: workflowId } : {}),
       ...(reasonCategory === "wants_human" ? { resolved_at: new Date().toISOString() } : {}),
     })
     .select("id")

@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // parsing, the escalation lookup and its 404/400/409 status mapping) stay
 // here and are tested against a real (mocked-at-the-DB-boundary) Supabase
 // client, but the actual "a missing_info reply arrived" business logic
-// (embed, resolve, proactively reply to the guest) now lives in
+// (embed, resolve, wake the suspended DBOS workflow) now lives in
 // @/agent/tools/missing-info.ts's handleMissingInfoReplyReceived, which is
-// mocked wholesale here — its own real behavior is covered by
-// tests/agent/tools/missing-info.test.ts, not this file.
+// mocked wholesale here — its own real behavior (including its DBOS.send
+// wiring) is covered by tests/agent/tools/missing-info.test.ts, not this
+// file. @/lib/dbos.ts's ensureDbosLaunched is also mocked at the module
+// boundary so this suite never touches a real DBOS/Postgres connection.
 const maybeSingleMock = vi.fn();
 const eqSelectMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const selectMock = vi.fn(() => ({ eq: eqSelectMock }));
@@ -27,6 +29,11 @@ vi.mock("@/lib/supabase.js", () => ({
 const handleMissingInfoReplyReceivedMock = vi.fn();
 vi.mock("@/agent/tools/missing-info.js", () => ({
   handleMissingInfoReplyReceived: handleMissingInfoReplyReceivedMock,
+}));
+
+const ensureDbosLaunchedMock = vi.fn();
+vi.mock("@/lib/dbos.js", () => ({
+  ensureDbosLaunched: ensureDbosLaunchedMock,
 }));
 
 const { POST } = await import("@/app/api/escalations/[id]/resolve/route.js");
@@ -53,6 +60,7 @@ describe("POST /api/escalations/[id]/resolve", () => {
     selectMock.mockClear();
     fromMock.mockClear();
     handleMissingInfoReplyReceivedMock.mockReset();
+    ensureDbosLaunchedMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -99,7 +107,7 @@ describe("POST /api/escalations/[id]/resolve", () => {
 
   it("returns 400 when the escalation isn't a missing_info category", async () => {
     maybeSingleMock.mockResolvedValueOnce({
-      data: { id: "esc-1", reason_category: "wants_human", resolved_at: null },
+      data: { id: "esc-1", reason_category: "wants_human", resolved_at: null, workflow_id: null },
       error: null,
     });
 
@@ -113,7 +121,12 @@ describe("POST /api/escalations/[id]/resolve", () => {
 
   it("returns 409 when the escalation is already resolved", async () => {
     maybeSingleMock.mockResolvedValueOnce({
-      data: { id: "esc-1", reason_category: "missing_info", resolved_at: "2026-07-25T10:00:00Z" },
+      data: {
+        id: "esc-1",
+        reason_category: "missing_info",
+        resolved_at: "2026-07-25T10:00:00Z",
+        workflow_id: null,
+      },
       error: null,
     });
 
@@ -135,55 +148,50 @@ describe("POST /api/escalations/[id]/resolve", () => {
     expect(json).toEqual({ error: "boom" });
   });
 
-  it("delegates to handleMissingInfoReplyReceived with the escalation's fields and returns its result", async () => {
+  it("ensures DBOS is launched, then delegates to handleMissingInfoReplyReceived with the escalation's workflow_id and returns its result", async () => {
     maybeSingleMock.mockResolvedValueOnce({
       data: {
         id: "esc-1",
         reason_category: "missing_info",
         resolved_at: null,
-        trigger_message_id: "msg-1",
-        conversation_id: "convo-1",
-        phone_number: "+351920742845",
+        workflow_id: "wf-abc-123",
       },
       error: null,
     });
-    handleMissingInfoReplyReceivedMock.mockResolvedValueOnce({ sentToGuest: true });
+    handleMissingInfoReplyReceivedMock.mockResolvedValueOnce({ resumed: true });
 
     const res = await POST(makeRequest({ answer: "The AC is above the bed" }), makeParams("esc-1"));
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(json).toEqual({ ok: true, sentToGuest: true });
+    expect(json).toEqual({ ok: true, resumed: true });
+    expect(ensureDbosLaunchedMock).toHaveBeenCalled();
     expect(handleMissingInfoReplyReceivedMock).toHaveBeenCalledWith({
       escalationId: "esc-1",
       answer: "The AC is above the bed",
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      triggerMessageId: "msg-1",
+      workflowId: "wf-abc-123",
     });
   });
 
-  it("passes triggerMessageId: null through untouched when the escalation has none", async () => {
+  it("passes workflowId: null through untouched when the escalation has none", async () => {
     maybeSingleMock.mockResolvedValueOnce({
       data: {
         id: "esc-1",
         reason_category: "missing_info",
         resolved_at: null,
-        trigger_message_id: null,
-        conversation_id: "convo-1",
-        phone_number: "+351920742845",
+        workflow_id: null,
       },
       error: null,
     });
-    handleMissingInfoReplyReceivedMock.mockResolvedValueOnce({ sentToGuest: false });
+    handleMissingInfoReplyReceivedMock.mockResolvedValueOnce({ resumed: false });
 
     const res = await POST(makeRequest({ answer: "The AC is above the bed" }), makeParams("esc-1"));
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(json).toEqual({ ok: true, sentToGuest: false });
+    expect(json).toEqual({ ok: true, resumed: false });
     expect(handleMissingInfoReplyReceivedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerMessageId: null }),
+      expect.objectContaining({ workflowId: null }),
     );
   });
 
@@ -193,9 +201,7 @@ describe("POST /api/escalations/[id]/resolve", () => {
         id: "esc-1",
         reason_category: "missing_info",
         resolved_at: null,
-        trigger_message_id: null,
-        conversation_id: "convo-1",
-        phone_number: "+351920742845",
+        workflow_id: null,
       },
       error: null,
     });

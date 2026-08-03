@@ -1,15 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handleMissingInfoReplyReceived } from "@/agent/tools/missing-info";
 import { requireApiKey } from "@/lib/auth";
+import { ensureDbosLaunched } from "@/lib/dbos";
 import { createAdminClient } from "@/lib/supabase";
 
 interface EscalationRow {
   id: string;
   reason_category: string | null;
   resolved_at: string | null;
-  trigger_message_id: string | null;
-  conversation_id: string;
-  phone_number: string;
+  workflow_id: string | null;
 }
 
 /**
@@ -22,14 +21,14 @@ interface EscalationRow {
  * escalation lookup and its 404/400/409 status mapping) live here, but the
  * actual "a missing_info reply has arrived" business logic — embed the
  * answer into the property knowledge base, mark the escalation resolved,
- * and (if possible) get the answer to the guest — lives in
- * @/agent/tools/missing-info.ts's handleMissingInfoReplyReceived, which this
- * route just calls. That file is the single, consolidated home for the
- * missing_info HITL flow (the ask-tool the model calls, the "reply
- * received" handler this route triggers, and the "reply never came" stub
- * handler) precisely so this flow isn't split across independent parallel
- * mechanisms — see that file's own top-of-file doc comment for the full
- * rationale.
+ * and wake the suspended DBOS workflow that asked the question (if any) —
+ * lives in @/agent/tools/missing-info.ts's handleMissingInfoReplyReceived,
+ * which this route just calls. That function does the KB write and
+ * escalation resolution BEFORE calling DBOS.send — see its own doc comment
+ * for why that order matters. The resumed workflow (@/agent/run-guest-turn.ts's
+ * runGuestTurn) composes and delivers the actual guest-facing reply
+ * entirely on its own, well after this route's own HTTP response has
+ * already been returned — this route has no visibility into that outcome.
  *
  * Request body: `{ answer: string }`.
  *
@@ -46,10 +45,11 @@ interface EscalationRow {
  * - 500 (`{ error: "..." }`) if handleMissingInfoReplyReceived's durable
  *   part (the KB embed/insert or the escalation resolution update) itself
  *   fails — those are the parts that must not silently succeed.
- * - Otherwise: `{ ok: true, sentToGuest: boolean }` —  `sentToGuest` is
- *   `true` only when the guest-facing reply was actually attempted and
- *   delivered; see handleMissingInfoReplyReceived's own doc comment for the
- *   full breakdown of when it's `false`.
+ * - Otherwise: `{ ok: true, resumed: boolean }` — `resumed` is `true` only
+ *   when DBOS.send was dispatched to a known, live workflow id; it does NOT
+ *   mean the guest has been messaged yet (that happens later, inside the
+ *   resumed workflow) — see handleMissingInfoReplyReceived's own doc
+ *   comment for the full breakdown of when it's `false`.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const unauthorized = requireApiKey(request);
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { data: escalation, error: selectError } = await supabase
     .from("escalations")
-    .select("id, reason_category, resolved_at, trigger_message_id, conversation_id, phone_number")
+    .select("id, reason_category, resolved_at, workflow_id")
     .eq("id", id)
     .maybeSingle();
 
@@ -85,9 +85,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const {
     reason_category: reasonCategory,
     resolved_at: resolvedAt,
-    trigger_message_id: triggerMessageId,
-    conversation_id: conversationId,
-    phone_number: phoneNumber,
+    workflow_id: workflowId,
   } = escalation as EscalationRow;
 
   if (reasonCategory !== "missing_info") {
@@ -102,14 +100,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   try {
-    const { sentToGuest } = await handleMissingInfoReplyReceived({
+    await ensureDbosLaunched();
+    const { resumed } = await handleMissingInfoReplyReceived({
       escalationId: id,
       answer,
-      conversationId,
-      phone: phoneNumber,
-      triggerMessageId,
+      workflowId,
     });
-    return NextResponse.json({ ok: true, sentToGuest });
+    return NextResponse.json({ ok: true, resumed });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

@@ -100,23 +100,26 @@ export async function getEscalationByTelegramMessageId(
 }
 
 export type ResolveEscalationResult =
-  | { ok: true; sentToGuest: boolean }
+  | { ok: true; resumed: boolean }
   | { ok: false; alreadyResolved: boolean; error?: string };
 
 /**
- * Calls GCA's POST /api/escalations/:id/resolve — the single call that now
+ * Calls GCA's POST /api/escalations/:id/resolve — the single call that
  * handles the whole missing_info resolution flow on GCA's side: persists the
- * answer, writes the new knowledge-base entry, and (best-effort) re-runs
- * GCA's own agent turn to actually reply to the guest in its own voice (see
- * that route's own doc comment, and @/lib/resume-conversation.ts in GCA, for
- * why this endpoint owns the guest-facing send now instead of
- * telegram-router relaying the owner's raw text via sendGuestMessage).
+ * answer, writes the new knowledge-base entry, then wakes GCA's suspended
+ * DBOS workflow (@/agent/run-guest-turn.ts in GCA) for that guest turn so it
+ * can compose and send the real reply itself.
  *
- * `sentToGuest` on a successful (`ok: true`) response reports whether that
- * proactive re-invocation actually delivered a reply to the guest — the
- * caller uses it to tell the owner the truth (full success vs. "added to the
- * knowledge base, but the guest wasn't reached") rather than assuming success
- * whenever the resolve call itself returns 200.
+ * `resumed` on a successful (`ok: true`) response reports only whether that
+ * wake-up call was dispatched to a known, live workflow — NOT whether the
+ * guest was actually messaged. GCA's own reply now happens later,
+ * asynchronously, inside the resumed workflow (which may take anywhere from
+ * milliseconds to longer, and could still fail on GCA's side after this call
+ * returns) — this router has no visibility into that outcome at all anymore.
+ * `resumed: false` means GCA couldn't find a workflow to wake for this
+ * escalation (e.g. it predates workflow correlation) — the caller uses this
+ * to give the owner an honest "the answer was saved, but I couldn't resume
+ * the conversation" message rather than falsely implying delivery either way.
  *
  * Mirrors ./crm.ts's markPromoCodeRejected shape: a 409 (already resolved —
  * a double reply or a Telegram webhook retry racing this same escalation) is
@@ -154,6 +157,6 @@ export async function resolveEscalation(
       error: `GCA resolve for escalation ${escalationId} failed (${res.status}): ${await res.text()}`,
     };
   }
-  const body = (await res.json().catch(() => ({}))) as { sentToGuest?: boolean };
-  return { ok: true, sentToGuest: body.sentToGuest ?? false };
+  const body = (await res.json().catch(() => ({}))) as { resumed?: boolean };
+  return { ok: true, resumed: body.resumed ?? false };
 }

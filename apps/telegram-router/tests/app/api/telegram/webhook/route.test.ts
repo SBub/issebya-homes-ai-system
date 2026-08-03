@@ -291,7 +291,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       resolved_at: null,
       answer: null,
     });
-    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: true });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, resumed: true });
 
     await POST(makeReplyRequest("The AC is above the bed", 42));
 
@@ -325,7 +325,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("resolves the escalation and confirms full success to the owner when sentToGuest is true", async () => {
+  it("resolves the escalation and confirms full success to the owner when resumed is true", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",
       phone_number: "+351920742845",
@@ -334,7 +334,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       resolved_at: null,
       answer: null,
     });
-    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: true });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, resumed: true });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", 42));
     const json = await res.json();
@@ -343,11 +343,13 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     expect(json).toEqual({ ok: true });
     expect(resolveEscalationMock).toHaveBeenCalledWith("esc-1", "The AC is above the bed");
     expect(sendMessageMock).toHaveBeenCalledWith(
-      expect.stringContaining("Sent to guest and added to the knowledge base"),
+      expect.stringContaining(
+        "Added to the knowledge base — the agent will reply to the guest shortly",
+      ),
     );
   });
 
-  it("reports a partial success — added to the knowledge base but the guest wasn't reached — when sentToGuest is false", async () => {
+  it("reports a partial success — added to the knowledge base but the conversation couldn't be resumed — when resumed is false", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",
       phone_number: "+351920742845",
@@ -356,7 +358,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       resolved_at: null,
       answer: null,
     });
-    resolveEscalationMock.mockResolvedValueOnce({ ok: true, sentToGuest: false });
+    resolveEscalationMock.mockResolvedValueOnce({ ok: true, resumed: false });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", 42));
     const json = await res.json();
@@ -364,7 +366,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
     expect(sendMessageMock).toHaveBeenCalledWith(
-      expect.stringContaining("Added to the knowledge base, but couldn't reach the guest"),
+      expect.stringContaining("Added to the knowledge base, but couldn't resume the conversation"),
     );
   });
 

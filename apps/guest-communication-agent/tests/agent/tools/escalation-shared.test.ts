@@ -156,6 +156,45 @@ describe("performEscalation", () => {
     });
   });
 
+  it("includes workflow_id in the escalations insert when supplied (the real missing_info suspend/resume path)", async () => {
+    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+    mockEq.mockResolvedValueOnce({ error: null });
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
+
+    await performEscalation({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest is asking about the AC",
+      reasonCategory: "missing_info",
+      workflowId: "wf-abc-123",
+    });
+
+    expect(mockInsert).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      phone_number: "+351920742845",
+      reason: "Guest is asking about the AC",
+      reason_category: "missing_info",
+      workflow_id: "wf-abc-123",
+    });
+  });
+
+  it("omits workflow_id from the escalations insert when not supplied", async () => {
+    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
+    mockEq.mockResolvedValueOnce({ error: null });
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
+
+    await performEscalation({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest is asking about the AC",
+      reasonCategory: "missing_info",
+    });
+
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.not.objectContaining({ workflow_id: expect.anything() }),
+    );
+  });
+
   it("skips the nudge (and logs) when the escalations insert itself fails, returning null", async () => {
     mockSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -1,27 +1,30 @@
-import crypto from "node:crypto";
+import { DBOS } from "@dbos-inc/dbos-sdk";
 import { type NextRequest, NextResponse } from "next/server";
-import { runAgentTurn } from "@/agent/run-turn";
+import { runGuestTurnWorkflow } from "@/agent/run-guest-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
-import { registerGuestContact, touchGuestContact } from "@/lib/crm";
-import { deriveStageHint } from "@/lib/funnel-stage";
+import { registerGuestContact } from "@/lib/crm";
+import { ensureDbosLaunched } from "@/lib/dbos";
 import { verifyTwilioSignature } from "@/lib/twilio";
-
-function escapeXml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 /**
  * Receives inbound WhatsApp messages via Twilio's webhook format, validates
- * X-Twilio-Signature, runs GCA's agent turn, and replies synchronously via
- * TwiML.
+ * X-Twilio-Signature, then starts the guest's turn as a durable DBOS
+ * workflow (@/agent/run-guest-turn.ts's runGuestTurnWorkflow) WITHOUT
+ * awaiting it, and immediately acks with empty TwiML.
  *
- * When `result.missingInfoEscalated` is true, the interim reply is neither
- * sent to the guest nor recorded into whatsapp_messages. Recording it was
- * tried first, but a test showed it broke the later re-invocation (see
- * @/lib/resume-conversation.ts): the model would read the recorded "I've let
- * the owner know" line as already having handled the question and escalate
- * again instead of finding the freshly-embedded answer. Skipping the record
- * entirely avoids that trap.
+ * This route used to await runAgentTurn directly and reply synchronously
+ * via TwiML built from its result. That no longer works now that a
+ * missing_info escalation can genuinely suspend the turn (via DBOS.recv —
+ * see @/agent/tools/missing-info.ts's waitForMissingInfoReply) for minutes,
+ * hours, or longer, waiting on the owner's Telegram reply — an HTTP request
+ * cannot stay open that long, and Twilio's webhook contract doesn't expect
+ * it to. So instead: every reply (not just missing_info ones) is now
+ * delivered later, proactively, by the workflow itself
+ * (run-guest-turn.ts's runGuestTurn sends via
+ * @/lib/twilio-send.ts's sendWhatsAppMessage once it has a final answer —
+ * whether that's 200ms or, after a real suspend, much later). This route's
+ * own HTTP response is always just an ack; it carries no guest-facing
+ * content anymore.
  */
 export async function POST(request: NextRequest) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -49,7 +52,7 @@ export async function POST(request: NextRequest) {
   const { conversationId, isNew } = await getOrCreateActiveConversation(phone);
   const userMessageId = await recordMessage(conversationId, "user", incomingMessage);
 
-  // Fire-and-forget: never blocks/fails the guest-facing reply.
+  // Fire-and-forget: never blocks/fails the guest-facing turn.
   // registerGuestContact() itself never throws; a console.warn is the only
   // signal on failure since this route replies via TwiML, not JSON.
   if (isNew) {
@@ -61,52 +64,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Stored as whatsapp_messages.langsmith_run_id for eval-feedback
-  // correlation, but is NOT a real LangSmith trace id — nothing on
-  // LangSmith's side matches it, so a later feedback submission against it
-  // will fail. Known regression, not addressed here.
-  const runId = crypto.randomUUID();
-
-  const result = await runAgentTurn(
-    { conversationId, phone, incomingMessage },
-    // Lets a mid-turn escalation store this message as trigger_message_id,
-    // so a later missing_info resolution can re-invoke runAgentTurn with the
-    // guest's real original question rather than the model's paraphrase —
-    // see @/lib/resume-conversation.ts.
-    { triggerMessageId: userMessageId },
-  );
-
-  const lastMessage = result.messages.at(-1);
-  const replyText =
-    lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
-      ? lastMessage.content
-      : "Sorry, I couldn't process that — please try again shortly.";
-
-  // Skipped entirely (not just undelivered) for a missing_info escalation —
-  // see this file's header comment.
-  if (!result.missingInfoEscalated) {
-    await recordMessage(conversationId, "assistant", replyText, runId);
-  }
-
-  // Fire-and-forget, same as registerGuestContact above. CRM owns the
-  // forward-only funnel_stage upgrade logic; this route just derives the
-  // hint (see funnel-stage.ts).
-  const stageHint = deriveStageHint(result.messages);
-  const touchResult = await touchGuestContact(phone, stageHint);
-  if (!touchResult.ok) {
-    console.warn(
-      `[guest-communication-agent] touchGuestContact failed for ${phone}: ${touchResult.error}`,
-    );
-  }
+  // Start the durable workflow WITHOUT awaiting its completion — mirrors
+  // harness-engineering/server/index.ts's
+  // `await DBOS.startWorkflow(workflow)(message.input)`. The `await` here
+  // only awaits the workflow being durably started (enqueued), not its
+  // result; run-guest-turn.ts's runGuestTurn resumes/finishes independently
+  // of this HTTP request's lifetime.
+  await ensureDbosLaunched();
+  await DBOS.startWorkflow(runGuestTurnWorkflow)({
+    conversationId,
+    phone,
+    incomingMessage,
+    triggerMessageId: userMessageId,
+  });
 
   // Empty <Response></Response> is valid TwiML that sends no message — the
-  // guest hears nothing until the owner answers and
-  // @/lib/resume-conversation.ts sends the real answer.
-  const twiml = result.missingInfoEscalated
-    ? "<Response></Response>"
-    : `<Response><Message>${escapeXml(replyText)}</Message></Response>`;
-
-  return new NextResponse(twiml, {
+  // guest hears nothing from this HTTP response; the real reply arrives
+  // later via the workflow's own proactive sendWhatsAppMessage call (see
+  // @/agent/run-guest-turn.ts).
+  return new NextResponse("<Response></Response>", {
     status: 200,
     headers: { "Content-Type": "text/xml" },
   });
