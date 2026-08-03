@@ -11,11 +11,8 @@ const checkAvailabilitySchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only declaration — no `execute`. Dispatch is manual: run-turn.ts's
-// own tool-call step looks up runCheckAvailability below by tool name and
-// calls it directly, rather than delegating to AI SDK's internal per-tool
-// execution. No per-turn context needed, so this stays a single module-level
-// instance — see pricing.ts's own comment for why that's safe.
+// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
+// runCheckAvailability below by name.
 export const checkAvailability = tool({
   description:
     "Check if a room is available for the requested dates. Use when the guest mentions specific check-in and check-out dates.",

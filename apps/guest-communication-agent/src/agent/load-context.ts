@@ -1,22 +1,9 @@
 import type { ModelMessage } from "ai";
 import { loadGuestInfo, loadRecentMessages } from "@/lib/db";
 
-// Loads everything runAgentTurn needs before it can reason about a turn:
-// recent conversation history and past-stay facts about the guest. Both are
-// read fresh from Postgres on every invocation — nothing about the guest or
-// the conversation is carried over in memory between turns, only
-// conversationId/phone/incomingMessage are caller-supplied inputs.
-//
-// This only returns the *prior* history, oldest first — it deliberately does
-// NOT append the turn's new incoming message. That used to matter a lot: the
-// old LangGraph port had to route the new message through a side-channel
-// field and let a single node return history+newMessage as one already-
-// ordered array, purely to dodge MessagesAnnotation's append-only reducer
-// (see git history/state.ts for that gory detail). A plain function has no
-// such reducer to dodge — the caller (run-turn.ts) just does
-// `[...historyMessages, { role: "user", content: incomingMessage }]`
-// directly, so this function's only job is fetching and ordering the
-// history.
+// Loads recent conversation history and past-stay guest facts fresh from
+// Postgres. Returns only the *prior* history, oldest first — the caller
+// (run-turn.ts) appends the turn's new incoming message itself.
 export interface LoadedContext {
   historyMessages: ModelMessage[];
   guestContext: string | null;

@@ -1,14 +1,9 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks the module boundary for every dependency this route touches, same
-// "mock the shared factory/module, not the network" convention as every
-// other route test in this app. verifyTwilioSignature is stubbed to always
-// pass so these tests can focus on the runAgentTurn() wiring, in particular
-// this route's triggerMessageId threading (see @/lib/conversations.js's
-// recordMessage now returning the new whatsapp_messages row's id, and
-// @/agent/tools/escalation.ts's performEscalation, which is what actually
-// consumes configurable.triggerMessageId mid-turn).
+// Mocks the module boundary for every dependency this route touches.
+// verifyTwilioSignature always passes so these tests can focus on the
+// runAgentTurn() wiring, in particular triggerMessageId threading.
 const verifyTwilioSignatureMock = vi.fn(() => true);
 vi.mock("@/lib/twilio.js", () => ({
   verifyTwilioSignature: verifyTwilioSignatureMock,
@@ -149,14 +144,10 @@ describe("POST /api/webhook/whatsapp", () => {
 
     const body = await res.text();
     expect(res.status).toBe(200);
-    // Valid, empty TwiML — Twilio relays nothing to the guest this turn.
     expect(body).toBe("<Response></Response>");
 
-    // Not recorded at all (not just undelivered) — a real test showed
-    // recording it here poisoned the later re-invocation's loaded history
-    // (the model read its own "I've let the owner know" reply as "already
-    // handled" and skipped re-searching) — see the route's own doc comment.
-    // Only the guest's own inbound message (call #1) is ever recorded.
+    // Not recorded at all (see the route's header comment on why). Only the
+    // guest's own inbound message (call #1) is ever recorded.
     expect(recordMessageMock).toHaveBeenCalledTimes(1);
     expect(recordMessageMock).toHaveBeenNthCalledWith(
       1,

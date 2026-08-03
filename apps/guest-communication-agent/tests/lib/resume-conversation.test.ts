@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks the module boundary for every dependency resumeConversationWithAnswer
-// touches — same "mock the shared module, not the network/LLM" approach as
-// every other test in this app. runAgentTurn is mocked wholesale (this is
-// NOT an agent-behavior test — tests/agent/run-turn.test.ts already covers
-// that); this file only proves resumeConversationWithAnswer's own wiring:
-// how it calls the agent, how it extracts a reply, and how it maps every
-// failure mode to `{ ok: false, error }` instead of throwing.
+// runAgentTurn is mocked wholesale — this is not an agent-behavior test
+// (tests/agent/run-turn.test.ts covers that); this file only proves
+// resumeConversationWithAnswer's own wiring: how it calls the agent, how it
+// extracts a reply, and how it maps every failure mode to
+// `{ ok: false, error }` instead of throwing.
 const runAgentTurnMock = vi.fn();
 vi.mock("@/agent/run-turn.js", () => ({
   runAgentTurn: runAgentTurnMock,

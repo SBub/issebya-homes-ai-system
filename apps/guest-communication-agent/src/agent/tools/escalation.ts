@@ -4,47 +4,22 @@ import { createAdminClient } from "@/lib/supabase";
 import { sendEscalationNudge } from "@/lib/telegram-router";
 import type { ToolContext } from "./config";
 
-// Kept as its own named schema (rather than inlined into escalateToOwner's
-// schema below) so the same enum/type can be reused by run-turn.ts's own
-// deterministic performEscalation call sites (step-cap and empty-reply
-// safety nets), which never go through this tool's schema validation.
+// Named separately so run-turn.ts's deterministic performEscalation call
+// sites (which skip this tool's schema validation) can reuse the same type.
 const escalationReasonCategorySchema = z.enum(["wants_human", "complaint", "missing_info"]);
 export type EscalationReasonCategory = z.infer<typeof escalationReasonCategorySchema>;
 
-// All three categories insert the escalations row, select its id back, and
-// push a nudge through apps/telegram-router (sendEscalationNudge) — unified
-// so every category follows this repo's "one app owns all Telegram I/O"
-// pattern.
+// Inserts the escalations row and pushes a nudge through apps/telegram-router
+// for all three categories. telegram_message_id is stored for all of them
+// (not just missing_info) since it's the correlation id a reply needs — a
+// wants_human reply can't be mistaken for an answer because it's already
+// resolved by insert time; a complaint reply is guarded by reason_category in
+// the webhook's handleEscalationReply. wants_human auto-resolves at insert
+// time (no owner action to wait for). complaint does not auto-resolve —
+// intentionally reverted per the owner, pending a real resolution mechanism.
 //
-// missing_info is the one category with a human-in-the-loop resolution
-// path: the owner can reply to the nudge with the actual answer, which then
-// reaches the guest and gets embedded into the property knowledge base (see
-// POST /api/escalations/by-telegram-message-id/[id] and
-// POST /api/escalations/[id]/resolve). That round trip needs a real
-// correlation id (Telegram's reply_to_message.message_id), which only
-// exists once the nudge has been sent — hence storing telegram_message_id
-// below for every category, not just missing_info. A reply to a
-// wants_human nudge can't be mistaken for an answer because it's already
-// resolved by insert time (see below); a reply to a complaint nudge is
-// guarded explicitly by reason_category in the webhook's
-// handleEscalationReply.
-//
-// wants_human is auto-resolved at insert time (resolved_at set below) —
-// there's no owner action to wait for; the system prompt already handles
-// the guest-facing acknowledgment. The nudge is still sent so the owner
-// knows, but nothing downstream waits on a reply. `answer` stays null since
-// there's no owner-contributed text to store.
-//
-// complaint was briefly auto-resolved the same way, then reverted per the
-// owner: "it shouldn't be resolved automatically for now, I don't yet know
-// how to resolve this." So it goes back to being inserted with resolved_at
-// unset, like missing_info — but for a different reason: missing_info
-// awaits a real answer via the HITL flow above, while complaint awaits a
-// resolution mechanism that hasn't been decided yet.
-//
-// Exported so run-turn.ts's step-cap/empty-reply safety nets can trigger
-// the exact same escalation (including the nudge round trip) without
-// duplicating this logic. The model itself only ever sees the
+// Exported so run-turn.ts's safety nets can trigger the same escalation path
+// without duplicating this logic; the model itself only sees the
 // escalateToOwner tool below.
 export async function performEscalation(params: {
   conversationId: string;
@@ -112,23 +87,14 @@ const escalateToOwnerSchema = z.object({
   ),
 });
 
-// Schema-only declaration — no `execute`. Dispatch is manual: run-turn.ts's
-// own tool-call step looks up runEscalateToOwner below by tool name and
-// calls it directly with this turn's ToolContext (conversationId/phone/
-// triggerMessageId) passed as a second argument, rather than delegating to
-// AI SDK's internal per-tool execution or (the old approach) closing that
-// context over a per-turn factory function. Since the context is now
-// threaded through the dispatcher's call instead of a closure, this can be a
-// single module-level instance reused across turns, same as
-// pricing.ts/availability.ts/property-question.ts.
+// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
+// runEscalateToOwner below by name, passing this turn's ToolContext.
 export const escalateToOwner = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest asks for a human, has a complaint, or asks something you cannot answer. Always classify which of those three this is via reason_category.",
   inputSchema: escalateToOwnerSchema,
 });
 
-// The real implementation, called by run-turn.ts's dispatcher with this
-// tool call's already-validated input plus the turn's ToolContext.
 export async function runEscalateToOwner(
   args: z.infer<typeof escalateToOwnerSchema>,
   context: ToolContext,

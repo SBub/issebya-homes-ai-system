@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same "mock the module boundary" approach as the rest of tests/agent/ —
-// this file isolates performEscalation itself rather than driving it
-// indirectly through runAgentTurn's step-cap branch.
+// Isolates performEscalation directly, rather than driving it indirectly
+// through runAgentTurn's step-cap branch.
 const mockSingle = vi.fn();
 const mockSelect = vi.fn(() => ({ single: mockSingle }));
 const mockInsert = vi.fn(() => ({ select: mockSelect }));
@@ -12,9 +11,8 @@ const mockFrom = vi.fn(() => ({ insert: mockInsert, update: mockUpdate }));
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
-  // ../../tools/search-property.ts imports createClient() at module load
-  // time (its own singleton pattern) — must be present here too, same
-  // reasoning as run-turn.test.ts's own supabase mock.
+  // search-property.ts calls createClient() at module load time — must be
+  // present here too, same reasoning as run-turn.test.ts's supabase mock.
   createClient: vi.fn(),
 }));
 
@@ -40,9 +38,8 @@ describe("performEscalation", () => {
     vi.clearAllMocks();
   });
 
-  // All three categories share the exact same insert -> nudge ->
-  // store-telegram_message_id path — see @/agent/tools/escalation.ts's
-  // performEscalation doc comment.
+  // All three categories share the same insert -> nudge ->
+  // store-telegram_message_id path.
   for (const reasonCategory of ["wants_human", "complaint", "missing_info"] as const) {
     it(`inserts, nudges via telegram-router, and stores telegram_message_id for ${reasonCategory}`, async () => {
       mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
@@ -70,14 +67,6 @@ describe("performEscalation", () => {
     });
   }
 
-  // wants_human is auto-resolved the instant it's created (no owner action
-  // left to wait for — the system prompt already handles its guest-facing
-  // side); complaint and missing_info both leave resolved_at unset, though
-  // for different reasons — missing_info's resolution genuinely depends on
-  // a later owner reply (see resume-conversation.ts's real HITL flow), while
-  // complaint awaits a resolution mechanism the owner hasn't decided on yet
-  // ("it shouldn't be resolved automatically for now, I don't yet know how
-  // to resolve this").
   it("inserts wants_human escalations with resolved_at already set", async () => {
     mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
     mockEq.mockResolvedValueOnce({ error: null });
@@ -111,9 +100,8 @@ describe("performEscalation", () => {
       reasonCategory: "complaint",
     });
 
-    // toHaveBeenCalledWith does a deep-equal on the whole object, so this
-    // also proves resolved_at is absent from the insert payload — were it
-    // present (with any value), this exact-shape match would fail.
+    // toHaveBeenCalledWith deep-equals the whole object, so this also proves
+    // resolved_at is absent from the insert payload.
     expect(mockInsert).toHaveBeenCalledWith({
       conversation_id: "convo-1",
       phone_number: "+351920742845",
@@ -134,9 +122,7 @@ describe("performEscalation", () => {
       reasonCategory: "missing_info",
     });
 
-    // toHaveBeenCalledWith does a deep-equal on the whole object, so this
-    // also proves resolved_at is absent from the insert payload — were it
-    // present (with any value), this exact-shape match would fail.
+    // Same deep-equal-proves-absence reasoning as the complaint test above.
     expect(mockInsert).toHaveBeenCalledWith({
       conversation_id: "convo-1",
       phone_number: "+351920742845",

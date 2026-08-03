@@ -37,12 +37,9 @@ function makeSupabaseMock(options: {
   } as unknown as ReturnType<typeof createAdminClient>;
 }
 
-// No-LLM test for loadContext's message-conversion/ordering logic. Unlike
-// the old LangGraph port (see git history), loadContext here only returns
-// the prior history — appending the turn's new incoming message is
-// run-turn.ts's own job now (`[...historyMessages, new
-// HumanMessage(incomingMessage)]`), so this only needs to prove the history
-// itself comes back oldest-first.
+// loadContext only returns prior history — appending the new incoming
+// message is run-turn.ts's job — so this only needs to prove the history
+// comes back oldest-first.
 describe("loadContext", () => {
   beforeEach(() => vi.clearAllMocks());
 
