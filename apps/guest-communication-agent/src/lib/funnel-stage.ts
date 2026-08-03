@@ -1,8 +1,9 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { FunnelStageHint } from "@/lib/crm";
 
-// escalateToOwner is deliberately excluded — escalation isn't part of this
-// funnel-stage model and produces no hint.
+// The three escalation tools (wants_human, complaint, missing_info) are
+// deliberately excluded — escalation isn't part of this funnel-stage model
+// and produces no hint.
 const INFORMED_TOOL_NAMES = new Set(["getPricing", "checkAvailability", "answerPropertyQuestion"]);
 
 function isToolResultPart(part: ToolResultPart | { type: string }): part is ToolResultPart {

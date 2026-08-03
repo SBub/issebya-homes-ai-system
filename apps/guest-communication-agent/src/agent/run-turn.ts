@@ -1,4 +1,3 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { load } from "@langchain/core/load";
 import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
@@ -6,10 +5,13 @@ import { Client } from "langsmith";
 import { loadContext } from "@/agent/load-context";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
+import { complaint, runComplaint } from "@/agent/tools/complaint";
 import type { ToolContext } from "@/agent/tools/config";
-import { escalateToOwner, runEscalateToOwner } from "@/agent/tools/escalation";
+import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
+import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
+import { openrouter } from "@/lib/openrouter";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
 // model and dispatch any tool calls it requested, until a final text reply
@@ -33,13 +35,9 @@ const MAX_AGENT_STEPS = 8;
 // so repeated pulls within a turn stay cheap.
 const langsmithClient = new Client({ apiKey: process.env.LANGSMITH_API_KEY });
 
-// Points at OpenRouter's OpenAI-compatible base URL. `.chat(MODEL)` targets
-// the Chat Completions API — the bare `openrouter(MODEL)` call would target
-// OpenAI's Responses API instead, which OpenRouter doesn't support.
-const openrouter = createOpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-});
+// `.chat(MODEL)` targets the Chat Completions API — the bare `openrouter(MODEL)`
+// call would target OpenAI's Responses API instead, which OpenRouter doesn't
+// support.
 const model = openrouter.chat(MODEL);
 
 // Explicit because MODEL is a reasoning model: its internal "thinking"
@@ -49,14 +47,52 @@ const model = openrouter.chat(MODEL);
 const MAX_OUTPUT_TOKENS = 1000;
 
 // Schema-only tool declarations (no `execute`) — dispatch happens manually
-// in runToolCall() below, driven by this file's own while loop.
+// in runToolCall() below, driven by this file's own while loop. The three
+// escalation tools' keys are quoted, literal snake_case strings on purpose
+// — that's the exact tool name the model sees for each (an explicit,
+// deliberate choice from the app owner, unlike every other tool here which
+// is camelCase) — replacing what used to be a single escalateToOwner tool
+// with a `reason_category` enum arg; the tool identity itself now encodes
+// what that enum value used to.
 const tools = {
   getPricing,
   checkAvailability,
   answerPropertyQuestion,
   sendBookingLink,
-  escalateToOwner,
+  wants_human: wantsHuman,
+  complaint: complaint,
+  missing_info: missingInfo,
 } satisfies ToolSet;
+
+// Tools that require a human's go-ahead before they run. Modeled on
+// harness-engineering/harness/runtime.ts's NEEDS_APPROVAL pattern: checked
+// here, in this file's own loop, before the tool is ever dispatched — the
+// app owner explicitly wants this "approve logic" visible here, not hidden
+// inside a tool file. For sendBookingLink specifically, gating here (before
+// runToolCall/runSendBookingLink is even invoked for that call) means the
+// gate sits before the tool creates the booking URL / inserts the
+// booking_link_requests row, without needing a second, redundant gate
+// inside booking.ts itself.
+const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
+
+// STUB — NOT REAL APPROVAL LOGIC. There is no durable suspend/pause yet (no
+// DBOS or equivalent), unlike harness-engineering/harness/runtime.ts's
+// NEEDS_APPROVAL branch, which actually suspends the workflow via
+// DBOS.recv() and waits (up to APPROVAL_TIMEOUT_S) for a real human
+// decision. This resolves immediately with a fixed, always-approve
+// decision so wants_human/sendBookingLink keep working end-to-end today.
+// TODO(hitl): replace with a real suspend/resume once a durable execution
+// mechanism is wired up — nothing here actually asks a human anything yet.
+async function requestHitlApproval(
+  toolName: string,
+  _input: Record<string, unknown>,
+  _context: ToolContext,
+): Promise<{ approved: boolean }> {
+  console.warn(
+    `[run-turn] requestHitlApproval STUB called for "${toolName}" — always approving, this is not real HITL yet`,
+  );
+  return { approved: true };
+}
 
 // One model call per round. Since none of `tools` has an `execute`,
 // generateText only ever returns the model's requested tool calls — it
@@ -89,7 +125,8 @@ async function modelTurn(system: string, messages: ModelMessage[]): Promise<Mode
 
 // Looks up the run<ToolName> implementation matching a requested tool call
 // and invokes it directly with this turn's ToolContext (only sendBookingLink
-// and escalateToOwner need it). Throws on an unrecognized tool name.
+// and the three escalation tools need it). Throws on an unrecognized tool
+// name. Called after the NEEDS_HITL gate below, never before it.
 async function runToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -104,8 +141,12 @@ async function runToolCall(
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
     case "sendBookingLink":
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
-    case "escalateToOwner":
-      return runEscalateToOwner(input as Parameters<typeof runEscalateToOwner>[0], context);
+    case "wants_human":
+      return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
+    case "complaint":
+      return runComplaint(input as Parameters<typeof runComplaint>[0], context);
+    case "missing_info":
+      return runMissingInfo(input as Parameters<typeof runMissingInfo>[0], context);
     default:
       throw new Error(`Unknown tool name: "${toolName}"`);
   }
@@ -158,9 +199,9 @@ export interface RunAgentTurnInput {
 }
 
 export interface RunAgentTurnConfig {
-  // This turn's inbound whatsapp_messages row id, passed to both the
-  // model-driven escalateToOwner tool and this file's own deterministic
-  // performEscalation safety-net calls below.
+  // This turn's inbound whatsapp_messages row id, passed to the
+  // model-driven wants_human/complaint/missing_info tools' ToolContext (see
+  // performEscalation in escalation-shared.ts).
   triggerMessageId?: string;
 }
 
@@ -171,17 +212,17 @@ export interface RunAgentTurnResult {
 }
 
 // Runs one full guest turn: loads context, then loops model -> tools ->
-// model until a final text reply or a safety net fires.
+// model until a final text reply, or the step cap is hit.
 //
 // Control flow to preserve carefully: after ANY tool call (including
-// escalateToOwner, regardless of reason_category) the loop goes back for
-// another model round. missingInfoEscalated is STICKY — once a missing_info
-// escalateToOwner call happens, it stays true for the rest of this
-// function's return even though the loop keeps running and the model may go
-// on to compose real text afterward. The caller (the webhook route) only
-// reads the final missingInfoEscalated/messages once the loop ends, so that
-// extra text is simply discarded when the flag is true. This is deliberate,
-// not a bug — do not "simplify" it away.
+// wants_human/complaint/missing_info) the loop goes back for another model
+// round. missingInfoEscalated is STICKY — once a missing_info tool call
+// happens, it stays true for the rest of this function's return even though
+// the loop keeps running and the model may go on to compose real text
+// afterward. The caller (the webhook route) only reads the final
+// missingInfoEscalated/messages once the loop ends, so that extra text is
+// simply discarded when the flag is true. This is deliberate, not a bug —
+// do not "simplify" it away.
 export async function runAgentTurn(
   input: RunAgentTurnInput,
   config: RunAgentTurnConfig = {},
@@ -220,9 +261,23 @@ export async function runAgentTurn(
     // response.messages carries this round's assistant message (with its
     // tool-call parts) but no tool-result message, since no tool has an
     // `execute`. Dispatch each call for real, in parallel, then build and
-    // append this round's tool-result message ourselves.
+    // append this round's tool-result message ourselves. NEEDS_HITL-gated
+    // calls go through requestHitlApproval first — see that stub's own doc
+    // comment — before runToolCall ever runs; a rejected call never reaches
+    // runToolCall at all.
     const toolOutputs = await Promise.all(
-      result.toolCalls.map((call) => runToolCall(call.toolName, call.input, toolContext)),
+      result.toolCalls.map(async (call) => {
+        if (NEEDS_HITL.has(call.toolName)) {
+          const decision = await requestHitlApproval(call.toolName, call.input, toolContext);
+          if (!decision.approved) {
+            return {
+              approved: false,
+              message: "This action was not approved. Do not retry it automatically.",
+            };
+          }
+        }
+        return runToolCall(call.toolName, call.input, toolContext);
+      }),
     );
     messages = [
       ...messages,
@@ -230,9 +285,7 @@ export async function runAgentTurn(
       toolResultMessage(result.toolCalls, toolOutputs),
     ];
 
-    const escalateCall = result.toolCalls.find((call) => call.toolName === "escalateToOwner");
-    const escalateArgs = escalateCall?.input as { reason_category?: string } | undefined;
-    if (escalateArgs?.reason_category === "missing_info") {
+    if (result.toolCalls.some((call) => call.toolName === "missing_info")) {
       missingInfoEscalated = true;
     }
     // Loop continues — do not return early here.

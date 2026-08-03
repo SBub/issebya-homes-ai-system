@@ -8,8 +8,8 @@ import { createAdminClient } from "@/lib/supabase";
  * to another message, keyed on Telegram's own
  * `reply_to_message.message_id` (the id of the message being replied to),
  * to check whether that message was actually one of this app's escalation
- * nudges — see @/agent/tools/escalation.ts's performEscalation, which stores that same
- * id as `telegram_message_id` once apps/telegram-router's
+ * nudges — see @/agent/tools/escalation-shared.ts's performEscalation, which
+ * stores that same id as `telegram_message_id` once apps/telegram-router's
  * POST /api/escalation-nudges confirms the send.
  *
  * Guarded by requireApiKey (X-API-Key against

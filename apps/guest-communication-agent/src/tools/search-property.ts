@@ -35,17 +35,9 @@
  * result formatting) is unchanged from the original.
  */
 
-import { createOpenAI } from "@ai-sdk/openai";
 import { embed } from "ai";
+import { openrouter } from "@/lib/openrouter";
 import { createClient } from "../lib/supabase";
-
-// OpenRouter exposes an OpenAI-compatible API, so this wraps it with
-// @ai-sdk/openai's createOpenAI pointed at OpenRouter's base URL rather than
-// using a dedicated OpenRouter SDK.
-const openrouter = createOpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-});
 
 type DocumentMetadata = {
   source: string;

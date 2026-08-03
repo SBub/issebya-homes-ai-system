@@ -56,8 +56,8 @@ describe("deriveStageHint", () => {
     expect(deriveStageHint(messages)).toBe("link_sent");
   });
 
-  it("returns undefined when only escalateToOwner fired — escalation isn't part of this model", () => {
-    const messages: ModelMessage[] = [toolMessage("escalateToOwner")];
+  it("returns undefined when only wants_human fired — escalation isn't part of this model", () => {
+    const messages: ModelMessage[] = [toolMessage("wants_human")];
     expect(deriveStageHint(messages)).toBeUndefined();
   });
 

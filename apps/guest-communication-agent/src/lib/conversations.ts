@@ -101,7 +101,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
  *
  * Returns the new row's id — the webhook route's own inbound "user" call
  * needs it (captured as escalations.trigger_message_id at escalation time,
- * see @/agent/tools/escalation.ts's performEscalation), so this can no longer be a
+ * see @/agent/tools/escalation-shared.ts's performEscalation), so this can no longer be a
  * fire-and-forget void insert. Every other existing caller (this route's own
  * "assistant" call, POST /api/send) is unaffected by the wider return type —
  * they simply don't use it.

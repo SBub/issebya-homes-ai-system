@@ -21,7 +21,7 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
-const { performEscalation } = await import("@/agent/tools/escalation.js");
+const { performEscalation } = await import("@/agent/tools/escalation-shared.js");
 
 describe("performEscalation", () => {
   beforeEach(() => {
@@ -46,13 +46,16 @@ describe("performEscalation", () => {
       mockEq.mockResolvedValueOnce({ error: null });
       sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
 
-      await performEscalation({
+      const result = await performEscalation({
         conversationId: "convo-1",
         phone: "+351920742845",
         reason: "Guest is upset about noise",
         reasonCategory,
       });
 
+      // Returns the new row's id — missing-info.ts's stub HITL wait step
+      // keys off of this.
+      expect(result).toBe("esc-1");
       expect(mockFrom).toHaveBeenCalledWith("escalations");
       expect(mockSelect).toHaveBeenCalledWith("id");
       expect(sendEscalationNudgeMock).toHaveBeenCalledWith({
@@ -153,35 +156,37 @@ describe("performEscalation", () => {
     });
   });
 
-  it("skips the nudge (and logs) when the escalations insert itself fails", async () => {
+  it("skips the nudge (and logs) when the escalations insert itself fails, returning null", async () => {
     mockSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await performEscalation({
+    const result = await performEscalation({
       conversationId: "convo-1",
       phone: "+351920742845",
       reason: "Guest asked something unanswerable",
       reasonCategory: "missing_info",
     });
 
+    expect(result).toBeNull();
     expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
 
-  it("does not store telegram_message_id when the nudge fails", async () => {
+  it("does not store telegram_message_id when the nudge fails, but still returns the escalation id", async () => {
     mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
     sendEscalationNudgeMock.mockResolvedValueOnce({ ok: false, error: "telegram-router down" });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await performEscalation({
+    const result = await performEscalation({
       conversationId: "convo-1",
       phone: "+351920742845",
       reason: "Guest asked something unanswerable",
       reasonCategory: "missing_info",
     });
 
+    expect(result).toBe("esc-1");
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
@@ -191,13 +196,14 @@ describe("performEscalation", () => {
     mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
     sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true });
 
-    await performEscalation({
+    const result = await performEscalation({
       conversationId: "convo-1",
       phone: "+351920742845",
       reason: "Guest asked something unanswerable",
       reasonCategory: "missing_info",
     });
 
+    expect(result).toBe("esc-1");
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

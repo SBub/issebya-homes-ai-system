@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // declarations have no `execute` (dispatch is manual via runToolCall()), so
 // the mocked generateText only needs to return { text, toolCalls, response
 // }; real tool implementations (runGetPricing, runSendBookingLink,
-// runEscalateToOwner) still run for real against the mocks below.
+// runWantsHuman, runComplaint, runMissingInfo) still run for real against
+// the mocks below.
 const loadContextMock = vi.fn();
 vi.mock("@/agent/load-context.js", () => ({
   loadContext: loadContextMock,
@@ -15,7 +16,10 @@ vi.mock("@/agent/load-context.js", () => ({
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
 // embedding call, so neither is exercised here — only getPricing (pure),
-// sendBookingLink, and escalateToOwner (both Supabase + telegram-router).
+// sendBookingLink, and the three escalation tools (all Supabase +
+// telegram-router; missing_info's stub HITL wait step never reaches a real
+// embedding call here either, see tests/agent/tools/missing-info.test.ts
+// for that).
 const mockEscSingle = vi.fn();
 const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
 const mockEscInsert = vi.fn(() => ({ select: mockEscSelect }));
@@ -215,9 +219,12 @@ describe("runAgentTurn", () => {
     });
   });
 
-  it("escalates instead of calling the model once MAX_AGENT_STEPS is exceeded", async () => {
+  it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an escalation", async () => {
     // Model always responds with a tool call so the loop never produces a
-    // final reply — the pathological case the step cap exists for.
+    // final reply — the pathological case the step cap exists for. There is
+    // no step-cap safety-net escalation anymore (removed in dcbfd2c,
+    // "drop empty-reply escalation") — the turn simply ends once the cap is
+    // hit, with whatever the last round's tool-result message was.
     generateTextMock.mockImplementation(() =>
       toolCallResponse([
         { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_loop" },
@@ -233,37 +240,25 @@ describe("runAgentTurn", () => {
       { triggerMessageId: "trigger-1" },
     );
 
-    // Rounds 1-8 each call the model once; round 9 short-circuits to the
-    // safety-net escalation without a 9th model call.
+    // Rounds 1-8 each call the model once; the loop then exits without a
+    // 9th model call.
     expect(generateTextMock).toHaveBeenCalledTimes(8);
-    expect(result.stepCount).toBe(9);
-    expect(result.missingInfoEscalated).toBe(true);
-
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversation_id: "convo-cap",
-        phone_number: "+351900000099",
-        reason_category: "missing_info",
-        reason: expect.stringContaining('Guest asked: "Is there a juicer in the kitchen?"'),
-        trigger_message_id: "trigger-1",
-      }),
-    );
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ escalationId: "esc-1", reasonCategory: "missing_info" }),
-    );
+    expect(result.stepCount).toBe(8);
+    expect(result.missingInfoEscalated).toBe(false);
+    expect(mockEscInsert).not.toHaveBeenCalled();
+    expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
 
     const last = result.messages.at(-1);
-    expect(last?.role).toBe("assistant");
-    expect(last?.content).toMatch(/owner/i);
+    expect(last?.role).toBe("tool");
   });
 
-  it("keeps missingInfoEscalated sticky and keeps looping (getting a real, if discarded, reply) after a missing_info escalateToOwner call", async () => {
+  it("keeps missingInfoEscalated sticky and keeps looping (getting a real, if discarded, reply) after a missing_info tool call", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
           {
-            toolName: "escalateToOwner",
-            input: { reason: "Guest asked about the sauna", reason_category: "missing_info" },
+            toolName: "missing_info",
+            input: { reason: "Guest asked about the sauna" },
             toolCallId: "call_esc",
           },
         ]),
@@ -292,13 +287,13 @@ describe("runAgentTurn", () => {
     );
   });
 
-  it("does not set missingInfoEscalated for wants_human/complaint escalateToOwner calls", async () => {
+  it("does not set missingInfoEscalated for a wants_human tool call", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
           {
-            toolName: "escalateToOwner",
-            input: { reason: "Guest wants a human", reason_category: "wants_human" },
+            toolName: "wants_human",
+            input: { reason: "Guest wants a human" },
             toolCallId: "call_esc",
           },
         ]),
@@ -315,6 +310,100 @@ describe("runAgentTurn", () => {
     expect(mockEscInsert).toHaveBeenCalledWith(
       expect.objectContaining({ reason_category: "wants_human" }),
     );
+  });
+
+  it("does not set missingInfoEscalated for a complaint tool call", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "complaint",
+            input: { reason: "Guest says the room was noisy" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("I'm sorry to hear that, I've let the owner know."));
+
+    const result = await runAgentTurn({
+      conversationId: "convo-complaint",
+      phone: "+351900000004",
+      incomingMessage: "The room was really noisy",
+    });
+
+    expect(result.missingInfoEscalated).toBe(false);
+    expect(mockEscInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reason_category: "complaint" }),
+    );
+  });
+
+  it("routes wants_human and sendBookingLink through the stub HITL gate (which always approves today) before running them", async () => {
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "sendBookingLink",
+            input: {
+              guestName: "Ana",
+              room: "room1",
+              checkIn: "2026-09-01",
+              checkOut: "2026-09-05",
+            },
+            toolCallId: "call_book",
+          },
+          {
+            toolName: "wants_human",
+            input: { reason: "Guest wants to speak to someone" },
+            toolCallId: "call_human",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Sure thing!"));
+
+    const result = await runAgentTurn({
+      conversationId: "convo-hitl",
+      phone: "+351900000010",
+      incomingMessage: "Book it and also let me talk to someone",
+    });
+
+    // Both gated tools still ran to completion (their real side effects
+    // fired) since the stub always approves — see run-turn.ts's
+    // requestHitlApproval and NEEDS_HITL.
+    expect(mockBookingInsert).toHaveBeenCalled();
+    expect(mockEscInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reason_category: "wants_human" }),
+    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("sendBookingLink"));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wants_human"));
+    expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Sure thing!" });
+
+    consoleWarnSpy.mockRestore();
+  });
+
+  it("does not route complaint or getPricing through the stub HITL gate (only wants_human/sendBookingLink are gated)", async () => {
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_price" },
+          {
+            toolName: "complaint",
+            input: { reason: "Guest says the room was noisy" },
+            toolCallId: "call_complaint",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Got it, I've let the owner know."));
+
+    await runAgentTurn({
+      conversationId: "convo-no-hitl",
+      phone: "+351900000011",
+      incomingMessage: "How much is room 1? Also it was noisy.",
+    });
+
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
+    consoleWarnSpy.mockRestore();
   });
 
   // generateText is mocked wholesale, so nothing stops it from "returning" a
