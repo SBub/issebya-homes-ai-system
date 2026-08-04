@@ -5,8 +5,7 @@ import {
   sendWhatsAppTemplate,
 } from "@/lib/twilio-send.js";
 
-// Same "mock fetch, don't hit the real Twilio API" approach as
-// tests/lib/crm.test.ts's fetch mocking.
+// Mocks fetch directly rather than hitting the real Twilio API.
 describe("sendWhatsAppMessage", () => {
   const originalEnv = { ...process.env };
   let fetchMock: ReturnType<typeof vi.fn>;

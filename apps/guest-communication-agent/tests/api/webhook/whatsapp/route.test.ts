@@ -17,20 +17,15 @@ vi.mock("@/lib/conversations.js", () => ({
   recordMessage: recordMessageMock,
 }));
 
-const registerGuestContactMock = vi.fn();
-vi.mock("@/lib/crm.js", () => ({
-  registerGuestContact: registerGuestContactMock,
-}));
-
 const ensureDbosLaunchedMock = vi.fn();
 vi.mock("@/lib/dbos.js", () => ({
   ensureDbosLaunched: ensureDbosLaunchedMock,
 }));
 
 // runGuestTurnWorkflow is just a plain marker value here — the real
-// registration is exercised in tests/agent/run-guest-turn.test.ts.
+// registration is exercised in tests/agent/run-turn.test.ts.
 const runGuestTurnWorkflowMock = { name: "runGuestTurn" };
-vi.mock("@/agent/run-guest-turn.js", () => ({
+vi.mock("@/agent/run-turn.js", () => ({
   runGuestTurnWorkflow: runGuestTurnWorkflowMock,
 }));
 
@@ -64,15 +59,11 @@ describe("POST /api/webhook/whatsapp", () => {
     verifyTwilioSignatureMock.mockReset().mockReturnValue(true);
     getOrCreateActiveConversationMock.mockReset();
     recordMessageMock.mockReset();
-    registerGuestContactMock.mockReset();
     ensureDbosLaunchedMock.mockReset();
     dbosStartWorkflowMock.mockClear();
     startWorkflowInnerMock.mockReset();
 
-    getOrCreateActiveConversationMock.mockResolvedValue({
-      conversationId: "convo-1",
-      isNew: false,
-    });
+    getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1" });
     recordMessageMock.mockResolvedValue("msg-user-1");
     ensureDbosLaunchedMock.mockResolvedValue(undefined);
     startWorkflowInnerMock.mockResolvedValue({ workflowID: "wf-1" });
@@ -124,15 +115,5 @@ describe("POST /api/webhook/whatsapp", () => {
 
     expect(res.status).toBe(401);
     expect(dbosStartWorkflowMock).not.toHaveBeenCalled();
-  });
-
-  it("registers a new guest contact when the conversation is new, using the normalized phone for both calls", async () => {
-    getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1", isNew: true });
-    registerGuestContactMock.mockResolvedValue({ ok: true });
-
-    await POST(makeRequest({ From: "whatsapp:+351920742845", Body: "Hi!" }));
-
-    expect(getOrCreateActiveConversationMock).toHaveBeenCalledWith("+351920742845");
-    expect(registerGuestContactMock).toHaveBeenCalledWith("+351920742845");
   });
 });

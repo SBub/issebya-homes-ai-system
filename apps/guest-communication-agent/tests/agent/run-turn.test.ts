@@ -24,7 +24,7 @@ const fromMock = vi.fn((table: string) => {
 });
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
-  // search-property.ts calls createClient() at module load time, so this
+  // property-question.ts calls createClient() at module load time, so this
   // must be present even though no test here calls that tool.
   createClient: vi.fn(() => ({})),
 }));
@@ -34,11 +34,24 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
+const recordMessageMock = vi.fn();
+vi.mock("@/lib/conversations.js", () => ({
+  recordMessage: recordMessageMock,
+}));
+
+const sendWhatsAppMessageMock = vi.fn();
+vi.mock("@/lib/twilio-send.js", () => ({
+  sendWhatsAppMessage: sendWhatsAppMessageMock,
+}));
+
 // workflowID undefined by default (no live workflow context in these
 // tests). recv defaults to resolving null (a timeout), driving
 // runMissingInfo's real "owner has been notified" fallback path.
+// registerWorkflow is mocked to just return the plain function, so
+// runGuestTurnWorkflow can be called directly like any other async function.
 const dbosRecvMock = vi.fn().mockResolvedValue(null);
 const dbosSendMock = vi.fn();
+const registerWorkflowMock = vi.fn((fn: unknown, _options: { name: string }) => fn);
 vi.mock("@dbos-inc/dbos-sdk", () => ({
   DBOS: {
     get workflowID() {
@@ -46,6 +59,7 @@ vi.mock("@dbos-inc/dbos-sdk", () => ({
     },
     recv: dbosRecvMock,
     send: dbosSendMock,
+    registerWorkflow: registerWorkflowMock,
   },
 }));
 
@@ -79,7 +93,13 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { runAgentTurn, sanitizeReplyText } = await import("@/agent/run-turn.js");
+const { runAgentTurn, runGuestTurnWorkflow, sanitizeReplyText } = await import(
+  "@/agent/run-turn.js"
+);
+
+// Captured before beforeEach's vi.clearAllMocks() wipes it — registration
+// happens exactly once, at import time.
+const registrationCallArgs = registerWorkflowMock.mock.calls[0];
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
 
@@ -132,6 +152,8 @@ describe("runAgentTurn", () => {
     mockEscEq.mockResolvedValue({ error: null });
     mockBookingInsert.mockResolvedValue({ data: null, error: null });
     sendEscalationNudgeMock.mockResolvedValue({ ok: true, telegramMessageId: 4242 });
+    recordMessageMock.mockResolvedValue("msg-assistant-1");
+    sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
   });
 
   it("builds the model call's system prompt string, history, then the new incoming message last", async () => {
@@ -413,5 +435,85 @@ describe("sanitizeReplyText", () => {
     expect(sanitizeReplyText("**Hairdryer** and *towels* included")).toBe(
       "Hairdryer and towels included",
     );
+  });
+});
+
+// The DBOS-wrapped delivery orchestrator: drives the real runAgentTurn (via
+// this suite's existing mocks — loadMemory, generateText, etc.), then
+// records the reply and sends it proactively. No CRM touch step — see the
+// CRM removal in this app's history.
+describe("runGuestTurnWorkflow", () => {
+  it("registers itself as a DBOS workflow named runGuestTurn", () => {
+    expect(registrationCallArgs?.[0]).toEqual(expect.any(Function));
+    expect(registrationCallArgs?.[1]).toEqual(expect.objectContaining({ name: "runGuestTurn" }));
+  });
+
+  it("runs the turn, records the assistant reply, and sends it via Twilio", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
+
+    await runGuestTurnWorkflow({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      incomingMessage: "Is room 1 free?",
+      triggerMessageId: "msg-user-1",
+    });
+
+    expect(recordMessageMock).toHaveBeenCalledWith(
+      "convo-1",
+      "assistant",
+      "Yes, room 1 is available!",
+      expect.any(String),
+    );
+    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
+      "+351920742845",
+      "Yes, room 1 is available!",
+    );
+  });
+
+  it("falls back to a generic apology reply when the turn's last message isn't a string assistant message", async () => {
+    // Model always responds with a tool call, so the loop never produces a
+    // final text reply — same step-cap shape as the runAgentTurn suite above.
+    generateTextMock.mockImplementation(() =>
+      toolCallResponse([
+        { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_loop" },
+      ]),
+    );
+
+    await runGuestTurnWorkflow({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      incomingMessage: "???",
+    });
+
+    const expectedFallback = "Sorry, I couldn't process that — please try again shortly.";
+    expect(recordMessageMock).toHaveBeenCalledWith(
+      "convo-1",
+      "assistant",
+      expectedFallback,
+      expect.any(String),
+    );
+    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith("+351920742845", expectedFallback);
+  });
+
+  it("logs but does not throw when sendWhatsAppMessage fails", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Hello!"));
+    sendWhatsAppMessageMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Twilio rejected the number",
+    });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      runGuestTurnWorkflow({
+        conversationId: "convo-1",
+        phone: "+351920742845",
+        incomingMessage: "Hi",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Twilio rejected the number"),
+    );
+    consoleErrorSpy.mockRestore();
   });
 });

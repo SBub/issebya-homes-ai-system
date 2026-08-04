@@ -71,7 +71,7 @@ export interface MissingInfoReplyResult {
 }
 
 // "Reply received" branch: embeds the owner's answer into the KB (same
-// embedding model/table search-property.ts reads from), then wakes the
+// embedding model/table property-question.ts reads from), then wakes the
 // suspended workflow via DBOS.send. Embed happens first and deliberately —
 // by the time DBOS.send fires the answer is already searchable.
 //

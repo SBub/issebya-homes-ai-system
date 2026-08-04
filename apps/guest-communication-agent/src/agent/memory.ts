@@ -1,18 +1,12 @@
 import { generateText, type ModelMessage } from "ai";
 import { trimToTokenBudget } from "@/agent/context";
-import {
-  getGuestMemory,
-  loadGuestInfo,
-  loadRecentMessages,
-  type MessageRow,
-  upsertGuestMemory,
-} from "@/lib/db";
+import { getGuestMemory, loadRecentMessages, type MessageRow, upsertGuestMemory } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
 
 // Combines recent-message loading + token-budget trimming (reuses
 // context.ts's trimToTokenBudget, only correlating its output back to
-// message ids here) + CRM past-stay facts + a persistent rolling
-// conversation summary backed by guest_memory.
+// message ids here) + a persistent rolling conversation summary backed by
+// guest_memory.
 //
 // `.chat(MODEL)` and MODEL are duplicated locally rather than imported from
 // run-turn.ts, since run-turn.ts imports loadMemory from here — importing
@@ -23,9 +17,9 @@ const model = openrouter.chat(MODEL);
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
   historyMessages: ModelMessage[];
-  // CRM guest facts + rolling summary, combined — fills the prompt
-  // template's {guest_memory_block} variable directly, replacing the
-  // guestContext-only value run-turn.ts used to build itself.
+  // The rolling summary — fills the prompt template's {guest_memory_block}
+  // variable directly, replacing the guestContext-only value run-turn.ts
+  // used to build itself.
   contextBlock: string;
 }
 
@@ -74,15 +68,11 @@ async function summarizeConversation(
 }
 
 // Builds the plain-text content the prompt template wraps in
-// <guest_memory> ({guest_memory_block}). Two labeled sections when both
-// exist, one when only one does, fallback text when neither does.
-export function buildContextBlock(guestFacts: string | null, summary: string | null): string {
-  const sections: string[] = [];
-  if (guestFacts) sections.push(`Guest facts:\n${guestFacts}`);
-  if (summary) sections.push(`Summary of earlier conversation:\n${summary}`);
-
-  if (sections.length === 0) return "No prior guest information available.";
-  return sections.join("\n\n");
+// <guest_memory> ({guest_memory_block}). The summary section when it
+// exists, fallback text when it doesn't.
+export function buildContextBlock(summary: string | null): string {
+  if (!summary) return "No prior guest information available.";
+  return `Summary of earlier conversation:\n${summary}`;
 }
 
 export async function loadMemory(params: {
@@ -91,9 +81,8 @@ export async function loadMemory(params: {
 }): Promise<AgentMemory> {
   const { conversationId, phone } = params;
 
-  const [rows, guestFacts, existingMemory] = await Promise.all([
+  const [rows, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
-    loadGuestInfo(phone),
     getGuestMemory(phone),
   ]);
 
@@ -126,6 +115,6 @@ export async function loadMemory(params: {
 
   return {
     historyMessages,
-    contextBlock: buildContextBlock(guestFacts, summary),
+    contextBlock: buildContextBlock(summary),
   };
 }

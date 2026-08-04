@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { DBOS } from "@dbos-inc/dbos-sdk";
 import { load } from "@langchain/core/load";
 import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
@@ -10,12 +12,22 @@ import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
+import { recordMessage } from "@/lib/conversations";
 import { openrouter } from "@/lib/openrouter";
+import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
 // model and dispatch any tool calls it requested, until a final text reply
 // or the step cap fires. Stateless per invocation — loadMemory reloads guest
 // history fresh from Postgres every turn.
+//
+// This file also holds runGuestTurnWorkflow, the DBOS-wrapped delivery
+// orchestrator that actually gets registered with DBOS and started by the
+// webhook route (see the bottom of this file). The two are kept as
+// deliberately separate functions rather than collapsed into one:
+// runAgentTurn stays free of guest-delivery side effects (recording the
+// reply, the proactive Twilio send) so it's easy to test/reason about in
+// isolation, while runGuestTurnWorkflow is the thing DBOS actually drives.
 
 const MODEL = "deepseek/deepseek-v4-pro";
 // SYSTEM_PROMPT_IDENTIFIER_OVERRIDE is for CI eval jobs only — must never be
@@ -182,7 +194,7 @@ export interface RunAgentTurnResult {
 //
 // After ANY tool call, including missing_info (which genuinely suspends via
 // DBOS.recv until the owner replies or times out — this function runs inside
-// a DBOS workflow, see @/agent/run-guest-turn.ts), the loop goes back to the
+// a DBOS workflow, see runGuestTurnWorkflow below), the loop goes back to the
 // model for a real final reply.
 export async function runAgentTurn(
   input: RunAgentTurnInput,
@@ -237,3 +249,52 @@ export async function runAgentTurn(
 
   return { messages, stepCount };
 }
+
+// Durable wrapper around runAgentTurn: keeps the reasoning loop itself free
+// of guest-delivery side effects (recording the reply, the proactive Twilio
+// send). By the time this workflow reaches those side effects — whether
+// 200ms or, after a real missing_info suspend, hours later — the original
+// inbound Twilio HTTP request has already returned its empty TwiML ack, so
+// every guest-facing reply is delivered proactively now.
+//
+// Registered as a DBOS workflow (functional style) so runMissingInfo's
+// DBOS.recv()/DBOS.workflowID calls work — those only work inside a running
+// workflow's own call stack. The webhook route starts this without
+// awaiting it, so a suspended missing_info wait doesn't hold the HTTP request open.
+export interface RunGuestTurnInput {
+  conversationId: string;
+  phone: string;
+  incomingMessage: string;
+  // The guest's inbound whatsapp_messages row id; ends up as
+  // escalations.trigger_message_id via performEscalation.
+  triggerMessageId?: string;
+}
+
+async function runGuestTurn(input: RunGuestTurnInput): Promise<void> {
+  const { conversationId, phone, incomingMessage, triggerMessageId } = input;
+
+  const result = await runAgentTurn(
+    { conversationId, phone, incomingMessage },
+    { triggerMessageId },
+  );
+
+  const lastMessage = result.messages.at(-1);
+  const replyText =
+    lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
+      ? lastMessage.content
+      : "Sorry, I couldn't process that — please try again shortly.";
+
+  // NOT a real LangSmith trace id — nothing on LangSmith's side matches it,
+  // so a later feedback submission against it will fail.
+  const runId = crypto.randomUUID();
+  await recordMessage(conversationId, "assistant", replyText, runId);
+
+  const sendResult = await sendWhatsAppMessage(phone, replyText);
+  if (!sendResult.ok) {
+    console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+  }
+}
+
+export const runGuestTurnWorkflow = DBOS.registerWorkflow(runGuestTurn, {
+  name: "runGuestTurn",
+});

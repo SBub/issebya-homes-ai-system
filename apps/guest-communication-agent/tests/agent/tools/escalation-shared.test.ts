@@ -11,7 +11,7 @@ const mockFrom = vi.fn(() => ({ insert: mockInsert, update: mockUpdate }));
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
-  // search-property.ts calls createClient() at module load time — must be
+  // property-question.ts calls createClient() at module load time — must be
   // present here too, same reasoning as run-turn.test.ts's supabase mock.
   createClient: vi.fn(),
 }));

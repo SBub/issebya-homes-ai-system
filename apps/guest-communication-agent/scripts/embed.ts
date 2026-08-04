@@ -18,7 +18,7 @@
  *    source repo's: `createAdminClient` from "@/lib/supabase" (this app's
  *    own inlined factory, not `@issebya/shared/supabase` — this monorepo has
  *    no packages/* workspace), and the OpenRouter-as-OpenAI-compatible-
- *    endpoint pattern from src/tools/search-property.ts and
+ *    endpoint pattern from src/agent/tools/property-question.ts and
  *    src/app/api/escalations/[id]/resolve/route.ts (`createOpenAI` from
  *    "@ai-sdk/openai" pointed at OpenRouter's base URL) instead of a
  *    dedicated `../src/openrouter` module (this app has no such module).
@@ -56,19 +56,19 @@
  *    per new/changed chunk (GPT-4o-mini via OpenRouter) to guess a `type`
  *    enum and 1-3 `topics` tags, stored alongside `source`/`section` in
  *    `metadata`. Nothing in this app ever reads those fields:
- *    src/tools/search-property.ts's `searchProperty` always calls
- *    `match_documents` with `filter: {}` (unfiltered) — deliberately, per
- *    that file's own header comment, after a confirmed bug in
- *    issebya-homes-website (commit 04e1f91) where a `type`-based filter
- *    caused real false negatives: the model's guessed category didn't match
- *    how a chunk was actually classified, silently excluding relevant
+ *    src/agent/tools/property-question.ts's `runAnswerPropertyQuestion`
+ *    always calls `match_documents` with `filter: {}` (unfiltered) —
+ *    deliberately, per that function's own header comment, after a confirmed
+ *    bug in issebya-homes-website (commit 04e1f91) where a `type`-based
+ *    filter caused real false negatives: the model's guessed category didn't
+ *    match how a chunk was actually classified, silently excluding relevant
  *    content from an otherwise-good match. That's the same lesson this file
  *    is now acting on from the producing side: if nothing consumes `type`/
  *    `topics`, don't spend an API call generating them. `ChunkMetadata` is
  *    now just `{ source, section, content_hash }`, matching what
- *    search-property.ts's `DocumentMetadata` type declares. This also means
- *    one fewer API call per new/changed chunk (no GPT-4o-mini round trip),
- *    so embedding runs faster.
+ *    property-question.ts's `DocumentMetadata` type declares. This also
+ *    means one fewer API call per new/changed chunk (no GPT-4o-mini round
+ *    trip), so embedding runs faster.
  *
  * Requires in .env: OPENROUTER_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  */
@@ -86,7 +86,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const KNOWLEDGE_BASE_DIR = join(__dirname, "../knowledge-base");
 
 // Same OpenRouter-as-OpenAI-compatible-endpoint setup as
-// ../src/tools/search-property.ts and
+// ../src/agent/tools/property-question.ts and
 // ../src/app/api/escalations/[id]/resolve/route.ts.
 const openrouter = createOpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,

@@ -11,12 +11,11 @@ export default defineConfig({
     },
   },
   test: {
-    // src/tools/search-property.ts creates a Supabase anon client as a
-    // module-level singleton, which throws at import time if these env vars
-    // are unset — the graph test suite imports it transitively (via
-    // graph.ts -> tools.ts -> search-property.ts). It never makes a real
-    // Supabase or LLM call, so dummy values are enough (same approach the
-    // source app's own vitest.config.ts uses).
+    // src/agent/tools/property-question.ts creates a Supabase anon client as
+    // a module-level singleton, which throws at import time if these env
+    // vars are unset — tests that import it transitively pull this in too.
+    // It never makes a real Supabase or LLM call, so dummy values are enough
+    // (same approach the source app's own vitest.config.ts uses).
     env: {
       SUPABASE_URL: "http://localhost:54331",
       SUPABASE_ANON_KEY: "test-anon-key",

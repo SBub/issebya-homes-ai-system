@@ -1,4 +1,3 @@
-import { lookupGuestContact } from "./crm";
 import { createAdminClient } from "./supabase";
 
 // Pure Postgres queries via createAdminClient(). Context assembly itself
@@ -44,25 +43,6 @@ export async function loadRecentMessages(
       created_at: m.created_at as string,
     }))
     .reverse();
-}
-
-// Looks up past-stay facts via CRM's lookupGuestContact (resilient to CRM
-// being unreachable — returns null rather than throwing).
-//
-// total_stays <= 0 is treated the same as no contact row — a contact with
-// total_stays=0 previously produced "stayed with us before (0 stay(s)
-// total)", which is false and reads as broken.
-export async function loadGuestInfo(phone: string): Promise<string | null> {
-  const contact = await lookupGuestContact(phone);
-  if (!contact?.found || contact.total_stays <= 0) return null;
-
-  const roomLine = contact.last_room
-    ? ` in ${contact.last_room}${
-        contact.last_stay_checkin ? `, checking in ${contact.last_stay_checkin}` : ""
-      }`
-    : "";
-
-  return `This guest has stayed with us before — most recently${roomLine} (${contact.total_stays} stay(s) total).`;
 }
 
 export interface GuestMemoryRow {

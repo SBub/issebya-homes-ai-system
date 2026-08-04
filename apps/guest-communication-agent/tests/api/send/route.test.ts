@@ -2,10 +2,10 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the module boundaries rather than hitting real Supabase/Twilio — same
-// approach as apps/crm's route tests (mock the shared factory/client) and
-// tests/lib/crm.test.ts (mock fetch). Here the route itself talks to two
-// separate lib modules (conversations, twilio-send), so both are mocked
-// directly rather than mocking fetch underneath them.
+// approach as apps/crm's route tests (mock the shared factory/client). Here
+// the route itself talks to two separate lib modules (conversations,
+// twilio-send), so both are mocked directly rather than mocking fetch
+// underneath them.
 const getOrCreateActiveConversationMock = vi.fn();
 const recordMessageMock = vi.fn();
 const sendWhatsAppMessageMock = vi.fn();

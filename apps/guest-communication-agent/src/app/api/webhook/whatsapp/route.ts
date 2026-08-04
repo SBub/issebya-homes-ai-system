@@ -1,8 +1,7 @@
 import { DBOS } from "@dbos-inc/dbos-sdk";
 import { type NextRequest, NextResponse } from "next/server";
-import { runGuestTurnWorkflow } from "@/agent/run-guest-turn";
+import { runGuestTurnWorkflow } from "@/agent/run-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
-import { registerGuestContact } from "@/lib/crm";
 import { ensureDbosLaunched } from "@/lib/dbos";
 import { normalizePhone } from "@/lib/phone";
 import { verifyTwilioSignature } from "@/lib/twilio";
@@ -15,7 +14,7 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  * A missing_info escalation can suspend the turn for minutes or hours
  * waiting on the owner's Telegram reply, which an HTTP request can't stay
  * open for — so every reply is delivered later, proactively, by the
- * workflow itself (run-guest-turn.ts's sendWhatsAppMessage call). This
+ * workflow itself (run-turn.ts's sendWhatsAppMessage call). This
  * route's response is always just an ack.
  */
 export async function POST(request: NextRequest) {
@@ -40,24 +39,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing From/Body" }, { status: 400 });
   }
   // Normalized once here, right at the ingress boundary — every downstream
-  // consumer (conversations, CRM, the agent workflow itself) receives this
+  // consumer (conversations, the agent workflow itself) receives this
   // bare value and never has to know about Twilio's "whatsapp:" prefix.
   // Signature verification above operates on the raw `params` object and is
   // unaffected by this.
   const phone = normalizePhone(params.From);
 
-  const { conversationId, isNew } = await getOrCreateActiveConversation(phone);
+  const { conversationId } = await getOrCreateActiveConversation(phone);
   const userMessageId = await recordMessage(conversationId, "user", incomingMessage);
-
-  // Fire-and-forget: never blocks/fails the guest-facing turn.
-  if (isNew) {
-    const result = await registerGuestContact(phone);
-    if (!result.ok) {
-      console.warn(
-        `[guest-communication-agent] registerGuestContact failed for ${phone}: ${result.error}`,
-      );
-    }
-  }
 
   // `await` here only awaits the workflow being durably started (enqueued),
   // not its result — it resumes/finishes independently of this request.

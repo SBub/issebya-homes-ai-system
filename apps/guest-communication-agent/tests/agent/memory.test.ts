@@ -2,14 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // memory.ts's own orchestration (trim -> id correlation -> watermark filter
 // -> summarize-and-upsert) is under test here, so db.ts's queries are mocked
-// directly rather than mocking createAdminClient/lookupGuestContact underneath them.
+// directly rather than mocking createAdminClient underneath them.
 const loadRecentMessagesMock = vi.fn();
-const loadGuestInfoMock = vi.fn();
 const getGuestMemoryMock = vi.fn();
 const upsertGuestMemoryMock = vi.fn();
 vi.mock("@/lib/db.js", () => ({
   loadRecentMessages: loadRecentMessagesMock,
-  loadGuestInfo: loadGuestInfoMock,
   getGuestMemory: getGuestMemoryMock,
   upsertGuestMemory: upsertGuestMemoryMock,
 }));
@@ -67,7 +65,6 @@ describe("loadMemory", () => {
       messageRow("msg-3", "user", 50, "2026-08-01T00:02:00Z"),
     ];
     loadRecentMessagesMock.mockResolvedValue(rows);
-    loadGuestInfoMock.mockResolvedValue(null);
     getGuestMemoryMock.mockResolvedValue(null);
 
     const result = await loadMemory({ conversationId: "convo-1", phone: "+351900000001" });
@@ -81,7 +78,6 @@ describe("loadMemory", () => {
   it("summarizes and upserts when overflow drops rows newer than the existing watermark (or with no watermark at all)", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
-    loadGuestInfoMock.mockResolvedValue(null);
     getGuestMemoryMock.mockResolvedValue(null); // no prior guest_memory row at all
     generateTextMock.mockResolvedValueOnce({
       text: "Guest asked about rooms 1-3, no booking yet.",
@@ -121,7 +117,6 @@ describe("loadMemory", () => {
   it("skips the model call and the write when every dropped row is already covered by the existing watermark", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
-    loadGuestInfoMock.mockResolvedValue(null);
     // Watermark already covers msg-0..msg-4 (all 5 rows this turn drops) —
     // the mechanism should be fully self-throttling here.
     getGuestMemoryMock.mockResolvedValue({
@@ -141,25 +136,13 @@ describe("loadMemory", () => {
 });
 
 describe("buildContextBlock", () => {
-  it("combines guest facts and summary as two labeled sections when both are present", () => {
-    expect(buildContextBlock("This guest has stayed with us before.", "Asked about room 2.")).toBe(
-      "Guest facts:\nThis guest has stayed with us before.\n\nSummary of earlier conversation:\nAsked about room 2.",
-    );
-  });
-
-  it("returns just the guest-facts section when there's no summary", () => {
-    expect(buildContextBlock("This guest has stayed with us before.", null)).toBe(
-      "Guest facts:\nThis guest has stayed with us before.",
-    );
-  });
-
-  it("returns just the summary section when there are no guest facts", () => {
-    expect(buildContextBlock(null, "Asked about room 2.")).toBe(
+  it("returns the labeled summary section when a summary is present", () => {
+    expect(buildContextBlock("Asked about room 2.")).toBe(
       "Summary of earlier conversation:\nAsked about room 2.",
     );
   });
 
-  it("falls back to the existing 'no prior guest information' text when neither is present", () => {
-    expect(buildContextBlock(null, null)).toBe("No prior guest information available.");
+  it("falls back to the existing 'no prior guest information' text when there's no summary", () => {
+    expect(buildContextBlock(null)).toBe("No prior guest information available.");
   });
 });

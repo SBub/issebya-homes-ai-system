@@ -4,7 +4,7 @@
 export interface ToolContext {
   conversationId: string;
   phone: string;
-  // Only the real webhook call path (via @/agent/run-guest-turn.ts's
+  // Only the real webhook call path (via @/agent/run-turn.ts's
   // runGuestTurn) supplies this; other callers leave it undefined.
   triggerMessageId?: string;
 }
