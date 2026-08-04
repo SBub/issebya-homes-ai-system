@@ -40,7 +40,7 @@ describe("performEscalation", () => {
 
   // All three categories share the same insert -> nudge ->
   // store-telegram_message_id path.
-  for (const reasonCategory of ["wants_human", "complaint", "missing_info"] as const) {
+  for (const reasonCategory of ["wants_human", "missing_info"] as const) {
     it(`inserts, nudges via telegram-router, and stores telegram_message_id for ${reasonCategory}`, async () => {
       mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
       mockEq.mockResolvedValueOnce({ error: null });
@@ -91,28 +91,6 @@ describe("performEscalation", () => {
     });
   });
 
-  it("inserts complaint escalations without resolved_at (left unset — no resolution mechanism decided yet)", async () => {
-    mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
-    mockEq.mockResolvedValueOnce({ error: null });
-    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true, telegramMessageId: 777 });
-
-    await performEscalation({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      reason: "Guest is upset about noise",
-      reasonCategory: "complaint",
-    });
-
-    // toHaveBeenCalledWith deep-equals the whole object, so this also proves
-    // resolved_at is absent from the insert payload.
-    expect(mockInsert).toHaveBeenCalledWith({
-      conversation_id: "convo-1",
-      phone_number: "+351920742845",
-      reason: "Guest is upset about noise",
-      reason_category: "complaint",
-    });
-  });
-
   it("inserts missing_info escalations without resolved_at (left unset for the real owner-reply HITL flow)", async () => {
     mockSingle.mockResolvedValueOnce({ data: { id: "esc-1" }, error: null });
     mockEq.mockResolvedValueOnce({ error: null });
@@ -125,7 +103,8 @@ describe("performEscalation", () => {
       reasonCategory: "missing_info",
     });
 
-    // Same deep-equal-proves-absence reasoning as the complaint test above.
+    // toHaveBeenCalledWith deep-equals the whole object, so this also proves
+    // resolved_at is absent from the insert payload.
     expect(mockInsert).toHaveBeenCalledWith({
       conversation_id: "convo-1",
       phone_number: "+351920742845",

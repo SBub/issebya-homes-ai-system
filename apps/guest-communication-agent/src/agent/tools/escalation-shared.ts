@@ -1,31 +1,17 @@
 import { createAdminClient } from "@/lib/supabase";
 import { sendEscalationNudge } from "@/lib/telegram-router";
 
-// Used to still be a single zod enum shared across one escalateToOwner
-// tool's `reason_category` argument. That tool has since been split into
-// three separate tools — wants_human, complaint, missing_info (see
-// wants-human.ts/complaint.ts/missing-info.ts) — whose identity now encodes
-// what this value used to. Kept as a plain string union (not a zod schema)
-// since nothing parses untrusted input into it anymore; it only types this
-// file's own performEscalation and telegram-router.ts's sendEscalationNudge.
-export type EscalationReasonCategory = "wants_human" | "complaint" | "missing_info";
+// Plain string union, not a zod schema — nothing parses untrusted input
+// into it; each tool's identity (wants_human/missing_info) already
+// encodes this.
+export type EscalationReasonCategory = "wants_human" | "missing_info";
 
 // Inserts the escalations row and pushes a nudge through apps/telegram-router
-// for all three categories. telegram_message_id is stored for all of them
-// (not just missing_info) since it's the correlation id a reply needs — a
-// wants_human reply can't be mistaken for an answer because it's already
-// resolved by insert time; a complaint reply is guarded by reason_category in
-// the webhook's handleEscalationReply. wants_human auto-resolves at insert
-// time (no owner action to wait for). complaint does not auto-resolve —
-// intentionally reverted per the owner, pending a real resolution mechanism.
+// for all three categories. wants_human is auto-resolved at insert time (no
+// owner action to wait for); missing_info has its own real DBOS suspend/resume.
 //
-// Exported so wants-human.ts/complaint.ts/missing-info.ts's run<ToolName>
-// implementations can all share this one insert-and-nudge path; the model
-// itself never sees this function directly, only the three tool schemas.
-//
-// Returns the new escalations row's id (so missing-info.ts's real DBOS.recv
-// wait step has something to key off of), or null if the insert itself failed
-// (already logged below) and there is nothing to nudge or wait on.
+// Returns the new escalations row's id (missing-info.ts's DBOS.recv wait
+// keys off it), or null if the insert failed.
 export async function performEscalation(params: {
   conversationId: string;
   phone: string;
@@ -34,13 +20,9 @@ export async function performEscalation(params: {
   // The guest's real original message id, distinct from `reason` (the
   // model's paraphrase).
   triggerMessageId?: string;
-  // The DBOS workflow id of the CURRENTLY RUNNING runGuestTurn workflow
-  // (read via DBOS.workflowID from inside it — see
-  // @/agent/run-guest-turn.ts), so POST /api/escalations/[id]/resolve can
-  // later address the right suspended workflow via DBOS.send. Only
-  // runMissingInfo (missing-info.ts) needs this — wants_human/complaint
-  // have no suspend/resume to correlate back to, so their callers
-  // (wants-human.ts/complaint.ts) simply omit it.
+  // Current runGuestTurn workflow id (DBOS.workflowID), so
+  // POST /api/escalations/[id]/resolve can DBOS.send to it later. Only
+  // missing_info needs this.
   workflowId?: string;
 }): Promise<string | null> {
   const { conversationId, phone, reason, reasonCategory, triggerMessageId, workflowId } = params;

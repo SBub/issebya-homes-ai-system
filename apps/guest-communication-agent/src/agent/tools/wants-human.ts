@@ -15,7 +15,7 @@ const wantsHumanSchema = z.object({
 // Also NEEDS_HITL-gated there via requestHitlApproval before dispatch.
 export const wantsHuman = tool({
   description:
-    "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person. For a complaint use the complaint tool instead, and for a question you cannot answer use missing_info instead.",
+    "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person.",
   inputSchema: wantsHumanSchema,
 });
 

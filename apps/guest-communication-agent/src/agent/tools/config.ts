@@ -1,5 +1,5 @@
 // Per-turn identifiers passed to the tools that need them (runSendBookingLink,
-// runWantsHuman, runComplaint, runMissingInfo), via run-turn.ts's
+// runWantsHuman, runMissingInfo), via run-turn.ts's
 // runToolCall().
 export interface ToolContext {
   conversationId: string;

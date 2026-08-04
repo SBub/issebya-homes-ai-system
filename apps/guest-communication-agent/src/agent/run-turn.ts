@@ -5,7 +5,6 @@ import { Client } from "langsmith";
 import { loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
-import { complaint, runComplaint } from "@/agent/tools/complaint";
 import type { ToolContext } from "@/agent/tools/config";
 import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
@@ -47,7 +46,6 @@ const tools = {
   answerPropertyQuestion,
   sendBookingLink,
   wants_human: wantsHuman,
-  complaint: complaint,
   missing_info: missingInfo,
 } satisfies ToolSet;
 
@@ -118,8 +116,6 @@ async function runToolCall(
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
     case "wants_human":
       return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
-    case "complaint":
-      return runComplaint(input as Parameters<typeof runComplaint>[0], context);
     case "missing_info":
       return runMissingInfo(input as Parameters<typeof runMissingInfo>[0], context);
     default:
@@ -171,7 +167,7 @@ export interface RunAgentTurnInput {
 
 export interface RunAgentTurnConfig {
   // This turn's inbound whatsapp_messages row id, passed to the
-  // model-driven wants_human/complaint/missing_info tools' ToolContext (see
+  // model-driven wants_human/missing_info tools' ToolContext (see
   // performEscalation in escalation-shared.ts).
   triggerMessageId?: string;
 }

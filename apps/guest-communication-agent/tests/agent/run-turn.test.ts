@@ -323,30 +323,6 @@ describe("runAgentTurn", () => {
     );
   });
 
-  it("escalates a complaint tool call as its own reason_category", async () => {
-    generateTextMock
-      .mockResolvedValueOnce(
-        toolCallResponse([
-          {
-            toolName: "complaint",
-            input: { reason: "Guest says the room was noisy" },
-            toolCallId: "call_esc",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(textResponse("I'm sorry to hear that, I've let the owner know."));
-
-    await runAgentTurn({
-      conversationId: "convo-complaint",
-      phone: "+351900000004",
-      incomingMessage: "The room was really noisy",
-    });
-
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ reason_category: "complaint" }),
-    );
-  });
-
   it("routes wants_human and sendBookingLink through the stub HITL gate (which always approves today) before running them", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     generateTextMock
@@ -391,25 +367,20 @@ describe("runAgentTurn", () => {
     consoleWarnSpy.mockRestore();
   });
 
-  it("does not route complaint or getPricing through the stub HITL gate (only wants_human/sendBookingLink are gated)", async () => {
+  it("does not route getPricing through the stub HITL gate (only wants_human/sendBookingLink are gated)", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
           { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_price" },
-          {
-            toolName: "complaint",
-            input: { reason: "Guest says the room was noisy" },
-            toolCallId: "call_complaint",
-          },
         ]),
       )
-      .mockResolvedValueOnce(textResponse("Got it, I've let the owner know."));
+      .mockResolvedValueOnce(textResponse("Got it, here is the price."));
 
     await runAgentTurn({
       conversationId: "convo-no-hitl",
       phone: "+351900000011",
-      incomingMessage: "How much is room 1? Also it was noisy.",
+      incomingMessage: "How much is room 1?",
     });
 
     expect(consoleWarnSpy).not.toHaveBeenCalled();
