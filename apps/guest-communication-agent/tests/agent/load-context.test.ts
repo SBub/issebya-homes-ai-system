@@ -15,6 +15,9 @@ vi.mock("@/lib/crm.js", () => ({
 const { createAdminClient } = await import("@/lib/supabase.js");
 const { lookupGuestContact } = await import("@/lib/crm.js");
 const { loadContext } = await import("@/agent/load-context.js");
+const { KEEP_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS, estimateTokens } = await import(
+  "@/agent/context.js"
+);
 
 // Builds a fake createAdminClient() return value that answers
 // .from('whatsapp_messages')...limit() with fixed data — the query
@@ -88,5 +91,66 @@ describe("loadContext", () => {
 
     expect(result.historyMessages).toHaveLength(0);
     expect(result.guestContext).toBeNull();
+  });
+
+  // Token-budget-driven history loading (replaces the old fixed
+  // RECENT_MESSAGE_LIMIT row cliff — see ../../src/lib/db.ts and
+  // ../../src/agent/context.ts).
+  describe("token-budget trimming", () => {
+    it("keeps a conversation that fits comfortably under MAX_CONTEXT_TOKENS in full", async () => {
+      // 20 short messages, nowhere near MAX_CONTEXT_TOKENS (3000) — should
+      // come back untrimmed, same as pre-token-budget behavior.
+      const oldestFirst = Array.from({ length: 20 }, (_, i) => ({
+        role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `message ${i}`,
+      }));
+      // loadRecentMessages fetches DESC then reverses to ascending, so the
+      // mock must hand back rows newest-first (see makeSupabaseMock's own
+      // comment above).
+      const newestFirst = [...oldestFirst].reverse();
+
+      vi.mocked(createAdminClient).mockReturnValue(makeSupabaseMock({ messageRows: newestFirst }));
+      vi.mocked(lookupGuestContact).mockResolvedValue({ found: false });
+
+      const result = await loadContext({ conversationId: "convo-short", phone: "+351900000003" });
+
+      expect(
+        estimateTokens(oldestFirst as unknown as Parameters<typeof estimateTokens>[0]),
+      ).toBeLessThan(MAX_CONTEXT_TOKENS);
+      expect(result.historyMessages).toHaveLength(20);
+      expect(result.historyMessages[0]).toEqual({ role: "user", content: "message 0" });
+      expect(result.historyMessages[19]).toEqual({ role: "assistant", content: "message 19" });
+    });
+
+    it("trims a conversation that exceeds MAX_CONTEXT_TOKENS down to under KEEP_CONTEXT_TOKENS, dropping oldest first", async () => {
+      // 40 messages of 400 chars (~100 tokens) each -> ~4000 tokens total,
+      // over MAX_CONTEXT_TOKENS (3000). Only the most recent 15 (~1500
+      // tokens) fit under KEEP_CONTEXT_TOKENS (1500).
+      const padding = "x".repeat(390);
+      const oldestFirst = Array.from({ length: 40 }, (_, i) => ({
+        role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `m${i}:${padding}`,
+      }));
+      const newestFirst = [...oldestFirst].reverse();
+
+      vi.mocked(createAdminClient).mockReturnValue(makeSupabaseMock({ messageRows: newestFirst }));
+      vi.mocked(lookupGuestContact).mockResolvedValue({ found: false });
+
+      const result = await loadContext({ conversationId: "convo-long", phone: "+351900000004" });
+
+      expect(result.historyMessages.length).toBeLessThan(40);
+      expect(result.historyMessages).toHaveLength(15);
+      expect(estimateTokens(result.historyMessages)).toBeLessThanOrEqual(KEEP_CONTEXT_TOKENS);
+      // Oldest 25 dropped, most recent 15 survive, still oldest-first among
+      // themselves.
+      expect(result.historyMessages[0]).toEqual({
+        role: oldestFirst[25].role,
+        content: oldestFirst[25].content,
+      });
+      expect(result.historyMessages[14]).toEqual({
+        role: oldestFirst[39].role,
+        content: oldestFirst[39].content,
+      });
+    });
   });
 });

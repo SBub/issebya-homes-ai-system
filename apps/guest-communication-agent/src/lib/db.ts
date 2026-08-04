@@ -23,25 +23,34 @@ import { createAdminClient } from "./supabase";
 // loadRecentMessages below — no synthetic block needed. Only the past-stay
 // lookup (loadGuestInfo) survives, as its own function.
 
-const RECENT_MESSAGE_LIMIT = 15;
+// A generous safety ceiling on the raw DB fetch only — NOT the real
+// context-size limiter (that's token-budget-driven trimming,
+// trimToTokenBudget in ../agent/context.ts, applied by
+// ../agent/load-context.ts on the set this returns). This just stops a
+// pathological case — a guest with years of history — from pulling their
+// entire conversation back in one round trip. Deliberately generous, since
+// the actual limiting work happens downstream.
+const RECENT_MESSAGE_SAFETY_LIMIT = 150;
 
 interface MessageRow {
   role: "user" | "assistant";
   content: string;
 }
 
-// Fetches the most recent RECENT_MESSAGE_LIMIT messages for a conversation,
-// returned oldest-first so callers can convert them straight into a
-// chronologically-ordered LangChain message list (see ../agent/load-context.ts
-// for why ordering matters here). Must query `created_at DESC` + `limit` to
-// actually get the tail end of a long conversation, then reverse back to
-// ascending order — querying ascending+limit (an earlier version of this
-// function did) gives the OLDEST messages instead, which silently drops
-// exactly the recent context this function exists to provide once a
-// conversation grows past the limit.
+// Fetches up to `limit` (a safety ceiling, see RECENT_MESSAGE_SAFETY_LIMIT
+// above — not the real bound on how much context gets used) of the most
+// recent messages for a conversation, returned oldest-first so callers can
+// convert them straight into a chronologically-ordered message list (see
+// ../agent/load-context.ts, which then applies token-budget trimming on top
+// of this). Must query `created_at DESC` + `limit` to actually get the tail
+// end of a long conversation, then reverse back to ascending order —
+// querying ascending+limit (an earlier version of this function did) gives
+// the OLDEST messages instead, which silently drops exactly the recent
+// context this function exists to provide once a conversation grows past
+// the limit.
 export async function loadRecentMessages(
   conversationId: string,
-  limit = RECENT_MESSAGE_LIMIT,
+  limit = RECENT_MESSAGE_SAFETY_LIMIT,
 ): Promise<MessageRow[]> {
   const supabase = createAdminClient();
   const { data, error } = await supabase
