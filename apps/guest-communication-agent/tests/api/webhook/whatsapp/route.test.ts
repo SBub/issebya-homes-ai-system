@@ -91,9 +91,13 @@ describe("POST /api/webhook/whatsapp", () => {
     expect(recordMessageMock).toHaveBeenCalledWith("convo-1", "user", "Is room 1 free?");
     expect(ensureDbosLaunchedMock).toHaveBeenCalled();
     expect(dbosStartWorkflowMock).toHaveBeenCalledWith(runGuestTurnWorkflowMock);
+    // The workflow input carries the normalized (bare, "whatsapp:"-stripped)
+    // phone even though params.From arrived prefixed — the route normalizes
+    // once, right at the ingress boundary, and everything downstream
+    // (including the agent workflow) receives that already-clean value.
     expect(startWorkflowInnerMock).toHaveBeenCalledWith({
       conversationId: "convo-1",
-      phone: "whatsapp:+351920742845",
+      phone: "+351920742845",
       incomingMessage: "Is room 1 free?",
       triggerMessageId: "msg-user-1",
     });
@@ -122,12 +126,13 @@ describe("POST /api/webhook/whatsapp", () => {
     expect(dbosStartWorkflowMock).not.toHaveBeenCalled();
   });
 
-  it("registers a new guest contact when the conversation is new", async () => {
+  it("registers a new guest contact when the conversation is new, using the normalized phone for both calls", async () => {
     getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1", isNew: true });
     registerGuestContactMock.mockResolvedValue({ ok: true });
 
     await POST(makeRequest({ From: "whatsapp:+351920742845", Body: "Hi!" }));
 
-    expect(registerGuestContactMock).toHaveBeenCalledWith("whatsapp:+351920742845");
+    expect(getOrCreateActiveConversationMock).toHaveBeenCalledWith("+351920742845");
+    expect(registerGuestContactMock).toHaveBeenCalledWith("+351920742845");
   });
 });

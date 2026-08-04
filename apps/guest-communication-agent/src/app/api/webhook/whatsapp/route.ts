@@ -4,6 +4,7 @@ import { runGuestTurnWorkflow } from "@/agent/run-guest-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
 import { registerGuestContact } from "@/lib/crm";
 import { ensureDbosLaunched } from "@/lib/dbos";
+import { normalizePhone } from "@/lib/phone";
 import { verifyTwilioSignature } from "@/lib/twilio";
 
 /**
@@ -34,11 +35,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const phone = params.From;
   const incomingMessage = params.Body;
-  if (!phone || !incomingMessage) {
+  if (!params.From || !incomingMessage) {
     return NextResponse.json({ error: "Missing From/Body" }, { status: 400 });
   }
+  // Normalized once here, right at the ingress boundary — every downstream
+  // consumer (conversations, CRM, the agent workflow itself) receives this
+  // bare value and never has to know about Twilio's "whatsapp:" prefix.
+  // Signature verification above operates on the raw `params` object and is
+  // unaffected by this.
+  const phone = normalizePhone(params.From);
 
   const { conversationId, isNew } = await getOrCreateActiveConversation(phone);
   const userMessageId = await recordMessage(conversationId, "user", incomingMessage);

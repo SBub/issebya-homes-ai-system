@@ -89,9 +89,9 @@ describe("loadMemory", () => {
 
     const result = await loadMemory({
       conversationId: "convo-2",
-      // Twilio's raw prefixed form — asserts the phone-key normalization
-      // memory.ts does before touching guest_memory.
-      phone: "whatsapp:+351900000002",
+      // Already-normalized (bare) form — the webhook route normalizes
+      // once, at the ingress boundary, before loadMemory ever sees `phone`.
+      phone: "+351900000002",
     });
 
     // Trimmed to the newest 3 rows (msg-5, msg-6, msg-7); the oldest 5
@@ -104,9 +104,10 @@ describe("loadMemory", () => {
     expect(call.messages[1].content).toContain("msg-4");
     expect(call.messages[1].content).not.toContain("msg-5:");
 
-    // Upserted under the normalized (bare, unprefixed) phone form, with the
-    // watermark set to the newest of the newly-folded-in dropped rows
-    // (msg-4 — the last of msg-0..msg-4).
+    // Upserted under exactly the phone value loadMemory was given — it does
+    // no normalization of its own anymore, with the watermark set to the
+    // newest of the newly-folded-in dropped rows (msg-4 — the last of
+    // msg-0..msg-4).
     expect(upsertGuestMemoryMock).toHaveBeenCalledWith(
       "+351900000002",
       "Guest asked about rooms 1-3, no booking yet.",

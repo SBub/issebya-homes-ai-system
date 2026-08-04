@@ -35,29 +35,12 @@ function toModelMessage(row: MessageRow): ModelMessage {
     : { role: "assistant", content: row.content };
 }
 
-// Phone-key decision: the phone reaching loadMemory (traced webhook route
-// -> runGuestTurnWorkflow -> runAgentTurn -> loadMemory) is Twilio's raw
-// `From` field, always "whatsapp:+..." prefixed (see the webhook route's
-// `params.From` and conversations.ts's getOrCreateActiveConversation,
-// which stores whatsapp_conversations.phone_number in that same prefixed
-// form). CRM's own guest_contacts table, by contrast, is keyed on the BARE
-// form — apps/crm/src/lib/phone.ts's normalizePhone strips the
-// "whatsapp:" prefix before CRM ever writes or queries a phone. GCA's
-// lookupGuestContact (../lib/crm.ts) just forwards whatever form it's
-// given and lets CRM normalize server-side, so it doesn't settle this for
-// us. Since guest_memory and guest_contacts are conceptually about the
-// same guest, this keys guest_memory.phone_number in that same bare form
-// CRM normalizes to — a local mirror of normalizePhone, since apps/crm's
-// module isn't importable across the app boundary.
-function normalizeMemoryPhoneKey(phone: string): string {
-  return phone.replace(/^whatsapp:/i, "").trim();
-}
-
-// Domain-tuned for GCA (a WhatsApp hospitality booking agent), not copied
-// verbatim from harness-engineering/harness/memory.ts's summarize() (that
-// reference's "item ids, categories, draft ids, amounts" instruction is
-// dev-agent-flavored) — same terse "fold new content into prior summary"
-// shape, different preserved facts.
+// guest_memory.phone_number is keyed on the bare (non-"whatsapp:"-prefixed)
+// form to match CRM's guest_contacts (apps/crm's normalizePhone). `phone`
+// arrives here already normalized — the webhook route
+// (src/app/api/webhook/whatsapp/route.ts) strips Twilio's "whatsapp:"
+// prefix once, at the ingress boundary, before starting the turn — so the
+// agent (this file included) never has to know that prefix exists.
 async function summarizeConversation(
   newlyDroppedMessages: ModelMessage[],
   priorSummary: string,
@@ -107,12 +90,11 @@ export async function loadMemory(params: {
   phone: string;
 }): Promise<AgentMemory> {
   const { conversationId, phone } = params;
-  const memoryPhoneKey = normalizeMemoryPhoneKey(phone);
 
   const [rows, guestFacts, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
     loadGuestInfo(phone),
-    getGuestMemory(memoryPhoneKey),
+    getGuestMemory(phone),
   ]);
 
   const mapped = rows.map(toModelMessage);
@@ -139,7 +121,7 @@ export async function loadMemory(params: {
     summary = await summarizeConversation(newlyDroppedMessages, existingMemory?.summary ?? "");
 
     const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
-    await upsertGuestMemory(memoryPhoneKey, summary, newWatermark);
+    await upsertGuestMemory(phone, summary, newWatermark);
   }
 
   return {
