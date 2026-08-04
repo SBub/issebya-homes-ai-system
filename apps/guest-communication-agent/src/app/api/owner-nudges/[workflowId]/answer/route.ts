@@ -4,7 +4,7 @@ import { requireApiKey } from "@/lib/auth";
 import { ensureDbosLaunched } from "@/lib/dbos";
 
 /**
- * Closes the human-in-the-loop for a missing_info escalation once the owner
+ * Closes the human-in-the-loop for a missing_info owner nudge once the owner
  * replies on Telegram. A thin trigger: auth/parsing/status mapping live
  * here, actual KB-embed + DBOS.send logic lives in
  * handleMissingInfoReplyReceived.
@@ -13,7 +13,7 @@ import { ensureDbosLaunched } from "@/lib/dbos";
  * — there is no escalations DB row anymore, so there's nothing to look up
  * by. apps/telegram-router's webhook route extracts this id straight out of
  * the owner's Telegram reply (the `[ref:<workflowId>]` tag embedded in the
- * original nudge text, see escalation-shared.ts/missing-info.ts) and calls
+ * original nudge text, see owner-nudge.ts/missing-info.ts) and calls
  * this route directly with it.
  *
  * Request body: `{ answer: string }`.

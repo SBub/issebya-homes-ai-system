@@ -39,10 +39,10 @@ export async function sendGuestMessage(
   return { ok: true };
 }
 
-export type AnswerEscalationResult = { ok: true; resumed: boolean } | { ok: false; error: string };
+export type AnswerOwnerNudgeResult = { ok: true; resumed: boolean } | { ok: false; error: string };
 
 /**
- * Calls GCA's POST /api/escalations/:workflowId/answer: writes the KB
+ * Calls GCA's POST /api/owner-nudges/:workflowId/answer: writes the KB
  * entry, then wakes GCA's suspended DBOS workflow so it can compose and
  * send the real reply itself. `workflowId` is the suspended DBOS workflow's
  * own id, extracted by the webhook route straight out of the owner's
@@ -58,10 +58,10 @@ export type AnswerEscalationResult = { ok: true; resumed: boolean } | { ok: fals
  * error). There's no more 409/already-resolved outcome — no DB row exists
  * to hold that state.
  */
-export async function answerEscalation(
+export async function answerOwnerNudge(
   workflowId: string,
   answer: string,
-): Promise<AnswerEscalationResult> {
+): Promise<AnswerOwnerNudgeResult> {
   const baseUrl = process.env.GUEST_COMMUNICATION_AGENT_API_URL;
   const apiKey = process.env.GUEST_COMMUNICATION_AGENT_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -70,7 +70,7 @@ export async function answerEscalation(
     );
   }
 
-  const res = await fetch(`${baseUrl}/api/escalations/${encodeURIComponent(workflowId)}/answer`, {
+  const res = await fetch(`${baseUrl}/api/owner-nudges/${encodeURIComponent(workflowId)}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
     body: JSON.stringify({ answer }),

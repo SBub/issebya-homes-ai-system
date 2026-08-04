@@ -11,7 +11,7 @@ vi.mock("@/agent/memory.js", () => ({
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
 // embedding call, so neither is exercised here. No more escalations table —
-// performEscalation talks to telegram-router only, not Supabase.
+// requestOwnerNudge talks to telegram-router only, not Supabase.
 const mockBookingInsert = vi.fn();
 const fromMock = vi.fn((table: string) => {
   if (table === "booking_link_requests") return { insert: mockBookingInsert };
@@ -24,9 +24,9 @@ vi.mock("@/lib/supabase.js", () => ({
   createClient: vi.fn(() => ({})),
 }));
 
-const sendEscalationNudgeMock = vi.fn();
+const sendOwnerNudgeMock = vi.fn();
 vi.mock("@/lib/telegram-router.js", () => ({
-  sendEscalationNudge: sendEscalationNudgeMock,
+  sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
 const recordMessageMock = vi.fn();
@@ -144,7 +144,7 @@ describe("runAgentTurn", () => {
       toChatMessages: () => [{ content: SYSTEM_PROMPT_TEXT }],
     });
     mockBookingInsert.mockResolvedValue({ data: null, error: null });
-    sendEscalationNudgeMock.mockResolvedValue({ ok: true });
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
   });
@@ -242,7 +242,7 @@ describe("runAgentTurn", () => {
     });
   });
 
-  it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an escalation", async () => {
+  it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an owner nudge", async () => {
     // Model always responds with a tool call so the loop never produces a
     // final reply — the pathological case the step cap exists for.
     generateTextMock.mockImplementation(() =>
@@ -262,7 +262,7 @@ describe("runAgentTurn", () => {
 
     expect(generateTextMock).toHaveBeenCalledTimes(8);
     expect(result.stepCount).toBe(8);
-    expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
+    expect(sendOwnerNudgeMock).not.toHaveBeenCalled();
 
     const last = result.messages.at(-1);
     expect(last?.role).toBe("tool");
@@ -298,7 +298,7 @@ describe("runAgentTurn", () => {
       role: "assistant",
       content: "Actually, here's the answer about the sauna!",
     });
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "missing_info" }),
     );
 
@@ -332,7 +332,7 @@ describe("runAgentTurn", () => {
       incomingMessage: "I want to talk to a person",
     });
 
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "wants_human" }),
     );
   });
@@ -371,7 +371,7 @@ describe("runAgentTurn", () => {
     // fired) since the stub always approves — see run-turn.ts's
     // requestHitlApproval and NEEDS_HITL.
     expect(mockBookingInsert).toHaveBeenCalled();
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "wants_human" }),
     );
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("sendBookingLink"));

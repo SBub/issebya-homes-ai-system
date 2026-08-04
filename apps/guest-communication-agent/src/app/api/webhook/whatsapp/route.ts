@@ -11,7 +11,7 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  * X-Twilio-Signature, then starts the guest's turn as a durable DBOS
  * workflow WITHOUT awaiting it, and immediately acks with empty TwiML.
  *
- * A missing_info escalation can suspend the turn for minutes or hours
+ * A missing_info owner nudge can suspend the turn for minutes or hours
  * waiting on the owner's Telegram reply, which an HTTP request can't stay
  * open for — so every reply is delivered later, proactively, by the
  * workflow itself (run-turn.ts's sendWhatsAppMessage call). This

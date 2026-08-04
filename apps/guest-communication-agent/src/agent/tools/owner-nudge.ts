@@ -1,14 +1,14 @@
-import { sendEscalationNudge } from "@/lib/telegram-router";
+import { sendOwnerNudge } from "@/lib/telegram-router";
 
 // Plain string union, not a zod schema — nothing parses untrusted input
 // into it; each tool's identity (wants_human/missing_info) already
 // encodes this.
-export type EscalationReasonCategory = "wants_human" | "missing_info";
+export type OwnerNudgeReason = "wants_human" | "missing_info";
 
 // No more escalations table — the app owner decided it overcomplicated
 // things unnecessarily (see supabase/migrations/*_drop_escalations_table.sql
 // for the removal and the full rationale). This just pushes a nudge through
-// apps/telegram-router's POST /api/escalation-nudges; telegram-router owns
+// apps/telegram-router's POST /api/owner-nudges; telegram-router owns
 // composing/sending the actual Telegram message for every category.
 //
 // missing_info's one genuinely load-bearing need — correlating a later
@@ -21,19 +21,19 @@ export type EscalationReasonCategory = "wants_human" | "missing_info";
 // wants_human never expects a reply, so it never passes workflowId.
 //
 // Returns whether the Telegram send itself succeeded — there's no more
-// DB-generated escalation id to hand back.
-export async function performEscalation(params: {
+// DB-generated id to hand back.
+export async function requestOwnerNudge(params: {
   conversationId: string;
   phone: string;
   reason: string;
-  reasonCategory: EscalationReasonCategory;
+  reasonCategory: OwnerNudgeReason;
   // Current runGuestTurn workflow id (DBOS.workflowID). Only missing_info
   // passes this — see the module comment above for what it's used for.
   workflowId?: string;
 }): Promise<boolean> {
   const { conversationId, phone, reason, reasonCategory, workflowId } = params;
 
-  const nudgeResult = await sendEscalationNudge({
+  const nudgeResult = await sendOwnerNudge({
     phone,
     reason,
     reasonCategory,
@@ -41,7 +41,7 @@ export async function performEscalation(params: {
     workflowId,
   });
   if (!nudgeResult.ok) {
-    console.error("[escalations] telegram-router nudge failed:", nudgeResult.error);
+    console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
     return false;
   }
 

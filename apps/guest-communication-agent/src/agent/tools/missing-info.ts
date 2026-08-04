@@ -4,12 +4,12 @@ import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
 import { createAdminClient } from "@/lib/supabase";
 import type { ToolContext } from "./config";
-import { performEscalation } from "./escalation-shared";
+import { requestOwnerNudge } from "./owner-nudge";
 
 // Consolidated home for the missing_info human-in-the-loop flow: the tool
 // the model calls to ask (runMissingInfo), and both branches of what happens
 // once it's settled — reply arrives (handleMissingInfoReplyReceived) or
-// doesn't (handleMissingInfoNoReply). POST /api/escalations/[workflowId]/answer
+// doesn't (handleMissingInfoNoReply). POST /api/owner-nudges/[workflowId]/answer
 // is a thin trigger that calls handleMissingInfoReplyReceived, not its own logic.
 //
 // The suspend/wait is real DBOS: runMissingInfo runs inside a runGuestTurn
@@ -17,7 +17,7 @@ import { performEscalation } from "./escalation-shared";
 // handleMissingInfoReplyReceived calls DBOS.send() for the same workflow id.
 // There is no escalations DB row anymore — the workflow id itself, embedded
 // in the Telegram nudge text as `[ref:<workflowId>]` and echoed back via the
-// owner's reply, is the only correlation key (see escalation-shared.ts and
+// owner's reply, is the only correlation key (see owner-nudge.ts and
 // apps/telegram-router's webhook route).
 
 const missingInfoSchema = z.object({
@@ -113,7 +113,7 @@ export async function handleMissingInfoReplyReceived(params: {
   const { error: insertError } = await supabase.from("documents").insert({
     content: answer,
     embedding: JSON.stringify(embedding),
-    metadata: { source: "owner_escalation_answer" },
+    metadata: { source: "owner_nudge_answer" },
   });
   if (insertError) {
     throw new Error(insertError.message);
@@ -148,10 +148,10 @@ export async function runMissingInfo(
   const { conversationId, phone } = context;
 
   // undefined outside a live runGuestTurn workflow (e.g. a direct test call);
-  // performEscalation skips embedding a [ref:...] tag in that case.
+  // requestOwnerNudge skips embedding a [ref:...] tag in that case.
   const workflowId = DBOS.workflowID;
 
-  const nudged = await performEscalation({
+  const nudged = await requestOwnerNudge({
     conversationId,
     phone,
     reason: args.reason,

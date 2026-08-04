@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Isolates performEscalation directly, rather than driving it indirectly
+// Isolates requestOwnerNudge directly, rather than driving it indirectly
 // through runAgentTurn's step-cap branch. No more Supabase mocking here —
-// performEscalation no longer touches the DB at all (the escalations table
+// requestOwnerNudge no longer touches the DB at all (the escalations table
 // is gone); it only pushes a nudge through telegram-router.
-const sendEscalationNudgeMock = vi.fn();
+const sendOwnerNudgeMock = vi.fn();
 vi.mock("@/lib/telegram-router.js", () => ({
-  sendEscalationNudge: sendEscalationNudgeMock,
+  sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
-const { performEscalation } = await import("@/agent/tools/escalation-shared.js");
+const { requestOwnerNudge } = await import("@/agent/tools/owner-nudge.js");
 
-describe("performEscalation", () => {
+describe("requestOwnerNudge", () => {
   beforeEach(() => {
-    sendEscalationNudgeMock.mockReset();
+    sendOwnerNudgeMock.mockReset();
   });
 
   afterEach(() => {
@@ -22,9 +22,9 @@ describe("performEscalation", () => {
 
   for (const reasonCategory of ["wants_human", "missing_info"] as const) {
     it(`sends a telegram-router nudge and returns true on success for ${reasonCategory}`, async () => {
-      sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true });
+      sendOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
 
-      const result = await performEscalation({
+      const result = await requestOwnerNudge({
         conversationId: "convo-1",
         phone: "+351920742845",
         reason: "Guest is upset about noise",
@@ -32,7 +32,7 @@ describe("performEscalation", () => {
       });
 
       expect(result).toBe(true);
-      expect(sendEscalationNudgeMock).toHaveBeenCalledWith({
+      expect(sendOwnerNudgeMock).toHaveBeenCalledWith({
         phone: "+351920742845",
         reason: "Guest is upset about noise",
         reasonCategory,
@@ -43,9 +43,9 @@ describe("performEscalation", () => {
   }
 
   it("passes workflowId through when supplied (the real missing_info suspend/resume path)", async () => {
-    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: true });
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
 
-    await performEscalation({
+    await requestOwnerNudge({
       conversationId: "convo-1",
       phone: "+351920742845",
       reason: "Guest is asking about the AC",
@@ -53,16 +53,16 @@ describe("performEscalation", () => {
       workflowId: "wf-abc-123",
     });
 
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ workflowId: "wf-abc-123" }),
     );
   });
 
   it("returns false and logs when the telegram-router nudge fails", async () => {
-    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: false, error: "telegram-router down" });
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "telegram-router down" });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await performEscalation({
+    const result = await requestOwnerNudge({
       conversationId: "convo-1",
       phone: "+351920742845",
       reason: "Guest asked something unanswerable",

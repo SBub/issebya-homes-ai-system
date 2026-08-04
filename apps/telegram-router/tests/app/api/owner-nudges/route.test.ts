@@ -10,17 +10,17 @@ vi.mock("@/lib/telegram/telegram.js", () => ({
   sendWithRetry: sendWithRetryMock,
 }));
 
-const { POST } = await import("@/app/api/escalation-nudges/route.js");
+const { POST } = await import("@/app/api/owner-nudges/route.js");
 
 function makeRequest(body: unknown, apiKey = "test-key"): NextRequest {
-  return new NextRequest("http://localhost:3003/api/escalation-nudges", {
+  return new NextRequest("http://localhost:3003/api/owner-nudges", {
     method: "POST",
     headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-describe("POST /api/escalation-nudges", () => {
+describe("POST /api/owner-nudges", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {

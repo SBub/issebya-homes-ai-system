@@ -10,7 +10,7 @@ import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/te
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { sendDigestNow } from "@/lib/telegram/digest";
-import { answerEscalation, sendGuestMessage } from "@/lib/telegram/gca";
+import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { runCheckHealth } from "@/lib/telegram/health-monitor";
 import { renderHealthSummary } from "@/lib/telegram/health-targets";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
@@ -108,7 +108,7 @@ async function handleNudgeReject(
 }
 
 // Matches a `[ref:<workflowId>]` tag at the very end of a missing_info
-// nudge's text (see GCA's escalation-shared.ts/missing-info.ts, which embed
+// nudge's text (see GCA's owner-nudge.ts/missing-info.ts, which embed
 // it two newlines after the human-readable nudge body). The workflow id is
 // captured as an opaque non-whitespace token, not assumed to be UUID-shaped.
 const MISSING_INFO_REF_REGEX = /\[ref:(\S+)\]\s*$/;
@@ -136,7 +136,7 @@ function extractMissingInfoWorkflowId(replyText: string | undefined): string | n
  * "unrelated reply" case. Returns true once a ref tag is matched, regardless
  * of outcome.
  */
-async function handleEscalationReply(
+async function handleOwnerNudgeReply(
   message: NonNullable<TelegramUpdate["message"]>,
 ): Promise<boolean> {
   const workflowId = extractMissingInfoWorkflowId(message.reply_to_message?.text);
@@ -145,10 +145,10 @@ async function handleEscalationReply(
     return false;
   }
 
-  const answerResult = await answerEscalation(workflowId, answer);
+  const answerResult = await answerOwnerNudge(workflowId, answer);
   if (!answerResult.ok) {
     console.error(
-      `[telegram-router] escalation answer failed for workflow ${workflowId}:`,
+      `[telegram-router] owner-nudge answer failed for workflow ${workflowId}:`,
       answerResult.error,
     );
     await sendMessage("Failed to add the answer to the knowledge base — try replying again.");
@@ -228,7 +228,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (update?.message?.reply_to_message && update.message.text) {
-    const handled = await handleEscalationReply(update.message);
+    const handled = await handleOwnerNudgeReply(update.message);
     if (handled) {
       return NextResponse.json({ ok: true });
     }

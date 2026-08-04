@@ -16,10 +16,10 @@ vi.mock("@/lib/telegram/crm.js", () => ({
 }));
 
 const sendGuestMessageMock = vi.fn();
-const answerEscalationMock = vi.fn();
+const answerOwnerNudgeMock = vi.fn();
 vi.mock("@/lib/telegram/gca.js", () => ({
   sendGuestMessage: sendGuestMessageMock,
-  answerEscalation: answerEscalationMock,
+  answerOwnerNudge: answerOwnerNudgeMock,
 }));
 
 const answerCallbackQueryMock = vi.fn();
@@ -89,7 +89,7 @@ describe("POST /api/telegram/webhook — nudge_approve/nudge_reject callbacks", 
     markPromoCodeSentMock.mockReset();
     markPromoCodeRejectedMock.mockReset();
     sendGuestMessageMock.mockReset();
-    answerEscalationMock.mockReset();
+    answerOwnerNudgeMock.mockReset();
     answerCallbackQueryMock.mockReset();
     editMessageTextMock.mockReset();
     sendMessageMock.mockReset();
@@ -211,9 +211,9 @@ describe("POST /api/telegram/webhook — nudge_approve/nudge_reject callbacks", 
   });
 });
 
-describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
+describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
   beforeEach(() => {
-    answerEscalationMock.mockReset();
+    answerOwnerNudgeMock.mockReset();
     sendGuestMessageMock.mockReset();
     sendMessageMock.mockReset();
     sendWithRetryMock.mockClear();
@@ -223,11 +223,11 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     vi.clearAllMocks();
   });
 
-  it("falls through to the normal dispatch (never calls answerEscalation) when the message isn't a reply", async () => {
+  it("falls through to the normal dispatch (never calls answerOwnerNudge) when the message isn't a reply", async () => {
     const res = await POST(makeReplyRequest("just a normal message"));
 
     expect(res.status).toBe(200);
-    expect(answerEscalationMock).not.toHaveBeenCalled();
+    expect(answerOwnerNudgeMock).not.toHaveBeenCalled();
   });
 
   it("falls through to the normal dispatch when the replied-to text has no [ref:...] tag (an unrelated reply)", async () => {
@@ -236,7 +236,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
-    expect(answerEscalationMock).not.toHaveBeenCalled();
+    expect(answerOwnerNudgeMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
@@ -251,12 +251,12 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
-    expect(answerEscalationMock).not.toHaveBeenCalled();
+    expect(answerOwnerNudgeMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it("extracts an opaque (non-UUID) ref token just as readily as a UUID-shaped one", async () => {
-    answerEscalationMock.mockResolvedValueOnce({ ok: true, resumed: true });
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
 
     await POST(
       makeReplyRequest(
@@ -265,23 +265,23 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
       ),
     );
 
-    expect(answerEscalationMock).toHaveBeenCalledWith(
+    expect(answerOwnerNudgeMock).toHaveBeenCalledWith(
       "sha-2f9a-not-a-uuid",
       "The AC is above the bed",
     );
   });
 
-  it("does not send to the guest itself — only calls answerEscalation directly, no sendGuestMessage relay", async () => {
-    answerEscalationMock.mockResolvedValueOnce({ ok: true, resumed: true });
+  it("does not send to the guest itself — only calls answerOwnerNudge directly, no sendGuestMessage relay", async () => {
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
 
     await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
 
     expect(sendGuestMessageMock).not.toHaveBeenCalled();
-    expect(answerEscalationMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
+    expect(answerOwnerNudgeMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
   });
 
-  it("tells the owner the KB write failed when answerEscalation itself fails", async () => {
-    answerEscalationMock.mockResolvedValueOnce({ ok: false, error: "boom" });
+  it("tells the owner the KB write failed when answerOwnerNudge itself fails", async () => {
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
@@ -295,14 +295,14 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
   });
 
   it("confirms full success to the owner when resumed is true", async () => {
-    answerEscalationMock.mockResolvedValueOnce({ ok: true, resumed: true });
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
     const json = await res.json();
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
-    expect(answerEscalationMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
+    expect(answerOwnerNudgeMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
     expect(sendMessageMock).toHaveBeenCalledWith(
       expect.stringContaining(
         "Added to the knowledge base — the agent will reply to the guest shortly",
@@ -311,7 +311,7 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
   });
 
   it("reports a partial success — added to the knowledge base but the conversation couldn't be resumed — when resumed is false (e.g. a duplicate/late reply)", async () => {
-    answerEscalationMock.mockResolvedValueOnce({ ok: true, resumed: false });
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: false });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
     const json = await res.json();

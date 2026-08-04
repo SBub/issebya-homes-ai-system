@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type { ToolContext } from "./config";
-import { performEscalation } from "./escalation-shared";
+import { requestOwnerNudge } from "./owner-nudge";
 
 const wantsHumanSchema = z.object({
   reason: z
@@ -21,7 +21,7 @@ export const wantsHuman = tool({
 
 export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
   const { conversationId, phone } = context;
-  await performEscalation({
+  await requestOwnerNudge({
     conversationId,
     phone,
     reason: args.reason,

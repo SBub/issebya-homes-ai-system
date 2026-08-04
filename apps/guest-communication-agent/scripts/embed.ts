@@ -19,7 +19,7 @@
  *    own inlined factory, not `@issebya/shared/supabase` — this monorepo has
  *    no packages/* workspace), and the OpenRouter-as-OpenAI-compatible-
  *    endpoint pattern from src/agent/tools/property-question.ts and
- *    src/app/api/escalations/[id]/answer/route.ts (`createOpenAI` from
+ *    src/app/api/owner-nudges/[id]/answer/route.ts (`createOpenAI` from
  *    "@ai-sdk/openai" pointed at OpenRouter's base URL) instead of a
  *    dedicated `../src/openrouter` module (this app has no such module).
  *
@@ -35,8 +35,8 @@
  *        is one of the knowledge-base filenames being processed here (see
  *        `KNOWLEDGE_BASE_SOURCES` below) — scoped so this script never
  *        touches, reads as relevant, or deletes rows from other sources,
- *        in particular the `owner_escalation_answer` rows written by
- *        POST /api/escalations/[id]/answer (src/app/api/escalations/[id]/answer/route.ts).
+ *        in particular the `owner_nudge_answer` rows written by
+ *        POST /api/owner-nudges/[id]/answer (src/app/api/owner-nudges/[id]/answer/route.ts).
  *      - Diffs desired vs. existing keyed on `(source, section)` — the
  *        stable identity for a chunk, since `content_hash` changes
  *        whenever the content does and so can't be the identity key
@@ -87,7 +87,7 @@ const KNOWLEDGE_BASE_DIR = join(__dirname, "../knowledge-base");
 
 // Same OpenRouter-as-OpenAI-compatible-endpoint setup as
 // ../src/agent/tools/property-question.ts and
-// ../src/app/api/escalations/[id]/answer/route.ts.
+// ../src/app/api/owner-nudges/[id]/answer/route.ts.
 const openrouter = createOpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
@@ -209,7 +209,7 @@ async function main() {
   }
 
   // Load only the existing rows for the sources we're about to process —
-  // never touch rows from other sources (e.g. owner_escalation_answer).
+  // never touch rows from other sources (e.g. owner_nudge_answer).
   const { data: existingData, error: selectError } = await supabase
     .from("documents")
     .select("id, metadata")

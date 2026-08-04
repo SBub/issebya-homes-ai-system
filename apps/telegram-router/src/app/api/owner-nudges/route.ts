@@ -4,8 +4,8 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
 
 /**
  * Inbound endpoint for apps/guest-communication-agent's own
- * performEscalation (see @/agent/tools/escalation-shared.ts) — this router
- * owns all Telegram I/O, so every escalation category pushes its owner
+ * requestOwnerNudge (see @/agent/tools/owner-nudge.ts) — this router
+ * owns all Telegram I/O, so every owner-nudge category pushes its owner
  * notification through here rather than GCA talking to Telegram itself.
  *
  * Guarded by requireApiKey (X-API-Key against TELEGRAM_ROUTER_API_KEY),
@@ -19,7 +19,7 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  * composed text (two newlines after the human-readable body) so a later
  * owner reply can be correlated back to that exact suspended workflow via
  * Telegram's own `reply_to_message.text` (see the webhook route's
- * handleEscalationReply) — no DB round-trip. wants_human never passes
+ * handleOwnerNudgeReply) — no DB round-trip. wants_human never passes
  * workflowId (it's a one-way notification, no reply expected), so its text
  * never gets a ref tag.
  *

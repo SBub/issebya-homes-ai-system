@@ -17,8 +17,8 @@ interface TelegramMessage {
   chat: { id: number };
   text?: string;
   /** Present when this message is itself a reply to another message — the
-   * escalation-nudge reply flow (../../app/api/telegram/webhook/route.ts's
-   * handleEscalationReply) reads `reply_to_message.text` (Telegram echoes
+   * owner-nudge reply flow (../../app/api/telegram/webhook/route.ts's
+   * handleOwnerNudgeReply) reads `reply_to_message.text` (Telegram echoes
    * the full text of the replied-to message) and regex-matches it for a
    * `[ref:<workflowId>]` tag to correlate the owner's free-text answer back
    * to the specific suspended DBOS workflow that sent the original

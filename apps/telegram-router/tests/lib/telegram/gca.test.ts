@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { answerEscalation, sendGuestMessage } from "@/lib/telegram/gca.js";
+import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca.js";
 
 describe("sendGuestMessage", () => {
   const originalEnv = { ...process.env };
@@ -61,7 +61,7 @@ describe("sendGuestMessage", () => {
   });
 });
 
-describe("answerEscalation", () => {
+describe("answerOwnerNudge", () => {
   const originalEnv = { ...process.env };
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -79,7 +79,7 @@ describe("answerEscalation", () => {
 
   it("throws when not configured, without calling fetch", async () => {
     delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
-    await expect(answerEscalation("wf-abc-123", "The AC is above the bed")).rejects.toThrow(
+    await expect(answerOwnerNudge("wf-abc-123", "The AC is above the bed")).rejects.toThrow(
       "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
     );
     expect(fetchMock).not.toHaveBeenCalled();
@@ -90,11 +90,11 @@ describe("answerEscalation", () => {
       new Response(JSON.stringify({ ok: true, resumed: true }), { status: 200 }),
     );
 
-    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: true });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3005/api/escalations/wf-abc-123/answer");
+    expect(url).toBe("http://localhost:3005/api/owner-nudges/wf-abc-123/answer");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "X-API-Key": "test-key" });
     expect(JSON.parse(init.body)).toEqual({ answer: "The AC is above the bed" });
@@ -105,7 +105,7 @@ describe("answerEscalation", () => {
       new Response(JSON.stringify({ ok: true, resumed: false }), { status: 200 }),
     );
 
-    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: false });
   });
@@ -113,7 +113,7 @@ describe("answerEscalation", () => {
   it("defaults resumed to false when the success body is missing/unparseable", async () => {
     fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
 
-    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: false });
   });
@@ -121,7 +121,7 @@ describe("answerEscalation", () => {
   it("returns ok: false with an error on a real failure — no more 409/already-resolved outcome", async () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
 
-    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
 
     expect(result.ok).toBe(false);
     if (!result.ok) {

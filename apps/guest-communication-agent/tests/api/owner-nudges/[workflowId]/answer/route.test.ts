@@ -16,10 +16,10 @@ vi.mock("@/lib/dbos.js", () => ({
   ensureDbosLaunched: ensureDbosLaunchedMock,
 }));
 
-const { POST } = await import("@/app/api/escalations/[workflowId]/answer/route.js");
+const { POST } = await import("@/app/api/owner-nudges/[workflowId]/answer/route.js");
 
 function makeRequest(body: unknown, apiKey = "test-key"): NextRequest {
-  return new NextRequest("http://localhost:3005/api/escalations/wf-abc-123/answer", {
+  return new NextRequest("http://localhost:3005/api/owner-nudges/wf-abc-123/answer", {
     method: "POST",
     headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -30,7 +30,7 @@ function makeParams(workflowId: string) {
   return { params: Promise.resolve({ workflowId }) };
 }
 
-describe("POST /api/escalations/[workflowId]/answer", () => {
+describe("POST /api/owner-nudges/[workflowId]/answer", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {

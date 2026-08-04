@@ -14,9 +14,9 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
 }));
 
-const sendEscalationNudgeMock = vi.fn();
+const sendOwnerNudgeMock = vi.fn();
 vi.mock("@/lib/telegram-router.js", () => ({
-  sendEscalationNudge: sendEscalationNudgeMock,
+  sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
 const embedMock = vi.fn();
@@ -103,19 +103,19 @@ describe("runMissingInfo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDbosWorkflowId = undefined;
-    sendEscalationNudgeMock.mockResolvedValue({ ok: true });
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("step 1 (real): sends the Telegram nudge exactly like the other escalation tools", async () => {
+  it("step 1 (real): sends the Telegram nudge exactly like the other owner-nudge tools", async () => {
     dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         phone: "+351920742845",
         reason: "Guest asked about the AC",
@@ -125,13 +125,13 @@ describe("runMissingInfo", () => {
     );
   });
 
-  it("reads DBOS.workflowID and passes it through to performEscalation when set", async () => {
+  it("reads DBOS.workflowID and passes it through to requestOwnerNudge when set", async () => {
     mockDbosWorkflowId = "wf-abc-123";
     dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ workflowId: "wf-abc-123" }),
     );
   });
@@ -141,7 +141,7 @@ describe("runMissingInfo", () => {
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ workflowId: undefined }),
     );
   });
@@ -173,7 +173,7 @@ describe("runMissingInfo", () => {
   });
 
   it("skips the DBOS.recv wait entirely (and still returns the fallback message) when the nudge itself failed", async () => {
-    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
@@ -208,7 +208,7 @@ describe("handleMissingInfoReplyReceived", () => {
     expect(mockDocInsert).toHaveBeenCalledWith({
       content: "The AC is above the bed",
       embedding: JSON.stringify([0.1, 0.2, 0.3]),
-      metadata: { source: "owner_escalation_answer" },
+      metadata: { source: "owner_nudge_answer" },
     });
 
     // Order matters (per the app owner): the KB embed/insert must happen

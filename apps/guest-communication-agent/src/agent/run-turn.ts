@@ -50,7 +50,7 @@ const model = openrouter.chat(MODEL);
 const MAX_OUTPUT_TOKENS = 1000;
 
 // Schema-only tool declarations — dispatch happens manually in runToolCall()
-// below. The escalation tools' keys are the literal snake_case tool names
+// below. The owner-nudge tools' keys are the literal snake_case tool names
 // the model sees (deliberately unlike the camelCase tools here).
 const tools = {
   getPricing,
@@ -180,7 +180,7 @@ export interface RunAgentTurnInput {
 export interface RunAgentTurnConfig {
   // This turn's inbound whatsapp_messages row id, passed to the
   // model-driven wants_human/missing_info tools' ToolContext (see
-  // performEscalation in escalation-shared.ts).
+  // requestOwnerNudge in owner-nudge.ts).
   triggerMessageId?: string;
 }
 

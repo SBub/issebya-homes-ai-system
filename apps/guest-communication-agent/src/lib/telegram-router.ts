@@ -1,12 +1,12 @@
-import type { EscalationReasonCategory } from "../agent/tools/escalation-shared";
+import type { OwnerNudgeReason } from "../agent/tools/owner-nudge";
 
-export interface EscalationNudgeResult {
+export interface OwnerNudgeResult {
   ok: boolean;
   error?: string;
 }
 
 /**
- * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
+ * Best-effort push to apps/telegram-router's POST /api/owner-nudges,
  * which composes and sends the Telegram message notifying the owner.
  * reasonCategory/conversationId let the route compose a category-appropriate
  * message (missing_info invites a reply, wants_human is a one-way alert).
@@ -19,13 +19,13 @@ export interface EscalationNudgeResult {
  * throwing — this is a best-effort notification, not something worth
  * failing the whole tool call over.
  */
-export async function sendEscalationNudge(params: {
+export async function sendOwnerNudge(params: {
   phone: string;
   reason: string;
-  reasonCategory: EscalationReasonCategory;
+  reasonCategory: OwnerNudgeReason;
   conversationId: string;
   workflowId?: string;
-}): Promise<EscalationNudgeResult> {
+}): Promise<OwnerNudgeResult> {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -33,14 +33,14 @@ export async function sendEscalationNudge(params: {
   }
 
   try {
-    const res = await fetch(`${baseUrl}/api/escalation-nudges`, {
+    const res = await fetch(`${baseUrl}/api/owner-nudges`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
       body: JSON.stringify(params),
     });
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
-      throw new Error(body.error ?? `telegram-router escalation-nudges failed (${res.status})`);
+      throw new Error(body.error ?? `telegram-router owner-nudges failed (${res.status})`);
     }
     return { ok: true };
   } catch (err) {

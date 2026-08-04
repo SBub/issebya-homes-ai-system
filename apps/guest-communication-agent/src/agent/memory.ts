@@ -55,7 +55,7 @@ async function summarizeConversation(
           "vacation-rental booking agent into a short running summary. Preserve concrete " +
           "facts: the guest's name (if mentioned), rooms/dates discussed or booked, prices " +
           'quoted, promises or commitments made (e.g. "I\'ll check with the owner"), any ' +
-          "prior escalations, and guest-stated preferences or facts. Be terse.",
+          "prior owner nudges, and guest-stated preferences or facts. Be terse.",
       },
       {
         role: "user",
