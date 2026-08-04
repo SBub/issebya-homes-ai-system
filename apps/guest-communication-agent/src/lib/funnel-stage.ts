@@ -12,9 +12,9 @@ function isToolResultPart(part: ToolResultPart | { type: string }): part is Tool
 
 /**
  * Pure extraction of a funnel-stage hint from a turn's messages. Only looks
- * at `role: "tool"` entries; since loadContext (@/agent/load-context.ts)
- * only ever reconstructs user/assistant messages from history, any tool
- * message present necessarily came from the current runAgentTurn() call.
+ * at `role: "tool"` entries; since loadMemory (@/agent/memory.ts) only ever
+ * reconstructs user/assistant messages from history, any tool message
+ * present necessarily came from the current runAgentTurn() call.
  *
  * Precedence: sendBookingLink firing at all wins ("link_sent") even if an
  * "informed" tool also fired this turn. Otherwise any one of the "informed"

@@ -2,7 +2,7 @@ import { load } from "@langchain/core/load";
 import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { Client } from "langsmith";
-import { loadContext } from "@/agent/load-context";
+import { loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import { complaint, runComplaint } from "@/agent/tools/complaint";
@@ -15,45 +15,32 @@ import { openrouter } from "@/lib/openrouter";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
 // model and dispatch any tool calls it requested, until a final text reply
-// or the step cap fires. Stateless per invocation — loadContext reloads
-// guest history fresh from Postgres every turn, which remains the system of
-// record, not any state held here.
+// or the step cap fires. Stateless per invocation — loadMemory reloads guest
+// history fresh from Postgres every turn.
 
 const MODEL = "deepseek/deepseek-v4-pro";
-// Pinned to the `production` tag so a new prompt commit needs an explicit
-// promotion step before it takes effect. SYSTEM_PROMPT_IDENTIFIER_OVERRIDE
-// exists only for CI eval jobs scoring an unpromoted candidate commit — must
-// never be set in a real runtime environment.
+// SYSTEM_PROMPT_IDENTIFIER_OVERRIDE is for CI eval jobs only — must never be
+// set in a real runtime environment.
 const SYSTEM_PROMPT_IDENTIFIER =
   process.env.SYSTEM_PROMPT_IDENTIFIER_OVERRIDE ?? "whatsapp-booking-agent:production";
 
-// Ceiling on reasoning rounds (loop iterations, not individual tool calls —
-// one round can dispatch several tool calls at once, see runToolCall).
+// Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
 
-// Module-level: also owns pullPromptCommit's internal per-identifier cache,
-// so repeated pulls within a turn stay cheap.
 const langsmithClient = new Client({ apiKey: process.env.LANGSMITH_API_KEY });
 
-// `.chat(MODEL)` targets the Chat Completions API — the bare `openrouter(MODEL)`
-// call would target OpenAI's Responses API instead, which OpenRouter doesn't
-// support.
+// `.chat(MODEL)` targets Chat Completions — bare `openrouter(MODEL)` would
+// target the Responses API, which OpenRouter doesn't support.
 const model = openrouter.chat(MODEL);
 
-// Explicit because MODEL is a reasoning model: its internal "thinking"
-// tokens draw from the same completion budget as the visible reply, so too
-// low a cap can make it silently return an empty string (confirmed via a
-// real trace). 1000 leaves headroom for both.
+// MODEL is a reasoning model: its internal "thinking" tokens draw from the
+// same completion budget as the visible reply, so too low a cap can make it
+// silently return an empty string. 1000 leaves headroom for both.
 const MAX_OUTPUT_TOKENS = 1000;
 
-// Schema-only tool declarations (no `execute`) — dispatch happens manually
-// in runToolCall() below, driven by this file's own while loop. The three
-// escalation tools' keys are quoted, literal snake_case strings on purpose
-// — that's the exact tool name the model sees for each (an explicit,
-// deliberate choice from the app owner, unlike every other tool here which
-// is camelCase) — replacing what used to be a single escalateToOwner tool
-// with a `reason_category` enum arg; the tool identity itself now encodes
-// what that enum value used to.
+// Schema-only tool declarations — dispatch happens manually in runToolCall()
+// below. The escalation tools' keys are the literal snake_case tool names
+// the model sees (deliberately unlike the camelCase tools here).
 const tools = {
   getPricing,
   checkAvailability,
@@ -64,25 +51,15 @@ const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Tools that require a human's go-ahead before they run. Modeled on
-// harness-engineering/harness/runtime.ts's NEEDS_APPROVAL pattern: checked
-// here, in this file's own loop, before the tool is ever dispatched — the
-// app owner explicitly wants this "approve logic" visible here, not hidden
-// inside a tool file. For sendBookingLink specifically, gating here (before
-// runToolCall/runSendBookingLink is even invoked for that call) means the
-// gate sits before the tool creates the booking URL / inserts the
-// booking_link_requests row, without needing a second, redundant gate
-// inside booking.ts itself.
+// Tools that require a human's go-ahead before they run, checked in this
+// file's own loop before dispatch (deliberately visible here, not hidden in
+// a tool file). Gating sendBookingLink here means approval happens before
+// the tool ever creates the booking URL / inserts booking_link_requests.
 const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
 
-// STUB — NOT REAL APPROVAL LOGIC. There is no durable suspend/pause yet (no
-// DBOS or equivalent), unlike harness-engineering/harness/runtime.ts's
-// NEEDS_APPROVAL branch, which actually suspends the workflow via
-// DBOS.recv() and waits (up to APPROVAL_TIMEOUT_S) for a real human
-// decision. This resolves immediately with a fixed, always-approve
-// decision so wants_human/sendBookingLink keep working end-to-end today.
-// TODO(hitl): replace with a real suspend/resume once a durable execution
-// mechanism is wired up — nothing here actually asks a human anything yet.
+// STUB — NOT REAL APPROVAL LOGIC. No durable suspend/pause yet; always
+// resolves approved so wants_human/sendBookingLink keep working end-to-end.
+// TODO(hitl): replace with a real suspend/resume once DBOS-backed approval exists.
 async function requestHitlApproval(
   toolName: string,
   _input: Record<string, unknown>,
@@ -123,10 +100,8 @@ async function modelTurn(system: string, messages: ModelMessage[]): Promise<Mode
   };
 }
 
-// Looks up the run<ToolName> implementation matching a requested tool call
-// and invokes it directly with this turn's ToolContext (only sendBookingLink
-// and the three escalation tools need it). Throws on an unrecognized tool
-// name. Called after the NEEDS_HITL gate below, never before it.
+// Dispatches a requested tool call to its run<ToolName> implementation.
+// Called after the NEEDS_HITL gate below, never before it.
 async function runToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -167,13 +142,9 @@ function toolResultMessage(calls: ModelTurnResult["toolCalls"], outputs: unknown
   };
 }
 
-// Pulls the prompt commit from LangSmith's Prompt Hub and deserializes it via
-// @langchain/core/load — the manifest's class id is namespaced under
-// "langchain" rather than "langchain_core", so the "prompts" module must be
-// supplied explicitly via importMap or load() throws "Invalid namespace".
-// This is the one deliberate residual @langchain/core usage kept after the
-// AI SDK migration; the caller flattens the result to a plain string
-// immediately, so nothing downstream ever sees a LangChain object.
+// The manifest's class id is namespaced under "langchain" rather than
+// "langchain_core", so "prompts" must be supplied explicitly via importMap
+// or load() throws "Invalid namespace".
 async function pullSystemPromptTemplate() {
   const commit = await langsmithClient.pullPromptCommit(SYSTEM_PROMPT_IDENTIFIER);
   return load<prompts.ChatPromptTemplate>(JSON.stringify(commit.manifest), {
@@ -213,19 +184,10 @@ export interface RunAgentTurnResult {
 // Runs one full guest turn: loads context, then loops model -> tools ->
 // model until a final text reply, or the step cap is hit.
 //
-// Control flow to preserve carefully: after ANY tool call (including
-// wants_human/complaint/missing_info) the loop goes back for another model
-// round — including missing_info, whose runMissingInfo tool implementation
-// (@/agent/tools/missing-info.ts) now genuinely suspends this whole call via
-// a real DBOS.recv() wait (this function runs inside a DBOS workflow — see
-// @/agent/run-guest-turn.ts) until the owner's reply arrives or a timeout
-// falls back to a graceful "owner notified" tool result. Either way, once
-// that tool call resolves, the loop goes back to the model for a real final
-// reply — there is no separate, discarded "interim" reply to special-case
-// here anymore (see @/agent/run-guest-turn.ts's header comment for the
-// fuller history: this function used to also return a stale
-// `missingInfoEscalated` flag for exactly that now-obsolete purpose, since
-// removed).
+// After ANY tool call, including missing_info (which genuinely suspends via
+// DBOS.recv until the owner replies or times out — this function runs inside
+// a DBOS workflow, see @/agent/run-guest-turn.ts), the loop goes back to the
+// model for a real final reply.
 export async function runAgentTurn(
   input: RunAgentTurnInput,
   config: RunAgentTurnConfig = {},
@@ -235,13 +197,8 @@ export async function runAgentTurn(
 
   const toolContext: ToolContext = { conversationId, phone, triggerMessageId };
 
-  const { historyMessages, guestContext } = await loadContext({ conversationId, phone });
+  const { historyMessages, contextBlock } = await loadMemory({ conversationId, phone });
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
-
-  // Past-stay facts from guest_contacts (see load-context.ts). Plain content
-  // only — the prompt template owns the <guest_memory> XML wrapper around
-  // {guest_memory_block}.
-  const guestMemoryBlock = guestContext ?? "No prior guest information available.";
 
   let stepCount = 0;
 
@@ -249,7 +206,7 @@ export async function runAgentTurn(
     stepCount++;
 
     const promptTemplate = await pullSystemPromptTemplate();
-    const promptValue = await promptTemplate.invoke({ guest_memory_block: guestMemoryBlock });
+    const promptValue = await promptTemplate.invoke({ guest_memory_block: contextBlock });
     const system = promptValue.toChatMessages()[0].content as string;
 
     const result = await modelTurn(system, messages);

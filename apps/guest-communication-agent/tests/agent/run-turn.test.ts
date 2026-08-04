@@ -9,9 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // }; real tool implementations (runGetPricing, runSendBookingLink,
 // runWantsHuman, runComplaint, runMissingInfo) still run for real against
 // the mocks below.
-const loadContextMock = vi.fn();
-vi.mock("@/agent/load-context.js", () => ({
-  loadContext: loadContextMock,
+const loadMemoryMock = vi.fn();
+vi.mock("@/agent/memory.js", () => ({
+  loadMemory: loadMemoryMock,
 }));
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
@@ -132,7 +132,10 @@ function toolCallResponse(
 describe("runAgentTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadContextMock.mockResolvedValue({ historyMessages: [], guestContext: null });
+    loadMemoryMock.mockResolvedValue({
+      historyMessages: [],
+      contextBlock: "No prior guest information available.",
+    });
     pullPromptCommitMock.mockResolvedValue({
       manifest: {},
       owner: "test-owner",
@@ -153,7 +156,10 @@ describe("runAgentTurn", () => {
       { role: "user", content: "Hi, room 1 free?" },
       { role: "assistant", content: "Yes, in August." },
     ];
-    loadContextMock.mockResolvedValue({ historyMessages: history, guestContext: null });
+    loadMemoryMock.mockResolvedValue({
+      historyMessages: history,
+      contextBlock: "No prior guest information available.",
+    });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
     await runAgentTurn({
@@ -162,7 +168,7 @@ describe("runAgentTurn", () => {
       incomingMessage: "Also, is breakfast included?",
     });
 
-    expect(loadContextMock).toHaveBeenCalledWith({ conversationId: "convo-1", phone: "+3519" });
+    expect(loadMemoryMock).toHaveBeenCalledWith({ conversationId: "convo-1", phone: "+3519" });
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
     expect(call.system).toBe(SYSTEM_PROMPT_TEXT);

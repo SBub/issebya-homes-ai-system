@@ -8,11 +8,12 @@ import type { ModelMessage } from "ai";
 // under KEEP" compaction shape in that project's runtime.ts, adapted to
 // GCA's per-turn re-fetch-and-trim model — see trimToTokenBudget below.
 //
-// This file is also the intended home for step 2 (persistent agent
-// memory — a guest_memory-backed rolling summary) once that's scoped and
-// built; see the injection seam left in load-context.ts. Nothing here
-// fetches, generates, or writes a summary yet — this step is scoped to
-// hydration mechanics only.
+// Step 2 (persistent agent memory — a guest_memory-backed rolling summary)
+// is now built too, in ../agent/memory.ts (loadMemory), which supersedes
+// load-context.ts entirely and calls trimToTokenBudget below unchanged.
+// Nothing in this file fetches, generates, or writes a summary itself —
+// that orchestration lives in memory.ts; this file stays scoped to pure
+// hydration mechanics over plain ModelMessage[].
 
 // Placeholder/demo-scale values copied directly from the reference
 // project (harness-engineering/harness/memory.ts), not yet tuned for GCA's
@@ -38,7 +39,7 @@ export function estimateTokens(messages: ModelMessage[]): number {
 // back under KEEP_CONTEXT_TOKENS") but operates on a single freshly-fetched
 // message list rather than an in-memory turns[] accumulator that persists
 // across steps. GCA has no equivalent accumulator — every guest turn calls
-// loadContext fresh, re-fetching and re-trimming recent history from
+// loadMemory fresh, re-fetching and re-trimming recent history from
 // Postgres each time (Postgres remains the system of record either way),
 // which is fine and expected here.
 export function trimToTokenBudget(messages: ModelMessage[]): ModelMessage[] {

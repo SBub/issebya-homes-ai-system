@@ -23,7 +23,7 @@ export function crmConfigured(): boolean {
  * other cross-app call in this repo (apps/finance's Telegram/CRM-sync calls,
  * all fire-and-forget side effects after a DB write that's already
  * committed), this function sits directly in GCA's real conversational
- * request path — src/agent/load-context.ts's loadContext() calls it
+ * request path — src/agent/memory.ts's loadMemory() calls it
  * on every single turn, before the agent can reply at all. A CRM outage
  * must NOT break GCA's ability to reply to a guest. So: if CRM is
  * unconfigured, if the fetch itself fails (network error, CRM down), or if

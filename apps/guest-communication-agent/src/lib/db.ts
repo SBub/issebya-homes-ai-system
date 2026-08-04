@@ -6,14 +6,13 @@ import { createAdminClient } from "./supabase";
 // repo's @issebya/shared/supabase -> this repo's inlined ./supabase). Both
 // are pure Postgres queries via createAdminClient(), no other deps.
 // Postgres remains the system of record for conversation history/context;
-// the agent loads that context itself, in loadContext (see
-// ../agent/load-context.ts) — the caller only supplies
+// the agent loads that context itself, in loadMemory (see
+// ../agent/memory.ts) — the caller only supplies
 // conversationId/phone/incomingMessage, it doesn't pre-assemble history.
 //
-// Note: loadGuestMemory (guest_memory.summary lookup) was intentionally
-// removed from here (in the source) — no writer anywhere in the codebase
-// ever populates guest_memory, so it always returned empty. Worth
-// revisiting once a summarizer exists to actually populate it.
+// getGuestMemory/upsertGuestMemory below are the writers that guest_memory
+// never had until now — see ../agent/memory.ts's loadMemory for the
+// rolling-summary orchestration that calls them.
 //
 // loadCrmContext (the crm_messages/campaigns/promo_codes join) was also
 // removed in the source. It existed to synthesize a "you were sent campaign
@@ -25,29 +24,39 @@ import { createAdminClient } from "./supabase";
 
 // A generous safety ceiling on the raw DB fetch only — NOT the real
 // context-size limiter (that's token-budget-driven trimming,
-// trimToTokenBudget in ../agent/context.ts, applied by
-// ../agent/load-context.ts on the set this returns). This just stops a
-// pathological case — a guest with years of history — from pulling their
-// entire conversation back in one round trip. Deliberately generous, since
-// the actual limiting work happens downstream.
+// trimToTokenBudget in ../agent/context.ts, applied by ../agent/memory.ts
+// on the set this returns). This just stops a pathological case — a guest
+// with years of history — from pulling their entire conversation back in
+// one round trip. Deliberately generous, since the actual limiting work
+// happens downstream.
 const RECENT_MESSAGE_SAFETY_LIMIT = 150;
 
-interface MessageRow {
+export interface MessageRow {
+  id: string;
   role: "user" | "assistant";
   content: string;
+  created_at: string;
 }
 
 // Fetches up to `limit` (a safety ceiling, see RECENT_MESSAGE_SAFETY_LIMIT
 // above — not the real bound on how much context gets used) of the most
 // recent messages for a conversation, returned oldest-first so callers can
 // convert them straight into a chronologically-ordered message list (see
-// ../agent/load-context.ts, which then applies token-budget trimming on top
-// of this). Must query `created_at DESC` + `limit` to actually get the tail
+// ../agent/memory.ts, which then applies token-budget trimming on top of
+// this). Must query `created_at DESC` + `limit` to actually get the tail
 // end of a long conversation, then reverse back to ascending order —
 // querying ascending+limit (an earlier version of this function did) gives
 // the OLDEST messages instead, which silently drops exactly the recent
 // context this function exists to provide once a conversation grows past
 // the limit.
+//
+// Returns `id`/`created_at` alongside `role`/`content` (grown from the
+// original role/content-only shape) so ../agent/memory.ts's loadMemory can
+// correlate whichever rows trimToTokenBudget ends up dropping back to their
+// whatsapp_messages ids — needed to set guest_memory's
+// summarized_through_message_id watermark. The only other caller of this
+// function was the now-deleted load-context.ts; nothing else in the
+// codebase calls it.
 export async function loadRecentMessages(
   conversationId: string,
   limit = RECENT_MESSAGE_SAFETY_LIMIT,
@@ -55,7 +64,7 @@ export async function loadRecentMessages(
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("whatsapp_messages")
-    .select("role, content")
+    .select("id, role, content, created_at")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -63,8 +72,10 @@ export async function loadRecentMessages(
   if (error) throw error;
   return (data ?? [])
     .map((m) => ({
+      id: m.id as string,
       role: m.role as "user" | "assistant",
       content: m.content as string,
+      created_at: m.created_at as string,
     }))
     .reverse();
 }
@@ -102,4 +113,59 @@ export async function loadGuestInfo(phone: string): Promise<string | null> {
     : "";
 
   return `This guest has stayed with us before — most recently${roomLine} (${contact.total_stays} stay(s) total).`;
+}
+
+export interface GuestMemoryRow {
+  summary: string;
+  summarizedThroughMessageId: string | null;
+}
+
+// Reads the guest's persistent rolling-summary row, keyed by phone_number.
+// `phone` is expected to already be in whatever normalized form the caller
+// (../agent/memory.ts's loadMemory) has decided guest_memory keys on — this
+// function does no normalization of its own, matching loadGuestInfo/
+// lookupGuestContact's split above (the phone-form decision lives in the
+// orchestration layer, not here). Returns null when the guest has no
+// guest_memory row yet (nothing summarized for them so far), not an empty
+// GuestMemoryRow — callers treat "no row" and "row with empty summary"
+// differently (a fresh row with no watermark yet vs. a genuinely empty
+// prior summary to fold new content into).
+export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | null> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("guest_memory")
+    .select("summary, summarized_through_message_id")
+    .eq("phone_number", phone)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  return {
+    summary: data.summary as string,
+    summarizedThroughMessageId: (data.summarized_through_message_id as string | null) ?? null,
+  };
+}
+
+// Insert-or-update on phone_number (the table's PK) — a guest's first
+// summarize call creates the row, every later one overwrites it in place.
+// `updated_at` is set explicitly here since no set_updated_at/moddatetime
+// trigger convention exists anywhere in this repo's migrations (checked).
+export async function upsertGuestMemory(
+  phone: string,
+  summary: string,
+  summarizedThroughMessageId: string,
+): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase.from("guest_memory").upsert(
+    {
+      phone_number: phone,
+      summary,
+      summarized_through_message_id: summarizedThroughMessageId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "phone_number" },
+  );
+
+  if (error) throw error;
 }

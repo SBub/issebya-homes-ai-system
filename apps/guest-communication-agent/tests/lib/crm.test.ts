@@ -81,7 +81,7 @@ describe("lookupGuestContact", () => {
 
   // This is the one behavior that's different from every other client-test
   // precedent in this repo (e.g. apps/finance's guest-contacts.test.ts,
-  // which returns { ok: false } instead of throwing): loadContext calls
+  // which returns { ok: false } instead of throwing): loadMemory calls
   // this on GCA's real guest-facing request path, so a CRM outage must not
   // break a reply — see crm.ts's own doc comment.
   it("returns null rather than throwing on a non-2xx response, does not crash", async () => {

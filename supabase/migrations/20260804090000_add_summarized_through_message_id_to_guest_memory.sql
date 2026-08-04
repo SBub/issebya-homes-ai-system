@@ -1,0 +1,33 @@
+-- Backs the new persistent rolling-summary mechanism (step 2 of GCA's
+-- memory/context-hydration work — see TASK_FOR_TOMORROW.md and
+-- apps/guest-communication-agent/src/agent/memory.ts). guest_memory.summary
+-- was always a dormant column with no writer; this adds the watermark that
+-- makes it self-throttling once populated.
+--
+-- src/agent/context.ts's trimToTokenBudget peels the oldest messages off a
+-- guest's recent history whenever it's over MAX_CONTEXT_TOKENS. Those
+-- peeled-off (dropped) messages are exactly the candidates to fold into
+-- guest_memory.summary — but only the ones not already folded in by a prior
+-- turn's summarize call. This column records the newest whatsapp_messages
+-- row already covered by the current summary text, so memory.ts's loadMemory
+-- can filter each turn's freshly-dropped rows down to only the ones newer
+-- than this watermark, skip the model call and write entirely once nothing
+-- qualifies, and never re-summarize the same stretch of conversation twice.
+--
+-- Nullable: no guest_memory row has ever been summarized yet (the table has
+-- had no writer until this feature), and a fresh guest_memory row inserted
+-- by the first summarize call still starts without a prior watermark to
+-- compare against.
+--
+-- ON DELETE SET NULL rather than CASCADE: guest_memory rows are keyed by
+-- phone_number and persist across conversations (a new
+-- whatsapp_conversations row starts per chat session, per
+-- 20260720150000_create_whatsapp_agent_tables.sql), so a
+-- whatsapp_conversations cascade-delete removing the referenced
+-- whatsapp_messages row must not take the guest's summary text down with
+-- it — only the now-dangling watermark reference should clear, leaving the
+-- summary itself intact (the next turn that overflows will simply
+-- re-establish a fresh watermark).
+alter table public.guest_memory
+  add column summarized_through_message_id uuid
+    references public.whatsapp_messages(id) on delete set null;
