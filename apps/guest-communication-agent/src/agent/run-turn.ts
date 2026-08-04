@@ -13,6 +13,7 @@ import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
+import { EventType, emit } from "@/lib/events";
 import { openrouter } from "@/lib/openrouter";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
@@ -205,6 +206,12 @@ export async function runAgentTurn(
 
   const toolContext: ToolContext = { conversationId, phone, triggerMessageId };
 
+  // Outside a live DBOS workflow (e.g. a direct test call), DBOS.workflowID
+  // is undefined — same fallback missing-info.ts's runMissingInfo already
+  // relies on, mirrored here so runAgentTurn's own signature/call sites
+  // don't need a threaded workflowId param.
+  const workflowId = DBOS.workflowID ?? "unknown";
+
   const { historyMessages, contextBlock } = await loadMemory({ conversationId, phone });
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
@@ -219,6 +226,18 @@ export async function runAgentTurn(
 
     const result = await modelTurn(system, messages);
 
+    await DBOS.runStep(
+      () =>
+        emit({
+          type: EventType.ModelCompleted,
+          workflowId,
+          stepCount,
+          text: result.text,
+          toolCallCount: result.toolCalls.length,
+        }),
+      { name: `model-completed-${stepCount}` },
+    );
+
     if (result.toolCalls.length === 0) {
       messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
       return { messages, stepCount };
@@ -229,7 +248,28 @@ export async function runAgentTurn(
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         if (NEEDS_HITL.has(call.toolName)) {
+          await DBOS.runStep(
+            () =>
+              emit({
+                type: EventType.ApprovalRequested,
+                workflowId,
+                toolCallId: call.toolCallId,
+                action: call.toolName,
+                args: call.input,
+              }),
+            { name: `approval-requested-${call.toolCallId}` },
+          );
           const decision = await requestHitlApproval(call.toolName, call.input, toolContext);
+          await DBOS.runStep(
+            () =>
+              emit({
+                type: EventType.ApprovalResolved,
+                workflowId,
+                toolCallId: call.toolCallId,
+                approved: decision.approved,
+              }),
+            { name: `approval-resolved-${call.toolCallId}` },
+          );
           if (!decision.approved) {
             return {
               approved: false,
@@ -237,7 +277,45 @@ export async function runAgentTurn(
             };
           }
         }
-        return runToolCall(call.toolName, call.input, toolContext);
+
+        await DBOS.runStep(
+          () =>
+            emit({
+              type: EventType.ToolRequested,
+              workflowId,
+              toolCallId: call.toolCallId,
+              name: call.toolName,
+              args: call.input,
+            }),
+          { name: `tool-requested-${call.toolCallId}` },
+        );
+        try {
+          const output = await runToolCall(call.toolName, call.input, toolContext);
+          await DBOS.runStep(
+            () =>
+              emit({
+                type: EventType.ToolCompleted,
+                workflowId,
+                toolCallId: call.toolCallId,
+                result: output,
+              }),
+            { name: `tool-completed-${call.toolCallId}` },
+          );
+          return output;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await DBOS.runStep(
+            () =>
+              emit({
+                type: EventType.ToolFailed,
+                workflowId,
+                toolCallId: call.toolCallId,
+                error: message,
+              }),
+            { name: `tool-failed-${call.toolCallId}` },
+          );
+          throw err;
+        }
       }),
     );
     messages = [
@@ -246,6 +324,16 @@ export async function runAgentTurn(
       toolResultMessage(result.toolCalls, toolOutputs),
     ];
   }
+
+  await DBOS.runStep(
+    () =>
+      emit({
+        type: EventType.WorkflowFailed,
+        workflowId,
+        error: `Hit the ${MAX_AGENT_STEPS}-step limit without finishing.`,
+      }),
+    { name: "max-steps-exceeded" },
+  );
 
   return { messages, stepCount };
 }
@@ -275,26 +363,52 @@ export interface RunGuestTurnInput {
 
 async function runGuestTurn(input: RunGuestTurnInput): Promise<void> {
   const { conversationId, phone, incomingMessage, triggerMessageId } = input;
+  const workflowId = DBOS.workflowID ?? "unknown";
 
-  const result = await runAgentTurn(
-    { conversationId, phone, incomingMessage },
-    { triggerMessageId },
+  await DBOS.runStep(
+    () =>
+      emit({
+        type: EventType.WorkflowStarted,
+        workflowId,
+        conversationId,
+        phone,
+        incomingMessage,
+      }),
+    { name: "workflow-started" },
   );
 
-  const lastMessage = result.messages.at(-1);
-  const replyText =
-    lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
-      ? lastMessage.content
-      : "Sorry, I couldn't process that — please try again shortly.";
+  try {
+    const result = await runAgentTurn(
+      { conversationId, phone, incomingMessage },
+      { triggerMessageId },
+    );
 
-  // NOT a real LangSmith trace id — nothing on LangSmith's side matches it,
-  // so a later feedback submission against it will fail.
-  const runId = crypto.randomUUID();
-  await recordMessage(conversationId, "assistant", replyText, runId);
+    const lastMessage = result.messages.at(-1);
+    const replyText =
+      lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
+        ? lastMessage.content
+        : "Sorry, I couldn't process that — please try again shortly.";
 
-  const sendResult = await sendWhatsAppMessage(phone, replyText);
-  if (!sendResult.ok) {
-    console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+    // NOT a real LangSmith trace id — nothing on LangSmith's side matches it,
+    // so a later feedback submission against it will fail.
+    const runId = crypto.randomUUID();
+    await recordMessage(conversationId, "assistant", replyText, runId);
+
+    const sendResult = await sendWhatsAppMessage(phone, replyText);
+    if (!sendResult.ok) {
+      console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+    }
+
+    await DBOS.runStep(
+      () => emit({ type: EventType.WorkflowCompleted, workflowId, output: replyText }),
+      { name: "workflow-completed" },
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await DBOS.runStep(() => emit({ type: EventType.WorkflowFailed, workflowId, error: message }), {
+      name: "workflow-failed",
+    });
+    throw err;
   }
 }
 

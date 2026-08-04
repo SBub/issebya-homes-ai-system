@@ -9,6 +9,16 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
+// Immediately invokes the callback, matching how a real runStep behaves from
+// the caller's perspective — requestOwnerNudge now emits an
+// OwnerNudgeRequested event (wrapped in DBOS.runStep) on a successful nudge.
+const dbosRunStepMock = vi.fn((fn: () => unknown) => fn());
+vi.mock("@dbos-inc/dbos-sdk", () => ({
+  DBOS: {
+    runStep: dbosRunStepMock,
+  },
+}));
+
 const { requestOwnerNudge } = await import("@/agent/tools/owner-nudge.js");
 
 describe("requestOwnerNudge", () => {

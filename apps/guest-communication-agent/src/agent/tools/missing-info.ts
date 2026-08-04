@@ -1,6 +1,7 @@
 import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
 import { embed, tool } from "ai";
 import { z } from "zod";
+import { EventType, emit } from "@/lib/events";
 import { openrouter } from "@/lib/openrouter";
 import { createAdminClient } from "@/lib/supabase";
 import type { ToolContext } from "./config";
@@ -68,6 +69,16 @@ export async function waitForMissingInfoReply(
     await handleMissingInfoNoReply(workflowId);
     return null;
   }
+
+  // Runs inside the suspended runGuestTurn workflow's own call stack (DBOS.recv
+  // above only resolves there), so workflowId here is that workflow's own id —
+  // not the notifier's (handleMissingInfoReplyReceived, which runs separately
+  // via the telegram-router webhook route).
+  await DBOS.runStep(
+    () => emit({ type: EventType.OwnerNudgeAnswered, workflowId: workflowId ?? "unknown", answer }),
+    { name: "owner-nudge-answered" },
+  );
+
   return answer;
 }
 
@@ -138,6 +149,10 @@ export async function handleMissingInfoReplyReceived(params: {
 export async function handleMissingInfoNoReply(workflowId: string | undefined): Promise<void> {
   console.warn(
     `[missing-info] handleMissingInfoNoReply called for workflow ${workflowId ?? "unknown"} — no reply arrived within ${MISSING_INFO_REPLY_TIMEOUT_SECONDS}s, falling back to the owner-notified response for this turn.`,
+  );
+  await DBOS.runStep(
+    () => emit({ type: EventType.OwnerNudgeTimedOut, workflowId: workflowId ?? "unknown" }),
+    { name: "owner-nudge-timed-out" },
   );
 }
 

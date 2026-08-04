@@ -35,6 +35,9 @@ class DBOSNonExistentWorkflowError extends Error {}
 let mockDbosWorkflowId: string | undefined;
 const dbosRecvMock = vi.fn();
 const dbosSendMock = vi.fn();
+// Immediately invokes the callback, matching how a real runStep behaves from
+// the caller's perspective.
+const dbosRunStepMock = vi.fn((fn: () => unknown) => fn());
 vi.mock("@dbos-inc/dbos-sdk", () => ({
   DBOS: {
     get workflowID() {
@@ -42,6 +45,7 @@ vi.mock("@dbos-inc/dbos-sdk", () => ({
     },
     recv: dbosRecvMock,
     send: dbosSendMock,
+    runStep: dbosRunStepMock,
   },
   Error: { DBOSNonExistentWorkflowError },
 }));

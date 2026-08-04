@@ -47,6 +47,11 @@ vi.mock("@/lib/twilio-send.js", () => ({
 const dbosRecvMock = vi.fn().mockResolvedValue(null);
 const dbosSendMock = vi.fn();
 const registerWorkflowMock = vi.fn((fn: unknown, _options: { name: string }) => fn);
+// Immediately invokes the callback, matching how a real runStep behaves from
+// the caller's perspective — this suite doesn't assert anything about the
+// emitted events themselves, just that wrapping runStep doesn't break the
+// existing call sites/mocks.
+const dbosRunStepMock = vi.fn((fn: () => unknown) => fn());
 vi.mock("@dbos-inc/dbos-sdk", () => ({
   DBOS: {
     get workflowID() {
@@ -55,6 +60,7 @@ vi.mock("@dbos-inc/dbos-sdk", () => ({
     recv: dbosRecvMock,
     send: dbosSendMock,
     registerWorkflow: registerWorkflowMock,
+    runStep: dbosRunStepMock,
   },
 }));
 

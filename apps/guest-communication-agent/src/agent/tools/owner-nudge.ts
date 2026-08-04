@@ -1,3 +1,5 @@
+import { DBOS } from "@dbos-inc/dbos-sdk";
+import { EventType, emit } from "@/lib/events";
 import { sendOwnerNudge } from "@/lib/telegram-router";
 
 // Plain string union, not a zod schema — nothing parses untrusted input
@@ -44,6 +46,17 @@ export async function requestOwnerNudge(params: {
     console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
     return false;
   }
+
+  await DBOS.runStep(
+    () =>
+      emit({
+        type: EventType.OwnerNudgeRequested,
+        workflowId: workflowId ?? "unknown",
+        reason,
+        reasonCategory,
+      }),
+    { name: "owner-nudge-requested" },
+  );
 
   return true;
 }
