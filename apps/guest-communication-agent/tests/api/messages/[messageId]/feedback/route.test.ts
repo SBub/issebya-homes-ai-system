@@ -1,13 +1,9 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same "mock the shared Supabase factory, not the network" approach as
-// tests/api/send/route.test.ts, plus a mock for langsmith's own Client so
-// createFeedback is never a real network call. createFeedback is invoked as
-// an instance method off `new Client(...)`, so the mock module exports a
-// Client class whose instances all share one createFeedback spy — this
-// route only ever constructs one module-level client, but the class shape
-// still has to be a real constructable class for `new Client(...)` to work.
+// createFeedback is invoked as an instance method off `new Client(...)`, so
+// the mock module exports a real constructable Client class whose instances
+// share one createFeedback spy.
 const maybeSingleMock = vi.fn();
 const eqMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const selectMock = vi.fn(() => ({ eq: eqMock }));

@@ -1,10 +1,5 @@
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
-// Inlined from issebya-homes-website's packages/shared/src/supabase.ts —
-// this monorepo has no packages/* workspace (only apps/*), so these two
-// ~20-line factories are copied directly rather than pulling in a whole
-// shared package for them.
-
 /**
  * Creates a Supabase client using the anon key for guest operations.
  * This client is subject to Row Level Security (RLS) policies.

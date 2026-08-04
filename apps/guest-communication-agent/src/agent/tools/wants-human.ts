@@ -11,11 +11,8 @@ const wantsHumanSchema = z.object({
     ),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runWantsHuman below by name (tool name "wants_human", matching this
-// literal key in run-turn.ts's `tools` ToolSet). Also one of run-turn.ts's
-// NEEDS_HITL-gated tools — see that file's requestHitlApproval stub, which
-// runs before this tool is ever dispatched.
+// Schema-only declaration — dispatched by run-turn.ts's runToolCall.
+// Also NEEDS_HITL-gated there via requestHitlApproval before dispatch.
 export const wantsHuman = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person. For a complaint use the complaint tool instead, and for a question you cannot answer use missing_info instead.",

@@ -3,15 +3,9 @@ import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase";
 
-// Module-level client, same construction as @/agent/run-turn.ts's own
-// langsmithClient — reused across requests rather than built per-call.
 const langsmithClient = new Client({ apiKey: process.env.LANGSMITH_API_KEY });
 
-// Fixed feedback key for this v1, binary-only "flag after" feature — every
-// piece of feedback recorded through this route is the owner's own
-// after-the-fact good/bad call on a real reply, as opposed to e.g. an
-// automated eval score, hence "human_approval" rather than something more
-// generic like "quality".
+// The owner's own after-the-fact good/bad call, not an automated eval score.
 const FEEDBACK_KEY = "human_approval";
 
 interface MessageRow {
@@ -19,39 +13,17 @@ interface MessageRow {
 }
 
 /**
- * Records the owner's retrospective good/bad call on a specific past
- * assistant reply as real LangSmith feedback attached to that turn's own
- * trace — the "flag after" eval-feedback feature. Entirely decoupled from
- * delivery: this never gates/delays a reply, it only ever runs after one has
- * already been sent, on a message the owner is reviewing from the CRM
- * dashboard.
+ * Records the owner's retrospective good/bad call on a past assistant reply
+ * as LangSmith feedback attached to that turn's trace. Runs only after a
+ * reply is already sent, from the CRM dashboard — never gates delivery.
  *
- * Guarded by requireApiKey (X-API-Key against
- * GUEST_COMMUNICATION_AGENT_API_KEY), same as POST /api/send.
+ * Request body: `{ score: 0 | 1, comment?: string }`. A blank/whitespace-only
+ * comment is treated as absent and omitted from the LangSmith call.
  *
- * Request body: `{ score: 0 | 1, comment?: string }` — score is still
- * required and binary-only. `comment` is this feature's free-text
- * enrichment (still tied to the one binary score, no per-dimension
- * classifiers): optional, but if present it must be a string (400
- * otherwise). A whitespace-only or empty comment is treated the same as no
- * comment at all — trimmed and omitted from the LangSmith call entirely,
- * matching this repo's "only include a field when it has a real value"
- * convention, rather than ever sending `comment: ""` through.
- *
- * Looks up whatsapp_messages by [messageId] for its own langsmith_run_id:
- *   - 404 (`{ error: "Message not found" }`) if no such message exists.
- *   - 400 (`{ error: "This message has no recorded trace to attach
- *     feedback to" }`) if langsmith_run_id is null — a guest's own message
- *     or a proactive/campaign send (POST /api/send), neither of which ever
- *     touches runAgentTurn() and so has nothing in LangSmith to attach
- *     feedback to (see whatsapp_messages.langsmith_run_id's own migration
- *     comment).
- *
- * Otherwise calls the LangSmith client's own createFeedback(runId, key,
- * { score }) — or { score, comment } when a real (non-empty, trimmed)
- * comment was given — 500 with the underlying error message on a LangSmith
- * API failure (a real external call that can fail), `{ ok: true }` (200) on
- * success.
+ * - 404 if no such message.
+ * - 400 if langsmith_run_id is null (a guest message or proactive send never
+ *   touches runAgentTurn, so has nothing to attach feedback to).
+ * - 500 on a LangSmith API failure, `{ ok: true }` on success.
  */
 export async function POST(
   request: NextRequest,

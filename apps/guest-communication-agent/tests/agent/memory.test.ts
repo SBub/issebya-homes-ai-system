@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same "mock the module boundary, not the network" convention as
-// run-turn.test.ts — memory.ts's own orchestration logic (trim -> id
-// correlation -> watermark filter -> summarize-and-upsert) is what's under
-// test here, not db.ts's Postgres queries (loadRecentMessages/loadGuestInfo/
-// getGuestMemory/upsertGuestMemory), which is why those are mocked directly
-// rather than mocking createAdminClient/lookupGuestContact underneath them.
+// memory.ts's own orchestration (trim -> id correlation -> watermark filter
+// -> summarize-and-upsert) is under test here, so db.ts's queries are mocked
+// directly rather than mocking createAdminClient/lookupGuestContact underneath them.
 const loadRecentMessagesMock = vi.fn();
 const loadGuestInfoMock = vi.fn();
 const getGuestMemoryMock = vi.fn();

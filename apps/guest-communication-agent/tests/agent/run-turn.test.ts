@@ -1,25 +1,16 @@
 import type { ModelMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Drives runAgentTurn end-to-end through its public entry point, mocking
-// only the true external boundaries: Postgres (@/lib/supabase),
-// telegram-router, LangSmith's Prompt Hub, and generateText itself. Tool
-// declarations have no `execute` (dispatch is manual via runToolCall()), so
-// the mocked generateText only needs to return { text, toolCalls, response
-// }; real tool implementations (runGetPricing, runSendBookingLink,
-// runWantsHuman, runComplaint, runMissingInfo) still run for real against
-// the mocks below.
+// Drives runAgentTurn end-to-end, mocking only the true external boundaries:
+// Postgres, telegram-router, LangSmith's Prompt Hub, and generateText
+// itself. Real tool implementations still run against the mocks below.
 const loadMemoryMock = vi.fn();
 vi.mock("@/agent/memory.js", () => ({
   loadMemory: loadMemoryMock,
 }));
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
-// embedding call, so neither is exercised here — only getPricing (pure),
-// sendBookingLink, and the three escalation tools (all Supabase +
-// telegram-router; missing_info's stub HITL wait step never reaches a real
-// embedding call here either, see tests/agent/tools/missing-info.test.ts
-// for that).
+// embedding call, so neither is exercised here.
 const mockEscSingle = vi.fn();
 const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
 const mockEscInsert = vi.fn(() => ({ select: mockEscSelect }));
@@ -33,10 +24,8 @@ const fromMock = vi.fn((table: string) => {
 });
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
-  // search-property.ts calls createClient() at module load time as a
-  // transitive dependency of answerPropertyQuestion (always imported into
-  // run-turn.ts's `tools` ToolSet), so this must be present even though no
-  // test here calls that tool.
+  // search-property.ts calls createClient() at module load time, so this
+  // must be present even though no test here calls that tool.
   createClient: vi.fn(() => ({})),
 }));
 
@@ -45,15 +34,9 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendEscalationNudge: sendEscalationNudgeMock,
 }));
 
-// run-turn.ts transitively imports missing-info.ts, which now imports
-// @dbos-inc/dbos-sdk for DBOS.workflowID/DBOS.recv — mocked at the module
-// boundary, same convention as generateText/createOpenAI below, so this
-// suite never touches a real DBOS/Postgres connection. workflowID is
-// undefined by default (no live workflow context in these tests, matching
-// how runMissingInfo is actually called here — directly, not through
-// run-guest-turn.ts's registered workflow). recv defaults to resolving
-// null (a timeout), which drives runMissingInfo's real fallback path — the
-// same "owner has been notified" tool result these tests already assert on.
+// workflowID undefined by default (no live workflow context in these
+// tests). recv defaults to resolving null (a timeout), driving
+// runMissingInfo's real "owner has been notified" fallback path.
 const dbosRecvMock = vi.fn().mockResolvedValue(null);
 const dbosSendMock = vi.fn();
 vi.mock("@dbos-inc/dbos-sdk", () => ({
@@ -246,10 +229,7 @@ describe("runAgentTurn", () => {
 
   it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an escalation", async () => {
     // Model always responds with a tool call so the loop never produces a
-    // final reply — the pathological case the step cap exists for. There is
-    // no step-cap safety-net escalation anymore (removed in dcbfd2c,
-    // "drop empty-reply escalation") — the turn simply ends once the cap is
-    // hit, with whatever the last round's tool-result message was.
+    // final reply — the pathological case the step cap exists for.
     generateTextMock.mockImplementation(() =>
       toolCallResponse([
         { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_loop" },
@@ -265,8 +245,6 @@ describe("runAgentTurn", () => {
       { triggerMessageId: "trigger-1" },
     );
 
-    // Rounds 1-8 each call the model once; the loop then exits without a
-    // 9th model call.
     expect(generateTextMock).toHaveBeenCalledTimes(8);
     expect(result.stepCount).toBe(8);
     expect(mockEscInsert).not.toHaveBeenCalled();
@@ -277,12 +255,8 @@ describe("runAgentTurn", () => {
   });
 
   it("keeps looping after a missing_info tool call (a real DBOS.recv answer flows back as the tool's own result, and the model composes a real final reply in the same turn)", async () => {
-    // Overrides this suite's default (resolves null, i.e. a timeout) with a
-    // real answer, so runMissingInfo returns { escalated: true, answer }
-    // directly rather than falling back to the "owner notified" message —
-    // see tests/agent/tools/missing-info.test.ts for waitForMissingInfoReply
-    // and handleMissingInfoReplyReceived's own, more focused coverage of
-    // DBOS.recv/DBOS.send's exact wiring.
+    // Overrides this suite's default (resolves null, a timeout) with a real
+    // answer, so runMissingInfo returns { escalated: true, answer } directly.
     dbosRecvMock.mockResolvedValueOnce("The sauna is on the ground floor.");
     generateTextMock
       .mockResolvedValueOnce(
@@ -303,10 +277,7 @@ describe("runAgentTurn", () => {
     });
 
     // The loop kept going after the tool call — the model got a second
-    // round and composed real text (not an early return right after the
-    // tool call). There is no separate "discarded interim reply" branch
-    // anymore (see run-turn.ts's own doc comment) — this second-round text
-    // IS the real reply.
+    // round and composed real text, not an early return.
     expect(generateTextMock).toHaveBeenCalledTimes(2);
     expect(result.stepCount).toBe(2);
     expect(result.messages.at(-1)).toEqual({

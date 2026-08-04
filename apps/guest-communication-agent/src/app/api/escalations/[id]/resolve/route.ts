@@ -12,44 +12,20 @@ interface EscalationRow {
 }
 
 /**
- * Closes the human-in-the-loop loop for a missing_info escalation once the
- * owner has replied (via apps/telegram-router's webhook — see that repo's
- * reply-to-nudge branch) with the actual answer. Guarded by requireApiKey,
- * same as every other route in this app.
- *
- * A thin trigger only: HTTP-layer concerns (auth, request-body parsing, the
- * escalation lookup and its 404/400/409 status mapping) live here, but the
- * actual "a missing_info reply has arrived" business logic — embed the
- * answer into the property knowledge base, mark the escalation resolved,
- * and wake the suspended DBOS workflow that asked the question (if any) —
- * lives in @/agent/tools/missing-info.ts's handleMissingInfoReplyReceived,
- * which this route just calls. That function does the KB write and
- * escalation resolution BEFORE calling DBOS.send — see its own doc comment
- * for why that order matters. The resumed workflow (@/agent/run-guest-turn.ts's
- * runGuestTurn) composes and delivers the actual guest-facing reply
- * entirely on its own, well after this route's own HTTP response has
- * already been returned — this route has no visibility into that outcome.
+ * Closes the human-in-the-loop for a missing_info escalation once the owner
+ * has replied with the actual answer. A thin trigger: auth/parsing/status
+ * mapping live here, actual KB-embed + resolve + DBOS.send logic lives in
+ * handleMissingInfoReplyReceived.
  *
  * Request body: `{ answer: string }`.
  *
- * - 404 (`{ error: "Escalation not found" }`) if no such escalation.
- * - 400 (`{ error: "..." }`) if `answer` is missing/blank, or if the
- *   escalation's reason_category isn't "missing_info" — the other two
- *   categories have no resolution flow (see
- *   @/agent/tools/escalation-shared.ts's performEscalation), so there is
- *   nothing for this endpoint to do for them.
- * - 409 (`{ error: "Escalation already resolved" }`) if `resolved_at` is
- *   already set — idempotency against a Telegram webhook retry or a
- *   duplicate reply re-processing the same escalation (and, transitively,
- *   writing the same answer into the knowledge base twice).
- * - 500 (`{ error: "..." }`) if handleMissingInfoReplyReceived's durable
- *   part (the KB embed/insert or the escalation resolution update) itself
- *   fails — those are the parts that must not silently succeed.
- * - Otherwise: `{ ok: true, resumed: boolean }` — `resumed` is `true` only
- *   when DBOS.send was dispatched to a known, live workflow id; it does NOT
- *   mean the guest has been messaged yet (that happens later, inside the
- *   resumed workflow) — see handleMissingInfoReplyReceived's own doc
- *   comment for the full breakdown of when it's `false`.
+ * - 404 if no such escalation.
+ * - 400 if `answer` is missing/blank, or reason_category isn't "missing_info"
+ *   (the other two categories have no resolution flow here).
+ * - 409 if already resolved — idempotency against a webhook retry.
+ * - 500 if the KB embed/insert or escalation update itself fails.
+ * - Otherwise `{ ok: true, resumed: boolean }` — see
+ *   handleMissingInfoReplyReceived for what `resumed` means.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const unauthorized = requireApiKey(request);

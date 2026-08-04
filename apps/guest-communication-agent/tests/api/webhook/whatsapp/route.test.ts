@@ -1,14 +1,10 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks the module boundary for every dependency this route touches.
 // verifyTwilioSignature always passes so these tests can focus on this
 // route's own wiring: recording the inbound message, then starting the
-// durable runGuestTurn workflow (@/agent/run-guest-turn.ts) via
-// DBOS.startWorkflow WITHOUT awaiting it, and always returning empty TwiML
-// immediately — this route no longer awaits runAgentTurn or builds a
-// message-bearing TwiML response at all; see run-guest-turn.ts for where
-// that logic now lives.
+// durable runGuestTurn workflow via DBOS.startWorkflow WITHOUT awaiting it,
+// and always returning empty TwiML immediately.
 const verifyTwilioSignatureMock = vi.fn(() => true);
 vi.mock("@/lib/twilio.js", () => ({
   verifyTwilioSignature: verifyTwilioSignatureMock,
@@ -31,10 +27,8 @@ vi.mock("@/lib/dbos.js", () => ({
   ensureDbosLaunched: ensureDbosLaunchedMock,
 }));
 
-// runGuestTurnWorkflow itself is just a plain marker value here — the real
-// registration (DBOS.registerWorkflow) is exercised in
-// tests/agent/run-guest-turn.test.ts, not this file. This route only needs
-// to prove it passes the right value to DBOS.startWorkflow.
+// runGuestTurnWorkflow is just a plain marker value here — the real
+// registration is exercised in tests/agent/run-guest-turn.test.ts.
 const runGuestTurnWorkflowMock = { name: "runGuestTurn" };
 vi.mock("@/agent/run-guest-turn.js", () => ({
   runGuestTurnWorkflow: runGuestTurnWorkflowMock,
@@ -106,11 +100,8 @@ describe("POST /api/webhook/whatsapp", () => {
   });
 
   it("always returns empty TwiML, never a message-bearing response", async () => {
-    // The route does `await DBOS.startWorkflow(fn)(input)` (mirrors
-    // harness-engineering/server/index.ts) — that await only waits for the
-    // workflow to be durably STARTED (DBOS's own real semantics), not for
-    // it to finish; startWorkflowInnerMock resolving quickly here mirrors
-    // that real "started" resolution, not the workflow's actual completion.
+    // startWorkflowInnerMock resolving quickly mirrors DBOS's real "started"
+    // resolution, not the workflow's actual completion.
     const res = await POST(
       makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
     );

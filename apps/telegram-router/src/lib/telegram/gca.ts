@@ -4,22 +4,12 @@ export interface SendGuestMessageResult {
 }
 
 /**
- * Calls apps/guest-communication-agent's POST /api/send — the actual guest-
- * facing WhatsApp delivery once the owner taps "✅ Approve" on a drafted
- * campaign nudge (see ../../app/api/telegram/webhook/route.ts's
- * handleCallbackQuery). This sits in that request-handling path, which
- * needs to know whether the send actually succeeded before deciding to call
- * CRM's mark-sent — so, like ./crm.ts's getPromoCode, this surfaces enough
- * detail to branch on rather than swallowing a failure into `null` the way
- * a fire-and-forget call (e.g. apps/finance's syncGuestContacts) would.
+ * Calls GCA's POST /api/send — guest-facing WhatsApp delivery once the owner
+ * taps "✅ Approve" on a drafted campaign nudge.
  *
- * Missing config (GUEST_COMMUNICATION_AGENT_API_URL/_API_KEY) throws, same
- * as this router's existing notifications.ts/social.ts clients — that's a
- * deployment mistake, not a normal operational outcome. A real send failure
- * (GCA's own {ok:false, error} 502 response, e.g. Twilio rejecting the
- * number) is instead returned as `{ ok: false, error }`, since that IS a
- * normal, expected-to-happen outcome the caller must branch on without it
- * being treated as an unhandled exception.
+ * Missing config throws (a deployment mistake). A real send failure (GCA's
+ * own {ok:false, error} response) is returned as `{ ok: false, error }`
+ * instead, since the caller must branch on it, not treat it as an exception.
  */
 export async function sendGuestMessage(
   phone: string,
@@ -59,18 +49,11 @@ export interface EscalationByTelegramMessageId {
 }
 
 /**
- * Calls GCA's GET /api/escalations/by-telegram-message-id/:id — the webhook
- * route's new reply-to-nudge branch (../../app/api/telegram/webhook/route.ts)
- * calls this first, on every message that replies to another message, to
- * check whether the replied-to message was actually one of GCA's own
- * missing_info escalation nudges.
+ * Calls GCA's GET /api/escalations/by-telegram-message-id/:id, checking
+ * whether a replied-to message was one of GCA's own escalation nudges.
  *
- * A 404 is a normal, routine outcome here — most replies in the owner's chat
- * have nothing to do with an escalation — so this returns `null` rather than
- * throwing, unlike ./crm.ts's getPromoCode (whose 404 really would be a bug:
- * it's always called with a promoCodeId this router itself just parsed out
- * of its own callback_data, so there's no legitimate "doesn't exist" case).
- * Any other non-2xx is a real failure and still throws, same as getPromoCode.
+ * A 404 is routine — most replies have nothing to do with an escalation —
+ * so this returns null rather than throwing. Any other non-2xx still throws.
  */
 export async function getEscalationByTelegramMessageId(
   telegramMessageId: number,
@@ -104,27 +87,17 @@ export type ResolveEscalationResult =
   | { ok: false; alreadyResolved: boolean; error?: string };
 
 /**
- * Calls GCA's POST /api/escalations/:id/resolve — the single call that
- * handles the whole missing_info resolution flow on GCA's side: persists the
- * answer, writes the new knowledge-base entry, then wakes GCA's suspended
- * DBOS workflow (@/agent/run-guest-turn.ts in GCA) for that guest turn so it
- * can compose and send the real reply itself.
+ * Calls GCA's POST /api/escalations/:id/resolve: persists the answer, writes
+ * the KB entry, then wakes GCA's suspended DBOS workflow so it can compose
+ * and send the real reply itself.
  *
- * `resumed` on a successful (`ok: true`) response reports only whether that
- * wake-up call was dispatched to a known, live workflow — NOT whether the
- * guest was actually messaged. GCA's own reply now happens later,
- * asynchronously, inside the resumed workflow (which may take anywhere from
- * milliseconds to longer, and could still fail on GCA's side after this call
- * returns) — this router has no visibility into that outcome at all anymore.
- * `resumed: false` means GCA couldn't find a workflow to wake for this
- * escalation (e.g. it predates workflow correlation) — the caller uses this
- * to give the owner an honest "the answer was saved, but I couldn't resume
- * the conversation" message rather than falsely implying delivery either way.
+ * `resumed` reports only whether the wake-up call reached a known workflow —
+ * NOT whether the guest was actually messaged (that happens later, inside
+ * the resumed workflow, invisible to this router). `resumed: false` lets the
+ * caller give an honest "saved, but couldn't resume" message.
  *
- * Mirrors ./crm.ts's markPromoCodeRejected shape: a 409 (already resolved —
- * a double reply or a Telegram webhook retry racing this same escalation) is
- * an expected outcome the caller must branch on, not an exception, so it's
- * returned as `{ ok: false, alreadyResolved: true }` rather than thrown.
+ * A 409 (already resolved) is an expected outcome, returned as
+ * `{ ok: false, alreadyResolved: true }` rather than thrown.
  */
 export async function resolveEscalation(
   escalationId: string,

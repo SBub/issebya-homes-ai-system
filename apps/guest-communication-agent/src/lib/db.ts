@@ -1,34 +1,12 @@
 import { lookupGuestContact } from "./crm";
 import { createAdminClient } from "./supabase";
 
-// Ported verbatim from issebya-homes-website's
-// apps/guest-communication-agent/src/lib/db.ts (import path updated: that
-// repo's @issebya/shared/supabase -> this repo's inlined ./supabase). Both
-// are pure Postgres queries via createAdminClient(), no other deps.
-// Postgres remains the system of record for conversation history/context;
-// the agent loads that context itself, in loadMemory (see
-// ../agent/memory.ts) — the caller only supplies
-// conversationId/phone/incomingMessage, it doesn't pre-assemble history.
-//
-// getGuestMemory/upsertGuestMemory below are the writers that guest_memory
-// never had until now — see ../agent/memory.ts's loadMemory for the
-// rolling-summary orchestration that calls them.
-//
-// loadCrmContext (the crm_messages/campaigns/promo_codes join) was also
-// removed in the source. It existed to synthesize a "you were sent campaign
-// X, code Y" text block because campaign sends weren't otherwise visible
-// anywhere. Now that campaign sends are logged into whatsapp_messages like
-// any other assistant turn, that context shows up naturally in
-// loadRecentMessages below — no synthetic block needed. Only the past-stay
-// lookup (loadGuestInfo) survives, as its own function.
+// Pure Postgres queries via createAdminClient(). Context assembly itself
+// lives in ../agent/memory.ts's loadMemory, which calls these.
 
-// A generous safety ceiling on the raw DB fetch only — NOT the real
-// context-size limiter (that's token-budget-driven trimming,
-// trimToTokenBudget in ../agent/context.ts, applied by ../agent/memory.ts
-// on the set this returns). This just stops a pathological case — a guest
-// with years of history — from pulling their entire conversation back in
-// one round trip. Deliberately generous, since the actual limiting work
-// happens downstream.
+// Safety ceiling on the raw DB fetch only — not the real context-size
+// limiter (that's trimToTokenBudget in ../agent/context.ts, applied
+// downstream). Just stops pulling a guest's entire history in one round trip.
 const RECENT_MESSAGE_SAFETY_LIMIT = 150;
 
 export interface MessageRow {
@@ -38,25 +16,13 @@ export interface MessageRow {
   created_at: string;
 }
 
-// Fetches up to `limit` (a safety ceiling, see RECENT_MESSAGE_SAFETY_LIMIT
-// above — not the real bound on how much context gets used) of the most
-// recent messages for a conversation, returned oldest-first so callers can
-// convert them straight into a chronologically-ordered message list (see
-// ../agent/memory.ts, which then applies token-budget trimming on top of
-// this). Must query `created_at DESC` + `limit` to actually get the tail
-// end of a long conversation, then reverse back to ascending order —
-// querying ascending+limit (an earlier version of this function did) gives
-// the OLDEST messages instead, which silently drops exactly the recent
-// context this function exists to provide once a conversation grows past
-// the limit.
+// Returns up to `limit` most recent messages, oldest-first. Must query
+// `created_at DESC` + `limit` then reverse — querying ascending+limit gives
+// the OLDEST messages instead once a conversation exceeds the limit.
 //
-// Returns `id`/`created_at` alongside `role`/`content` (grown from the
-// original role/content-only shape) so ../agent/memory.ts's loadMemory can
-// correlate whichever rows trimToTokenBudget ends up dropping back to their
-// whatsapp_messages ids — needed to set guest_memory's
-// summarized_through_message_id watermark. The only other caller of this
-// function was the now-deleted load-context.ts; nothing else in the
-// codebase calls it.
+// Includes id/created_at (not just role/content) so loadMemory can
+// correlate rows trimToTokenBudget drops back to their message ids, for
+// guest_memory's summarized_through_message_id watermark.
 export async function loadRecentMessages(
   conversationId: string,
   limit = RECENT_MESSAGE_SAFETY_LIMIT,
@@ -80,28 +46,12 @@ export async function loadRecentMessages(
     .reverse();
 }
 
-// Looks up this guest's past-stay facts, unconditionally for any known
-// phone — decoupled from whether a CRM campaign was ever sent (that
-// coupling is what loadCrmContext used to bake in). Deliberately limited to
-// past-stay facts (room/check-in/total stays); free-text
-// preferences/summary memory is out of scope here (see guest_memory note
-// above — still unpopulated, still a future concern, not this one).
+// Looks up past-stay facts via CRM's lookupGuestContact (resilient to CRM
+// being unreachable — returns null rather than throwing).
 //
-// Data now comes from CRM (apps/crm), not a direct Supabase query — CRM
-// owns the guest_contacts table (see src/lib/crm.ts's lookupGuestContact,
-// which normalizes `phone` and is resilient to CRM being unreachable,
-// returning null rather than throwing). The interpretation/formatting logic
-// below is unchanged from when this queried guest_contacts directly:
-//
-// Returns null when there's no guest_contacts row for the phone at all, OR
-// when a row exists but total_stays is 0 (a contact record with no actual
-// completed stay yet — in practice guest_contacts is populated from the
-// finance CSV import, one row per past *booking*, so this shouldn't occur
-// from that path, but nothing enforces it at the DB level, and treating any
-// existing row as "has stayed before" regardless of total_stays produced a
-// real, confirmed bug: a guest with total_stays=0 was told "This guest has
-// stayed with us before — most recently (0 stay(s) total)," which is false
-// and reads as broken. Both are now the same "no info" case.
+// total_stays <= 0 is treated the same as no contact row — a contact with
+// total_stays=0 previously produced "stayed with us before (0 stay(s)
+// total)", which is false and reads as broken.
 export async function loadGuestInfo(phone: string): Promise<string | null> {
   const contact = await lookupGuestContact(phone);
   if (!contact?.found || contact.total_stays <= 0) return null;
@@ -120,16 +70,12 @@ export interface GuestMemoryRow {
   summarizedThroughMessageId: string | null;
 }
 
-// Reads the guest's persistent rolling-summary row, keyed by phone_number.
-// `phone` is expected to already be in whatever normalized form the caller
-// (../agent/memory.ts's loadMemory) has decided guest_memory keys on — this
-// function does no normalization of its own, matching loadGuestInfo/
-// lookupGuestContact's split above (the phone-form decision lives in the
-// orchestration layer, not here). Returns null when the guest has no
-// guest_memory row yet (nothing summarized for them so far), not an empty
-// GuestMemoryRow — callers treat "no row" and "row with empty summary"
-// differently (a fresh row with no watermark yet vs. a genuinely empty
-// prior summary to fold new content into).
+// `phone` must already be normalized by the caller — this function does no
+// normalization of its own. In practice that means the bare (non-
+// "whatsapp:"-prefixed) form, stripped once at the webhook ingress boundary
+// (src/app/api/webhook/whatsapp/route.ts) and threaded through unchanged.
+// Returns null (not an empty row) when no guest_memory row exists yet —
+// callers distinguish "no row" from "row with empty summary".
 export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | null> {
   const supabase = createAdminClient();
   const { data, error } = await supabase
@@ -147,10 +93,8 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
   };
 }
 
-// Insert-or-update on phone_number (the table's PK) — a guest's first
-// summarize call creates the row, every later one overwrites it in place.
-// `updated_at` is set explicitly here since no set_updated_at/moddatetime
-// trigger convention exists anywhere in this repo's migrations (checked).
+// `updated_at` is set explicitly — no set_updated_at/moddatetime trigger
+// convention exists in this repo's migrations.
 export async function upsertGuestMemory(
   phone: string,
   summary: string,

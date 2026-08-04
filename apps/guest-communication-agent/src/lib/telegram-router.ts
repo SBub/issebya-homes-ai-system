@@ -8,27 +8,15 @@ export interface EscalationNudgeResult {
 
 /**
  * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
- * which composes and sends the actual Telegram message notifying the owner
- * — see ../agent/tools/escalation-shared.ts's performEscalation, the only caller, which now
- * routes all three escalation categories here (this used to be missing_info
- * only, with the other two bypassing telegram-router entirely via a raw
- * fetch straight to the Telegram Bot API — see ../lib/telegram.ts's
- * now-deleted sendTelegramNotification). reasonCategory/conversationId are
- * passed through so the route can compose a category-appropriate message —
- * missing_info gets a reply-inviting message, the other two get a plain
- * one-way alert with their own distinguishing prefix.
+ * which composes and sends the Telegram message notifying the owner.
+ * reasonCategory/conversationId let the route compose a category-appropriate
+ * message (missing_info invites a reply, the others are one-way alerts).
  *
- * Mirrors apps/crm's src/lib/telegram-router-client.ts's postCampaignDraft
- * resilience shape exactly: by the time this is called the escalations row
- * is already committed, so a missing TELEGRAM_ROUTER_API_URL/
- * TELEGRAM_ROUTER_API_KEY (or any delivery failure) must no-op / return a
- * result object rather than throwing — never roll back the insert, never
- * fail the whole escalation over a best-effort notification step. Unlike
- * postCampaignDraft, the success path here returns telegram-router's own
- * telegramMessageId so the caller can store it on the escalation row (the
- * correlation key the owner's later free-text reply gets matched against —
- * see the webhook's handleEscalationReply, which now guards on
- * reason_category before treating a reply as a missing_info answer).
+ * The escalations row is already committed by the time this runs, so a
+ * missing config or delivery failure returns a result object rather than
+ * throwing — never roll back the insert over a best-effort notification.
+ * On success, returns telegram-router's telegramMessageId so the caller can
+ * store it as the correlation key for the owner's later reply.
  */
 export async function sendEscalationNudge(params: {
   escalationId: string;

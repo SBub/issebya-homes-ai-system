@@ -216,13 +216,8 @@ export async function runAgentTurn(
       return { messages, stepCount };
     }
 
-    // response.messages carries this round's assistant message (with its
-    // tool-call parts) but no tool-result message, since no tool has an
-    // `execute`. Dispatch each call for real, in parallel, then build and
-    // append this round's tool-result message ourselves. NEEDS_HITL-gated
-    // calls go through requestHitlApproval first — see that stub's own doc
-    // comment — before runToolCall ever runs; a rejected call never reaches
-    // runToolCall at all.
+    // No tool has `execute`, so we dispatch and build the tool-result
+    // message ourselves; a rejected NEEDS_HITL call never reaches runToolCall.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         if (NEEDS_HITL.has(call.toolName)) {
@@ -242,8 +237,6 @@ export async function runAgentTurn(
       ...result.response.messages,
       toolResultMessage(result.toolCalls, toolOutputs),
     ];
-
-    // Loop continues — do not return early here.
   }
 
   return { messages, stepCount };

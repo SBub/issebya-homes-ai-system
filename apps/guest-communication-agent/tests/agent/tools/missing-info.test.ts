@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks every real external boundary this file's functions touch: Postgres
-// (@/lib/supabase, routed by table name — escalations, documents), the
-// embedding call (ai's embed + @ai-sdk/openai's createOpenAI), and DBOS
-// itself (@dbos-inc/dbos-sdk) — the real suspend/resume mechanism
-// (DBOS.recv/DBOS.send/DBOS.workflowID) this file now drives, mocked at the
-// module boundary so this suite never touches a real DBOS/Postgres
-// connection, same convention as every other external boundary here.
+// Mocks every real external boundary: Postgres (routed by table name),
+// the embedding call, and DBOS itself (DBOS.recv/send/workflowID).
 const mockEscSingle = vi.fn();
 const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
 const mockEscInsert = vi.fn((_row: Record<string, unknown>) => ({ select: mockEscSelect }));

@@ -1,18 +1,11 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// This route module transitively imports lib/telegram/db.ts (via
-// delivery-failures.ts and health-monitor.ts), which throws at import time
-// if DATABASE_URL isn't set — must be set before the dynamic import below,
-// even though these tests never touch a real DB (pg.Pool itself is lazy).
+// lib/telegram/db.ts throws at import time if DATABASE_URL isn't set, even
+// though these tests never touch a real DB (pg.Pool itself is lazy).
 process.env.DATABASE_URL = "postgresql://test/test";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-webhook-secret";
 
-// Mock the module boundary, not the network, for every dependency the new
-// nudge_approve/nudge_reject branches touch — the pre-existing done:/
-// command branches aren't exercised by these tests, so their own
-// dependencies (notifications.js, social.js, digest.js, etc.) are left
-// real; none of them do anything at import time that needs mocking.
 const getPromoCodeMock = vi.fn();
 const markPromoCodeSentMock = vi.fn();
 const markPromoCodeRejectedMock = vi.fn();
@@ -370,12 +363,8 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     );
   });
 
-  // GCA's performEscalation always inserts wants_human escalations with
-  // resolved_at already set at creation time (see
-  // apps/guest-communication-agent/src/agent/tools/escalation.ts) — there's no
-  // remaining owner action for a reply to trigger, so any real reply to one
-  // of these nudges hits the resolved_at check above first ("Already
-  // handled") before it could ever reach a category-specific branch.
+  // wants_human escalations are always inserted with resolved_at already set
+  // — a real reply hits the resolved_at check first, before any category branch.
   it("tells the owner it's already handled, without resolving, when replying to an auto-resolved wants_human escalation nudge", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",
@@ -396,15 +385,8 @@ describe("POST /api/telegram/webhook — reply-to-escalation-nudge", () => {
     expect(sendMessageMock).toHaveBeenCalledWith(expect.stringContaining("Already handled"));
   });
 
-  // complaint reverted to being createable unresolved — per the owner, "it
-  // shouldn't be resolved automatically for now, I don't yet know how to
-  // resolve this." Safety-critical: a reply to an unresolved complaint
-  // escalation must be refused via its own reason_category guard, ahead of
-  // resolveEscalation, rather than relayed to the guest (sendGuestMessage)
-  // or sent to GCA's resolve endpoint (resolveEscalation) — which would
-  // otherwise relay verbatim to the guest over WhatsApp before
-  // resolveEscalation's own reason_category === "missing_info" validation
-  // ever gets a chance to reject it.
+  // complaint has no auto-resolve action — a reply must be refused via the
+  // reason_category guard, never relayed to the guest or to resolveEscalation.
   it("does NOT relay to the guest or resolve when replying to an unresolved complaint escalation nudge", async () => {
     getEscalationByTelegramMessageIdMock.mockResolvedValueOnce({
       id: "esc-1",

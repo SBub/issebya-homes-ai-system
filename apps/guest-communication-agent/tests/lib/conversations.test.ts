@@ -1,15 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Same "mock the shared Supabase factory, not the network" approach as
-// tests/api/conversations/route.test.ts. getOrCreateActiveConversation
-// issues up to two sequential .from("whatsapp_conversations") calls (the
-// existing-conversation lookup, then — only when nothing is found — the
-// insert), each with its own chain shape, so both are stubbed independently
-// here rather than sharing one mock across both branches. The lookup chain
-// is select().in().eq().order().limit().maybeSingle() — order+limit(1) is
-// deliberate (see conversations.ts's own doc comment): it tolerates more
-// than one "active" row matching across phone forms, rather than erroring
-// like an unqualified .maybeSingle() would.
+// getOrCreateActiveConversation issues up to two sequential
+// .from("whatsapp_conversations") calls (lookup, then insert if nothing
+// found), each with its own chain shape, stubbed independently.
 const maybeSingleMock = vi.fn();
 const limitMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const orderMock = vi.fn(() => ({ limit: limitMock }));
@@ -116,13 +109,6 @@ describe("getOrCreateActiveConversation", () => {
   });
 });
 
-// recordMessage now returns the new row's id (instead of void) — the
-// webhook route's own inbound "user" call needs it (captured as
-// escalations.trigger_message_id at escalation time, see
-// @/agent/tools/escalation.ts's performEscalation) — so this exercises its
-// insert().select("id").single() chain, the same shape as
-// getOrCreateActiveConversation's own create branch above, just against
-// `whatsapp_messages` instead of `whatsapp_conversations`.
 describe("recordMessage", () => {
   beforeEach(() => {
     insertSelectSingleMock.mockReset();

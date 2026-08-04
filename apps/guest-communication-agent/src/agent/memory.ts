@@ -9,21 +9,14 @@ import {
 } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
 
-// Supersedes load-context.ts (deleted — see this app's "no two mechanisms
-// coexisting" precedent). Combines everything a turn needs to hydrate
-// itself with: recent-message loading + token-budget trimming (reuses
-// ../agent/context.ts's estimateTokens/trimToTokenBudget unchanged — this
-// file does not duplicate that logic, only correlates its output back to
-// message ids) + CRM past-stay facts + a NEW persistent rolling
-// conversation summary backed by the guest_memory table (step 2 of the
-// memory/context-hydration work — see TASK_FOR_TOMORROW.md; step 1, the
-// token-budget trimming mechanics, already existed).
+// Combines recent-message loading + token-budget trimming (reuses
+// context.ts's trimToTokenBudget, only correlating its output back to
+// message ids here) + CRM past-stay facts + a persistent rolling
+// conversation summary backed by guest_memory.
 //
-// `.chat(MODEL)` is built locally here (own openrouter client reference,
-// own MODEL constant) rather than importing anything from run-turn.ts —
-// run-turn.ts imports loadMemory from this file, so importing back from
-// run-turn.ts would create a circular import. Duplicating the one MODEL
-// string is simpler than extracting a shared constants file for it.
+// `.chat(MODEL)` and MODEL are duplicated locally rather than imported from
+// run-turn.ts, since run-turn.ts imports loadMemory from here — importing
+// back would create a circular import.
 const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
@@ -97,14 +90,9 @@ async function summarizeConversation(
   return text;
 }
 
-// Combines CRM past-stay facts and the rolling summary into the single
-// text block the prompt template wraps in <guest_memory> ({guest_memory_block}
-// — the template owns that XML wrapper, this only builds the plain-text
-// content). Two clearly labeled sections when both exist; just one when
-// only one exists; the existing fallback text when neither does. Moved
-// here from run-turn.ts, which used to inline
-// `guestContext ?? "No prior guest information available."` — run-turn.ts
-// no longer needs to know about that fallback.
+// Builds the plain-text content the prompt template wraps in
+// <guest_memory> ({guest_memory_block}). Two labeled sections when both
+// exist, one when only one does, fallback text when neither does.
 export function buildContextBlock(guestFacts: string | null, summary: string | null): string {
   const sections: string[] = [];
   if (guestFacts) sections.push(`Guest facts:\n${guestFacts}`);
@@ -130,22 +118,15 @@ export async function loadMemory(params: {
   const mapped = rows.map(toModelMessage);
   const historyMessages = trimToTokenBudget(mapped);
 
-  // trimToTokenBudget only ever peels messages off the front (oldest
-  // first) — see context.ts's own doc comment — so `rows` and `mapped` are
-  // the same length and same chronological order, and the number dropped
-  // is exactly the length difference. The oldest `droppedCount` rows are
-  // therefore rows.slice(0, droppedCount).
+  // trimToTokenBudget only ever peels messages off the front (oldest first),
+  // so `rows`/`mapped` stay the same length/order and the dropped rows are
+  // positionally rows.slice(0, droppedCount) — correlated by index, not id.
   const droppedCount = mapped.length - historyMessages.length;
   const droppedRows = rows.slice(0, droppedCount);
 
-  // Watermark check: find where the existing summary's
-  // summarized_through_message_id sits within this turn's fetched rows
-  // (still chronologically ordered, oldest-first, from loadRecentMessages).
-  // Not found (no watermark yet, or the watermarked message has aged out of
-  // the fetched window entirely — meaning it's older than everything fetched
-  // here) means every dropped row is new. Found at index w means only rows
-  // after index w are new — since droppedRows is rows.slice(0, droppedCount),
-  // its indices line up 1:1 with rows' indices.
+  // Find the existing summary's watermark within this turn's fetched rows.
+  // Not found (no watermark, or it's aged out of the fetched window) means
+  // every dropped row is new; found at index w means only rows after w are.
   const watermarkId = existingMemory?.summarizedThroughMessageId ?? null;
   const watermarkIndex = watermarkId ? rows.findIndex((r) => r.id === watermarkId) : -1;
   const newlyDroppedRows =

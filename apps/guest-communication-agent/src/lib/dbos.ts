@@ -1,62 +1,21 @@
 import { DBOS } from "@dbos-inc/dbos-sdk";
 
-// GCA's durable-execution boundary. Per the app owner's explicit scope
-// limit, only the missing_info suspend/resume mechanism needs to be real
-// DBOS — waitForMissingInfoReply's DBOS.recv (@/agent/tools/missing-info.ts)
-// and the resolve route's DBOS.send (also missing-info.ts's
-// handleMissingInfoReplyReceived) — plus the workflow registration/start
-// plumbing those two depend on (@/agent/run-guest-turn.ts,
-// @/app/api/webhook/whatsapp/route.ts). Nothing else in this app's turn
-// (model calls, tool dispatch, recordMessage, embedding, ...) is wrapped in
-// DBOS.runStep() — fine-grained checkpointing/replay-safety is deliberately
-// deferred to later work. A crash mid-turn today may re-run more than the
-// ideal minimal amount of work on recovery; that's an accepted, explicit
-// tradeoff for this phase, not something this file tries to solve.
+// GCA's durable-execution boundary. Only the missing_info suspend/resume
+// (DBOS.recv/send in @/agent/tools/missing-info.ts) is real DBOS; nothing
+// else in a turn is wrapped in DBOS.runStep() — fine-grained
+// checkpointing/replay-safety is deferred to later work.
 //
-// SUPABASE_CONNECTION_STRING is a NEW env var, distinct from SUPABASE_URL /
-// SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY (used everywhere else in
-// this app via @supabase/supabase-js's PostgREST client — see
-// @/lib/supabase.ts). DBOS needs a raw `postgres://...` connection string
-// to create and manage its own system tables (workflow status, step/
-// operation outputs, the notification queue DBOS.send/DBOS.recv read and
-// write) — Supabase's REST API can't do that, only a real Postgres
-// connection can.
+// SUPABASE_CONNECTION_STRING is a raw postgres:// connection string
+// (distinct from the PostgREST-based SUPABASE_* vars in @/lib/supabase.ts)
+// DBOS needs to manage its own system tables. From Supabase dashboard ->
+// Project Settings -> Database -> Connection string. Prefer "Session"
+// pooler mode (port 5432) over "Transaction" mode (6543) — DBOS holds
+// long-lived sessions that transaction-mode pooling can break.
 //
-// To get it: Supabase dashboard -> this project -> Project Settings ->
-// Database -> "Connection string" -> URI. Use the same Supabase Postgres
-// instance the SUPABASE_* vars already point at, so DBOS's system tables
-// live alongside this app's own tables. Prefer the "Session" pooler mode
-// (port 5432) over the "Transaction" pooler (port 6543) if Supabase offers
-// both for this project — DBOS holds long-lived sessions for its
-// notification/wakeup machinery, which transaction-mode pooling can break.
-// For local dev against `supabase start`'s local stack, the direct local
-// connection string (`postgres://postgres:postgres@127.0.0.1:54332/postgres`
-// — check `supabase status`'s "DB URL" for the exact local port) works
-// too, since it's a real Postgres connection, not PostgREST.
-//
-// Lazily launched, not launched at module load: unlike the reference
-// project's Express `main()` (harness-engineering/server/index.ts), Next.js
-// API routes have no single shared "app startup" hook — any route's module
-// can be the first thing to run in a given server process, and every route
-// that touches DBOS (the webhook route's DBOS.startWorkflow, the resolve
-// route's — via handleMissingInfoReplyReceived — DBOS.send) must be sure
-// DBOS.launch() has completed first. ensureDbosLaunched() is memoized so
-// the first caller in a process pays the launch cost once; every later
-// call/route in the same process reuses the same promise instead of
-// re-launching.
-//
-// HMR safety: `next dev`'s hot-reload can re-evaluate this module (e.g.
-// after editing an unrelated file that transitively imports it), re-running
-// its top-level statements — including a fresh `let`/module-level binding,
-// which would forget any in-flight or completed launch from before the
-// reload and attempt a second DBOS.launch() in the same process. DBOS's own
-// TypeScript docs describe launch() as callable again only after an
-// explicit `shutdown()` in a test context — calling it twice in a live
-// process is not documented as safe, so this is a real hazard, not just a
-// micro-optimization to avoid. Stashing the launch promise on `globalThis`
-// (mirroring the well-known Next.js "singleton Prisma client survives HMR"
-// pattern) survives that module re-evaluation, since globalThis itself is
-// not reset by HMR within the same server process.
+// Launched lazily and memoized on globalThis (not a module-level `let`) so
+// `next dev`'s HMR re-evaluating this module doesn't forget an in-flight
+// launch and call DBOS.launch() twice in the same process, which isn't
+// documented as safe outside an explicit shutdown() in tests.
 declare global {
   // eslint-disable-next-line no-var -- globalThis singleton, see comment above.
   var __gcaDbosLaunchPromise: Promise<void> | undefined;
@@ -77,16 +36,8 @@ function launchDbos(): Promise<void> {
   return DBOS.launch();
 }
 
-/**
- * Ensures DBOS is configured and launched exactly once per server process,
- * regardless of how many routes/callers race to call this concurrently or
- * how many times Next.js re-evaluates this module under HMR. Callers
- * (currently: the webhook route before DBOS.startWorkflow, and the resolve
- * route before handleMissingInfoReplyReceived's DBOS.send) must await this
- * before touching any other DBOS API — calling DBOS.startWorkflow/send/recv
- * before launch() has completed is a DBOS usage error this function cannot
- * paper over.
- */
+// Ensures DBOS is configured and launched exactly once per process. Callers
+// must await this before touching any other DBOS API.
 export function ensureDbosLaunched(): Promise<void> {
   if (!globalThis.__gcaDbosLaunchPromise) {
     globalThis.__gcaDbosLaunchPromise = launchDbos();

@@ -1,16 +1,10 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// This route is now a thin trigger: HTTP-layer concerns (auth, request-body
-// parsing, the escalation lookup and its 404/400/409 status mapping) stay
-// here and are tested against a real (mocked-at-the-DB-boundary) Supabase
-// client, but the actual "a missing_info reply arrived" business logic
-// (embed, resolve, wake the suspended DBOS workflow) now lives in
-// @/agent/tools/missing-info.ts's handleMissingInfoReplyReceived, which is
-// mocked wholesale here — its own real behavior (including its DBOS.send
-// wiring) is covered by tests/agent/tools/missing-info.test.ts, not this
-// file. @/lib/dbos.ts's ensureDbosLaunched is also mocked at the module
-// boundary so this suite never touches a real DBOS/Postgres connection.
+// HTTP-layer concerns (auth, parsing, status mapping) are tested here
+// against a mocked-at-the-DB-boundary Supabase client. The actual
+// KB-embed/resolve/DBOS-wake logic is mocked wholesale — its own behavior
+// is covered by tests/agent/tools/missing-info.test.ts.
 const maybeSingleMock = vi.fn();
 const eqSelectMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const selectMock = vi.fn(() => ({ eq: eqSelectMock }));

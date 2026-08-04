@@ -10,18 +10,9 @@ function isToolResultPart(part: ToolResultPart | { type: string }): part is Tool
   return part.type === "tool-result";
 }
 
-/**
- * Pure extraction of a funnel-stage hint from a turn's messages. Only looks
- * at `role: "tool"` entries; since loadMemory (@/agent/memory.ts) only ever
- * reconstructs user/assistant messages from history, any tool message
- * present necessarily came from the current runAgentTurn() call.
- *
- * Precedence: sendBookingLink firing at all wins ("link_sent") even if an
- * "informed" tool also fired this turn. Otherwise any one of the "informed"
- * tools yields "informed". No matching tool call returns undefined — the
- * caller still calls touchGuestContact with no stageHint, purely to bump
- * last_interaction_at.
- */
+// Any `role: "tool"` message necessarily came from the current turn — loadMemory
+// only ever reconstructs user/assistant messages from history.
+// sendBookingLink wins ("link_sent") over any "informed" tool also firing.
 export function deriveStageHint(messages: ModelMessage[]): FunnelStageHint | undefined {
   const toolNames = new Set(
     messages

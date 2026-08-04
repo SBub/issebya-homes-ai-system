@@ -1,17 +1,10 @@
 import crypto from "node:crypto";
 
-/**
- * Twilio's request-signing scheme: base64(HMAC-SHA1(authToken, url + sorted
- * form-param "key+value" pairs concatenated in place)) — see
- * https://www.twilio.com/docs/usage/webhooks/webhooks-security. Implemented
- * by hand instead of pulling in the `twilio` SDK, to keep this app's
- * dependency footprint as small as every other app in this repo.
- *
- * `url` must be the exact URL Twilio signed against — its own public
- * hostname/path/query string, not whatever this process thinks its address
- * is. Once a real public webhook URL exists, confirm the exact string
- * Twilio uses (via its console or a request log) rather than assuming.
- */
+// Twilio's request-signing scheme: base64(HMAC-SHA1(authToken, url + sorted
+// form-param "key+value" pairs)) — see
+// https://www.twilio.com/docs/usage/webhooks/webhooks-security.
+// `url` must be the exact URL Twilio signed against, not this process's own
+// idea of its address.
 export function verifyTwilioSignature(
   authToken: string,
   url: string,

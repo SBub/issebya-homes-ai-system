@@ -32,8 +32,7 @@ export async function performEscalation(params: {
   reason: string;
   reasonCategory: EscalationReasonCategory;
   // The guest's real original message id, distinct from `reason` (the
-  // model's paraphrase). Optional: only the real webhook call path supplies
-  // it; other callers leave trigger_message_id null rather than fabricating one.
+  // model's paraphrase).
   triggerMessageId?: string;
   // The DBOS workflow id of the CURRENTLY RUNNING runGuestTurn workflow
   // (read via DBOS.workflowID from inside it — see

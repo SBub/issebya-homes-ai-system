@@ -79,11 +79,6 @@ describe("lookupGuestContact", () => {
     expect(init.headers).toEqual({ "X-API-Key": "test-key" });
   });
 
-  // This is the one behavior that's different from every other client-test
-  // precedent in this repo (e.g. apps/finance's guest-contacts.test.ts,
-  // which returns { ok: false } instead of throwing): loadMemory calls
-  // this on GCA's real guest-facing request path, so a CRM outage must not
-  // break a reply — see crm.ts's own doc comment.
   it("returns null rather than throwing on a non-2xx response, does not crash", async () => {
     fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
 
@@ -116,12 +111,6 @@ describe("registerGuestContact", () => {
     process.env = { ...originalEnv };
     vi.unstubAllGlobals();
   });
-
-  // Same resilience shape as apps/finance's guest-contacts.test.ts's
-  // syncGuestContacts tests — this is a fire-and-forget side effect after a
-  // DB write already committed (a brand-new whatsapp_conversation row), NOT
-  // in the live reply-blocking path like lookupGuestContact above, so it
-  // returns { ok: ... } rather than throwing.
 
   it("no-ops (ok: true) when not configured, without calling fetch", async () => {
     delete process.env.CRM_API_URL;
@@ -180,10 +169,6 @@ describe("touchGuestContact", () => {
     process.env = { ...originalEnv };
     vi.unstubAllGlobals();
   });
-
-  // Same resilience shape as registerGuestContact above — this fires after
-  // runAgentTurn() has already produced the guest-facing reply, not in the
-  // reply-blocking path, so it returns { ok: ... } rather than throwing.
 
   it("no-ops (ok: true) when not configured, without calling fetch", async () => {
     delete process.env.CRM_API_URL;

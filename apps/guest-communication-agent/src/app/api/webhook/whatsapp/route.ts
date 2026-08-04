@@ -9,22 +9,13 @@ import { verifyTwilioSignature } from "@/lib/twilio";
 /**
  * Receives inbound WhatsApp messages via Twilio's webhook format, validates
  * X-Twilio-Signature, then starts the guest's turn as a durable DBOS
- * workflow (@/agent/run-guest-turn.ts's runGuestTurnWorkflow) WITHOUT
- * awaiting it, and immediately acks with empty TwiML.
+ * workflow WITHOUT awaiting it, and immediately acks with empty TwiML.
  *
- * This route used to await runAgentTurn directly and reply synchronously
- * via TwiML built from its result. That no longer works now that a
- * missing_info escalation can genuinely suspend the turn (via DBOS.recv —
- * see @/agent/tools/missing-info.ts's waitForMissingInfoReply) for minutes,
- * hours, or longer, waiting on the owner's Telegram reply — an HTTP request
- * cannot stay open that long, and Twilio's webhook contract doesn't expect
- * it to. So instead: every reply (not just missing_info ones) is now
- * delivered later, proactively, by the workflow itself
- * (run-guest-turn.ts's runGuestTurn sends via
- * @/lib/twilio-send.ts's sendWhatsAppMessage once it has a final answer —
- * whether that's 200ms or, after a real suspend, much later). This route's
- * own HTTP response is always just an ack; it carries no guest-facing
- * content anymore.
+ * A missing_info escalation can suspend the turn for minutes or hours
+ * waiting on the owner's Telegram reply, which an HTTP request can't stay
+ * open for — so every reply is delivered later, proactively, by the
+ * workflow itself (run-guest-turn.ts's sendWhatsAppMessage call). This
+ * route's response is always just an ack.
  */
 export async function POST(request: NextRequest) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -53,8 +44,6 @@ export async function POST(request: NextRequest) {
   const userMessageId = await recordMessage(conversationId, "user", incomingMessage);
 
   // Fire-and-forget: never blocks/fails the guest-facing turn.
-  // registerGuestContact() itself never throws; a console.warn is the only
-  // signal on failure since this route replies via TwiML, not JSON.
   if (isNew) {
     const result = await registerGuestContact(phone);
     if (!result.ok) {
@@ -64,12 +53,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Start the durable workflow WITHOUT awaiting its completion — mirrors
-  // harness-engineering/server/index.ts's
-  // `await DBOS.startWorkflow(workflow)(message.input)`. The `await` here
-  // only awaits the workflow being durably started (enqueued), not its
-  // result; run-guest-turn.ts's runGuestTurn resumes/finishes independently
-  // of this HTTP request's lifetime.
+  // `await` here only awaits the workflow being durably started (enqueued),
+  // not its result — it resumes/finishes independently of this request.
   await ensureDbosLaunched();
   await DBOS.startWorkflow(runGuestTurnWorkflow)({
     conversationId,
@@ -79,9 +64,7 @@ export async function POST(request: NextRequest) {
   });
 
   // Empty <Response></Response> is valid TwiML that sends no message — the
-  // guest hears nothing from this HTTP response; the real reply arrives
-  // later via the workflow's own proactive sendWhatsAppMessage call (see
-  // @/agent/run-guest-turn.ts).
+  // real reply arrives later via the workflow's own proactive send.
   return new NextResponse("<Response></Response>", {
     status: 200,
     headers: { "Content-Type": "text/xml" },

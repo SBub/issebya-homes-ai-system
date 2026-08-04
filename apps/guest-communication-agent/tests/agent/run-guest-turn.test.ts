@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks every module boundary this wrapper touches: runAgentTurn itself
-// (its own behavior is covered by tests/agent/run-turn.test.ts, not here —
-// this file only proves the wrapper's own wiring: what it does with
-// runAgentTurn's result), the conversations/crm/funnel-stage/twilio-send
-// helpers this used to be the webhook route's job to call, and DBOS
-// (registerWorkflow mocked to just return the plain function, so this
-// file can call runGuestTurnWorkflow directly like any other async
-// function — the real DBOS.registerWorkflow plumbing itself is exercised
-// indirectly via the webhook route's own test, which mocks DBOS.startWorkflow).
+// This file only proves the wrapper's own wiring — runAgentTurn's own
+// behavior is covered by tests/agent/run-turn.test.ts. registerWorkflow is
+// mocked to just return the plain function, so this file can call
+// runGuestTurnWorkflow directly like any other async function.
 const runAgentTurnMock = vi.fn();
 vi.mock("@/agent/run-turn.js", () => ({
   runAgentTurn: runAgentTurnMock,
@@ -43,10 +38,8 @@ vi.mock("@dbos-inc/dbos-sdk", () => ({
 
 const { runGuestTurnWorkflow } = await import("@/agent/run-guest-turn.js");
 
-// Captured immediately after import, BEFORE any beforeEach's
-// vi.clearAllMocks() below can wipe registerWorkflowMock's call history —
-// module-level registration (`DBOS.registerWorkflow(runGuestTurn, {name:
-// "runGuestTurn"})`) happens exactly once, at import time.
+// Captured before beforeEach's vi.clearAllMocks() wipes it — registration
+// happens exactly once, at import time.
 const registrationCallArgs = registerWorkflowMock.mock.calls[0];
 
 describe("runGuestTurnWorkflow", () => {
