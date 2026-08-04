@@ -10,11 +10,7 @@ import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/te
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { sendDigestNow } from "@/lib/telegram/digest";
-import {
-  getEscalationByTelegramMessageId,
-  resolveEscalation,
-  sendGuestMessage,
-} from "@/lib/telegram/gca";
+import { answerEscalation, sendGuestMessage } from "@/lib/telegram/gca";
 import { runCheckHealth } from "@/lib/telegram/health-monitor";
 import { renderHealthSummary } from "@/lib/telegram/health-targets";
 import { acknowledgeReminder } from "@/lib/telegram/notifications";
@@ -111,71 +107,57 @@ async function handleNudgeReject(
   }
 }
 
+// Matches a `[ref:<workflowId>]` tag at the very end of a missing_info
+// nudge's text (see GCA's escalation-shared.ts/missing-info.ts, which embed
+// it two newlines after the human-readable nudge body). The workflow id is
+// captured as an opaque non-whitespace token, not assumed to be UUID-shaped.
+const MISSING_INFO_REF_REGEX = /\[ref:(\S+)\]\s*$/;
+
+function extractMissingInfoWorkflowId(replyText: string | undefined): string | null {
+  if (!replyText) {
+    return null;
+  }
+  const match = replyText.match(MISSING_INFO_REF_REGEX);
+  return match ? match[1] : null;
+}
+
 /**
- * Owner replied to a previous escalation nudge. Correlation key is
- * `reply_to_message.message_id` matched against escalations.telegram_message_id
- * via GET /api/escalations/by-telegram-message-id/:id.
+ * Owner replied to a previous missing_info nudge. Correlation is entirely
+ * text-based now — no DB lookup, no GCA API call needed just to find out
+ * which workflow (if any) a reply belongs to: the nudge embeds the
+ * suspended DBOS workflow's id as a `[ref:<workflowId>]` tag, and Telegram
+ * echoes the replied-to message's full text back via
+ * `reply_to_message.text` on any reply.
  *
- * Returns false on a 404 (or non-text reply) so the caller falls through to
- * its normal command/social-post dispatch — the webhook sees every reply in
- * the chat, not just escalation ones. Returns true once a real escalation
- * nudge is matched, regardless of outcome.
- *
- * Only missing_info has a real reply/resolve action here:
- * - wants_human is inserted with resolved_at already set at creation, so a
- *   reply to it always hits the "Already handled" branch first.
- * - complaint is inserted unresolved but has no auto-resolve action yet, so
- *   it's explicitly guarded below rather than reaching resolveEscalation.
+ * Returns false when the reply doesn't carry a ref tag (not a reply, or a
+ * reply to something other than a missing_info nudge — e.g. wants_human,
+ * which never invites a reply and so never gets one) so the caller falls
+ * through to its normal command/social-post dispatch, same as today's
+ * "unrelated reply" case. Returns true once a ref tag is matched, regardless
+ * of outcome.
  */
 async function handleEscalationReply(
   message: NonNullable<TelegramUpdate["message"]>,
 ): Promise<boolean> {
-  const replyToId = message.reply_to_message?.message_id;
+  const workflowId = extractMissingInfoWorkflowId(message.reply_to_message?.text);
   const answer = message.text;
-  if (replyToId === undefined || !answer) {
+  if (!workflowId || !answer) {
     return false;
   }
 
-  let escalation: Awaited<ReturnType<typeof getEscalationByTelegramMessageId>>;
-  try {
-    escalation = await getEscalationByTelegramMessageId(replyToId);
-  } catch (err) {
-    // Fail open on a real (non-404) lookup failure — fall through rather than
-    // silently eat a message that may be unrelated to any escalation.
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("[telegram-router] escalation lookup failed:", errorMessage);
-    return false;
-  }
-
-  if (!escalation) {
-    return false;
-  }
-
-  if (escalation.resolved_at) {
-    await sendMessage("Already handled — this escalation was already resolved.");
-    return true;
-  }
-
-  if (escalation.reason_category === "complaint") {
-    // No auto resolve action for this category yet — do not call resolveEscalation.
-    await sendMessage(
-      "Noted — this escalation type doesn't have an automatic reply/resolve action yet.",
-    );
-    return true;
-  }
-
-  const resolveResult = await resolveEscalation(escalation.id, answer);
-  if (!resolveResult.ok) {
+  const answerResult = await answerEscalation(workflowId, answer);
+  if (!answerResult.ok) {
     console.error(
-      `[telegram-router] escalation resolve failed for ${escalation.id}:`,
-      resolveResult.error,
+      `[telegram-router] escalation answer failed for workflow ${workflowId}:`,
+      answerResult.error,
     );
     await sendMessage("Failed to add the answer to the knowledge base — try replying again.");
     return true;
   }
 
-  if (!resolveResult.resumed) {
-    // KB write succeeded but no suspended workflow was found to wake.
+  if (!answerResult.resumed) {
+    // KB write succeeded but no suspended workflow was found to wake (e.g.
+    // a duplicate/late reply after the workflow already resumed or expired).
     await sendMessage(
       "Added to the knowledge base, but couldn't resume the conversation — you may want to follow up directly.",
     );

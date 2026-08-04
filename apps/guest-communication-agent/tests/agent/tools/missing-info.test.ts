@@ -1,17 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks every real external boundary: Postgres (routed by table name),
-// the embedding call, and DBOS itself (DBOS.recv/send/workflowID).
-const mockEscSingle = vi.fn();
-const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
-const mockEscInsert = vi.fn((_row: Record<string, unknown>) => ({ select: mockEscSelect }));
-const mockEscEq = vi.fn();
-const mockEscUpdate = vi.fn(() => ({ eq: mockEscEq }));
-
+// Mocks every real external boundary: Postgres (documents insert only —
+// there's no escalations table anymore), the embedding call, and DBOS
+// itself (DBOS.recv/send/workflowID/Error).
 const mockDocInsert = vi.fn();
 
 const mockFrom = vi.fn((table: string) => {
-  if (table === "escalations") return { insert: mockEscInsert, update: mockEscUpdate };
   if (table === "documents") return { insert: mockDocInsert };
   throw new Error(`missing-info.test.ts mockFrom: unexpected table "${table}"`);
 });
@@ -34,6 +28,10 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ embedding: (model: string) => model }),
 }));
 
+// Mirrors the real @dbos-inc/dbos-sdk shape closely enough for
+// `err instanceof DBOSErrors.DBOSNonExistentWorkflowError` to work.
+class DBOSNonExistentWorkflowError extends Error {}
+
 let mockDbosWorkflowId: string | undefined;
 const dbosRecvMock = vi.fn();
 const dbosSendMock = vi.fn();
@@ -45,6 +43,7 @@ vi.mock("@dbos-inc/dbos-sdk", () => ({
     recv: dbosRecvMock,
     send: dbosSendMock,
   },
+  Error: { DBOSNonExistentWorkflowError },
 }));
 
 const {
@@ -67,7 +66,7 @@ describe("waitForMissingInfoReply", () => {
   it("calls DBOS.recv with the missing_info_reply topic and the configured timeout, returning a real answer as-is", async () => {
     dbosRecvMock.mockResolvedValueOnce("The AC is above the bed");
 
-    const result = await waitForMissingInfoReply("esc-1");
+    const result = await waitForMissingInfoReply("wf-abc-123");
 
     expect(dbosRecvMock).toHaveBeenCalledWith(
       MISSING_INFO_REPLY_TOPIC,
@@ -80,10 +79,10 @@ describe("waitForMissingInfoReply", () => {
     dbosRecvMock.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await waitForMissingInfoReply("esc-1");
+    const result = await waitForMissingInfoReply("wf-abc-123");
 
     expect(result).toBeNull();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-abc-123"));
     consoleWarnSpy.mockRestore();
   });
 });
@@ -92,8 +91,8 @@ describe("handleMissingInfoNoReply", () => {
   it("resolves after logging — no DB/DBOS side effects (see waitForMissingInfoReply, the only real caller)", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await expect(handleMissingInfoNoReply("esc-1")).resolves.toBeUndefined();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
+    await expect(handleMissingInfoNoReply("wf-abc-123")).resolves.toBeUndefined();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-abc-123"));
     expect(mockFrom).not.toHaveBeenCalled();
 
     consoleWarnSpy.mockRestore();
@@ -104,52 +103,47 @@ describe("runMissingInfo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDbosWorkflowId = undefined;
-    mockEscSingle.mockResolvedValue({ data: { id: "esc-1" }, error: null });
-    mockEscEq.mockResolvedValue({ error: null });
-    sendEscalationNudgeMock.mockResolvedValue({ ok: true, telegramMessageId: 4242 });
+    sendEscalationNudgeMock.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("step 1 (real): inserts the escalation and sends the Telegram nudge exactly like the other escalation tools", async () => {
+  it("step 1 (real): sends the Telegram nudge exactly like the other escalation tools", async () => {
     dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(mockFrom).toHaveBeenCalledWith("escalations");
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversation_id: "convo-1",
-        phone_number: "+351920742845",
-        reason: "Guest asked about the AC",
-        reason_category: "missing_info",
-      }),
-    );
     expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ escalationId: "esc-1", reasonCategory: "missing_info" }),
+      expect.objectContaining({
+        phone: "+351920742845",
+        reason: "Guest asked about the AC",
+        reasonCategory: "missing_info",
+        conversationId: "convo-1",
+      }),
     );
   });
 
-  it("reads DBOS.workflowID and includes it as workflow_id in the escalation insert when set", async () => {
+  it("reads DBOS.workflowID and passes it through to performEscalation when set", async () => {
     mockDbosWorkflowId = "wf-abc-123";
     dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ workflow_id: "wf-abc-123" }),
+    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "wf-abc-123" }),
     );
   });
 
-  it("omits workflow_id from the escalation insert when DBOS.workflowID is undefined (no live workflow context)", async () => {
+  it("passes workflowId: undefined when DBOS.workflowID is undefined (no live workflow context)", async () => {
     dbosRecvMock.mockResolvedValueOnce(null);
 
     await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
 
-    const insertArg = mockEscInsert.mock.calls[0][0];
-    expect(insertArg).not.toHaveProperty("workflow_id");
+    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: undefined }),
+    );
   });
 
   it("returns the answer directly as its own tool result when DBOS.recv resolves with a real answer — no re-embedding at this call site", async () => {
@@ -178,8 +172,8 @@ describe("runMissingInfo", () => {
     consoleWarnSpy.mockRestore();
   });
 
-  it("skips the DBOS.recv wait entirely (and still returns the fallback message) when the escalation insert itself failed", async () => {
-    mockEscSingle.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+  it("skips the DBOS.recv wait entirely (and still returns the fallback message) when the nudge itself failed", async () => {
+    sendEscalationNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
@@ -188,7 +182,7 @@ describe("runMissingInfo", () => {
       escalated: true,
       message: "The owner has been notified and will be in touch shortly.",
     });
-    // No escalation id means nothing to wait on — DBOS.recv is never called.
+    // Nudge failed means nothing to wait on — DBOS.recv is never called.
     expect(dbosRecvMock).not.toHaveBeenCalled();
   });
 });
@@ -198,14 +192,12 @@ describe("handleMissingInfoReplyReceived", () => {
     vi.clearAllMocks();
     embedMock.mockResolvedValue({ embedding: [0.1, 0.2, 0.3] });
     mockDocInsert.mockResolvedValue({ error: null });
-    mockEscEq.mockResolvedValue({ error: null });
   });
 
-  it("embeds the answer, inserts into documents, and resolves the escalation, then calls DBOS.send with the workflow id and returns resumed:true", async () => {
+  it("embeds the answer, inserts into documents, then calls DBOS.send with the workflow id and returns resumed:true", async () => {
     const result = await handleMissingInfoReplyReceived({
-      escalationId: "esc-1",
-      answer: "The AC is above the bed",
       workflowId: "wf-abc-123",
+      answer: "The AC is above the bed",
     });
 
     expect(result).toEqual({ resumed: true });
@@ -216,20 +208,14 @@ describe("handleMissingInfoReplyReceived", () => {
     expect(mockDocInsert).toHaveBeenCalledWith({
       content: "The AC is above the bed",
       embedding: JSON.stringify([0.1, 0.2, 0.3]),
-      metadata: { source: "owner_escalation_answer", escalation_id: "esc-1" },
+      metadata: { source: "owner_escalation_answer" },
     });
-    expect(mockEscUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ answer: "The AC is above the bed" }),
-    );
-    expect(mockEscEq).toHaveBeenCalledWith("id", "esc-1");
 
-    // Order matters (per the app owner): the KB embed/insert and escalation
-    // resolution must both happen BEFORE DBOS.send wakes the workflow.
+    // Order matters (per the app owner): the KB embed/insert must happen
+    // BEFORE DBOS.send wakes the workflow.
     const docInsertOrder = mockDocInsert.mock.invocationCallOrder[0];
-    const escUpdateOrder = mockEscUpdate.mock.invocationCallOrder[0];
     const sendOrder = dbosSendMock.mock.invocationCallOrder[0];
     expect(docInsertOrder).toBeLessThan(sendOrder);
-    expect(escUpdateOrder).toBeLessThan(sendOrder);
 
     expect(dbosSendMock).toHaveBeenCalledWith(
       "wf-abc-123",
@@ -238,50 +224,43 @@ describe("handleMissingInfoReplyReceived", () => {
     );
   });
 
-  it("still embeds and resolves the escalation, but skips DBOS.send and returns resumed:false, when workflowId is null", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const result = await handleMissingInfoReplyReceived({
-      escalationId: "esc-1",
-      answer: "The AC is above the bed",
-      workflowId: null,
-    });
-
-    expect(result).toEqual({ resumed: false });
-    expect(mockDocInsert).toHaveBeenCalled();
-    expect(mockEscUpdate).toHaveBeenCalled();
-    expect(dbosSendMock).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("esc-1"));
-
-    consoleErrorSpy.mockRestore();
-  });
-
-  it("throws when the documents insert fails, before touching the escalations update or DBOS.send", async () => {
+  it("throws when the documents insert fails, before touching DBOS.send", async () => {
     mockDocInsert.mockResolvedValueOnce({ error: { message: "insert boom" } });
 
     await expect(
       handleMissingInfoReplyReceived({
-        escalationId: "esc-1",
-        answer: "The AC is above the bed",
         workflowId: "wf-abc-123",
+        answer: "The AC is above the bed",
       }),
     ).rejects.toThrow("insert boom");
 
-    expect(mockEscUpdate).not.toHaveBeenCalled();
     expect(dbosSendMock).not.toHaveBeenCalled();
   });
 
-  it("throws when the escalations resolution update fails, before DBOS.send", async () => {
-    mockEscEq.mockResolvedValueOnce({ error: { message: "update boom" } });
+  it("returns resumed:false (without throwing) when DBOS.send reports the workflow no longer exists — a duplicate/late reply", async () => {
+    dbosSendMock.mockRejectedValueOnce(
+      new DBOSNonExistentWorkflowError("Sent to non-existent destination workflow UUID: wf-gone"),
+    );
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await handleMissingInfoReplyReceived({
+      workflowId: "wf-gone",
+      answer: "The AC is above the bed",
+    });
+
+    expect(result).toEqual({ resumed: false });
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-gone"));
+    consoleWarnSpy.mockRestore();
+  });
+
+  it("rethrows any other DBOS.send failure rather than swallowing it", async () => {
+    dbosSendMock.mockRejectedValueOnce(new Error("connection reset"));
 
     await expect(
       handleMissingInfoReplyReceived({
-        escalationId: "esc-1",
-        answer: "The AC is above the bed",
         workflowId: "wf-abc-123",
+        answer: "The AC is above the bed",
       }),
-    ).rejects.toThrow("update boom");
-
-    expect(dbosSendMock).not.toHaveBeenCalled();
+    ).rejects.toThrow("connection reset");
   });
 });

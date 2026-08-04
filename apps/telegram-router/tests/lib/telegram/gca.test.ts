@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getEscalationByTelegramMessageId,
-  resolveEscalation,
-  sendGuestMessage,
-} from "@/lib/telegram/gca.js";
+import { answerEscalation, sendGuestMessage } from "@/lib/telegram/gca.js";
 
 describe("sendGuestMessage", () => {
   const originalEnv = { ...process.env };
@@ -65,7 +61,7 @@ describe("sendGuestMessage", () => {
   });
 });
 
-describe("getEscalationByTelegramMessageId", () => {
+describe("answerEscalation", () => {
   const originalEnv = { ...process.env };
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -83,80 +79,22 @@ describe("getEscalationByTelegramMessageId", () => {
 
   it("throws when not configured, without calling fetch", async () => {
     delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
-    await expect(getEscalationByTelegramMessageId(42)).rejects.toThrow(
+    await expect(answerEscalation("wf-abc-123", "The AC is above the bed")).rejects.toThrow(
       "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns null (not a throw) on a 404", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
-
-    const result = await getEscalationByTelegramMessageId(42);
-
-    expect(result).toBeNull();
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3005/api/escalations/by-telegram-message-id/42");
-    expect(init.headers).toEqual({ "X-API-Key": "test-key" });
-  });
-
-  it("returns the escalation on a match", async () => {
-    const row = {
-      id: "esc-1",
-      phone_number: "+351920742845",
-      reason: "Guest asked about the AC",
-      reason_category: "missing_info",
-      resolved_at: null,
-      answer: null,
-    };
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(row), { status: 200 }));
-
-    const result = await getEscalationByTelegramMessageId(42);
-
-    expect(result).toEqual(row);
-  });
-
-  it("throws on a real (non-404) failure", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("server exploded", { status: 500 }));
-
-    await expect(getEscalationByTelegramMessageId(42)).rejects.toThrow(/500/);
-  });
-});
-
-describe("resolveEscalation", () => {
-  const originalEnv = { ...process.env };
-  let fetchMock: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    process.env.GUEST_COMMUNICATION_AGENT_API_URL = "http://localhost:3005";
-    process.env.GUEST_COMMUNICATION_AGENT_API_KEY = "test-key";
-    fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-  });
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    vi.unstubAllGlobals();
-  });
-
-  it("throws when not configured, without calling fetch", async () => {
-    delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
-    await expect(resolveEscalation("esc-1", "The AC is above the bed")).rejects.toThrow(
-      "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("posts the answer and returns ok: true, resumed: true on full success", async () => {
+  it("posts the answer to the workflow id path and returns ok: true, resumed: true on full success", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ ok: true, resumed: true }), { status: 200 }),
     );
 
-    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: true });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3005/api/escalations/esc-1/resolve");
+    expect(url).toBe("http://localhost:3005/api/escalations/wf-abc-123/answer");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "X-API-Key": "test-key" });
     expect(JSON.parse(init.body)).toEqual({ answer: "The AC is above the bed" });
@@ -167,7 +105,7 @@ describe("resolveEscalation", () => {
       new Response(JSON.stringify({ ok: true, resumed: false }), { status: 200 }),
     );
 
-    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: false });
   });
@@ -175,27 +113,18 @@ describe("resolveEscalation", () => {
   it("defaults resumed to false when the success body is missing/unparseable", async () => {
     fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
 
-    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
 
     expect(result).toEqual({ ok: true, resumed: false });
   });
 
-  it("returns ok: false, alreadyResolved: true on a 409, without throwing", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("", { status: 409 }));
-
-    const result = await resolveEscalation("esc-1", "The AC is above the bed");
-
-    expect(result).toEqual({ ok: false, alreadyResolved: true });
-  });
-
-  it("returns ok: false, alreadyResolved: false with an error on a real failure", async () => {
+  it("returns ok: false with an error on a real failure — no more 409/already-resolved outcome", async () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
 
-    const result = await resolveEscalation("esc-1", "The AC is above the bed");
+    const result = await answerEscalation("wf-abc-123", "The AC is above the bed");
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.alreadyResolved).toBe(false);
       expect(result.error).toContain("500");
     }
   });

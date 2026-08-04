@@ -10,15 +10,10 @@ vi.mock("@/agent/memory.js", () => ({
 }));
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
-// embedding call, so neither is exercised here.
-const mockEscSingle = vi.fn();
-const mockEscSelect = vi.fn(() => ({ single: mockEscSingle }));
-const mockEscInsert = vi.fn(() => ({ select: mockEscSelect }));
-const mockEscEq = vi.fn();
-const mockEscUpdate = vi.fn(() => ({ eq: mockEscEq }));
+// embedding call, so neither is exercised here. No more escalations table —
+// performEscalation talks to telegram-router only, not Supabase.
 const mockBookingInsert = vi.fn();
 const fromMock = vi.fn((table: string) => {
-  if (table === "escalations") return { insert: mockEscInsert, update: mockEscUpdate };
   if (table === "booking_link_requests") return { insert: mockBookingInsert };
   throw new Error(`run-turn.test.ts fromMock: unexpected table "${table}"`);
 });
@@ -148,10 +143,8 @@ describe("runAgentTurn", () => {
     promptTemplateInvokeMock.mockResolvedValue({
       toChatMessages: () => [{ content: SYSTEM_PROMPT_TEXT }],
     });
-    mockEscSingle.mockResolvedValue({ data: { id: "esc-1" }, error: null });
-    mockEscEq.mockResolvedValue({ error: null });
     mockBookingInsert.mockResolvedValue({ data: null, error: null });
-    sendEscalationNudgeMock.mockResolvedValue({ ok: true, telegramMessageId: 4242 });
+    sendEscalationNudgeMock.mockResolvedValue({ ok: true });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
   });
@@ -269,7 +262,6 @@ describe("runAgentTurn", () => {
 
     expect(generateTextMock).toHaveBeenCalledTimes(8);
     expect(result.stepCount).toBe(8);
-    expect(mockEscInsert).not.toHaveBeenCalled();
     expect(sendEscalationNudgeMock).not.toHaveBeenCalled();
 
     const last = result.messages.at(-1);
@@ -306,8 +298,8 @@ describe("runAgentTurn", () => {
       role: "assistant",
       content: "Actually, here's the answer about the sauna!",
     });
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ reason_category: "missing_info" }),
+    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCategory: "missing_info" }),
     );
 
     const toolMessage = result.messages.find((m) => m.role === "tool");
@@ -340,8 +332,8 @@ describe("runAgentTurn", () => {
       incomingMessage: "I want to talk to a person",
     });
 
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ reason_category: "wants_human" }),
+    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCategory: "wants_human" }),
     );
   });
 
@@ -379,8 +371,8 @@ describe("runAgentTurn", () => {
     // fired) since the stub always approves — see run-turn.ts's
     // requestHitlApproval and NEEDS_HITL.
     expect(mockBookingInsert).toHaveBeenCalled();
-    expect(mockEscInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ reason_category: "wants_human" }),
+    expect(sendEscalationNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCategory: "wants_human" }),
     );
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("sendBookingLink"));
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wants_human"));

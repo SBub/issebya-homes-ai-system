@@ -35,7 +35,6 @@ describe("POST /api/escalation-nudges", () => {
   });
 
   const validBody = {
-    escalationId: "esc-1",
     phone: "+351920742845",
     reason: "Guest asked about the AC, couldn't find it in the knowledge base",
     reasonCategory: "missing_info",
@@ -49,7 +48,7 @@ describe("POST /api/escalation-nudges", () => {
   });
 
   it("returns 400 when required fields are missing", async () => {
-    const res = await POST(makeRequest({ escalationId: "esc-1" }));
+    const res = await POST(makeRequest({ phone: "+351920742845" }));
     expect(res.status).toBe(400);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
@@ -68,11 +67,11 @@ describe("POST /api/escalation-nudges", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("sends a reply-inviting message and returns the telegram message id for missing_info", async () => {
+  it("sends a reply-inviting message and returns ok: true for missing_info", async () => {
     const res = await POST(makeRequest(validBody));
     const json = await res.json();
 
-    expect(json).toEqual({ telegramMessageId: 4242 });
+    expect(json).toEqual({ ok: true });
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     const [text] = sendMessageMock.mock.calls[0];
     expect(text).toContain("+351920742845");
@@ -80,43 +79,41 @@ describe("POST /api/escalation-nudges", () => {
     expect(text.toLowerCase()).toContain("reply");
   });
 
-  const nonMissingInfoCases = [
-    { reasonCategory: "wants_human", prefix: "🙋 Wants human" },
-    { reasonCategory: "complaint", prefix: "⚠️ Complaint" },
-  ] as const;
+  it("appends a [ref:<workflowId>] tag two newlines after the missing_info body when workflowId is supplied", async () => {
+    const res = await POST(makeRequest({ ...validBody, workflowId: "wf-abc-123" }));
+    const json = await res.json();
 
-  for (const { reasonCategory, prefix } of nonMissingInfoCases) {
-    it(`sends a plain one-way alert with its own "${prefix}" prefix for ${reasonCategory}`, async () => {
-      const res = await POST(
-        makeRequest({
-          ...validBody,
-          reasonCategory,
-          reason: "Guest is upset about noise",
-        }),
-      );
-      const json = await res.json();
+    expect(json).toEqual({ ok: true });
+    const [text] = sendMessageMock.mock.calls[0];
+    expect(text.endsWith("\n\n[ref:wf-abc-123]")).toBe(true);
+  });
 
-      expect(json).toEqual({ telegramMessageId: 4242 });
-      expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [text] = sendMessageMock.mock.calls[0];
-      expect(text).toBe(
-        `${prefix}\nGuest +351920742845 needs you: Guest is upset about noise\n\nConversation: convo-1`,
-      );
-      expect(text.toLowerCase()).not.toContain("reply to this message");
-    });
-  }
+  it("omits the [ref:...] tag entirely when workflowId isn't supplied", async () => {
+    await POST(makeRequest(validBody));
 
-  it("gives wants_human and complaint distinct prefixes rather than identical wording", async () => {
-    const texts: string[] = [];
-    for (const reasonCategory of ["wants_human", "complaint"] as const) {
-      sendMessageMock.mockClear();
-      await POST(
-        makeRequest({ ...validBody, reasonCategory, reason: "Guest is upset about noise" }),
-      );
-      texts.push(sendMessageMock.mock.calls[0][0]);
-    }
-    const [wantsHumanText, complaintText] = texts;
-    expect(wantsHumanText).not.toBe(complaintText);
+    const [text] = sendMessageMock.mock.calls[0];
+    expect(text).not.toContain("[ref:");
+  });
+
+  it("sends a plain one-way alert with no ref tag for wants_human, even if workflowId were supplied", async () => {
+    const res = await POST(
+      makeRequest({
+        ...validBody,
+        reasonCategory: "wants_human",
+        reason: "Guest is upset about noise",
+        workflowId: "wf-abc-123",
+      }),
+    );
+    const json = await res.json();
+
+    expect(json).toEqual({ ok: true });
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const [text] = sendMessageMock.mock.calls[0];
+    expect(text).toBe(
+      "🙋 Wants human\nGuest +351920742845 needs you: Guest is upset about noise\n\nConversation: convo-1",
+    );
+    expect(text.toLowerCase()).not.toContain("reply to this message");
+    expect(text).not.toContain("[ref:");
   });
 
   it("returns 500 with the error when the send fails even after retry", async () => {

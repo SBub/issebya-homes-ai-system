@@ -1,4 +1,4 @@
-import { DBOS } from "@dbos-inc/dbos-sdk";
+import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
 import { embed, tool } from "ai";
 import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
@@ -9,12 +9,16 @@ import { performEscalation } from "./escalation-shared";
 // Consolidated home for the missing_info human-in-the-loop flow: the tool
 // the model calls to ask (runMissingInfo), and both branches of what happens
 // once it's settled — reply arrives (handleMissingInfoReplyReceived) or
-// doesn't (handleMissingInfoNoReply). POST /api/escalations/[id]/resolve is
-// a thin trigger that calls handleMissingInfoReplyReceived, not its own logic.
+// doesn't (handleMissingInfoNoReply). POST /api/escalations/[workflowId]/answer
+// is a thin trigger that calls handleMissingInfoReplyReceived, not its own logic.
 //
 // The suspend/wait is real DBOS: runMissingInfo runs inside a runGuestTurn
 // workflow and genuinely suspends via DBOS.recv() until
 // handleMissingInfoReplyReceived calls DBOS.send() for the same workflow id.
+// There is no escalations DB row anymore — the workflow id itself, embedded
+// in the Telegram nudge text as `[ref:<workflowId>]` and echoed back via the
+// owner's reply, is the only correlation key (see escalation-shared.ts and
+// apps/telegram-router's webhook route).
 
 const missingInfoSchema = z.object({
   reason: z
@@ -47,26 +51,33 @@ const MISSING_INFO_REPLY_TIMEOUT_SECONDS = 24 * 60 * 60;
  * handleMissingInfoReplyReceived sends on the same workflow id, or the
  * timeout elapses. Must only be called from inside a runGuestTurn workflow.
  * Returns null on timeout (DBOS.recv resolves null rather than throwing).
+ * `workflowId` is only used for logging context here — the actual recv() is
+ * scoped to the currently-running workflow implicitly, via DBOS.workflowID.
  */
-export async function waitForMissingInfoReply(escalationId: string): Promise<string | null> {
+export async function waitForMissingInfoReply(
+  workflowId: string | undefined,
+): Promise<string | null> {
   const answer = await DBOS.recv<string>(
     MISSING_INFO_REPLY_TOPIC,
     MISSING_INFO_REPLY_TIMEOUT_SECONDS,
   );
   if (answer === null || answer === undefined) {
     console.warn(
-      `[missing-info] waitForMissingInfoReply timed out after ${MISSING_INFO_REPLY_TIMEOUT_SECONDS}s waiting for escalation ${escalationId}'s reply`,
+      `[missing-info] waitForMissingInfoReply timed out after ${MISSING_INFO_REPLY_TIMEOUT_SECONDS}s waiting for workflow ${workflowId ?? "unknown"}'s reply`,
     );
-    await handleMissingInfoNoReply(escalationId);
+    await handleMissingInfoNoReply(workflowId);
     return null;
   }
   return answer;
 }
 
 export interface MissingInfoReplyResult {
-  // True only when DBOS.send was dispatched to a known workflow id — NOT
-  // whether the guest was actually messaged; that happens later, inside the
-  // resumed workflow, which this function has no visibility into.
+  // True only when DBOS.send was dispatched without error — NOT whether the
+  // guest was actually messaged; that happens later, inside the resumed
+  // workflow, which this function has no visibility into. False when the
+  // target workflow id doesn't exist (see the DBOSNonExistentWorkflowError
+  // catch below) — e.g. a duplicate/late reply arriving after the workflow
+  // already completed and was garbage-collected, or a malformed ref tag.
   resumed: boolean;
 }
 
@@ -75,15 +86,23 @@ export interface MissingInfoReplyResult {
 // suspended workflow via DBOS.send. Embed happens first and deliberately —
 // by the time DBOS.send fires the answer is already searchable.
 //
-// Throws if the KB write or escalation update fails. Never throws over a
-// missing/unaddressable workflow_id — that's only logged and reflected in
-// `resumed`.
+// workflowId comes straight from the Telegram-embedded `[ref:...]` tag
+// (extracted by telegram-router's webhook route) — no DB lookup involved.
+//
+// Throws if the KB write fails. A second DBOS.send for a workflow that
+// already resumed (e.g. a duplicate reply or a retried webhook) is safe: per
+// DBOS's own send/recv semantics, send() just persists another message to
+// the destination workflow's durable inbox — it does not error, and nothing
+// will ever consume that stray message since this workflow's one recv() call
+// has already returned. The only real failure mode is a destination
+// workflow id that doesn't exist at all (DBOSNonExistentWorkflowError, an FK
+// violation), which is caught below and reflected as `resumed: false`
+// instead of throwing.
 export async function handleMissingInfoReplyReceived(params: {
-  escalationId: string;
+  workflowId: string;
   answer: string;
-  workflowId: string | null;
 }): Promise<MissingInfoReplyResult> {
-  const { escalationId, answer, workflowId } = params;
+  const { workflowId, answer } = params;
   const supabase = createAdminClient();
 
   const { embedding } = await embed({
@@ -94,36 +113,31 @@ export async function handleMissingInfoReplyReceived(params: {
   const { error: insertError } = await supabase.from("documents").insert({
     content: answer,
     embedding: JSON.stringify(embedding),
-    metadata: { source: "owner_escalation_answer", escalation_id: escalationId },
+    metadata: { source: "owner_escalation_answer" },
   });
   if (insertError) {
     throw new Error(insertError.message);
   }
 
-  const { error: updateError } = await supabase
-    .from("escalations")
-    .update({ resolved_at: new Date().toISOString(), answer })
-    .eq("id", escalationId);
-  if (updateError) {
-    throw new Error(updateError.message);
+  try {
+    await DBOS.send(workflowId, answer, MISSING_INFO_REPLY_TOPIC);
+  } catch (err) {
+    if (err instanceof DBOSErrors.DBOSNonExistentWorkflowError) {
+      console.warn(
+        `[missing-info] DBOS.send found no such workflow ${workflowId} — likely a duplicate/late reply after the workflow completed and was garbage-collected, or a malformed ref tag. The knowledge base has been updated regardless.`,
+      );
+      return { resumed: false };
+    }
+    throw err;
   }
 
-  if (!workflowId) {
-    console.error(
-      `[missing-info] escalation ${escalationId} has no workflow_id — cannot resume a suspended workflow for it (it may predate this column, or performEscalation's insert ran outside a live DBOS workflow context). The knowledge base has been updated regardless; no proactive reply will be sent for this escalation.`,
-    );
-    return { resumed: false };
-  }
-
-  await DBOS.send(workflowId, answer, MISSING_INFO_REPLY_TOPIC);
   return { resumed: true };
 }
 
-// Stub: only logs. No timeout/expiry side effect (marking escalation
-// expired, re-nudging owner) exists yet.
-export async function handleMissingInfoNoReply(escalationId: string): Promise<void> {
+// Stub: only logs. No timeout/expiry side effect (re-nudging owner) exists yet.
+export async function handleMissingInfoNoReply(workflowId: string | undefined): Promise<void> {
   console.warn(
-    `[missing-info] handleMissingInfoNoReply called for escalation ${escalationId} — no reply arrived within ${MISSING_INFO_REPLY_TIMEOUT_SECONDS}s, falling back to the owner-notified response for this turn.`,
+    `[missing-info] handleMissingInfoNoReply called for workflow ${workflowId ?? "unknown"} — no reply arrived within ${MISSING_INFO_REPLY_TIMEOUT_SECONDS}s, falling back to the owner-notified response for this turn.`,
   );
 }
 
@@ -131,25 +145,24 @@ export async function runMissingInfo(
   args: z.infer<typeof missingInfoSchema>,
   context: ToolContext,
 ) {
-  const { conversationId, phone, triggerMessageId } = context;
+  const { conversationId, phone } = context;
 
   // undefined outside a live runGuestTurn workflow (e.g. a direct test call);
-  // performEscalation omits workflow_id from the insert in that case.
+  // performEscalation skips embedding a [ref:...] tag in that case.
   const workflowId = DBOS.workflowID;
 
-  const escalationId = await performEscalation({
+  const nudged = await performEscalation({
     conversationId,
     phone,
     reason: args.reason,
     reasonCategory: "missing_info",
-    triggerMessageId,
     workflowId,
   });
 
-  // No escalation id means the insert failed — skip straight to the same
-  // fallback a timeout would produce.
-  if (escalationId) {
-    const answer = await waitForMissingInfoReply(escalationId);
+  // Nudge failed to send — skip straight to the same fallback a timeout
+  // would produce; there's no point suspending if the owner was never told.
+  if (nudged) {
+    const answer = await waitForMissingInfoReply(workflowId);
     if (answer !== null) {
       // Embedding already happened in handleMissingInfoReplyReceived before
       // DBOS.send delivered this answer — do not re-embed here.

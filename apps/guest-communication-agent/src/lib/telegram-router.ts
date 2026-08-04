@@ -2,7 +2,6 @@ import type { EscalationReasonCategory } from "../agent/tools/escalation-shared"
 
 export interface EscalationNudgeResult {
   ok: boolean;
-  telegramMessageId?: number;
   error?: string;
 }
 
@@ -10,20 +9,22 @@ export interface EscalationNudgeResult {
  * Best-effort push to apps/telegram-router's POST /api/escalation-nudges,
  * which composes and sends the Telegram message notifying the owner.
  * reasonCategory/conversationId let the route compose a category-appropriate
- * message (missing_info invites a reply, the others are one-way alerts).
+ * message (missing_info invites a reply, wants_human is a one-way alert).
+ * workflowId (missing_info only) gets embedded by that route as a
+ * `[ref:<workflowId>]` tag at the end of the nudge text, so a later owner
+ * reply can be correlated back to the exact suspended DBOS workflow via
+ * Telegram's own `reply_to_message.text` — no DB round-trip involved.
  *
- * The escalations row is already committed by the time this runs, so a
- * missing config or delivery failure returns a result object rather than
- * throwing — never roll back the insert over a best-effort notification.
- * On success, returns telegram-router's telegramMessageId so the caller can
- * store it as the correlation key for the owner's later reply.
+ * A missing config or delivery failure returns a result object rather than
+ * throwing — this is a best-effort notification, not something worth
+ * failing the whole tool call over.
  */
 export async function sendEscalationNudge(params: {
-  escalationId: string;
   phone: string;
   reason: string;
   reasonCategory: EscalationReasonCategory;
   conversationId: string;
+  workflowId?: string;
 }): Promise<EscalationNudgeResult> {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;
@@ -37,14 +38,11 @@ export async function sendEscalationNudge(params: {
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
       body: JSON.stringify(params),
     });
-    const body = (await res.json().catch(() => ({}))) as {
-      telegramMessageId?: number;
-      error?: string;
-    };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
       throw new Error(body.error ?? `telegram-router escalation-nudges failed (${res.status})`);
     }
-    return { ok: true, telegramMessageId: body.telegramMessageId };
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

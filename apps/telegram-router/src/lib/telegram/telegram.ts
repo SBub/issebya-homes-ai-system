@@ -18,10 +18,12 @@ interface TelegramMessage {
   text?: string;
   /** Present when this message is itself a reply to another message — the
    * escalation-nudge reply flow (../../app/api/telegram/webhook/route.ts's
-   * new reply-to-nudge branch) matches `reply_to_message.message_id`
-   * against an escalation's stored `telegram_message_id` to correlate the
-   * owner's free-text answer back to the nudge it's replying to. */
-  reply_to_message?: { message_id: number };
+   * handleEscalationReply) reads `reply_to_message.text` (Telegram echoes
+   * the full text of the replied-to message) and regex-matches it for a
+   * `[ref:<workflowId>]` tag to correlate the owner's free-text answer back
+   * to the specific suspended DBOS workflow that sent the original
+   * missing_info nudge — no DB lookup involved. */
+  reply_to_message?: { message_id: number; text?: string };
 }
 
 interface TelegramCallbackQuery {

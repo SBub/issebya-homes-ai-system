@@ -20,13 +20,12 @@ export const wantsHuman = tool({
 });
 
 export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
-  const { conversationId, phone, triggerMessageId } = context;
+  const { conversationId, phone } = context;
   await performEscalation({
     conversationId,
     phone,
     reason: args.reason,
     reasonCategory: "wants_human",
-    triggerMessageId,
   });
   return {
     escalated: true,

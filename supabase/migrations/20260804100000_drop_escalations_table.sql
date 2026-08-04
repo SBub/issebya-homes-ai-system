@@ -1,0 +1,22 @@
+-- The escalations table is removed entirely — the app owner decided it
+-- "overcomplicates things unnecessarily" for what it was actually used for.
+--
+-- Its one genuinely load-bearing job — correlating a later Telegram reply
+-- back to the specific suspended DBOS workflow waiting on it, for the
+-- missing_info human-in-the-loop flow — no longer needs a DB row at all.
+-- The suspended workflow's DBOS.workflowID is now embedded directly in the
+-- nudge's Telegram message text as a `[ref:<workflowId>]` tag (see
+-- apps/guest-communication-agent/src/agent/tools/escalation-shared.ts and
+-- missing-info.ts on the writing side). Telegram already echoes a
+-- replied-to message's full text back via `reply_to_message.text`, so
+-- apps/telegram-router's webhook route can parse the workflow id straight
+-- out of the reply with a regex — no DB lookup, no GCA API call needed just
+-- to find out which workflow a reply belongs to (see that app's webhook
+-- route.ts and lib/telegram/gca.ts).
+--
+-- wants_human was already auto-resolved at insert time (no owner action to
+-- wait for, nothing to correlate), and the complaint category was removed
+-- outright in an earlier change (20260726120000_remove_unhappy_guest_reason_category.sql's
+-- neighboring history) before ever getting a resolve flow. Nothing depends
+-- on this table anymore.
+drop table public.escalations;

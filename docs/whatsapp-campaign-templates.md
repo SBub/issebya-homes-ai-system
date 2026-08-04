@@ -182,7 +182,7 @@ from the template-drafting and code-scaffolding work this pass covers.
    - **Meta Business Manager** → WhatsApp Manager → Message Templates → "Create Template"
      → category **Marketing** → same body + button setup. (If created here instead of
      Twilio, it still needs to be linked into Twilio's Content API as an approved
-     template before `sendWhatsAppTemplate`, below, can use it.)
+     template before anything can send it via `ContentSid`.)
 2. **Submit for review.** Meta reviews the template's wording against its policies.
    Realistic timelines: often just minutes, but can take up to 48 hours, and it can be
    **rejected** — most commonly for wording that reads as spammy, for missing an opt-out
@@ -193,8 +193,11 @@ from the template-drafting and code-scaffolding work this pass covers.
    pipeline:
    - Twilio Console's Content Editor has a "Try it" / test-send tool — send the approved
      template to your own verified WhatsApp number directly from the console.
-   - Or call Twilio's Messages API directly with `ContentSid` + `ContentVariables` (the
-     same shape `sendWhatsAppTemplate`, below, sends) targeting your own number.
+   - Or call Twilio's Messages API directly with `ContentSid` + `ContentVariables`
+     targeting your own number (the same shape a future send helper would use — see
+     `apps/guest-communication-agent/src/lib/twilio-send.ts`'s `sendWhatsAppMessage` for
+     the free-text counterpart; a template-sending equivalent was scaffolded and then
+     removed as dead code since this feature isn't wired up yet).
 4. **Confirm the inbound webhook sees the button tap distinctly from free text.** This
    matters because eventually we'll want to detect a "yes" tap programmatically (e.g. to
    auto-advance a guest's funnel stage) rather than relying on GCA's conversational AI to

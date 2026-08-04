@@ -265,8 +265,11 @@ export interface RunGuestTurnInput {
   conversationId: string;
   phone: string;
   incomingMessage: string;
-  // The guest's inbound whatsapp_messages row id; ends up as
-  // escalations.trigger_message_id via performEscalation.
+  // The guest's inbound whatsapp_messages row id — the real original
+  // question, distinct from a tool's own paraphrased `reason`. No longer
+  // persisted anywhere (the escalations table it used to end up in is
+  // gone); kept on ToolContext for whatever future feature needs to find
+  // the guest's original message.
   triggerMessageId?: string;
 }
 
