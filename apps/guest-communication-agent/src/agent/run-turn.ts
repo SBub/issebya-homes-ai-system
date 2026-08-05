@@ -249,14 +249,34 @@ export async function runAgentTurn(
   )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
+  // Hoisted out of the loop and fetched exactly once per turn, not once per
+  // round: contextBlock (loaded above, once, from load-memory) doesn't
+  // change across rounds of the same turn, so neither does the system string
+  // derived from it. Un-stepped code between step.run checkpoints re-runs on
+  // every Inngest replay — left inside the loop, a replay reaching round N
+  // would re-fetch the LangSmith prompt commit for every round 1..N that
+  // already ran (wasted API calls), and worse, non-deterministically: if the
+  // prompt commit under SYSTEM_PROMPT_IDENTIFIER is updated mid-turn
+  // (plausible across missing_info's up-to-24h suspend), different rounds of
+  // the SAME turn could end up using different prompt versions.
+  //
+  // Cast needed: step.run()'s return type is run through Inngest's Jsonify
+  // transform (step results are actually persisted as JSON and rehydrated on
+  // replay), which narrows types like FilePart's `data: URL | DataContent`
+  // down to their JSON-safe equivalents (an ArrayBuffer, for instance,
+  // structurally loses its methods). The system prompt here is always a
+  // plain string, so the narrowing is a false positive for this call site
+  // too, same as the model-${stepCount} and load-memory step calls below.
+  const system = (await step.run("load-system-prompt", async () => {
+    const promptTemplate = await pullSystemPromptTemplate();
+    const promptValue = await promptTemplate.invoke({ guest_memory_block: contextBlock });
+    return promptValue.toChatMessages()[0].content as string;
+  })) as string;
+
   let stepCount = 0;
 
   while (stepCount < MAX_AGENT_STEPS) {
     stepCount++;
-
-    const promptTemplate = await pullSystemPromptTemplate();
-    const promptValue = await promptTemplate.invoke({ guest_memory_block: contextBlock });
-    const system = promptValue.toChatMessages()[0].content as string;
 
     // Cast needed: step.run()'s return type is run through Inngest's Jsonify
     // transform (step results are actually persisted as JSON and rehydrated
