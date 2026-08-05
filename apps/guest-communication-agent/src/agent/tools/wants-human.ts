@@ -20,12 +20,13 @@ export const wantsHuman = tool({
 });
 
 export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
-  const { conversationId, phone } = context;
+  const { conversationId, phone, step } = context;
   await requestOwnerNudge({
     conversationId,
     phone,
     reason: args.reason,
     reasonCategory: "wants_human",
+    step,
   });
   return {
     escalated: true,

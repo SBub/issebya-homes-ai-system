@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import { DBOS } from "@dbos-inc/dbos-sdk";
 import { load } from "@langchain/core/load";
 import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
+import type { GetStepTools } from "inngest";
 import { Client } from "langsmith";
 import { loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
@@ -13,7 +13,7 @@ import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
-import { EventType, emit } from "@/lib/events";
+import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
@@ -22,13 +22,18 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 // or the step cap fires. Stateless per invocation — loadMemory reloads guest
 // history fresh from Postgres every turn.
 //
-// This file also holds runGuestTurnWorkflow, the DBOS-wrapped delivery
-// orchestrator that actually gets registered with DBOS and started by the
-// webhook route (see the bottom of this file). The two are kept as
-// deliberately separate functions rather than collapsed into one:
-// runAgentTurn stays free of guest-delivery side effects (recording the
-// reply, the proactive Twilio send) so it's easy to test/reason about in
-// isolation, while runGuestTurnWorkflow is the thing DBOS actually drives.
+// This file also holds runGuestTurn (the plain delivery orchestrator) and
+// runGuestTurnFunction, the Inngest function that wraps it and is registered
+// with the /api/inngest serve endpoint (see src/app/api/inngest/route.ts).
+// The webhook route triggers it fire-and-forget by sending
+// GUEST_TURN_REQUESTED_EVENT. runGuestTurn is kept as a plain, directly
+// callable/testable function — same shape DBOS.registerWorkflow used to
+// wrap — so tests can drive it with a hand-rolled `step` mock instead of a
+// real Inngest engine.
+//
+// runAgentTurn itself stays free of guest-delivery side effects (recording
+// the reply, the proactive Twilio send) so it's easy to test/reason about in
+// isolation, while runGuestTurn is the thing that adds those on top.
 
 const MODEL = "deepseek/deepseek-v4-pro";
 // SYSTEM_PROMPT_IDENTIFIER_OVERRIDE is for CI eval jobs only — must never be
@@ -68,9 +73,23 @@ const tools = {
 // the tool ever creates the booking URL / inserts booking_link_requests.
 const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
 
+// Tools whose own implementation calls context.step directly:
+// missing_info's waitForMissingInfoReply calls step.waitForEvent to
+// suspend. Inngest doesn't support calling a step tool from inside another
+// step.run()'s callback — the callback must be a self-contained unit of
+// work — so wants_human and missing_info are both dispatched directly from
+// the loop below (never wrapped in an outer step.run) and manage their own
+// checkpointing internally where they have any (wants_human currently has
+// none of its own — it's grouped here for the same "never nest inside an
+// outer step.run" reasoning, not because it calls step itself today). Every
+// other tool has no step usage of its own, so wrapping the whole call in one
+// step.run is safe and gives it real memoization/replay safety — the actual
+// point of this migration.
+const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info"]);
+
 // STUB — NOT REAL APPROVAL LOGIC. No durable suspend/pause yet; always
 // resolves approved so wants_human/sendBookingLink keep working end-to-end.
-// TODO(hitl): replace with a real suspend/resume once DBOS-backed approval exists.
+// TODO(hitl): replace with a real suspend/resume once Inngest-backed approval exists.
 async function requestHitlApproval(
   toolName: string,
   _input: Record<string, unknown>,
@@ -183,6 +202,12 @@ export interface RunAgentTurnConfig {
   // model-driven wants_human/missing_info tools' ToolContext (see
   // requestOwnerNudge in owner-nudge.ts).
   triggerMessageId?: string;
+  // This run's correlation id — see GuestTurnRequestedEventData below for
+  // where it comes from and why.
+  correlationId: string;
+  // This run's Inngest step tools, threaded down explicitly since Inngest
+  // (unlike DBOS) has no ambient "current workflow" equivalent to read from.
+  step: GetStepTools<typeof inngest>;
 }
 
 export interface RunAgentTurnResult {
@@ -194,23 +219,17 @@ export interface RunAgentTurnResult {
 // model until a final text reply, or the step cap is hit.
 //
 // After ANY tool call, including missing_info (which genuinely suspends via
-// DBOS.recv until the owner replies or times out — this function runs inside
-// a DBOS workflow, see runGuestTurnWorkflow below), the loop goes back to the
-// model for a real final reply.
+// step.waitForEvent until the owner replies or times out — this function
+// runs inside a run-guest-turn Inngest function, see runGuestTurn below),
+// the loop goes back to the model for a real final reply.
 export async function runAgentTurn(
   input: RunAgentTurnInput,
-  config: RunAgentTurnConfig = {},
+  config: RunAgentTurnConfig,
 ): Promise<RunAgentTurnResult> {
   const { conversationId, phone, incomingMessage } = input;
-  const { triggerMessageId } = config;
+  const { triggerMessageId, correlationId, step } = config;
 
-  const toolContext: ToolContext = { conversationId, phone, triggerMessageId };
-
-  // Outside a live DBOS workflow (e.g. a direct test call), DBOS.workflowID
-  // is undefined — same fallback missing-info.ts's runMissingInfo already
-  // relies on, mirrored here so runAgentTurn's own signature/call sites
-  // don't need a threaded workflowId param.
-  const workflowId = DBOS.workflowID ?? "unknown";
+  const toolContext: ToolContext = { conversationId, phone, triggerMessageId, correlationId, step };
 
   const { historyMessages, contextBlock } = await loadMemory({ conversationId, phone });
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
@@ -224,19 +243,17 @@ export async function runAgentTurn(
     const promptValue = await promptTemplate.invoke({ guest_memory_block: contextBlock });
     const system = promptValue.toChatMessages()[0].content as string;
 
-    const result = await modelTurn(system, messages);
-
-    await DBOS.runStep(
-      () =>
-        emit({
-          type: EventType.ModelCompleted,
-          workflowId,
-          stepCount,
-          text: result.text,
-          toolCallCount: result.toolCalls.length,
-        }),
-      { name: `model-completed-${stepCount}` },
-    );
+    // Cast needed: step.run()'s return type is run through Inngest's Jsonify
+    // transform (step results are actually persisted as JSON and rehydrated
+    // on replay), which narrows types like FilePart's `data: URL |
+    // DataContent` down to their JSON-safe equivalents (an ArrayBuffer, for
+    // instance, structurally loses its methods). GCA's ModelMessage content
+    // here is always plain text/tool-call parts — this agent never sends or
+    // receives file attachments — so the narrowing is a false positive for
+    // this call site specifically, not a real runtime concern.
+    const result = (await step.run(`model-${stepCount}`, () =>
+      modelTurn(system, messages),
+    )) as ModelTurnResult;
 
     if (result.toolCalls.length === 0) {
       messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
@@ -248,27 +265,8 @@ export async function runAgentTurn(
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         if (NEEDS_HITL.has(call.toolName)) {
-          await DBOS.runStep(
-            () =>
-              emit({
-                type: EventType.ApprovalRequested,
-                workflowId,
-                toolCallId: call.toolCallId,
-                action: call.toolName,
-                args: call.input,
-              }),
-            { name: `approval-requested-${call.toolCallId}` },
-          );
-          const decision = await requestHitlApproval(call.toolName, call.input, toolContext);
-          await DBOS.runStep(
-            () =>
-              emit({
-                type: EventType.ApprovalResolved,
-                workflowId,
-                toolCallId: call.toolCallId,
-                approved: decision.approved,
-              }),
-            { name: `approval-resolved-${call.toolCallId}` },
+          const decision = await step.run(`hitl-approval-${call.toolName}`, () =>
+            requestHitlApproval(call.toolName, call.input, toolContext),
           );
           if (!decision.approved) {
             return {
@@ -278,44 +276,14 @@ export async function runAgentTurn(
           }
         }
 
-        await DBOS.runStep(
-          () =>
-            emit({
-              type: EventType.ToolRequested,
-              workflowId,
-              toolCallId: call.toolCallId,
-              name: call.toolName,
-              args: call.input,
-            }),
-          { name: `tool-requested-${call.toolCallId}` },
-        );
-        try {
-          const output = await runToolCall(call.toolName, call.input, toolContext);
-          await DBOS.runStep(
-            () =>
-              emit({
-                type: EventType.ToolCompleted,
-                workflowId,
-                toolCallId: call.toolCallId,
-                result: output,
-              }),
-            { name: `tool-completed-${call.toolCallId}` },
-          );
-          return output;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await DBOS.runStep(
-            () =>
-              emit({
-                type: EventType.ToolFailed,
-                workflowId,
-                toolCallId: call.toolCallId,
-                error: message,
-              }),
-            { name: `tool-failed-${call.toolCallId}` },
-          );
-          throw err;
-        }
+        // See SELF_STEPPED_TOOLS above — wants_human/missing_info manage
+        // their own step checkpointing and must not be nested inside
+        // another step.run() call.
+        return SELF_STEPPED_TOOLS.has(call.toolName)
+          ? await runToolCall(call.toolName, call.input, toolContext)
+          : await step.run(`tool-${call.toolName}`, () =>
+              runToolCall(call.toolName, call.input, toolContext),
+            );
       }),
     );
     messages = [
@@ -325,93 +293,80 @@ export async function runAgentTurn(
     ];
   }
 
-  await DBOS.runStep(
-    () =>
-      emit({
-        type: EventType.WorkflowFailed,
-        workflowId,
-        error: `Hit the ${MAX_AGENT_STEPS}-step limit without finishing.`,
-      }),
-    { name: "max-steps-exceeded" },
-  );
-
   return { messages, stepCount };
 }
 
-// Durable wrapper around runAgentTurn: keeps the reasoning loop itself free
-// of guest-delivery side effects (recording the reply, the proactive Twilio
-// send). By the time this workflow reaches those side effects — whether
-// 200ms or, after a real missing_info suspend, hours later — the original
-// inbound Twilio HTTP request has already returned its empty TwiML ack, so
-// every guest-facing reply is delivered proactively now.
-//
-// Registered as a DBOS workflow (functional style) so runMissingInfo's
-// DBOS.recv()/DBOS.workflowID calls work — those only work inside a running
-// workflow's own call stack. The webhook route starts this without
-// awaiting it, so a suspended missing_info wait doesn't hold the HTTP request open.
-export interface RunGuestTurnInput {
+// The event that triggers a guest turn — sent (fire-and-forget) by the
+// webhook route, consumed by runGuestTurnFunction below.
+export const GUEST_TURN_REQUESTED_EVENT = "gca/guest-turn.requested";
+
+interface GuestTurnRequestedEventData {
+  // Which conversation this turn belongs to (conversations table row id).
   conversationId: string;
+  // Guest's WhatsApp number, normalized (no "whatsapp:" prefix).
   phone: string;
+  // The guest's message text — the actual content, not an id.
   incomingMessage: string;
-  // The guest's inbound whatsapp_messages row id — the real original
-  // question, distinct from a tool's own paraphrased `reason`. No longer
-  // persisted anywhere (the escalations table it used to end up in is
-  // gone); kept on ToolContext for whatever future feature needs to find
-  // the guest's original message.
+  // Row id of the guest's inbound message in whatsapp_messages. Not always
+  // set — only real webhook calls have one.
   triggerMessageId?: string;
+  // Random id for this run, set once in the webhook route. Lets
+  // step.waitForEvent (see missing-info.ts) find this exact suspended run
+  // when the owner's reply comes back as a separate event.
+  correlationId: string;
 }
 
-async function runGuestTurn(input: RunGuestTurnInput): Promise<void> {
-  const { conversationId, phone, incomingMessage, triggerMessageId } = input;
-  const workflowId = DBOS.workflowID ?? "unknown";
+export interface RunGuestTurnParams extends GuestTurnRequestedEventData {
+  step: GetStepTools<typeof inngest>;
+}
 
-  await DBOS.runStep(
-    () =>
-      emit({
-        type: EventType.WorkflowStarted,
-        workflowId,
-        conversationId,
-        phone,
-        incomingMessage,
-      }),
-    { name: "workflow-started" },
+// Delivery orchestrator: drives the real runAgentTurn, then records the
+// reply and sends it proactively. By the time this function reaches those
+// side effects — whether 200ms or, after a real missing_info suspend, hours
+// later — the original inbound Twilio HTTP request has already returned its
+// empty TwiML ack, so every guest-facing reply is delivered proactively now.
+//
+// Kept as a plain function (not the inngest.createFunction() call itself)
+// so tests can call it directly with a hand-rolled `step` mock instead of
+// spinning up a real Inngest engine — see runGuestTurnFunction below for the
+// thin adapter that actually gets registered with Inngest.
+export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
+  const { conversationId, phone, incomingMessage, triggerMessageId, correlationId, step } = params;
+
+  const result = await runAgentTurn(
+    { conversationId, phone, incomingMessage },
+    { triggerMessageId, correlationId, step },
   );
 
-  try {
-    const result = await runAgentTurn(
-      { conversationId, phone, incomingMessage },
-      { triggerMessageId },
-    );
+  const lastMessage = result.messages.at(-1);
+  const replyText =
+    lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
+      ? lastMessage.content
+      : "Sorry, I couldn't process that — please try again shortly.";
 
-    const lastMessage = result.messages.at(-1);
-    const replyText =
-      lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
-        ? lastMessage.content
-        : "Sorry, I couldn't process that — please try again shortly.";
-
+  await step.run("record-reply", () =>
     // NOT a real LangSmith trace id — nothing on LangSmith's side matches it,
     // so a later feedback submission against it will fail.
-    const runId = crypto.randomUUID();
-    await recordMessage(conversationId, "assistant", replyText, runId);
+    recordMessage(conversationId, "assistant", replyText, crypto.randomUUID()),
+  );
 
+  await step.run("send-whatsapp-reply", async () => {
     const sendResult = await sendWhatsAppMessage(phone, replyText);
     if (!sendResult.ok) {
       console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
     }
-
-    await DBOS.runStep(
-      () => emit({ type: EventType.WorkflowCompleted, workflowId, output: replyText }),
-      { name: "workflow-completed" },
-    );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await DBOS.runStep(() => emit({ type: EventType.WorkflowFailed, workflowId, error: message }), {
-      name: "workflow-failed",
-    });
-    throw err;
-  }
+    return sendResult;
+  });
 }
 
-export const runGuestTurnWorkflow = DBOS.registerWorkflow(runGuestTurn, {
-  name: "runGuestTurn",
-});
+// The Inngest function actually registered with /api/inngest (see
+// src/app/api/inngest/route.ts). Thin adapter: pulls the typed payload off
+// the triggering event and hands it, plus this run's own step tools, to the
+// plain runGuestTurn above.
+export const runGuestTurnFunction = inngest.createFunction(
+  { id: "run-guest-turn", triggers: [{ event: GUEST_TURN_REQUESTED_EVENT }] },
+  async ({ event, step }) => {
+    const data = event.data as GuestTurnRequestedEventData;
+    await runGuestTurn({ ...data, step });
+  },
+);

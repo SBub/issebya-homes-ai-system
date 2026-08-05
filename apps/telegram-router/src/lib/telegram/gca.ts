@@ -39,27 +39,28 @@ export async function sendGuestMessage(
   return { ok: true };
 }
 
-export type AnswerOwnerNudgeResult = { ok: true; resumed: boolean } | { ok: false; error: string };
+export type AnswerOwnerNudgeResult = { ok: true } | { ok: false; error: string };
 
 /**
- * Calls GCA's POST /api/owner-nudges/:workflowId/answer: writes the KB
- * entry, then wakes GCA's suspended DBOS workflow so it can compose and
- * send the real reply itself. `workflowId` is the suspended DBOS workflow's
- * own id, extracted by the webhook route straight out of the owner's
- * Telegram reply (the `[ref:<workflowId>]` tag embedded in the original
- * missing_info nudge) — there's no DB lookup involved anymore.
+ * Calls GCA's POST /api/owner-nudges/:correlationId/answer: writes the KB
+ * entry, then sends the event that wakes GCA's suspended run-guest-turn
+ * Inngest function so it can compose and send the real reply itself.
+ * `correlationId` is the suspended function's own correlation id, extracted
+ * by the webhook route straight out of the owner's Telegram reply (the
+ * `[ref:<correlationId>]` tag embedded in the original missing_info nudge)
+ * — there's no DB lookup involved anymore.
  *
- * `resumed` reports only whether the wake-up call reached a known workflow —
- * NOT whether the guest was actually messaged (that happens later, inside
- * the resumed workflow, invisible to this router). `resumed: false` lets the
- * caller give an honest "saved, but couldn't resume" message (e.g. a
- * duplicate/late reply after the workflow already resumed or expired — see
- * GCA's handleMissingInfoReplyReceived for why that's safe rather than an
- * error). There's no more 409/already-resolved outcome — no DB row exists
- * to hold that state.
+ * Unlike the old DBOS-backed version, GCA has no way to tell us whether a
+ * suspended run was actually still waiting on this answer — Inngest gives no
+ * such signal (sending an event nobody's waiting on isn't an error, it's
+ * simply never consumed). So this only reports whether the call itself
+ * succeeded, NOT whether the guest was actually messaged (that happens
+ * later, inside the resumed run, invisible to this router either way) and
+ * NOT whether anything was actually resumed. There's no more 409/
+ * already-resolved outcome — no DB row exists to hold that state.
  */
 export async function answerOwnerNudge(
-  workflowId: string,
+  correlationId: string,
   answer: string,
 ): Promise<AnswerOwnerNudgeResult> {
   const baseUrl = process.env.GUEST_COMMUNICATION_AGENT_API_URL;
@@ -70,18 +71,20 @@ export async function answerOwnerNudge(
     );
   }
 
-  const res = await fetch(`${baseUrl}/api/owner-nudges/${encodeURIComponent(workflowId)}/answer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-    body: JSON.stringify({ answer }),
-  });
+  const res = await fetch(
+    `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/answer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ answer }),
+    },
+  );
 
   if (!res.ok) {
     return {
       ok: false,
-      error: `GCA answer for workflow ${workflowId} failed (${res.status}): ${await res.text()}`,
+      error: `GCA answer for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`,
     };
   }
-  const body = (await res.json().catch(() => ({}))) as { resumed?: boolean };
-  return { ok: true, resumed: body.resumed ?? false };
+  return { ok: true };
 }

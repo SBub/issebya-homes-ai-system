@@ -10,10 +10,11 @@ export interface OwnerNudgeResult {
  * which composes and sends the Telegram message notifying the owner.
  * reasonCategory/conversationId let the route compose a category-appropriate
  * message (missing_info invites a reply, wants_human is a one-way alert).
- * workflowId (missing_info only) gets embedded by that route as a
- * `[ref:<workflowId>]` tag at the end of the nudge text, so a later owner
- * reply can be correlated back to the exact suspended DBOS workflow via
- * Telegram's own `reply_to_message.text` — no DB round-trip involved.
+ * correlationId (missing_info only) gets embedded by that route as a
+ * `[ref:<correlationId>]` tag at the end of the nudge text, so a later owner
+ * reply can be correlated back to the exact suspended run-guest-turn Inngest
+ * function via Telegram's own `reply_to_message.text` — no DB round-trip
+ * involved.
  *
  * A missing config or delivery failure returns a result object rather than
  * throwing — this is a best-effort notification, not something worth
@@ -24,7 +25,7 @@ export async function sendOwnerNudge(params: {
   reason: string;
   reasonCategory: OwnerNudgeReason;
   conversationId: string;
-  workflowId?: string;
+  correlationId?: string;
 }): Promise<OwnerNudgeResult> {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;

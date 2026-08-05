@@ -1,5 +1,7 @@
 import type { ModelMessage } from "ai";
+import type { GetStepTools } from "inngest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { inngest } from "@/lib/inngest";
 
 // Drives runAgentTurn end-to-end, mocking only the true external boundaries:
 // Postgres, telegram-router, LangSmith's Prompt Hub, and generateText
@@ -39,31 +41,6 @@ vi.mock("@/lib/twilio-send.js", () => ({
   sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
 
-// workflowID undefined by default (no live workflow context in these
-// tests). recv defaults to resolving null (a timeout), driving
-// runMissingInfo's real "owner has been notified" fallback path.
-// registerWorkflow is mocked to just return the plain function, so
-// runGuestTurnWorkflow can be called directly like any other async function.
-const dbosRecvMock = vi.fn().mockResolvedValue(null);
-const dbosSendMock = vi.fn();
-const registerWorkflowMock = vi.fn((fn: unknown, _options: { name: string }) => fn);
-// Immediately invokes the callback, matching how a real runStep behaves from
-// the caller's perspective — this suite doesn't assert anything about the
-// emitted events themselves, just that wrapping runStep doesn't break the
-// existing call sites/mocks.
-const dbosRunStepMock = vi.fn((fn: () => unknown) => fn());
-vi.mock("@dbos-inc/dbos-sdk", () => ({
-  DBOS: {
-    get workflowID() {
-      return undefined;
-    },
-    recv: dbosRecvMock,
-    send: dbosSendMock,
-    registerWorkflow: registerWorkflowMock,
-    runStep: dbosRunStepMock,
-  },
-}));
-
 // Mocked as a real constructable class since `new Client(...)` must keep
 // working.
 const pullPromptCommitMock = vi.fn();
@@ -94,15 +71,31 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { runAgentTurn, runGuestTurnWorkflow, sanitizeReplyText } = await import(
-  "@/agent/run-turn.js"
-);
-
-// Captured before beforeEach's vi.clearAllMocks() wipes it — registration
-// happens exactly once, at import time.
-const registrationCallArgs = registerWorkflowMock.mock.calls[0];
+const { runAgentTurn, runGuestTurn, sanitizeReplyText } = await import("@/agent/run-turn.js");
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
+
+// Hand-rolled Inngest step mock — mirrors how @dbos-inc/dbos-sdk used to be
+// hand-mocked in this suite. step.run immediately invokes its callback
+// (matching how a real step.run behaves from the caller's perspective once
+// memoized state doesn't short-circuit it) rather than pulling in
+// @inngest/test's heavier InngestTestEngine harness, since run-turn.ts now
+// takes `step` as a plain explicit parameter instead of an ambient import —
+// a plain mock object is enough.
+type StepTools = GetStepTools<typeof inngest>;
+
+// Only `run`/`waitForEvent` are exercised by real code here — the rest of
+// the real StepTools surface (sendEvent, sleep, ai, ...) is cast away rather
+// than stubbed out, since nothing under test calls it.
+function makeStepMock() {
+  return {
+    run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    waitForEvent: vi.fn(),
+  } as unknown as StepTools & {
+    run: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+  };
+}
 
 function textResponse(text: string) {
   return {
@@ -134,8 +127,14 @@ function toolCallResponse(
 }
 
 describe("runAgentTurn", () => {
+  let step: ReturnType<typeof makeStepMock>;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    step = makeStepMock();
+    // waitForEvent defaults to resolving null (a timeout), driving
+    // runMissingInfo's real "owner has been notified" fallback path.
+    step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
       contextBlock: "No prior guest information available.",
@@ -166,11 +165,14 @@ describe("runAgentTurn", () => {
     });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
-    await runAgentTurn({
-      conversationId: "convo-1",
-      phone: "+3519",
-      incomingMessage: "Also, is breakfast included?",
-    });
+    await runAgentTurn(
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        incomingMessage: "Also, is breakfast included?",
+      },
+      { correlationId: "corr-1", step },
+    );
 
     expect(loadMemoryMock).toHaveBeenCalledWith({ conversationId: "convo-1", phone: "+3519" });
 
@@ -187,17 +189,40 @@ describe("runAgentTurn", () => {
       textResponse("The **Hairdryer** is in the bathroom — just ask if you need help."),
     );
 
-    const result = await runAgentTurn({
-      conversationId: "convo-1",
-      phone: "+3519",
-      incomingMessage: "Is there a hairdryer?",
-    });
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        incomingMessage: "Is there a hairdryer?",
+      },
+      { correlationId: "corr-1", step },
+    );
 
     expect(result.stepCount).toBe(1);
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
       content: "The Hairdryer is in the bathroom, just ask if you need help.",
     });
+  });
+
+  it("wraps each model round and every real tool call in step.run for durability", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          { toolName: "getPricing", input: { room: "room1" }, toolCallId: "call_price" },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Here's the price."));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "How much is room 1?" },
+      { correlationId: "corr-1", step },
+    );
+
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("model-1");
+    expect(stepIds).toContain("tool-getPricing");
+    expect(stepIds).toContain("model-2");
   });
 
   it("fans out to every tool call in one round and correlates tool results by tool_call_id, then loops back to the model", async () => {
@@ -219,11 +244,14 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("All set, here is your link!"));
 
-    const result = await runAgentTurn({
-      conversationId: "convo-1",
-      phone: "+3519",
-      incomingMessage: "Book room 1 for Ana, Sep 1-5",
-    });
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        incomingMessage: "Book room 1 for Ana, Sep 1-5",
+      },
+      { correlationId: "corr-1", step },
+    );
 
     expect(generateTextMock).toHaveBeenCalledTimes(2);
     expect(result.stepCount).toBe(2);
@@ -263,7 +291,7 @@ describe("runAgentTurn", () => {
         phone: "+351900000099",
         incomingMessage: "Is there a juicer in the kitchen?",
       },
-      { triggerMessageId: "trigger-1" },
+      { triggerMessageId: "trigger-1", correlationId: "corr-cap", step },
     );
 
     expect(generateTextMock).toHaveBeenCalledTimes(8);
@@ -274,10 +302,12 @@ describe("runAgentTurn", () => {
     expect(last?.role).toBe("tool");
   });
 
-  it("keeps looping after a missing_info tool call (a real DBOS.recv answer flows back as the tool's own result, and the model composes a real final reply in the same turn)", async () => {
+  it("keeps looping after a missing_info tool call (a real step.waitForEvent answer flows back as the tool's own result, and the model composes a real final reply in the same turn)", async () => {
     // Overrides this suite's default (resolves null, a timeout) with a real
     // answer, so runMissingInfo returns { escalated: true, answer } directly.
-    dbosRecvMock.mockResolvedValueOnce("The sauna is on the ground floor.");
+    step.waitForEvent.mockResolvedValueOnce({
+      data: { answer: "The sauna is on the ground floor." },
+    });
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -290,11 +320,14 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Actually, here's the answer about the sauna!"));
 
-    const result = await runAgentTurn({
-      conversationId: "convo-sticky",
-      phone: "+351900000002",
-      incomingMessage: "Is there a sauna?",
-    });
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-sticky",
+        phone: "+351900000002",
+        incomingMessage: "Is there a sauna?",
+      },
+      { correlationId: "corr-sticky", step },
+    );
 
     // The loop kept going after the tool call — the model got a second
     // round and composed real text, not an early return.
@@ -317,6 +350,12 @@ describe("runAgentTurn", () => {
       type: "json",
       value: { escalated: true, answer: "The sauna is on the ground floor." },
     });
+
+    // missing_info manages its own step checkpointing internally (it calls
+    // context.step directly) — it must NOT also be wrapped in an outer
+    // "tool-missing_info" step.run, since Inngest doesn't support nesting
+    // step calls inside another step.run()'s callback.
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-missing_info");
   });
 
   it("escalates a wants_human tool call as its own reason_category", async () => {
@@ -332,15 +371,20 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
 
-    await runAgentTurn({
-      conversationId: "convo-wants-human",
-      phone: "+351900000003",
-      incomingMessage: "I want to talk to a person",
-    });
+    await runAgentTurn(
+      {
+        conversationId: "convo-wants-human",
+        phone: "+351900000003",
+        incomingMessage: "I want to talk to a person",
+      },
+      { correlationId: "corr-wants-human", step },
+    );
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "wants_human" }),
     );
+    // Same nesting concern as missing_info above.
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-wants_human");
   });
 
   it("routes wants_human and sendBookingLink through the stub HITL gate (which always approves today) before running them", async () => {
@@ -367,11 +411,14 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Sure thing!"));
 
-    const result = await runAgentTurn({
-      conversationId: "convo-hitl",
-      phone: "+351900000010",
-      incomingMessage: "Book it and also let me talk to someone",
-    });
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-hitl",
+        phone: "+351900000010",
+        incomingMessage: "Book it and also let me talk to someone",
+      },
+      { correlationId: "corr-hitl", step },
+    );
 
     // Both gated tools still ran to completion (their real side effects
     // fired) since the stub always approves — see run-turn.ts's
@@ -397,11 +444,14 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Got it, here is the price."));
 
-    await runAgentTurn({
-      conversationId: "convo-no-hitl",
-      phone: "+351900000011",
-      incomingMessage: "How much is room 1?",
-    });
+    await runAgentTurn(
+      {
+        conversationId: "convo-no-hitl",
+        phone: "+351900000011",
+        incomingMessage: "How much is room 1?",
+      },
+      { correlationId: "corr-no-hitl", step },
+    );
 
     expect(consoleWarnSpy).not.toHaveBeenCalled();
     consoleWarnSpy.mockRestore();
@@ -416,11 +466,10 @@ describe("runAgentTurn", () => {
     );
 
     await expect(
-      runAgentTurn({
-        conversationId: "convo-bogus",
-        phone: "+351900000005",
-        incomingMessage: "Whatever",
-      }),
+      runAgentTurn(
+        { conversationId: "convo-bogus", phone: "+351900000005", incomingMessage: "Whatever" },
+        { correlationId: "corr-bogus", step },
+      ),
     ).rejects.toThrow(/unknown tool name.*bogusTool/i);
   });
 });
@@ -436,24 +485,47 @@ describe("sanitizeReplyText", () => {
   });
 });
 
-// The DBOS-wrapped delivery orchestrator: drives the real runAgentTurn (via
-// this suite's existing mocks — loadMemory, generateText, etc.), then
+// The Inngest-driven delivery orchestrator: drives the real runAgentTurn
+// (via this suite's existing mocks — loadMemory, generateText, etc.), then
 // records the reply and sends it proactively. No CRM touch step — see the
-// CRM removal in this app's history.
-describe("runGuestTurnWorkflow", () => {
-  it("registers itself as a DBOS workflow named runGuestTurn", () => {
-    expect(registrationCallArgs?.[0]).toEqual(expect.any(Function));
-    expect(registrationCallArgs?.[1]).toEqual(expect.objectContaining({ name: "runGuestTurn" }));
+// CRM removal in this app's history. runGuestTurn is the plain function
+// runGuestTurnFunction (in the real app) wraps with inngest.createFunction —
+// exercised directly here with a hand-rolled step mock instead of a real
+// Inngest engine.
+describe("runGuestTurn", () => {
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    step = makeStepMock();
+    step.waitForEvent.mockResolvedValue(null);
+    loadMemoryMock.mockResolvedValue({
+      historyMessages: [],
+      contextBlock: "No prior guest information available.",
+    });
+    pullPromptCommitMock.mockResolvedValue({
+      manifest: {},
+      owner: "test-owner",
+      repo: "test-repo",
+      commit_hash: "abc123",
+    });
+    promptTemplateInvokeMock.mockResolvedValue({
+      toChatMessages: () => [{ content: SYSTEM_PROMPT_TEXT }],
+    });
+    recordMessageMock.mockResolvedValue("msg-assistant-1");
+    sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
   });
 
-  it("runs the turn, records the assistant reply, and sends it via Twilio", async () => {
+  it("runs the turn, records the assistant reply, and sends it via Twilio, both inside their own step.run", async () => {
     generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
 
-    await runGuestTurnWorkflow({
+    await runGuestTurn({
       conversationId: "convo-1",
       phone: "+351920742845",
       incomingMessage: "Is room 1 free?",
       triggerMessageId: "msg-user-1",
+      correlationId: "corr-1",
+      step,
     });
 
     expect(recordMessageMock).toHaveBeenCalledWith(
@@ -466,6 +538,8 @@ describe("runGuestTurnWorkflow", () => {
       "+351920742845",
       "Yes, room 1 is available!",
     );
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toEqual(expect.arrayContaining(["record-reply", "send-whatsapp-reply"]));
   });
 
   it("falls back to a generic apology reply when the turn's last message isn't a string assistant message", async () => {
@@ -477,10 +551,12 @@ describe("runGuestTurnWorkflow", () => {
       ]),
     );
 
-    await runGuestTurnWorkflow({
+    await runGuestTurn({
       conversationId: "convo-1",
       phone: "+351920742845",
       incomingMessage: "???",
+      correlationId: "corr-2",
+      step,
     });
 
     const expectedFallback = "Sorry, I couldn't process that — please try again shortly.";
@@ -502,10 +578,12 @@ describe("runGuestTurnWorkflow", () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      runGuestTurnWorkflow({
+      runGuestTurn({
         conversationId: "convo-1",
         phone: "+351920742845",
         incomingMessage: "Hi",
+        correlationId: "corr-3",
+        step,
       }),
     ).resolves.toBeUndefined();
 

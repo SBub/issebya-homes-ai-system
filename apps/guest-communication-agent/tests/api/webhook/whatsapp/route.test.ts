@@ -2,9 +2,9 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // verifyTwilioSignature always passes so these tests can focus on this
-// route's own wiring: recording the inbound message, then starting the
-// durable runGuestTurn workflow via DBOS.startWorkflow WITHOUT awaiting it,
-// and always returning empty TwiML immediately.
+// route's own wiring: recording the inbound message, then triggering the
+// durable run-guest-turn Inngest function via inngest.send WITHOUT awaiting
+// its result, and always returning empty TwiML immediately.
 const verifyTwilioSignatureMock = vi.fn(() => true);
 vi.mock("@/lib/twilio.js", () => ({
   verifyTwilioSignature: verifyTwilioSignatureMock,
@@ -17,24 +17,19 @@ vi.mock("@/lib/conversations.js", () => ({
   recordMessage: recordMessageMock,
 }));
 
-const ensureDbosLaunchedMock = vi.fn();
-vi.mock("@/lib/dbos.js", () => ({
-  ensureDbosLaunched: ensureDbosLaunchedMock,
+const inngestSendMock = vi.fn();
+vi.mock("@/lib/inngest.js", () => ({
+  inngest: { send: inngestSendMock },
 }));
 
-// runGuestTurnWorkflow is just a plain marker value here — the real
-// registration is exercised in tests/agent/run-turn.test.ts.
-const runGuestTurnWorkflowMock = { name: "runGuestTurn" };
+// run-turn.ts pulls in generateText/langsmith/langchain/openrouter — heavy,
+// unrelated dependencies this route doesn't need. Mocked wholesale (down to
+// a single marker constant), matching how the DBOS-era version of this test
+// mocked runGuestTurnWorkflow as a plain marker value rather than importing
+// the real module.
+const GUEST_TURN_REQUESTED_EVENT = "gca/guest-turn.requested";
 vi.mock("@/agent/run-turn.js", () => ({
-  runGuestTurnWorkflow: runGuestTurnWorkflowMock,
-}));
-
-const startWorkflowInnerMock = vi.fn();
-const dbosStartWorkflowMock = vi.fn(() => startWorkflowInnerMock);
-vi.mock("@dbos-inc/dbos-sdk", () => ({
-  DBOS: {
-    startWorkflow: dbosStartWorkflowMock,
-  },
+  GUEST_TURN_REQUESTED_EVENT,
 }));
 
 const { POST } = await import("@/app/api/webhook/whatsapp/route.js");
@@ -59,44 +54,45 @@ describe("POST /api/webhook/whatsapp", () => {
     verifyTwilioSignatureMock.mockReset().mockReturnValue(true);
     getOrCreateActiveConversationMock.mockReset();
     recordMessageMock.mockReset();
-    ensureDbosLaunchedMock.mockReset();
-    dbosStartWorkflowMock.mockClear();
-    startWorkflowInnerMock.mockReset();
+    inngestSendMock.mockReset();
 
     getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1" });
     recordMessageMock.mockResolvedValue("msg-user-1");
-    ensureDbosLaunchedMock.mockResolvedValue(undefined);
-    startWorkflowInnerMock.mockResolvedValue({ workflowID: "wf-1" });
+    inngestSendMock.mockResolvedValue({ ids: ["evt-1"] });
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
   });
 
-  it("records the inbound message, then starts runGuestTurnWorkflow with the recorded message id as triggerMessageId", async () => {
+  it("records the inbound message, then sends GUEST_TURN_REQUESTED_EVENT with the recorded message id as triggerMessageId and a freshly generated correlationId", async () => {
     const res = await POST(
       makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
     );
 
     expect(res.status).toBe(200);
     expect(recordMessageMock).toHaveBeenCalledWith("convo-1", "user", "Is room 1 free?");
-    expect(ensureDbosLaunchedMock).toHaveBeenCalled();
-    expect(dbosStartWorkflowMock).toHaveBeenCalledWith(runGuestTurnWorkflowMock);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    const [sentEvent] = inngestSendMock.mock.calls[0];
+    expect(sentEvent.name).toBe(GUEST_TURN_REQUESTED_EVENT);
     // The workflow input carries the normalized (bare, "whatsapp:"-stripped)
     // phone even though params.From arrived prefixed — the route normalizes
     // once, right at the ingress boundary, and everything downstream
-    // (including the agent workflow) receives that already-clean value.
-    expect(startWorkflowInnerMock).toHaveBeenCalledWith({
+    // (including the agent function) receives that already-clean value.
+    expect(sentEvent.data).toEqual({
       conversationId: "convo-1",
       phone: "+351920742845",
       incomingMessage: "Is room 1 free?",
       triggerMessageId: "msg-user-1",
+      correlationId: expect.any(String),
     });
+    // A real, non-empty UUID — generated once, here, not left undefined.
+    expect(sentEvent.data.correlationId.length).toBeGreaterThan(0);
   });
 
   it("always returns empty TwiML, never a message-bearing response", async () => {
-    // startWorkflowInnerMock resolving quickly mirrors DBOS's real "started"
-    // resolution, not the workflow's actual completion.
+    // inngestSendMock resolving quickly mirrors Inngest's real "accepted"
+    // resolution, not the triggered function's actual completion.
     const res = await POST(
       makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
     );
@@ -114,6 +110,6 @@ describe("POST /api/webhook/whatsapp", () => {
     );
 
     expect(res.status).toBe(401);
-    expect(dbosStartWorkflowMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 });

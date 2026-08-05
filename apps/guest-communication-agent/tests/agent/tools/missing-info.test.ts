@@ -1,8 +1,13 @@
+import type { GetStepTools } from "inngest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { inngest } from "@/lib/inngest";
 
 // Mocks every real external boundary: Postgres (documents insert only —
-// there's no escalations table anymore), the embedding call, and DBOS
-// itself (DBOS.recv/send/workflowID/Error).
+// there's no escalations table anymore), the embedding call, telegram-router,
+// and inngest.send. step is a hand-rolled mock (run/waitForEvent), matching
+// how @dbos-inc/dbos-sdk used to be hand-mocked — run-turn.ts now threads
+// `step` in as a plain explicit parameter instead of an ambient import, so a
+// plain mock object is enough; no need for @inngest/test's heavier harness.
 const mockDocInsert = vi.fn();
 
 const mockFrom = vi.fn((table: string) => {
@@ -28,26 +33,9 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ embedding: (model: string) => model }),
 }));
 
-// Mirrors the real @dbos-inc/dbos-sdk shape closely enough for
-// `err instanceof DBOSErrors.DBOSNonExistentWorkflowError` to work.
-class DBOSNonExistentWorkflowError extends Error {}
-
-let mockDbosWorkflowId: string | undefined;
-const dbosRecvMock = vi.fn();
-const dbosSendMock = vi.fn();
-// Immediately invokes the callback, matching how a real runStep behaves from
-// the caller's perspective.
-const dbosRunStepMock = vi.fn((fn: () => unknown) => fn());
-vi.mock("@dbos-inc/dbos-sdk", () => ({
-  DBOS: {
-    get workflowID() {
-      return mockDbosWorkflowId;
-    },
-    recv: dbosRecvMock,
-    send: dbosSendMock,
-    runStep: dbosRunStepMock,
-  },
-  Error: { DBOSNonExistentWorkflowError },
+const inngestSendMock = vi.fn();
+vi.mock("@/lib/inngest.js", () => ({
+  inngest: { send: inngestSendMock },
 }));
 
 const {
@@ -55,48 +43,68 @@ const {
   waitForMissingInfoReply,
   handleMissingInfoNoReply,
   handleMissingInfoReplyReceived,
+  OWNER_NUDGE_ANSWERED_EVENT,
 } = await import("@/agent/tools/missing-info.js");
 
-const toolContext = { conversationId: "convo-1", phone: "+351920742845" };
+const toolContextBase = { conversationId: "convo-1", phone: "+351920742845" };
 
-const MISSING_INFO_REPLY_TOPIC = "missing_info_reply";
-const MISSING_INFO_REPLY_TIMEOUT_SECONDS = 24 * 60 * 60;
+const MISSING_INFO_REPLY_TIMEOUT = "24h";
+
+type StepTools = GetStepTools<typeof inngest>;
+
+// Only `run`/`waitForEvent` are exercised by real code here — the rest of
+// the real StepTools surface is cast away rather than stubbed out, since
+// nothing under test calls it.
+function makeStepMock() {
+  return {
+    run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    waitForEvent: vi.fn(),
+  } as unknown as StepTools & {
+    run: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+  };
+}
 
 describe("waitForMissingInfoReply", () => {
+  let step: ReturnType<typeof makeStepMock>;
+
   beforeEach(() => {
-    dbosRecvMock.mockReset();
+    step = makeStepMock();
   });
 
-  it("calls DBOS.recv with the missing_info_reply topic and the configured timeout, returning a real answer as-is", async () => {
-    dbosRecvMock.mockResolvedValueOnce("The AC is above the bed");
+  it("calls step.waitForEvent with the owner-nudge-answered event, matching on data.correlationId, and the configured timeout, returning a real answer as-is", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { answer: "The AC is above the bed" } });
 
-    const result = await waitForMissingInfoReply("wf-abc-123");
+    const result = await waitForMissingInfoReply({ step, correlationId: "corr-abc-123" });
 
-    expect(dbosRecvMock).toHaveBeenCalledWith(
-      MISSING_INFO_REPLY_TOPIC,
-      MISSING_INFO_REPLY_TIMEOUT_SECONDS,
-    );
+    expect(step.waitForEvent).toHaveBeenCalledWith("wait-for-owner-answer", {
+      event: OWNER_NUDGE_ANSWERED_EVENT,
+      match: "data.correlationId",
+      timeout: MISSING_INFO_REPLY_TIMEOUT,
+    });
     expect(result).toBe("The AC is above the bed");
   });
 
-  it("returns null and calls handleMissingInfoNoReply when DBOS.recv times out (resolves null)", async () => {
-    dbosRecvMock.mockResolvedValueOnce(null);
+  it("returns null and calls handleMissingInfoNoReply when step.waitForEvent times out (resolves null)", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await waitForMissingInfoReply("wf-abc-123");
+    const result = await waitForMissingInfoReply({ step, correlationId: "corr-abc-123" });
 
     expect(result).toBeNull();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-abc-123"));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));
     consoleWarnSpy.mockRestore();
   });
 });
 
 describe("handleMissingInfoNoReply", () => {
-  it("resolves after logging — no DB/DBOS side effects (see waitForMissingInfoReply, the only real caller)", async () => {
+  it("resolves after logging — no DB side effects (see waitForMissingInfoReply, the only real caller)", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await expect(handleMissingInfoNoReply("wf-abc-123")).resolves.toBeUndefined();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-abc-123"));
+    await expect(
+      handleMissingInfoNoReply({ correlationId: "corr-abc-123" }),
+    ).resolves.toBeUndefined();
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));
     expect(mockFrom).not.toHaveBeenCalled();
 
     consoleWarnSpy.mockRestore();
@@ -104,9 +112,11 @@ describe("handleMissingInfoNoReply", () => {
 });
 
 describe("runMissingInfo", () => {
+  let step: ReturnType<typeof makeStepMock>;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbosWorkflowId = undefined;
+    step = makeStepMock();
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
   });
 
@@ -115,9 +125,9 @@ describe("runMissingInfo", () => {
   });
 
   it("step 1 (real): sends the Telegram nudge exactly like the other owner-nudge tools", async () => {
-    dbosRecvMock.mockResolvedValueOnce(null);
+    step.waitForEvent.mockResolvedValueOnce(null);
 
-    await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    await runMissingInfo({ reason: "Guest asked about the AC" }, { ...toolContextBase, step });
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -129,45 +139,54 @@ describe("runMissingInfo", () => {
     );
   });
 
-  it("reads DBOS.workflowID and passes it through to requestOwnerNudge when set", async () => {
-    mockDbosWorkflowId = "wf-abc-123";
-    dbosRecvMock.mockResolvedValueOnce(null);
+  it("reads context.correlationId and passes it through to requestOwnerNudge when set", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
 
-    await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    await runMissingInfo(
+      { reason: "Guest asked about the AC" },
+      { ...toolContextBase, step, correlationId: "corr-abc-123" },
+    );
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowId: "wf-abc-123" }),
+      expect.objectContaining({ correlationId: "corr-abc-123" }),
     );
   });
 
-  it("passes workflowId: undefined when DBOS.workflowID is undefined (no live workflow context)", async () => {
-    dbosRecvMock.mockResolvedValueOnce(null);
+  it("passes correlationId: undefined when context.correlationId is undefined (no live run context)", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
 
-    await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    await runMissingInfo({ reason: "Guest asked about the AC" }, { ...toolContextBase, step });
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowId: undefined }),
+      expect.objectContaining({ correlationId: undefined }),
     );
   });
 
-  it("returns the answer directly as its own tool result when DBOS.recv resolves with a real answer — no re-embedding at this call site", async () => {
-    dbosRecvMock.mockResolvedValueOnce("The AC is above the bed");
+  it("returns the answer directly as its own tool result when step.waitForEvent resolves with a real answer — no re-embedding at this call site", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { answer: "The AC is above the bed" } });
 
-    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    const result = await runMissingInfo(
+      { reason: "Guest asked about the AC" },
+      { ...toolContextBase, step },
+    );
 
     expect(result).toEqual({ escalated: true, answer: "The AC is above the bed" });
     // The embedding already happened on the resolve-route side (see
-    // handleMissingInfoReplyReceived's own tests below) BEFORE DBOS.send
-    // delivered this answer here — runMissingInfo must not re-embed.
+    // handleMissingInfoReplyReceived's own tests below) BEFORE the
+    // owner-nudge-answered event delivered this answer here — runMissingInfo
+    // must not re-embed.
     expect(embedMock).not.toHaveBeenCalled();
     expect(mockDocInsert).not.toHaveBeenCalled();
   });
 
-  it("falls back to the owner-notified response when DBOS.recv times out (resolves null)", async () => {
-    dbosRecvMock.mockResolvedValueOnce(null);
+  it("falls back to the owner-notified response when step.waitForEvent times out (resolves null)", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    const result = await runMissingInfo(
+      { reason: "Guest asked about the AC" },
+      { ...toolContextBase, step },
+    );
 
     expect(result).toEqual({
       escalated: true,
@@ -176,18 +195,21 @@ describe("runMissingInfo", () => {
     consoleWarnSpy.mockRestore();
   });
 
-  it("skips the DBOS.recv wait entirely (and still returns the fallback message) when the nudge itself failed", async () => {
+  it("skips the step.waitForEvent wait entirely (and still returns the fallback message) when the nudge itself failed", async () => {
     sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await runMissingInfo({ reason: "Guest asked about the AC" }, toolContext);
+    const result = await runMissingInfo(
+      { reason: "Guest asked about the AC" },
+      { ...toolContextBase, step },
+    );
 
     expect(result).toEqual({
       escalated: true,
       message: "The owner has been notified and will be in touch shortly.",
     });
-    // Nudge failed means nothing to wait on — DBOS.recv is never called.
-    expect(dbosRecvMock).not.toHaveBeenCalled();
+    // Nudge failed means nothing to wait on — step.waitForEvent is never called.
+    expect(step.waitForEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -196,15 +218,15 @@ describe("handleMissingInfoReplyReceived", () => {
     vi.clearAllMocks();
     embedMock.mockResolvedValue({ embedding: [0.1, 0.2, 0.3] });
     mockDocInsert.mockResolvedValue({ error: null });
+    inngestSendMock.mockResolvedValue({ ids: ["evt-1"] });
   });
 
-  it("embeds the answer, inserts into documents, then calls DBOS.send with the workflow id and returns resumed:true", async () => {
-    const result = await handleMissingInfoReplyReceived({
-      workflowId: "wf-abc-123",
+  it("embeds the answer, inserts into documents, then sends the owner-nudge-answered event with the correlation id", async () => {
+    await handleMissingInfoReplyReceived({
+      correlationId: "corr-abc-123",
       answer: "The AC is above the bed",
     });
 
-    expect(result).toEqual({ resumed: true });
     expect(embedMock).toHaveBeenCalledWith(
       expect.objectContaining({ value: "The AC is above the bed" }),
     );
@@ -216,53 +238,36 @@ describe("handleMissingInfoReplyReceived", () => {
     });
 
     // Order matters (per the app owner): the KB embed/insert must happen
-    // BEFORE DBOS.send wakes the workflow.
+    // BEFORE the event that wakes a suspended run is sent.
     const docInsertOrder = mockDocInsert.mock.invocationCallOrder[0];
-    const sendOrder = dbosSendMock.mock.invocationCallOrder[0];
+    const sendOrder = inngestSendMock.mock.invocationCallOrder[0];
     expect(docInsertOrder).toBeLessThan(sendOrder);
 
-    expect(dbosSendMock).toHaveBeenCalledWith(
-      "wf-abc-123",
-      "The AC is above the bed",
-      MISSING_INFO_REPLY_TOPIC,
-    );
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      name: OWNER_NUDGE_ANSWERED_EVENT,
+      data: { correlationId: "corr-abc-123", answer: "The AC is above the bed" },
+    });
   });
 
-  it("throws when the documents insert fails, before touching DBOS.send", async () => {
+  it("throws when the documents insert fails, before touching inngest.send", async () => {
     mockDocInsert.mockResolvedValueOnce({ error: { message: "insert boom" } });
 
     await expect(
       handleMissingInfoReplyReceived({
-        workflowId: "wf-abc-123",
+        correlationId: "corr-abc-123",
         answer: "The AC is above the bed",
       }),
     ).rejects.toThrow("insert boom");
 
-    expect(dbosSendMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
-  it("returns resumed:false (without throwing) when DBOS.send reports the workflow no longer exists — a duplicate/late reply", async () => {
-    dbosSendMock.mockRejectedValueOnce(
-      new DBOSNonExistentWorkflowError("Sent to non-existent destination workflow UUID: wf-gone"),
-    );
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const result = await handleMissingInfoReplyReceived({
-      workflowId: "wf-gone",
-      answer: "The AC is above the bed",
-    });
-
-    expect(result).toEqual({ resumed: false });
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wf-gone"));
-    consoleWarnSpy.mockRestore();
-  });
-
-  it("rethrows any other DBOS.send failure rather than swallowing it", async () => {
-    dbosSendMock.mockRejectedValueOnce(new Error("connection reset"));
+  it("rethrows an inngest.send failure rather than swallowing it — there's no equivalent to DBOS's 'workflow doesn't exist' case to catch", async () => {
+    inngestSendMock.mockRejectedValueOnce(new Error("connection reset"));
 
     await expect(
       handleMissingInfoReplyReceived({
-        workflowId: "wf-abc-123",
+        correlationId: "corr-abc-123",
         answer: "The AC is above the bed",
       }),
     ).rejects.toThrow("connection reset");

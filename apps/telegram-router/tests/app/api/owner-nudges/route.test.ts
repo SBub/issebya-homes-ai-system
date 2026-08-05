@@ -79,29 +79,29 @@ describe("POST /api/owner-nudges", () => {
     expect(text.toLowerCase()).toContain("reply");
   });
 
-  it("appends a [ref:<workflowId>] tag two newlines after the missing_info body when workflowId is supplied", async () => {
-    const res = await POST(makeRequest({ ...validBody, workflowId: "wf-abc-123" }));
+  it("appends a [ref:<correlationId>] tag two newlines after the missing_info body when correlationId is supplied", async () => {
+    const res = await POST(makeRequest({ ...validBody, correlationId: "corr-abc-123" }));
     const json = await res.json();
 
     expect(json).toEqual({ ok: true });
     const [text] = sendMessageMock.mock.calls[0];
-    expect(text.endsWith("\n\n[ref:wf-abc-123]")).toBe(true);
+    expect(text.endsWith("\n\n[ref:corr-abc-123]")).toBe(true);
   });
 
-  it("omits the [ref:...] tag entirely when workflowId isn't supplied", async () => {
+  it("omits the [ref:...] tag entirely when correlationId isn't supplied", async () => {
     await POST(makeRequest(validBody));
 
     const [text] = sendMessageMock.mock.calls[0];
     expect(text).not.toContain("[ref:");
   });
 
-  it("sends a plain one-way alert with no ref tag for wants_human, even if workflowId were supplied", async () => {
+  it("sends a plain one-way alert with no ref tag for wants_human, even if correlationId were supplied", async () => {
     const res = await POST(
       makeRequest({
         ...validBody,
         reasonCategory: "wants_human",
         reason: "Guest is upset about noise",
-        workflowId: "wf-abc-123",
+        correlationId: "corr-abc-123",
       }),
     );
     const json = await res.json();

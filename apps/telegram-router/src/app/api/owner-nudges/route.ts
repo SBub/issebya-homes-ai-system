@@ -12,16 +12,16 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  * same shape as ../campaign-drafts/route.ts's own guard.
  *
  * Request body: `{ phone, reason, reasonCategory, conversationId,
- * workflowId? }`. There's no escalationId anymore — GCA's escalations table
- * is gone (see supabase/migrations/*_drop_escalations_table.sql). Instead,
- * for missing_info, GCA passes the current DBOS.workflowID as `workflowId`;
- * this route embeds it as a `[ref:<workflowId>]` tag at the very end of the
- * composed text (two newlines after the human-readable body) so a later
- * owner reply can be correlated back to that exact suspended workflow via
- * Telegram's own `reply_to_message.text` (see the webhook route's
- * handleOwnerNudgeReply) — no DB round-trip. wants_human never passes
- * workflowId (it's a one-way notification, no reply expected), so its text
- * never gets a ref tag.
+ * correlationId? }`. There's no escalationId anymore — GCA's escalations
+ * table is gone (see supabase/migrations/*_drop_escalations_table.sql).
+ * Instead, for missing_info, GCA passes its current run's correlation id as
+ * `correlationId`; this route embeds it as a `[ref:<correlationId>]` tag at
+ * the very end of the composed text (two newlines after the human-readable
+ * body) so a later owner reply can be correlated back to that exact
+ * suspended run-guest-turn Inngest function via Telegram's own
+ * `reply_to_message.text` (see the webhook route's handleOwnerNudgeReply) —
+ * no DB round-trip. wants_human never passes correlationId (it's a one-way
+ * notification, no reply expected), so its text never gets a ref tag.
  *
  * Composes a distinct message per reasonCategory, each with its own
  * emoji + short label prefix so the owner can tell them apart in Telegram
@@ -50,8 +50,9 @@ export async function POST(request: NextRequest) {
   const reason = body?.reason;
   const reasonCategory = body?.reasonCategory;
   const conversationId = body?.conversationId;
-  const rawWorkflowId = body?.workflowId;
-  const workflowId = typeof rawWorkflowId === "string" && rawWorkflowId ? rawWorkflowId : undefined;
+  const rawCorrelationId = body?.correlationId;
+  const correlationId =
+    typeof rawCorrelationId === "string" && rawCorrelationId ? rawCorrelationId : undefined;
 
   if (
     !phone ||
@@ -73,8 +74,8 @@ export async function POST(request: NextRequest) {
   switch (reasonCategory) {
     case "missing_info":
       text = `🔍 Missing info\nGuest ${phone} asked: "${reason}"\n\nReply to this message with the answer — I'll send it to the guest and add it to the knowledge base.`;
-      if (workflowId) {
-        text += `\n\n[ref:${workflowId}]`;
+      if (correlationId) {
+        text += `\n\n[ref:${correlationId}]`;
       }
       break;
     case "wants_human":

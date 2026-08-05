@@ -79,49 +79,29 @@ describe("answerOwnerNudge", () => {
 
   it("throws when not configured, without calling fetch", async () => {
     delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
-    await expect(answerOwnerNudge("wf-abc-123", "The AC is above the bed")).rejects.toThrow(
+    await expect(answerOwnerNudge("corr-abc-123", "The AC is above the bed")).rejects.toThrow(
       "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("posts the answer to the workflow id path and returns ok: true, resumed: true on full success", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ ok: true, resumed: true }), { status: 200 }),
-    );
+  it("posts the answer to the correlation id path and returns ok: true on success — GCA (Inngest-backed now) has no 'resumed' signal to report", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
-    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("corr-abc-123", "The AC is above the bed");
 
-    expect(result).toEqual({ ok: true, resumed: true });
+    expect(result).toEqual({ ok: true });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3005/api/owner-nudges/wf-abc-123/answer");
+    expect(url).toBe("http://localhost:3005/api/owner-nudges/corr-abc-123/answer");
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "X-API-Key": "test-key" });
     expect(JSON.parse(init.body)).toEqual({ answer: "The AC is above the bed" });
   });
 
-  it("surfaces resumed: false on a partial success (embedded but no workflow to wake)", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ ok: true, resumed: false }), { status: 200 }),
-    );
-
-    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
-
-    expect(result).toEqual({ ok: true, resumed: false });
-  });
-
-  it("defaults resumed to false when the success body is missing/unparseable", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
-
-    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
-
-    expect(result).toEqual({ ok: true, resumed: false });
-  });
-
   it("returns ok: false with an error on a real failure — no more 409/already-resolved outcome", async () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
 
-    const result = await answerOwnerNudge("wf-abc-123", "The AC is above the bed");
+    const result = await answerOwnerNudge("corr-abc-123", "The AC is above the bed");
 
     expect(result.ok).toBe(false);
     if (!result.ok) {

@@ -1,21 +1,21 @@
-import { DBOS } from "@dbos-inc/dbos-sdk";
+import crypto from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
-import { runGuestTurnWorkflow } from "@/agent/run-turn";
+import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
-import { ensureDbosLaunched } from "@/lib/dbos";
+import { inngest } from "@/lib/inngest";
 import { normalizePhone } from "@/lib/phone";
 import { verifyTwilioSignature } from "@/lib/twilio";
 
 /**
  * Receives inbound WhatsApp messages via Twilio's webhook format, validates
- * X-Twilio-Signature, then starts the guest's turn as a durable DBOS
- * workflow WITHOUT awaiting it, and immediately acks with empty TwiML.
+ * X-Twilio-Signature, then triggers the guest's turn as a durable Inngest
+ * function WITHOUT awaiting it, and immediately acks with empty TwiML.
  *
  * A missing_info owner nudge can suspend the turn for minutes or hours
  * waiting on the owner's Telegram reply, which an HTTP request can't stay
  * open for — so every reply is delivered later, proactively, by the
- * workflow itself (run-turn.ts's sendWhatsAppMessage call). This
- * route's response is always just an ack.
+ * function itself (run-turn.ts's sendWhatsAppMessage call). This route's
+ * response is always just an ack.
  */
 export async function POST(request: NextRequest) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing From/Body" }, { status: 400 });
   }
   // Normalized once here, right at the ingress boundary — every downstream
-  // consumer (conversations, the agent workflow itself) receives this
+  // consumer (conversations, the agent function itself) receives this
   // bare value and never has to know about Twilio's "whatsapp:" prefix.
   // Signature verification above operates on the raw `params` object and is
   // unaffected by this.
@@ -48,18 +48,30 @@ export async function POST(request: NextRequest) {
   const { conversationId } = await getOrCreateActiveConversation(phone);
   const userMessageId = await recordMessage(conversationId, "user", incomingMessage);
 
-  // `await` here only awaits the workflow being durably started (enqueued),
-  // not its result — it resumes/finishes independently of this request.
-  await ensureDbosLaunched();
-  await DBOS.startWorkflow(runGuestTurnWorkflow)({
-    conversationId,
-    phone,
-    incomingMessage,
-    triggerMessageId: userMessageId,
+  // Generated once, here — a plain Next.js request handler that runs exactly
+  // once per real inbound webhook call, not a replayed Inngest step — then
+  // threaded through the event's own data so the triggered run-guest-turn
+  // function can read it back deterministically on every one of its own
+  // replays (see run-turn.ts's GuestTurnRequestedEventData for the full
+  // reasoning).
+  const correlationId = crypto.randomUUID();
+
+  // `await` here only awaits the event being durably accepted by Inngest,
+  // not the triggered function's result — it runs/resumes independently of
+  // this request.
+  await inngest.send({
+    name: GUEST_TURN_REQUESTED_EVENT,
+    data: {
+      conversationId,
+      phone,
+      incomingMessage,
+      triggerMessageId: userMessageId,
+      correlationId,
+    },
   });
 
   // Empty <Response></Response> is valid TwiML that sends no message — the
-  // real reply arrives later via the workflow's own proactive send.
+  // real reply arrives later via the function's own proactive send.
   return new NextResponse("<Response></Response>", {
     status: 200,
     headers: { "Content-Type": "text/xml" },

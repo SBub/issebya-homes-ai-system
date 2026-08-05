@@ -256,7 +256,7 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
   });
 
   it("extracts an opaque (non-UUID) ref token just as readily as a UUID-shaped one", async () => {
-    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
 
     await POST(
       makeReplyRequest(
@@ -272,7 +272,7 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
   });
 
   it("does not send to the guest itself — only calls answerOwnerNudge directly, no sendGuestMessage relay", async () => {
-    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
 
     await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
 
@@ -294,8 +294,8 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("confirms full success to the owner when resumed is true", async () => {
-    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: true });
+  it("confirms success to the owner on ok: true — GCA (Inngest-backed now) has no 'resumed' signal to distinguish a partial success with", async () => {
+    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
 
     const res = await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
     const json = await res.json();
@@ -307,19 +307,6 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
       expect.stringContaining(
         "Added to the knowledge base — the agent will reply to the guest shortly",
       ),
-    );
-  });
-
-  it("reports a partial success — added to the knowledge base but the conversation couldn't be resumed — when resumed is false (e.g. a duplicate/late reply)", async () => {
-    answerOwnerNudgeMock.mockResolvedValueOnce({ ok: true, resumed: false });
-
-    const res = await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
-    const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json).toEqual({ ok: true });
-    expect(sendMessageMock).toHaveBeenCalledWith(
-      expect.stringContaining("Added to the knowledge base, but couldn't resume the conversation"),
     );
   });
 });

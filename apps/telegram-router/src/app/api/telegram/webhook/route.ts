@@ -107,13 +107,14 @@ async function handleNudgeReject(
   }
 }
 
-// Matches a `[ref:<workflowId>]` tag at the very end of a missing_info
+// Matches a `[ref:<correlationId>]` tag at the very end of a missing_info
 // nudge's text (see GCA's owner-nudge.ts/missing-info.ts, which embed
-// it two newlines after the human-readable nudge body). The workflow id is
-// captured as an opaque non-whitespace token, not assumed to be UUID-shaped.
+// it two newlines after the human-readable nudge body). The correlation id
+// is captured as an opaque non-whitespace token, not assumed to be
+// UUID-shaped.
 const MISSING_INFO_REF_REGEX = /\[ref:(\S+)\]\s*$/;
 
-function extractMissingInfoWorkflowId(replyText: string | undefined): string | null {
+function extractMissingInfoCorrelationId(replyText: string | undefined): string | null {
   if (!replyText) {
     return null;
   }
@@ -124,9 +125,9 @@ function extractMissingInfoWorkflowId(replyText: string | undefined): string | n
 /**
  * Owner replied to a previous missing_info nudge. Correlation is entirely
  * text-based now — no DB lookup, no GCA API call needed just to find out
- * which workflow (if any) a reply belongs to: the nudge embeds the
- * suspended DBOS workflow's id as a `[ref:<workflowId>]` tag, and Telegram
- * echoes the replied-to message's full text back via
+ * which run (if any) a reply belongs to: the nudge embeds the suspended
+ * run-guest-turn Inngest function's correlation id as a `[ref:<correlationId>]`
+ * tag, and Telegram echoes the replied-to message's full text back via
  * `reply_to_message.text` on any reply.
  *
  * Returns false when the reply doesn't carry a ref tag (not a reply, or a
@@ -139,32 +140,26 @@ function extractMissingInfoWorkflowId(replyText: string | undefined): string | n
 async function handleOwnerNudgeReply(
   message: NonNullable<TelegramUpdate["message"]>,
 ): Promise<boolean> {
-  const workflowId = extractMissingInfoWorkflowId(message.reply_to_message?.text);
+  const correlationId = extractMissingInfoCorrelationId(message.reply_to_message?.text);
   const answer = message.text;
-  if (!workflowId || !answer) {
+  if (!correlationId || !answer) {
     return false;
   }
 
-  const answerResult = await answerOwnerNudge(workflowId, answer);
+  const answerResult = await answerOwnerNudge(correlationId, answer);
   if (!answerResult.ok) {
     console.error(
-      `[telegram-router] owner-nudge answer failed for workflow ${workflowId}:`,
+      `[telegram-router] owner-nudge answer failed for correlationId ${correlationId}:`,
       answerResult.error,
     );
     await sendMessage("Failed to add the answer to the knowledge base — try replying again.");
     return true;
   }
 
-  if (!answerResult.resumed) {
-    // KB write succeeded but no suspended workflow was found to wake (e.g.
-    // a duplicate/late reply after the workflow already resumed or expired).
-    await sendMessage(
-      "Added to the knowledge base, but couldn't resume the conversation — you may want to follow up directly.",
-    );
-    return true;
-  }
-
-  // resumed: true means the workflow woke up, not that the guest was messaged yet.
+  // GCA (Inngest-backed now) has no way to tell us whether a suspended run
+  // was actually still waiting on this answer — see gca.ts's
+  // answerOwnerNudge comment. `ok: true` only means the KB write and the
+  // wake-up event send both succeeded, not that the guest was messaged yet.
   await sendMessage("✅ Added to the knowledge base — the agent will reply to the guest shortly.");
   return true;
 }

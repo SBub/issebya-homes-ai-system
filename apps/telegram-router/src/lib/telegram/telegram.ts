@@ -20,9 +20,9 @@ interface TelegramMessage {
    * owner-nudge reply flow (../../app/api/telegram/webhook/route.ts's
    * handleOwnerNudgeReply) reads `reply_to_message.text` (Telegram echoes
    * the full text of the replied-to message) and regex-matches it for a
-   * `[ref:<workflowId>]` tag to correlate the owner's free-text answer back
-   * to the specific suspended DBOS workflow that sent the original
-   * missing_info nudge — no DB lookup involved. */
+   * `[ref:<correlationId>]` tag to correlate the owner's free-text answer
+   * back to the specific suspended run-guest-turn Inngest function that sent
+   * the original missing_info nudge — no DB lookup involved. */
   reply_to_message?: { message_id: number; text?: string };
 }
 
