@@ -13,24 +13,26 @@
     "start": "next start --port 3005",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "embed": "tsx --env-file=.env scripts/embed.ts"
+    "embed": "tsx --env-file=.env scripts/embed.ts",
+    "migrate-prompts": "tsx --env-file=.env scripts/migrate-prompts-to-braintrust.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.48",
-    "@langchain/core": "^1.2.1",
     "@supabase/supabase-js": "^2.49.8",
     "ai": "^6.0.138",
+    "braintrust": "^3.27.0",
     "inngest": "^4.15.0",
-    "langsmith": "^0.7.17",
     "next": "^16.2.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@langchain/core": "^1.2.1",
     "@types/node": "^26.1.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "langsmith": "^0.7.17",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

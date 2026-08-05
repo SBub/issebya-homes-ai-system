@@ -1,4 +1,5 @@
 import { generateText, type ModelMessage } from "ai";
+import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import { getGuestMemory, loadRecentMessages, type MessageRow, upsertGuestMemory } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
@@ -13,6 +14,15 @@ import { openrouter } from "@/lib/openrouter";
 // back would create a circular import.
 const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
+
+// This prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID, slug
+// below), pushed there by scripts/migrate-prompts-to-braintrust.ts — same
+// version-pinning rationale as run-turn.ts's SYSTEM_PROMPT_VERSION (that
+// file's comment on it has the full explanation of why it's pinned rather
+// than loadPrompt({ environment: "production" })).
+const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
+const SUMMARIZER_PROMPT_VERSION =
+  process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197636062690373";
 
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
@@ -45,24 +55,22 @@ async function summarizeConversation(
     )
     .join("\n");
 
-  const { text } = await generateText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You compress an older stretch of a WhatsApp guest conversation with a " +
-          "vacation-rental booking agent into a short running summary. Preserve concrete " +
-          "facts: the guest's name (if mentioned), rooms/dates discussed or booked, prices " +
-          'quoted, promises or commitments made (e.g. "I\'ll check with the owner"), any ' +
-          "prior owner nudges, and guest-stated preferences or facts. Be terse.",
-      },
-      {
-        role: "user",
-        content: `Prior summary:\n${priorSummary || "(none)"}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
-      },
-    ],
+  const promptTemplate = await loadPrompt({
+    projectId: process.env.BRAINTRUST_PROJECT_ID,
+    slug: SUMMARIZER_PROMPT_SLUG,
+    version: SUMMARIZER_PROMPT_VERSION,
   });
+  const { messages } = promptTemplate.build({
+    prior_summary: priorSummary || "(none)",
+    transcript,
+  });
+
+  // Cast needed: build()'s messages are typed as OpenAI-shaped chat params
+  // (content can be a content-part array, for image/tool messages), while
+  // generateText wants ModelMessage. SUMMARIZER_PROMPT (see the migration
+  // script) only ever has plain-string system/user content, so the two
+  // shapes coincide here even though their types don't structurally align.
+  const { text } = await generateText({ model, messages: messages as ModelMessage[] });
 
   return text;
 }

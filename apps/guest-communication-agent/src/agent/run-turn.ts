@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
-import { load } from "@langchain/core/load";
-import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
+import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
-import { Client } from "langsmith";
 import { type AgentMemory, loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
@@ -37,15 +35,22 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 // isolation, while runGuestTurn is the thing that adds those on top.
 
 const MODEL = "deepseek/deepseek-v4-pro";
-// SYSTEM_PROMPT_IDENTIFIER_OVERRIDE is for CI eval jobs only — must never be
+
+// The system prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID,
+// slug below), not this repo — same as it lived in LangSmith's Prompt Hub
+// before this migration (scripts/migrate-prompts-to-braintrust.ts). Pinned
+// to an exact version rather than loadPrompt({ environment: "production" })
+// because issebya's Braintrust org has no "production" environment set up
+// yet (see that script's header comment for why). To ship an edited prompt:
+// edit it in Braintrust's UI (or in the migration script + rerun it), then
+// copy the new version id here.
+// SYSTEM_PROMPT_VERSION_OVERRIDE is for CI eval jobs only — must never be
 // set in a real runtime environment.
-const SYSTEM_PROMPT_IDENTIFIER =
-  process.env.SYSTEM_PROMPT_IDENTIFIER_OVERRIDE ?? "whatsapp-booking-agent:production";
+const SYSTEM_PROMPT_SLUG = "gca-system";
+const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "1000197636062690670";
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
-
-const langsmithClient = new Client({ apiKey: process.env.LANGSMITH_API_KEY });
 
 // `.chat(MODEL)` targets Chat Completions — bare `openrouter(MODEL)` would
 // target the Responses API, which OpenRouter doesn't support.
@@ -174,16 +179,6 @@ function toolResultMessage(calls: ModelTurnResult["toolCalls"], outputs: unknown
   };
 }
 
-// The manifest's class id is namespaced under "langchain" rather than
-// "langchain_core", so "prompts" must be supplied explicitly via importMap
-// or load() throws "Invalid namespace".
-async function pullSystemPromptTemplate() {
-  const commit = await langsmithClient.pullPromptCommit(SYSTEM_PROMPT_IDENTIFIER);
-  return load<prompts.ChatPromptTemplate>(JSON.stringify(commit.manifest), {
-    importMap: { prompts },
-  });
-}
-
 // Enforces the prompt's "no em dash"/"no bold" rules in code, since the
 // model doesn't reliably follow them on its own. Keeps the wrapped text,
 // only strips the markers — "**Hairdryer**"/"*Hairdryer*" both become
@@ -254,11 +249,11 @@ export async function runAgentTurn(
   // change across rounds of the same turn, so neither does the system string
   // derived from it. Un-stepped code between step.run checkpoints re-runs on
   // every Inngest replay — left inside the loop, a replay reaching round N
-  // would re-fetch the LangSmith prompt commit for every round 1..N that
-  // already ran (wasted API calls), and worse, non-deterministically: if the
-  // prompt commit under SYSTEM_PROMPT_IDENTIFIER is updated mid-turn
-  // (plausible across missing_info's up-to-24h suspend), different rounds of
-  // the SAME turn could end up using different prompt versions.
+  // would re-fetch the Braintrust prompt for every round 1..N that already
+  // ran (wasted API calls). SYSTEM_PROMPT_VERSION is pinned (see its own
+  // comment above), so unlike the old LangSmith ":production" tag this can
+  // no longer change mid-turn — but the hoist still avoids the redundant
+  // fetches on replay.
   //
   // Cast needed: step.run()'s return type is run through Inngest's Jsonify
   // transform (step results are actually persisted as JSON and rehydrated on
@@ -268,9 +263,13 @@ export async function runAgentTurn(
   // plain string, so the narrowing is a false positive for this call site
   // too, same as the model-${stepCount} and load-memory step calls below.
   const system = (await step.run("load-system-prompt", async () => {
-    const promptTemplate = await pullSystemPromptTemplate();
-    const promptValue = await promptTemplate.invoke({ guest_memory_block: contextBlock });
-    return promptValue.toChatMessages()[0].content as string;
+    const promptTemplate = await loadPrompt({
+      projectId: process.env.BRAINTRUST_PROJECT_ID,
+      slug: SYSTEM_PROMPT_SLUG,
+      version: SYSTEM_PROMPT_VERSION,
+    });
+    const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
+    return messages[0].content as string;
   })) as string;
 
   let stepCount = 0;

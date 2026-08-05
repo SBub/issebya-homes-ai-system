@@ -22,7 +22,7 @@ vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
 }));
 
-// run-turn.ts pulls in generateText/langsmith/langchain/openrouter — heavy,
+// run-turn.ts pulls in generateText/braintrust/openrouter — heavy,
 // unrelated dependencies this route doesn't need. Mocked wholesale (down to
 // a single marker constant), matching how the DBOS-era version of this test
 // mocked runGuestTurnWorkflow as a plain marker value rather than importing

@@ -12,13 +12,21 @@ vi.mock("@/lib/db.js", () => ({
   upsertGuestMemory: upsertGuestMemoryMock,
 }));
 
-// summarizeConversation's only external call — mocked the same way
-// run-turn.test.ts mocks generateText, at the "ai" module boundary.
+// summarizeConversation's two external calls — generateText mocked the same
+// way run-turn.test.ts mocks it, at the "ai" module boundary; loadPrompt
+// (Braintrust) mocked to return a stub Prompt whose build() renders
+// {{prior_summary}}/{{transcript}} the same way the real Braintrust prompt
+// does, so assertions on the resulting user-message content still hold.
 const generateTextMock = vi.fn();
 vi.mock("ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("ai")>();
   return { ...actual, generateText: generateTextMock };
 });
+
+const loadPromptMock = vi.fn();
+vi.mock("braintrust", () => ({
+  loadPrompt: loadPromptMock,
+}));
 
 // Only needs a working `.chat(modelId)` since generateText itself is mocked.
 vi.mock("@ai-sdk/openai", () => ({
@@ -56,6 +64,17 @@ function overflowingRows() {
 describe("loadMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    loadPromptMock.mockResolvedValue({
+      build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
+        messages: [
+          { role: "system", content: "You compress an older stretch..." },
+          {
+            role: "user",
+            content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
+          },
+        ],
+      }),
+    });
   });
 
   it("passes through untrimmed history and the fallback contextBlock when nothing overflows and there's no prior summary", async () => {

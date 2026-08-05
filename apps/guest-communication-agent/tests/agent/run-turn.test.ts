@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { inngest } from "@/lib/inngest";
 
 // Drives runAgentTurn end-to-end, mocking only the true external boundaries:
-// Postgres, telegram-router, LangSmith's Prompt Hub, and generateText
+// Postgres, telegram-router, Braintrust's prompt store, and generateText
 // itself. Real tool implementations still run against the mocks below.
 const loadMemoryMock = vi.fn();
 vi.mock("@/agent/memory.js", () => ({
@@ -41,21 +41,12 @@ vi.mock("@/lib/twilio-send.js", () => ({
   sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
 
-// Mocked as a real constructable class since `new Client(...)` must keep
-// working.
-const pullPromptCommitMock = vi.fn();
-vi.mock("langsmith", () => ({
-  Client: class {
-    pullPromptCommit = pullPromptCommitMock;
-  },
-}));
-
-// pullSystemPromptTemplate() deserializes the pulled commit via
-// @langchain/core/load's load() — mocked to return a stub template instead
-// of actually deserializing anything.
-const promptTemplateInvokeMock = vi.fn();
-vi.mock("@langchain/core/load", () => ({
-  load: vi.fn().mockResolvedValue({ invoke: promptTemplateInvokeMock }),
+// run-turn.ts's loadPrompt({ slug: SYSTEM_PROMPT_SLUG, ... }) call — mocked
+// to return a stub Prompt whose build() returns a fixed messages array,
+// instead of actually hitting Braintrust.
+const loadPromptMock = vi.fn();
+vi.mock("braintrust", () => ({
+  loadPrompt: loadPromptMock,
 }));
 
 // Only generateText is mocked — tool() and everything else "ai" exports
@@ -139,14 +130,8 @@ describe("runAgentTurn", () => {
       historyMessages: [],
       contextBlock: "No prior guest information available.",
     });
-    pullPromptCommitMock.mockResolvedValue({
-      manifest: {},
-      owner: "test-owner",
-      repo: "test-repo",
-      commit_hash: "abc123",
-    });
-    promptTemplateInvokeMock.mockResolvedValue({
-      toChatMessages: () => [{ content: SYSTEM_PROMPT_TEXT }],
+    loadPromptMock.mockResolvedValue({
+      build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
     });
     mockBookingInsert.mockResolvedValue({ data: null, error: null });
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
@@ -503,14 +488,8 @@ describe("runGuestTurn", () => {
       historyMessages: [],
       contextBlock: "No prior guest information available.",
     });
-    pullPromptCommitMock.mockResolvedValue({
-      manifest: {},
-      owner: "test-owner",
-      repo: "test-repo",
-      commit_hash: "abc123",
-    });
-    promptTemplateInvokeMock.mockResolvedValue({
-      toChatMessages: () => [{ content: SYSTEM_PROMPT_TEXT }],
+    loadPromptMock.mockResolvedValue({
+      build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
     });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
