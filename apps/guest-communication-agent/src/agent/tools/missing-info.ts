@@ -136,14 +136,23 @@ export async function runMissingInfo(
 ) {
   const { conversationId, phone, step, correlationId } = context;
 
-  const nudged = await requestOwnerNudge({
-    conversationId,
-    phone,
-    reason: args.reason,
-    reasonCategory: "missing_info",
-    correlationId,
-    step,
-  });
+  // Wrapped in its own step.run, distinct from "wait-for-owner-answer" below
+  // — sending the nudge and waiting for the reply are two different kinds of
+  // operation. Without this, a replay of this Inngest function (guaranteed
+  // once step.waitForEvent below suspends and later resumes, since Inngest
+  // replays the whole function body from the top) would re-send this real
+  // Telegram nudge every single time, since un-stepped code isn't memoized
+  // across replays the way step.waitForEvent itself is.
+  const nudged = await step.run("owner-nudge-missing-info", () =>
+    requestOwnerNudge({
+      conversationId,
+      phone,
+      reason: args.reason,
+      reasonCategory: "missing_info",
+      correlationId,
+      step,
+    }),
+  );
 
   // Nudge failed to send — skip straight to the same fallback a timeout
   // would produce; there's no point suspending if the owner was never told.
