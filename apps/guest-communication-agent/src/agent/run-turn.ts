@@ -8,6 +8,7 @@ import { loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
+import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
 import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
@@ -63,6 +64,7 @@ const tools = {
   checkAvailability,
   answerPropertyQuestion,
   sendBookingLink,
+  getCurrentDate,
   wants_human: wantsHuman,
   missing_info: missingInfo,
 } satisfies ToolSet;
@@ -146,6 +148,8 @@ async function runToolCall(
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
     case "sendBookingLink":
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
+    case "getCurrentDate":
+      return runGetCurrentDate();
     case "wants_human":
       return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
     case "missing_info":
