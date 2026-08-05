@@ -4,7 +4,7 @@ import * as prompts from "@langchain/core/prompts";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import type { GetStepTools } from "inngest";
 import { Client } from "langsmith";
-import { loadMemory } from "@/agent/memory";
+import { type AgentMemory, loadMemory } from "@/agent/memory";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
@@ -235,7 +235,18 @@ export async function runAgentTurn(
 
   const toolContext: ToolContext = { conversationId, phone, triggerMessageId, correlationId, step };
 
-  const { historyMessages, contextBlock } = await loadMemory({ conversationId, phone });
+  // Cast needed: step.run()'s return type is run through Inngest's Jsonify
+  // transform (step results are actually persisted as JSON and rehydrated on
+  // replay), which narrows types like FilePart's `data: URL | DataContent`
+  // down to their JSON-safe equivalents (an ArrayBuffer, for instance,
+  // structurally loses its methods). loadMemory's historyMessages is a
+  // ModelMessage[] built from plain DB rows via toModelMessage() in
+  // memory.ts — always user/assistant text content, never a file part — so
+  // the narrowing is a false positive here too, same as the model-${stepCount}
+  // step below.
+  const { historyMessages, contextBlock } = (await step.run("load-memory", () =>
+    loadMemory({ conversationId, phone }),
+  )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
   let stepCount = 0;
