@@ -13,7 +13,7 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
-import { turnTraceContext, withTurnSpan } from "@/lib/tracing";
+import { turnTraceContext, updateSpanIO, withTurnSpan } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -137,6 +137,15 @@ async function modelTurn(
 
       span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
       span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      // "braintrust.*" is the attribute namespace that actually maps to a
+      // span's top-level input/output fields in Braintrust's UI (Traces
+      // list + per-span view) — the gen_ai.* attributes above only ever
+      // land in `metadata`, since @braintrust/otel's BraintrustSpanProcessor
+      // does no gen_ai.*-to-input/output conversion of its own (see
+      // node_modules/@braintrust/otel/dist/index.js). Duplicating the same
+      // values under this namespace is what makes them actually visible.
+      span.setAttribute("braintrust.input", JSON.stringify(messages));
+      span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
       // Optional chaining: `usage` is always present on a real AI SDK
       // generateText() result, but test mocks in this repo return a
       // trimmed-down shape without it.
@@ -235,6 +244,21 @@ export interface RunAgentTurnConfig {
 export interface RunAgentTurnResult {
   messages: ModelMessage[];
   stepCount: number;
+  // The real OTel SDK-generated id of this turn's "braintrust.guest_turn"
+  // root marker span (see the "start-trace" step below) — threaded out so
+  // runGuestTurn can retroactively patch that span's input/output via
+  // updateSpanIO once the final reply text actually exists (see the
+  // "update-turn-trace-io" step there).
+  guestTurnSpanId: string;
+  // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
+  // missing_info) — Braintrust aggregates a `braintrust.tags` value set on
+  // ANY span in a trace up to the whole trace, but wants_human/missing_info
+  // never get a span of their own (see SELF_STEPPED_TOOLS's comment), so
+  // there's nowhere to set that attribute directly. Threaded out instead so
+  // runGuestTurn can pass it to updateSpanIO's merge-patch on the
+  // "braintrust.guest_turn" root span, the same deferred route
+  // guestTurnSpanId already uses for output.
+  firedTags: string[];
 }
 
 // Runs one full guest turn: loads context, then loops model -> tools ->
@@ -259,7 +283,11 @@ export async function runAgentTurn(
   // stays open for the whole turn (see src/lib/tracing.ts — no live Span
   // object can survive across Inngest step boundaries, so there's no real
   // "root span" to hold open here).
-  await step.run("start-trace", () =>
+  // Real (OTel SDK-generated) span id of this marker span, captured so it
+  // can be retroactively patched with the turn's real input/output once the
+  // final reply exists — see updateSpanIO's own comment (src/lib/tracing.ts)
+  // and the "update-turn-trace-io" step in runGuestTurn below.
+  const guestTurnSpanId = await step.run("start-trace", () =>
     withTurnSpan(
       correlationId,
       // Must start with one of @braintrust/otel's AISpanProcessor
@@ -274,7 +302,7 @@ export async function runAgentTurn(
       // span, not a real gen_ai call.
       "braintrust.guest_turn",
       { "gca.conversation_id": conversationId, "gca.phone": phone },
-      async () => {},
+      async (span) => span.spanContext().spanId,
     ),
   );
 
@@ -322,6 +350,12 @@ export async function runAgentTurn(
 
   let stepCount = 0;
 
+  // Accumulates across rounds exactly like `messages` above: rebuilt from
+  // already-completed/memoized step results on every Inngest replay, so it
+  // reconstructs identically each pass rather than drifting. See
+  // RunAgentTurnResult.firedTags for why this exists.
+  const firedTags: string[] = [];
+
   while (stepCount < MAX_AGENT_STEPS) {
     stepCount++;
 
@@ -339,7 +373,7 @@ export async function runAgentTurn(
 
     if (result.toolCalls.length === 0) {
       messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
-      return { messages, stepCount };
+      return { messages, stepCount, guestTurnSpanId, firedTags };
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
@@ -371,21 +405,42 @@ export async function runAgentTurn(
         // which Inngest only actually executes once — replays return the
         // memoized value without re-running the callback — so wrapping the
         // runToolCall call inside it here is replay-safe.
-        return SELF_STEPPED_TOOLS.has(call.toolName)
-          ? await runToolCall(call.toolName, call.input, toolContext)
-          : await step.run(`tool-${call.toolName}`, () =>
-              withTurnSpan(
-                correlationId,
-                `gen_ai.tool.${call.toolName}`,
-                { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-                async (span) => {
-                  const output = await runToolCall(call.toolName, call.input, toolContext);
-                  span.setAttribute("gca.tool.input", JSON.stringify(call.input));
-                  span.setAttribute("gca.tool.output", JSON.stringify(output));
-                  return output;
-                },
-              ),
-            );
+        if (SELF_STEPPED_TOOLS.has(call.toolName)) {
+          const output = await runToolCall(call.toolName, call.input, toolContext);
+          // Only reached once the tool actually dispatched — a HITL-rejected
+          // call (wants_human is NEEDS_HITL-gated) returns earlier, above,
+          // and never reaches this line. See RunAgentTurnResult.firedTags for
+          // why this is collected here rather than as a span attribute.
+          firedTags.push(call.toolName);
+          return output;
+        }
+
+        return await step.run(`tool-${call.toolName}`, () =>
+          withTurnSpan(
+            correlationId,
+            `gen_ai.tool.${call.toolName}`,
+            { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
+            async (span) => {
+              const output = await runToolCall(call.toolName, call.input, toolContext);
+              span.setAttribute("gca.tool.input", JSON.stringify(call.input));
+              span.setAttribute("gca.tool.output", JSON.stringify(output));
+              // See modelTurn's matching comment above — "braintrust.*"
+              // is the namespace that actually maps to the span's
+              // top-level input/output fields in Braintrust's UI.
+              span.setAttribute("braintrust.input", JSON.stringify(call.input));
+              span.setAttribute("braintrust.output", JSON.stringify(output));
+              if (call.toolName === "sendBookingLink") {
+                // Braintrust aggregates a `braintrust.tags` value set on ANY
+                // span up to the whole trace, so tagging this one span makes
+                // the entire turn's trace filterable by "sent a booking
+                // link". String arrays are a native OTel attribute value —
+                // no JSON.stringify needed, unlike the JSON blobs above.
+                span.setAttribute("braintrust.tags", ["sendBookingLink"]);
+              }
+              return output;
+            },
+          ),
+        );
       }),
     );
     messages = [
@@ -395,7 +450,7 @@ export async function runAgentTurn(
     ];
   }
 
-  return { messages, stepCount };
+  return { messages, stepCount, guestTurnSpanId, firedTags };
 }
 
 // The event that triggers a guest turn — sent (fire-and-forget) by the
@@ -445,6 +500,26 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
       ? lastMessage.content
       : "Sorry, I couldn't process that — please try again shortly.";
+
+  // Retroactive merge-patch: the "braintrust.guest_turn" root marker span
+  // (started/closed empty in the "start-trace" step, well before replyText
+  // exists) is what the Traces LIST view surfaces Input/Output from. Plain
+  // strings here, not JSON-stringified — unlike the child spans' structured
+  // message arrays (which must fit as OTel span attributes), this goes
+  // through updateSpanIO's REST call directly, and plain strings render most
+  // cleanly in Braintrust's UI.
+  //
+  // Deduped: a single turn can plausibly call missing_info more than once
+  // across rounds (each dispatch pushes into firedTags), but Braintrust's
+  // tags field is a set, not a multiset — duplicate entries add nothing.
+  const dedupedTags = [...new Set(result.firedTags)];
+  await step.run("update-turn-trace-io", () =>
+    updateSpanIO(result.guestTurnSpanId, {
+      input: incomingMessage,
+      output: replyText,
+      ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
+    }),
+  );
 
   await step.run("record-reply", () =>
     // A real Braintrust trace id — turnTraceContext/withTurnSpan (see

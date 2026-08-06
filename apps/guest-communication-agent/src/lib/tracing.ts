@@ -61,3 +61,65 @@ export async function withTurnSpan<T>(
     }),
   );
 }
+
+// issebya's Braintrust org is EU-data-plane — same gotcha as everywhere else
+// in this app (instrumentation.ts, scripts/migrate-prompts-to-braintrust.ts).
+const BRAINTRUST_API_BASE = process.env.BRAINTRUST_API_URL ?? "https://api-eu.braintrust.dev";
+
+// Retroactively patches a specific span's input/output fields after the
+// span has already closed, via Braintrust's log-insert-with-merge REST API
+// (POST /v1/project_logs/{project_id}/insert, { _is_merge: true }, keyed by
+// the row's `id` — Braintrust maps a span's OTel-generated span id directly
+// to that row id). `_is_merge: true` deep-merges just the given fields into
+// the existing row, leaving its real metadata/metrics/span_attributes/trace
+// linkage untouched.
+//
+// Exists for run-turn.ts's "braintrust.guest_turn" root marker span: its
+// input (the guest's incoming message) is known when the span is created,
+// but its output (the turn's final reply) isn't known until well after the
+// span has already been created and closed inside its own step.run — so
+// there's no live Span object left to call span.setAttribute on by the time
+// the reply exists. This patches the row directly instead.
+//
+// Best-effort and non-fatal, matching this app's existing convention for
+// optional enrichment calls (e.g. TELEGRAM_ROUTER_API_URL unset just
+// degrades a feature rather than crashing): no-ops if
+// BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID aren't set, and never throws — a
+// trace-enrichment call failing must never break a guest's actual reply.
+export async function updateSpanIO(
+  spanId: string,
+  fields: { input?: unknown; output?: unknown; tags?: string[] },
+): Promise<void> {
+  const apiKey = process.env.BRAINTRUST_API_KEY;
+  const projectId = process.env.BRAINTRUST_PROJECT_ID;
+  if (!apiKey || !projectId) {
+    return;
+  }
+
+  // tags is omitted entirely (rather than sent as []) when empty, so a merge
+  // patch with no tags to add never clobbers tags a span already has —
+  // matching the "tags aggregate at the trace level" mechanism this exists
+  // for (see run-turn.ts's firedTags comment).
+  const { tags, ...rest } = fields;
+  const patch = tags && tags.length > 0 ? { ...rest, tags } : rest;
+
+  try {
+    const response = await fetch(`${BRAINTRUST_API_BASE}/v1/project_logs/${projectId}/insert`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        events: [{ id: spanId, _is_merge: true, ...patch }],
+      }),
+    });
+    if (!response.ok) {
+      console.error(
+        `[tracing] updateSpanIO failed for span "${spanId}": ${response.status} ${await response.text()}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[tracing] updateSpanIO threw for span "${spanId}":`, err);
+  }
+}

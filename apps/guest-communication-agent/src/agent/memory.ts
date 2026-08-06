@@ -87,11 +87,17 @@ async function summarizeConversation(
       const result = await generateText({ model, messages: messages as ModelMessage[] });
 
       span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+      // "braintrust.*" is the namespace that actually maps to a span's
+      // top-level input/output fields in Braintrust's UI — see run-turn.ts's
+      // modelTurn for the full explanation (same gen_ai.chat-shaped span
+      // wrapping pattern as here).
+      span.setAttribute("braintrust.input", JSON.stringify(messages));
       // Optional chaining throughout: `response`/`usage` are always present
       // on a real AI SDK generateText() result, but memory.test.ts's mock
       // returns a trimmed-down `{ text }`-only shape.
       if (result.response?.messages !== undefined) {
         span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+        span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
       }
       if (result.usage?.inputTokens !== undefined) {
         span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);

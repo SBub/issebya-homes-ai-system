@@ -1,7 +1,29 @@
+import { trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import type { ModelMessage } from "ai";
 import type { GetStepTools } from "inngest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { inngest } from "@/lib/inngest";
+
+// tracing.ts's real withTurnSpan/tracer stay real in this suite (see the
+// updateSpanIOMock comment below), but with no OTel SDK wired up (that's
+// instrumentation.ts's job, only invoked by the real Next.js runtime), the
+// default global TracerProvider is a no-op — span.setAttribute calls happen
+// but land nowhere observable. Registering a real, in-memory-only
+// BasicTracerProvider here (once, for this whole test file) lets the
+// sendBookingLink span-tagging test below inspect the actual attributes a
+// real span ends up with, without needing to touch Braintrust or any
+// network. trace.getTracer() inside tracing.ts resolves this lazily on each
+// span-emitting call (it's a ProxyTracer), so registering after that
+// module's already been imported still takes effect.
+const spanExporter = new InMemorySpanExporter();
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
+);
 
 // Drives runAgentTurn end-to-end, mocking only the true external boundaries:
 // Postgres, telegram-router, Braintrust's prompt store, and generateText
@@ -40,6 +62,18 @@ const sendWhatsAppMessageMock = vi.fn();
 vi.mock("@/lib/twilio-send.js", () => ({
   sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
+
+// tracing.ts's real withTurnSpan stays real (it's pure OTel API calls, no
+// network) so run-turn.ts's "start-trace"/model/tool spans still exercise
+// real span-id generation — only updateSpanIO (a real fetch() to
+// Braintrust's REST API) is mocked, the same "mock the module's exported
+// external-call function directly" style used for sendWhatsAppMessage etc.
+// above.
+const updateSpanIOMock = vi.fn();
+vi.mock("@/lib/tracing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
+  return { ...actual, updateSpanIO: updateSpanIOMock };
+});
 
 // run-turn.ts's loadPrompt({ slug: SYSTEM_PROMPT_SLUG, ... }) call — mocked
 // to return a stub Prompt whose build() returns a fixed messages array,
@@ -122,6 +156,7 @@ describe("runAgentTurn", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    spanExporter.reset();
     step = makeStepMock();
     // waitForEvent defaults to resolving null (a timeout), driving
     // runMissingInfo's real "owner has been notified" fallback path.
@@ -263,6 +298,24 @@ describe("runAgentTurn", () => {
       role: "assistant",
       content: "All set, here is your link!",
     });
+
+    // sendBookingLink already gets a real span of its own (the
+    // "tool-sendBookingLink" step.run/withTurnSpan wrapping) — unlike
+    // wants_human/missing_info, it's tagged directly on that span rather
+    // than through firedTags/updateSpanIO. Braintrust aggregates a tag set
+    // on any span in a trace up to the whole trace (see run-turn.ts's
+    // comment at the setAttribute call site), so tagging just this span is
+    // enough to make the whole turn filterable.
+    const toolSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.sendBookingLink");
+    expect(toolSpan?.attributes["braintrust.tags"]).toEqual(["sendBookingLink"]);
+
+    // getPricing isn't sendBookingLink — its own span must not pick up the tag.
+    const pricingSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.getPricing");
+    expect(pricingSpan?.attributes["braintrust.tags"]).toBeUndefined();
   });
 
   it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an owner nudge", async () => {
@@ -345,6 +398,12 @@ describe("runAgentTurn", () => {
     // "tool-missing_info" step.run, since Inngest doesn't support nesting
     // step calls inside another step.run()'s callback.
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-missing_info");
+
+    // wants_human/missing_info never get a span of their own (see
+    // SELF_STEPPED_TOOLS's comment in run-turn.ts), so firedTags is the
+    // deferred route runGuestTurn uses to still tag this turn's trace — see
+    // RunAgentTurnResult.firedTags.
+    expect(result.firedTags).toEqual(["missing_info"]);
   });
 
   it("escalates a wants_human tool call as its own reason_category", async () => {
@@ -360,7 +419,7 @@ describe("runAgentTurn", () => {
       )
       .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
 
-    await runAgentTurn(
+    const result = await runAgentTurn(
       {
         conversationId: "convo-wants-human",
         phone: "+351900000003",
@@ -374,6 +433,7 @@ describe("runAgentTurn", () => {
     );
     // Same nesting concern as missing_info above.
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-wants_human");
+    expect(result.firedTags).toEqual(["wants_human"]);
   });
 
   it("routes wants_human and sendBookingLink through the stub HITL gate (which always approves today) before running them", async () => {
@@ -419,6 +479,10 @@ describe("runAgentTurn", () => {
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("sendBookingLink"));
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wants_human"));
     expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Sure thing!" });
+    // sendBookingLink isn't SELF_STEPPED_TOOLS-dispatched, so it never pushes
+    // into firedTags — it gets a real span of its own and is tagged there
+    // instead (see the "tags sendBookingLink's own span" test below).
+    expect(result.firedTags).toEqual(["wants_human"]);
 
     consoleWarnSpy.mockRestore();
   });
@@ -497,6 +561,7 @@ describe("runGuestTurn", () => {
     });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
+    updateSpanIOMock.mockResolvedValue(undefined);
   });
 
   it("runs the turn, records the assistant reply, and sends it via Twilio, both inside their own step.run", async () => {
@@ -521,8 +586,43 @@ describe("runGuestTurn", () => {
       "+351920742845",
       "Yes, room 1 is available!",
     );
+    expect(updateSpanIOMock).toHaveBeenCalledWith(expect.any(String), {
+      input: "Is room 1 free?",
+      output: "Yes, room 1 is available!",
+    });
     const stepIds = step.run.mock.calls.map((call) => call[0]);
-    expect(stepIds).toEqual(expect.arrayContaining(["record-reply", "send-whatsapp-reply"]));
+    expect(stepIds).toEqual(
+      expect.arrayContaining(["update-turn-trace-io", "record-reply", "send-whatsapp-reply"]),
+    );
+  });
+
+  it("passes firedTags through to updateSpanIO's tags when the turn escalated via wants_human", async () => {
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "wants_human",
+            input: { reason: "Guest wants a human" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
+
+    await runGuestTurn({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      incomingMessage: "I want to talk to a person",
+      correlationId: "corr-tags",
+      step,
+    });
+
+    expect(updateSpanIOMock).toHaveBeenCalledWith(expect.any(String), {
+      input: "I want to talk to a person",
+      output: "Sure, the owner will reach out shortly.",
+      tags: ["wants_human"],
+    });
   });
 
   it("falls back to a generic apology reply when the turn's last message isn't a string assistant message", async () => {
