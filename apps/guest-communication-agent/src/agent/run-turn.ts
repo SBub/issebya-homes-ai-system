@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
@@ -14,6 +13,7 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
+import { turnTraceContext, withTurnSpan } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -117,24 +117,47 @@ interface ModelTurnResult {
   response: { messages: ModelMessage[] };
 }
 
-async function modelTurn(system: string, messages: ModelMessage[]): Promise<ModelTurnResult> {
-  const result = await generateText({
-    model,
-    system,
-    messages,
-    tools,
-    maxOutputTokens: MAX_OUTPUT_TOKENS,
-  });
+async function modelTurn(
+  system: string,
+  messages: ModelMessage[],
+  correlationId: string,
+): Promise<ModelTurnResult> {
+  return withTurnSpan(
+    correlationId,
+    "gen_ai.chat",
+    { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
+    async (span) => {
+      const result = await generateText({
+        model,
+        system,
+        messages,
+        tools,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+      });
 
-  return {
-    text: result.text,
-    toolCalls: result.toolCalls.map((call) => ({
-      toolCallId: call.toolCallId,
-      toolName: call.toolName,
-      input: call.input as Record<string, unknown>,
-    })),
-    response: { messages: result.response.messages },
-  };
+      span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+      span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      // Optional chaining: `usage` is always present on a real AI SDK
+      // generateText() result, but test mocks in this repo return a
+      // trimmed-down shape without it.
+      if (result.usage?.inputTokens !== undefined) {
+        span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+      }
+      if (result.usage?.outputTokens !== undefined) {
+        span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+      }
+
+      return {
+        text: result.text,
+        toolCalls: result.toolCalls.map((call) => ({
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          input: call.input as Record<string, unknown>,
+        })),
+        response: { messages: result.response.messages },
+      };
+    },
+  );
 }
 
 // Dispatches a requested tool call to its run<ToolName> implementation.
@@ -230,6 +253,21 @@ export async function runAgentTurn(
 
   const toolContext: ToolContext = { conversationId, phone, triggerMessageId, correlationId, step };
 
+  // Lightweight marker span, once per turn, memoized in its own step — gives
+  // every trace a clean root node in Braintrust's UI (attributes: conversation
+  // id, phone) even though it's a near-zero-duration marker, not a span that
+  // stays open for the whole turn (see src/lib/tracing.ts — no live Span
+  // object can survive across Inngest step boundaries, so there's no real
+  // "root span" to hold open here).
+  await step.run("start-trace", () =>
+    withTurnSpan(
+      correlationId,
+      "guest-turn",
+      { "gca.conversation_id": conversationId, "gca.phone": phone },
+      async () => {},
+    ),
+  );
+
   // Cast needed: step.run()'s return type is run through Inngest's Jsonify
   // transform (step results are actually persisted as JSON and rehydrated on
   // replay), which narrows types like FilePart's `data: URL | DataContent`
@@ -240,7 +278,7 @@ export async function runAgentTurn(
   // the narrowing is a false positive here too, same as the model-${stepCount}
   // step below.
   const { historyMessages, contextBlock } = (await step.run("load-memory", () =>
-    loadMemory({ conversationId, phone }),
+    loadMemory({ conversationId, phone, correlationId }),
   )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
@@ -286,7 +324,7 @@ export async function runAgentTurn(
     // receives file attachments — so the narrowing is a false positive for
     // this call site specifically, not a real runtime concern.
     const result = (await step.run(`model-${stepCount}`, () =>
-      modelTurn(system, messages),
+      modelTurn(system, messages, correlationId),
     )) as ModelTurnResult;
 
     if (result.toolCalls.length === 0) {
@@ -313,10 +351,30 @@ export async function runAgentTurn(
         // See SELF_STEPPED_TOOLS above — wants_human/missing_info manage
         // their own step checkpointing and must not be nested inside
         // another step.run() call.
+        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info are
+        // never wrapped here: their dispatch call site (the branch below)
+        // re-executes on every Inngest replay, so tracing it would
+        // duplicate-emit a span every time the function replays after a
+        // suspend (missing_info's up-to-24h step.waitForEvent wait is
+        // exactly the highest-value case this would corrupt). Every other
+        // tool IS already inside step.run(`tool-${call.toolName}`, ...),
+        // which Inngest only actually executes once — replays return the
+        // memoized value without re-running the callback — so wrapping the
+        // runToolCall call inside it here is replay-safe.
         return SELF_STEPPED_TOOLS.has(call.toolName)
           ? await runToolCall(call.toolName, call.input, toolContext)
           : await step.run(`tool-${call.toolName}`, () =>
-              runToolCall(call.toolName, call.input, toolContext),
+              withTurnSpan(
+                correlationId,
+                `gen_ai.tool.${call.toolName}`,
+                { "gen_ai.tool.name": call.toolName },
+                async (span) => {
+                  const output = await runToolCall(call.toolName, call.input, toolContext);
+                  span.setAttribute("gca.tool.input", JSON.stringify(call.input));
+                  span.setAttribute("gca.tool.output", JSON.stringify(output));
+                  return output;
+                },
+              ),
             );
       }),
     );
@@ -379,9 +437,12 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       : "Sorry, I couldn't process that — please try again shortly.";
 
   await step.run("record-reply", () =>
-    // NOT a real LangSmith trace id — nothing on LangSmith's side matches it,
-    // so a later feedback submission against it will fail.
-    recordMessage(conversationId, "assistant", replyText, crypto.randomUUID()),
+    // A real Braintrust trace id — turnTraceContext/withTurnSpan (see
+    // src/lib/tracing.ts) group every span emitted for this correlationId
+    // (the model call(s), tool calls, the summarizer call) under this exact
+    // trace id, so this DB value doubles as a working pointer into
+    // Braintrust for this turn.
+    recordMessage(conversationId, "assistant", replyText, turnTraceContext(correlationId).traceId),
   );
 
   await step.run("send-whatsapp-reply", async () => {

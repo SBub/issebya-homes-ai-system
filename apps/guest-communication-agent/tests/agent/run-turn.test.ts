@@ -159,7 +159,11 @@ describe("runAgentTurn", () => {
       { correlationId: "corr-1", step },
     );
 
-    expect(loadMemoryMock).toHaveBeenCalledWith({ conversationId: "convo-1", phone: "+3519" });
+    expect(loadMemoryMock).toHaveBeenCalledWith({
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+    });
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
     expect(call.system).toBe(SYSTEM_PROMPT_TEXT);

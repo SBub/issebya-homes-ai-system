@@ -3,6 +3,7 @@ import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import { getGuestMemory, loadRecentMessages, type MessageRow, upsertGuestMemory } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
+import { withTurnSpan } from "@/lib/tracing";
 
 // Combines recent-message loading + token-budget trimming (reuses
 // context.ts's trimToTokenBudget, only correlating its output back to
@@ -48,6 +49,7 @@ function toModelMessage(row: MessageRow): ModelMessage {
 async function summarizeConversation(
   newlyDroppedMessages: ModelMessage[],
   priorSummary: string,
+  correlationId: string,
 ): Promise<string> {
   const transcript = newlyDroppedMessages
     .map(
@@ -65,14 +67,42 @@ async function summarizeConversation(
     transcript,
   });
 
-  // Cast needed: build()'s messages are typed as OpenAI-shaped chat params
-  // (content can be a content-part array, for image/tool messages), while
-  // generateText wants ModelMessage. SUMMARIZER_PROMPT (see the migration
-  // script) only ever has plain-string system/user content, so the two
-  // shapes coincide here even though their types don't structurally align.
-  const { text } = await generateText({ model, messages: messages as ModelMessage[] });
+  // Not inside any step.run() of its own — but it's only ever called from
+  // loadMemory, which itself runs inside run-turn.ts's outer
+  // step.run("load-memory", ...), so (like the model-call/tool-call
+  // step.run wrapping in run-turn.ts) it only actually executes once per
+  // real run; a replay returns the memoized load-memory result without
+  // re-running this. Safe to wrap in a span for the same reason.
+  return withTurnSpan(
+    correlationId,
+    "gen_ai.chat",
+    { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
+    async (span) => {
+      // Cast needed: build()'s messages are typed as OpenAI-shaped chat
+      // params (content can be a content-part array, for image/tool
+      // messages), while generateText wants ModelMessage. SUMMARIZER_PROMPT
+      // (see the migration script) only ever has plain-string system/user
+      // content, so the two shapes coincide here even though their types
+      // don't structurally align.
+      const result = await generateText({ model, messages: messages as ModelMessage[] });
 
-  return text;
+      span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+      // Optional chaining throughout: `response`/`usage` are always present
+      // on a real AI SDK generateText() result, but memory.test.ts's mock
+      // returns a trimmed-down `{ text }`-only shape.
+      if (result.response?.messages !== undefined) {
+        span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      }
+      if (result.usage?.inputTokens !== undefined) {
+        span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+      }
+      if (result.usage?.outputTokens !== undefined) {
+        span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+      }
+
+      return result.text;
+    },
+  );
 }
 
 // Builds the plain-text content the prompt template wraps in
@@ -86,8 +116,9 @@ export function buildContextBlock(summary: string | null): string {
 export async function loadMemory(params: {
   conversationId: string;
   phone: string;
+  correlationId: string;
 }): Promise<AgentMemory> {
-  const { conversationId, phone } = params;
+  const { conversationId, phone, correlationId } = params;
 
   const [rows, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
@@ -115,7 +146,11 @@ export async function loadMemory(params: {
 
   if (newlyDroppedRows.length > 0) {
     const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
-    summary = await summarizeConversation(newlyDroppedMessages, existingMemory?.summary ?? "");
+    summary = await summarizeConversation(
+      newlyDroppedMessages,
+      existingMemory?.summary ?? "",
+      correlationId,
+    );
 
     const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
     await upsertGuestMemory(phone, summary, newWatermark);

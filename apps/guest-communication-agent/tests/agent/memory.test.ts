@@ -86,7 +86,11 @@ describe("loadMemory", () => {
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
 
-    const result = await loadMemory({ conversationId: "convo-1", phone: "+351900000001" });
+    const result = await loadMemory({
+      conversationId: "convo-1",
+      phone: "+351900000001",
+      correlationId: "corr-1",
+    });
 
     expect(result.historyMessages).toHaveLength(3);
     expect(result.contextBlock).toBe("No prior guest information available.");
@@ -107,6 +111,7 @@ describe("loadMemory", () => {
       // Already-normalized (bare) form — the webhook route normalizes
       // once, at the ingress boundary, before loadMemory ever sees `phone`.
       phone: "+351900000002",
+      correlationId: "corr-2",
     });
 
     // Trimmed to the newest 3 rows (msg-5, msg-6, msg-7); the oldest 5
@@ -143,7 +148,11 @@ describe("loadMemory", () => {
       summarizedThroughMessageId: "msg-4",
     });
 
-    const result = await loadMemory({ conversationId: "convo-3", phone: "+351900000003" });
+    const result = await loadMemory({
+      conversationId: "convo-3",
+      phone: "+351900000003",
+      correlationId: "corr-3",
+    });
 
     expect(result.historyMessages).toHaveLength(3);
     expect(generateTextMock).not.toHaveBeenCalled();

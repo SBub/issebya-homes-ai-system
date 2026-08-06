@@ -49,20 +49,23 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
   return { conversationId: created.id, isNew: true };
 }
 
-// `langsmithRunId` is omitted (not written as null) when absent — matches
-// whatsapp_messages.langsmith_run_id's nullable convention. Returns the new
-// row's id, passed through as RunAgentTurnConfig.triggerMessageId (the
-// guest's real original message id, distinct from a tool's own paraphrase).
+// `traceId` is omitted (not written as null) when absent — matches
+// whatsapp_messages.langsmith_run_id's nullable convention. The column is
+// still named langsmith_run_id (stale — it now holds a Braintrust trace id,
+// see turnTraceContext in src/lib/tracing.ts) — renaming it is a separate
+// future DB migration, out of scope here. Returns the new row's id, passed
+// through as RunAgentTurnConfig.triggerMessageId (the guest's real original
+// message id, distinct from a tool's own paraphrase).
 export async function recordMessage(
   conversationId: string,
   role: "user" | "assistant",
   content: string,
-  langsmithRunId?: string,
+  traceId?: string,
 ): Promise<string> {
   const supabase = createAdminClient();
   const insert: Record<string, unknown> = { conversation_id: conversationId, role, content };
-  if (langsmithRunId !== undefined) {
-    insert.langsmith_run_id = langsmithRunId;
+  if (traceId !== undefined) {
+    insert.langsmith_run_id = traceId;
   }
   const { data, error } = await supabase
     .from("whatsapp_messages")

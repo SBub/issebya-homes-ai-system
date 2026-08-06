@@ -619,6 +619,30 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@braintrust/otel@npm:^0.3.0":
+  version: 0.3.0
+  resolution: "@braintrust/otel@npm:0.3.0"
+  peerDependencies:
+    "@opentelemetry/api": ">=1.9.0"
+    "@opentelemetry/core": ">=1.9.0"
+    "@opentelemetry/exporter-trace-otlp-http": ">=0.35.0"
+    "@opentelemetry/sdk-trace-base": ">=1.9.0"
+    braintrust: ">=1.0.0-0"
+  peerDependenciesMeta:
+    "@opentelemetry/api":
+      optional: false
+    "@opentelemetry/core":
+      optional: false
+    "@opentelemetry/exporter-trace-otlp-http":
+      optional: false
+    "@opentelemetry/sdk-trace-base":
+      optional: false
+    braintrust:
+      optional: false
+  checksum: 10c0/2181039c33d2003d890eae72118741cdce932ee1f39ee00291fea623624cd924fad510a12487aac78a3fead88939e97616a0996dc1b8b5d53b71d9b0e85794f0
+  languageName: node
+  linkType: hard
+
 "@bufbuild/protobuf@npm:^2.2.3":
   version: 2.13.0
   resolution: "@bufbuild/protobuf@npm:2.13.0"
@@ -1660,7 +1684,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/api@npm:^1.3.0, @opentelemetry/api@npm:^1.9.0":
+"@opentelemetry/api@npm:^1.3.0, @opentelemetry/api@npm:^1.9.0, @opentelemetry/api@npm:^1.9.1":
   version: 1.9.1
   resolution: "@opentelemetry/api@npm:1.9.1"
   checksum: 10c0/c608485fc8b5a91e1f7e05e843b45b509307456b31cd2ad365933d90813e40ebfedf179f1451c762037e82d7c76aa8500e95d2da3609f640a1206cde5322cd14
@@ -1748,7 +1772,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/core@npm:2.10.0, @opentelemetry/core@npm:^2.0.0, @opentelemetry/core@npm:^2.0.1, @opentelemetry/core@npm:^2.9.0":
+"@opentelemetry/core@npm:2.10.0, @opentelemetry/core@npm:^2.0.0, @opentelemetry/core@npm:^2.0.1, @opentelemetry/core@npm:^2.10.0, @opentelemetry/core@npm:^2.9.0":
   version: 2.10.0
   resolution: "@opentelemetry/core@npm:2.10.0"
   dependencies:
@@ -1868,7 +1892,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/exporter-trace-otlp-http@npm:0.221.0, @opentelemetry/exporter-trace-otlp-http@npm:>=0.200.0 <0.300.0":
+"@opentelemetry/exporter-trace-otlp-http@npm:0.221.0, @opentelemetry/exporter-trace-otlp-http@npm:>=0.200.0 <0.300.0, @opentelemetry/exporter-trace-otlp-http@npm:^0.221.0":
   version: 0.221.0
   resolution: "@opentelemetry/exporter-trace-otlp-http@npm:0.221.0"
   dependencies:
@@ -2669,7 +2693,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/sdk-trace-base@npm:2.10.0, @opentelemetry/sdk-trace-base@npm:>=2.0.0 <3.0.0":
+"@opentelemetry/sdk-trace-base@npm:2.10.0, @opentelemetry/sdk-trace-base@npm:>=2.0.0 <3.0.0, @opentelemetry/sdk-trace-base@npm:^2.10.0":
   version: 2.10.0
   resolution: "@opentelemetry/sdk-trace-base@npm:2.10.0"
   dependencies:
@@ -7475,7 +7499,12 @@ __metadata:
   resolution: "guest-communication-agent@workspace:apps/guest-communication-agent"
   dependencies:
     "@ai-sdk/openai": "npm:^3.0.48"
+    "@braintrust/otel": "npm:^0.3.0"
     "@langchain/core": "npm:^1.2.1"
+    "@opentelemetry/api": "npm:^1.9.1"
+    "@opentelemetry/core": "npm:^2.10.0"
+    "@opentelemetry/exporter-trace-otlp-http": "npm:^0.221.0"
+    "@opentelemetry/sdk-trace-base": "npm:^2.10.0"
     "@supabase/supabase-js": "npm:^2.49.8"
     "@types/node": "npm:^26.1.1"
     "@types/react": "npm:^19"
