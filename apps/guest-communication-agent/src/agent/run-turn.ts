@@ -47,7 +47,7 @@ const MODEL = "deepseek/deepseek-v4-pro";
 // SYSTEM_PROMPT_VERSION_OVERRIDE is for CI eval jobs only — must never be
 // set in a real runtime environment.
 const SYSTEM_PROMPT_SLUG = "gca-system";
-const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "1000197636062690670";
+const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "1000197640483751332";
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
