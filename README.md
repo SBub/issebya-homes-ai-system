@@ -150,12 +150,10 @@ hand-implemented HMAC-SHA1, no `twilio` SDK dependency) and runs the agent turn 
 verified live end-to-end (signature check -> conversation created/looked-up -> inbound
 message recorded -> graph reaches the agent node).
 
-> **Note: not yet actually live.** The agent node pulls its system prompt from LangSmith's
-> Prompt Hub at runtime (`whatsapp-booking-agent:production`) — it is not a file anywhere
-> in this repo, and needs access to the same LangSmith org/prompt as the source. No real
-> Twilio account/WhatsApp number is configured either. Without both, a real inbound
-> message fails at the prompt-pull step — confirmed live, and it fails *only* there,
-> nowhere earlier in the pipeline.
+> **Note: not yet actually live.** The agent node pulls its system prompt from Braintrust
+> at runtime (project `BRAINTRUST_PROJECT_ID`, slug `gca-system`) — it is not a file
+> anywhere in this repo. No real Twilio account/WhatsApp number is configured either.
+> Without both, a real inbound message fails — confirmed live.
 >
 > **Known gaps carried over, not yet resolved:**
 > - `guest_contacts` has no committed migration anywhere in the source repo's history
@@ -200,9 +198,8 @@ cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.e
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `supabase status`, Publishable/Secret on newer CLI versions),
                        # OPENROUTER_API_KEY (same key apps/orch-a/apps/social-media use),
-                       # LANGSMITH_API_KEY (needs access to the same LangSmith org/prompt
-                       # as issebya-homes-website — not yet configured, see that app's
-                       # README section for what's still not live without it),
+                       # BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID (AI observability +
+                       # prompt management — see that app's own .env.example comment),
                        # TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL once a real Twilio account
                        # exists, TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
                        # uses), NEXT_PUBLIC_SITE_URL

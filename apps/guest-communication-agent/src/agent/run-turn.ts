@@ -37,13 +37,12 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 const MODEL = "deepseek/deepseek-v4-pro";
 
 // The system prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID,
-// slug below), not this repo — same as it lived in LangSmith's Prompt Hub
-// before this migration (scripts/migrate-prompts-to-braintrust.ts). Pinned
-// to an exact version rather than loadPrompt({ environment: "production" })
-// because issebya's Braintrust org has no "production" environment set up
-// yet (see that script's header comment for why). To ship an edited prompt:
-// edit it in Braintrust's UI (or in the migration script + rerun it), then
-// copy the new version id here.
+// slug below), not this repo — it used to live in LangSmith's Prompt Hub
+// before a one-time migration moved it into Braintrust. Pinned to an exact
+// version rather than loadPrompt({ environment: "production" }) because
+// issebya's Braintrust org has no "production" environment set up yet. To
+// ship an edited prompt: edit it in Braintrust's UI, then copy the new
+// version id here.
 // SYSTEM_PROMPT_VERSION_OVERRIDE is for CI eval jobs only — must never be
 // set in a real runtime environment.
 const SYSTEM_PROMPT_SLUG = "gca-system";

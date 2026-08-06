@@ -17,10 +17,9 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 // This prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID, slug
-// below), pushed there by scripts/migrate-prompts-to-braintrust.ts — same
-// version-pinning rationale as run-turn.ts's SYSTEM_PROMPT_VERSION (that
-// file's comment on it has the full explanation of why it's pinned rather
-// than loadPrompt({ environment: "production" })).
+// below) — same version-pinning rationale as run-turn.ts's
+// SYSTEM_PROMPT_VERSION (that file's comment on it has the full explanation
+// of why it's pinned rather than loadPrompt({ environment: "production" })).
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 const SUMMARIZER_PROMPT_VERSION =
   process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197636062690373";
