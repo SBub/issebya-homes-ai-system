@@ -262,7 +262,17 @@ export async function runAgentTurn(
   await step.run("start-trace", () =>
     withTurnSpan(
       correlationId,
-      "guest-turn",
+      // Must start with one of @braintrust/otel's AISpanProcessor
+      // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
+      // checked against the span name AND non-system attribute keys — see
+      // node_modules/@braintrust/otel/dist/index.js's isAISpan) or
+      // filterAISpans: true (instrumentation.ts) silently drops this span
+      // before export. Neither "guest-turn" nor this span's own attributes
+      // (gca.conversation_id/gca.phone) matched any prefix, which is why it
+      // never showed up in Braintrust at all. "braintrust." is an honest
+      // prefix for this — it's a Braintrust-observability-specific marker
+      // span, not a real gen_ai call.
+      "braintrust.guest_turn",
       { "gca.conversation_id": conversationId, "gca.phone": phone },
       async () => {},
     ),
@@ -367,7 +377,7 @@ export async function runAgentTurn(
               withTurnSpan(
                 correlationId,
                 `gen_ai.tool.${call.toolName}`,
-                { "gen_ai.tool.name": call.toolName },
+                { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
                 async (span) => {
                   const output = await runToolCall(call.toolName, call.input, toolContext);
                   span.setAttribute("gca.tool.input", JSON.stringify(call.input));

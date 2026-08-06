@@ -55,10 +55,28 @@ export async function register(): Promise<void> {
   }
 
   const { BasicTracerProvider } = await import("@opentelemetry/sdk-trace-base");
-  const { trace } = await import("@opentelemetry/api");
+  const { context, trace } = await import("@opentelemetry/api");
+  const { AsyncHooksContextManager } = await import("@opentelemetry/context-async-hooks");
   const { BraintrustSpanProcessor, setupOtelCompat } = await import("@braintrust/otel");
 
   setupOtelCompat(); // enables interop with Braintrust's own logger/traced API if anything else ever uses it — cheap, call it
+
+  // Registers a real ContextManager so context.with(...)/context.active()
+  // (used by src/lib/tracing.ts's withTurnSpan to make a deterministic
+  // parent SpanContext "active" before starting a span) actually propagate
+  // context across the awaits inside Inngest step callbacks, instead of
+  // silently no-op'ing. Without this, @opentelemetry/api's default no-op
+  // ContextManager makes context.with(ctx, fn) just call fn() directly —
+  // context.active() always reads back as the root/empty context, so every
+  // tracer.startActiveSpan call falls back to a fresh random trace id with
+  // no parent, which is exactly what fragmented every turn into N separate
+  // Braintrust traces (one per span) instead of one trace per turn.
+  // AsyncHooksContextManager (async_hooks/AsyncLocalStorage-backed) is the
+  // Node-appropriate choice here — the browser-only alternative
+  // (ZoneContextManager) doesn't apply to this server-only instrumentation.
+  const contextManager = new AsyncHooksContextManager();
+  contextManager.enable();
+  context.setGlobalContextManager(contextManager);
 
   const braintrustProcessor = new BraintrustSpanProcessor({
     apiKey,

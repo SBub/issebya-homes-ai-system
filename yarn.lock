@@ -1763,7 +1763,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@opentelemetry/context-async-hooks@npm:2.10.0, @opentelemetry/context-async-hooks@npm:>=2.0.0 <3.0.0":
+"@opentelemetry/context-async-hooks@npm:2.10.0, @opentelemetry/context-async-hooks@npm:>=2.0.0 <3.0.0, @opentelemetry/context-async-hooks@npm:^2.10.0":
   version: 2.10.0
   resolution: "@opentelemetry/context-async-hooks@npm:2.10.0"
   peerDependencies:
@@ -7509,6 +7509,7 @@ __metadata:
     "@braintrust/otel": "npm:^0.3.0"
     "@langchain/core": "npm:^1.2.1"
     "@opentelemetry/api": "npm:^1.9.1"
+    "@opentelemetry/context-async-hooks": "npm:^2.10.0"
     "@opentelemetry/core": "npm:^2.10.0"
     "@opentelemetry/exporter-trace-otlp-http": "npm:^0.221.0"
     "@opentelemetry/sdk-trace-base": "npm:^2.10.0"
