@@ -107,12 +107,18 @@ interface ConversationMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
-  // The LangSmith trace/run id this message's turn was generated under, if
-  // any (see GCA's whatsapp_messages.langsmith_run_id migration comment for
-  // which message types get a real value). Null for a guest's own message
-  // and for a proactive/campaign send — the "flag after" eval-feedback
-  // controls below only ever render for a message that actually has one.
-  langsmith_run_id: string | null;
+  // The Braintrust trace id this message's turn was generated under, if any
+  // (see GCA's whatsapp_messages.trace_id column). Null for a guest's own
+  // message and for a proactive/campaign send — the "flag after"
+  // eval-feedback controls below only ever render for a message that
+  // actually has one.
+  //
+  // Dead code as of this field's rename: this data arrives via
+  // /api/guest-contacts/[id]/conversations, which proxies to GCA's own
+  // GET /api/conversations — that GCA route no longer exists (removed in an
+  // earlier, unrelated CRM-dependency cleanup), so this proxy 404s and
+  // `conversation.messages` is never actually populated today.
+  trace_id: string | null;
 }
 
 interface Conversation {
@@ -2569,7 +2575,7 @@ export default function DashboardPage() {
                             <Text as="div" size="2">
                               {message.content}
                             </Text>
-                            {message.role === "assistant" && message.langsmith_run_id && (
+                            {message.role === "assistant" && message.trace_id && (
                               <Box mt="1">
                                 {messageFeedbackMarked[message.id] !== undefined ? (
                                   <Box>

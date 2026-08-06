@@ -136,7 +136,7 @@ describe("recordMessage", () => {
     expect(result).toBe("msg-1");
   });
 
-  it("includes langsmith_run_id in the insert when supplied", async () => {
+  it("includes trace_id in the insert when supplied", async () => {
     insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-2" }, error: null });
 
     const result = await recordMessage("convo-1", "assistant", "Yes, room 1 is free!", "run-1");
@@ -145,7 +145,7 @@ describe("recordMessage", () => {
       conversation_id: "convo-1",
       role: "assistant",
       content: "Yes, room 1 is free!",
-      langsmith_run_id: "run-1",
+      trace_id: "run-1",
     });
     expect(result).toBe("msg-2");
   });
