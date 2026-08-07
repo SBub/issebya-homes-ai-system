@@ -1,6 +1,7 @@
 import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
 import { sendOwnerNudge } from "@/lib/telegram-router";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 // Plain string union, not a zod schema — nothing parses untrusted input
 // into it; each tool's identity (wants_human/missing_info) already
@@ -40,17 +41,42 @@ export async function requestOwnerNudge(params: {
 }): Promise<boolean> {
   const { conversationId, phone, reason, reasonCategory, correlationId } = params;
 
-  const nudgeResult = await sendOwnerNudge({
-    phone,
-    reason,
-    reasonCategory,
-    conversationId,
-    correlationId,
-  });
-  if (!nudgeResult.ok) {
-    console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
-    return false;
-  }
+  // Generic withSpan, not withTurnSpan: this `correlationId` param is
+  // requestOwnerNudge's own business-logic value (only missing_info ever
+  // sets it — see the doc comment above), not necessarily the turn's real
+  // correlation id (wants_human never passes one on here, even though its
+  // own ToolContext.correlationId is real). Using it as a deterministic
+  // trace key would give every wants_human call (which all resolve
+  // correlationId to undefined here) the SAME shared trace id. Callers
+  // (missing-info.ts, wants-human.ts) already wrap their own step.run
+  // callback in withTurnSpan(context.correlationId, ...) before calling this
+  // — that's the real, per-turn trace key. This span just needs to nest
+  // under it via ambient context, which withSpan does automatically.
+  return withSpan(
+    "owner_nudge.request",
+    {
+      "gca.phone": phone,
+      "gca.conversation_id": conversationId,
+      "gca.reason_category": reasonCategory,
+    },
+    async (span) => {
+      const nudgeResult = await sendOwnerNudge({
+        phone,
+        reason,
+        reasonCategory,
+        conversationId,
+        correlationId,
+      });
+      if (!nudgeResult.ok) {
+        console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
+        markSpanFailed(
+          span,
+          nudgeResult.error ?? "telegram-router nudge failed with no error message",
+        );
+        return false;
+      }
 
-  return true;
+      return true;
+    },
+  );
 }

@@ -85,6 +85,7 @@ describe("POST /api/webhook/whatsapp", () => {
       incomingMessage: "Is room 1 free?",
       triggerMessageId: "msg-user-1",
       correlationId: expect.any(String),
+      traceAnchor: { traceId: expect.any(String), spanId: expect.any(String) },
     });
     // A real, non-empty UUID — generated once, here, not left undefined.
     expect(sentEvent.data.correlationId.length).toBeGreaterThan(0);

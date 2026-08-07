@@ -1,5 +1,6 @@
 import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
+import type { TraceAnchor } from "@/lib/tracing";
 
 // Per-turn identifiers passed to the tools that need them (runSendBookingLink,
 // runWantsHuman, runMissingInfo), via run-turn.ts's
@@ -7,6 +8,13 @@ import type { inngest } from "@/lib/inngest";
 export interface ToolContext {
   conversationId: string;
   phone: string;
+  // This turn's real trace anchor (src/lib/tracing.ts's TraceAnchor) —
+  // parented to the "braintrust.guest_turn" span, so a tool's own
+  // owner-nudge/etc. spans nest under it instead of a synthetic stand-in.
+  // Stable across an Inngest replay (see run-turn.ts's runAgentTurn for how
+  // it's derived) even after missing_info's step.waitForEvent suspends for
+  // up to 24h.
+  traceAnchor: TraceAnchor;
   // Only the real webhook call path (via @/agent/run-turn.ts's
   // runGuestTurn) supplies this; other callers leave it undefined.
   triggerMessageId?: string;

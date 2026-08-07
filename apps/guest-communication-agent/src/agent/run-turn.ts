@@ -13,7 +13,7 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
-import { turnTraceContext, updateSpanIO, withTurnSpan } from "@/lib/tracing";
+import { markSpanFailed, type TraceAnchor, updateSpanIO, withTurnSpan } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -50,6 +50,14 @@ const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "100
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
+
+// Guest-facing text used whenever the model's own reply can't be used
+// as-is — currently: a final round with no tool calls and blank text (see
+// modelTurn's markSpanFailed call for the trace-visible side of this same
+// condition), and runGuestTurn's own "no assistant message at all" case.
+// Sending the model's raw "" straight to Twilio 400s (a message body can't
+// be empty), which is what silently ate a guest's reply before this existed.
+const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again shortly.";
 
 // `.chat(MODEL)` targets Chat Completions — bare `openrouter(MODEL)` would
 // target the Responses API, which OpenRouter doesn't support.
@@ -116,26 +124,68 @@ interface ModelTurnResult {
   response: { messages: ModelMessage[] };
 }
 
+// A reasoning model can burn its whole completion on internal "thinking"
+// tokens and come back with neither a text reply nor a tool call —
+// generateText doesn't treat that as an error (finishReason is often "stop",
+// not "length" — i.e. the model itself thinks it's done), so left alone this
+// silently looks like a successful, no-op turn everywhere except the guest,
+// who gets nothing back. Retrying is cheap insurance against exactly that
+// kind of transient flakiness. "content-filter" is the one finishReason
+// retrying can't fix — a deterministic moderation block — so that's the only
+// reason this gives up immediately instead of spending the remaining
+// attempts. 3 total attempts, not 3 retries: the first pass through the loop
+// below counts as attempt 1.
+const MAX_MODEL_ATTEMPTS = 3;
+
 async function modelTurn(
   system: string,
   messages: ModelMessage[],
-  correlationId: string,
+  turnAnchor: TraceAnchor,
 ): Promise<ModelTurnResult> {
   return withTurnSpan(
-    correlationId,
+    turnAnchor,
     "gen_ai.chat",
     { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
     async (span) => {
-      const result = await generateText({
-        model,
-        system,
-        messages,
-        tools,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-      });
+      // Plain non-generic closure over `tools`, purely so `typeof callModel`
+      // below gives `result` the exact GenerateTextResult<typeof tools, ...>
+      // shape — `ReturnType<typeof generateText>` on the generic function
+      // itself widens back to a bare ToolSet and loses the specific tool
+      // types.
+      const callModel = () =>
+        generateText({
+          model,
+          system,
+          messages,
+          tools,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+        });
+
+      let result: Awaited<ReturnType<typeof callModel>>;
+      let attempt = 0;
+      for (;;) {
+        attempt++;
+        result = await callModel();
+        const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
+        if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
+          break;
+        }
+        console.warn(
+          `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
+        );
+        // Same signal as the console.warn above, but attached to the span so
+        // it's visible in the Axiom/Braintrust trace itself, not just server
+        // logs nobody is watching.
+        span.addEvent("gen_ai.retry", {
+          attempt,
+          finishReason: result.finishReason,
+        });
+      }
 
       span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
       span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
+      span.setAttribute("gen_ai.request.attempt_count", attempt);
       // "braintrust.*" is the attribute namespace that actually maps to a
       // span's top-level input/output fields in Braintrust's UI (Traces
       // list + per-span view) — the gen_ai.* attributes above only ever
@@ -153,6 +203,18 @@ async function modelTurn(
       }
       if (result.usage?.outputTokens !== undefined) {
         span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+      }
+
+      // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
+      // content-filter finish) — flag it so it shows up as an ERROR span
+      // instead of blending into every other "OK" span in the trace. See
+      // markSpanFailed's own comment for why this doesn't need to throw to
+      // be visible.
+      if (result.text.trim() === "" && result.toolCalls.length === 0) {
+        markSpanFailed(
+          span,
+          `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
+        );
       }
 
       return {
@@ -235,6 +297,11 @@ export interface RunAgentTurnConfig {
   // This run's correlation id — see GuestTurnRequestedEventData below for
   // where it comes from and why.
   correlationId: string;
+  // The webhook route's real trace root, threaded through so this turn's own
+  // "braintrust.guest_turn" marker span parents to something real instead of
+  // a synthetic stand-in — see GuestTurnRequestedEventData.traceAnchor and
+  // src/lib/tracing.ts's startTraceRoot/TraceAnchor.
+  traceAnchor: TraceAnchor;
   // This run's Inngest step tools, threaded down explicitly since Inngest
   // (unlike DBOS) has no ambient "current workflow" equivalent to read from.
   step: GetStepTools<typeof inngest>;
@@ -272,9 +339,7 @@ export async function runAgentTurn(
   config: RunAgentTurnConfig,
 ): Promise<RunAgentTurnResult> {
   const { conversationId, phone, incomingMessage } = input;
-  const { triggerMessageId, correlationId, step } = config;
-
-  const toolContext: ToolContext = { conversationId, phone, triggerMessageId, correlationId, step };
+  const { triggerMessageId, correlationId, traceAnchor, step } = config;
 
   // Lightweight marker span, once per turn, memoized in its own step — gives
   // every trace a clean root node in Braintrust's UI (attributes: conversation
@@ -288,7 +353,7 @@ export async function runAgentTurn(
   // and the "update-turn-trace-io" step in runGuestTurn below.
   const guestTurnSpanId = await step.run("start-trace", () =>
     withTurnSpan(
-      correlationId,
+      traceAnchor,
       // Must start with one of @braintrust/otel's AISpanProcessor
       // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
       // checked against the span name AND non-system attribute keys — see
@@ -305,6 +370,23 @@ export async function runAgentTurn(
     ),
   );
 
+  // Every span from here on nests under the real "braintrust.guest_turn"
+  // span above, instead of parenting to traceAnchor (the webhook's root)
+  // directly — that's what gives load-memory/load-system-prompt/gen_ai.*/
+  // etc. proper parent/child structure in Braintrust and Axiom, rather than
+  // all landing as siblings of braintrust.guest_turn. traceId never changes
+  // within a turn, only which real span is "current".
+  const turnAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: guestTurnSpanId };
+
+  const toolContext: ToolContext = {
+    conversationId,
+    phone,
+    triggerMessageId,
+    correlationId,
+    traceAnchor: turnAnchor,
+    step,
+  };
+
   // Cast needed: step.run()'s return type is run through Inngest's Jsonify
   // transform (step results are actually persisted as JSON and rehydrated on
   // replay), which narrows types like FilePart's `data: URL | DataContent`
@@ -315,7 +397,9 @@ export async function runAgentTurn(
   // the narrowing is a false positive here too, same as the model-${stepCount}
   // step below.
   const { historyMessages, contextBlock } = (await step.run("load-memory", () =>
-    loadMemory({ conversationId, phone, correlationId }),
+    withTurnSpan(turnAnchor, "load-memory", { "gca.conversation_id": conversationId }, () =>
+      loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
+    ),
   )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
@@ -337,15 +421,19 @@ export async function runAgentTurn(
   // structurally loses its methods). The system prompt here is always a
   // plain string, so the narrowing is a false positive for this call site
   // too, same as the model-${stepCount} and load-memory step calls below.
-  const system = (await step.run("load-system-prompt", async () => {
-    const promptTemplate = await loadPrompt({
-      projectId: process.env.BRAINTRUST_PROJECT_ID,
-      slug: SYSTEM_PROMPT_SLUG,
-      version: SYSTEM_PROMPT_VERSION,
-    });
-    const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
-    return messages[0].content as string;
-  })) as string;
+  const system = (await step.run("load-system-prompt", () =>
+    withTurnSpan(turnAnchor, "load-system-prompt", {}, async () => {
+      const promptTemplate = await loadPrompt({
+        projectId: process.env.BRAINTRUST_PROJECT_ID,
+        slug: SYSTEM_PROMPT_SLUG,
+        version: SYSTEM_PROMPT_VERSION,
+      });
+      const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
+      return messages[0].content as string;
+    }),
+  )) as string;
+
+  console.log("contextBlock", contextBlock);
 
   let stepCount = 0;
 
@@ -367,11 +455,13 @@ export async function runAgentTurn(
     // receives file attachments — so the narrowing is a false positive for
     // this call site specifically, not a real runtime concern.
     const result = (await step.run(`model-${stepCount}`, () =>
-      modelTurn(system, messages, correlationId),
+      modelTurn(system, messages, turnAnchor),
     )) as ModelTurnResult;
 
     if (result.toolCalls.length === 0) {
-      messages = [...messages, { role: "assistant", content: sanitizeReplyText(result.text) }];
+      const replyText =
+        result.text.trim() === "" ? FALLBACK_REPLY_TEXT : sanitizeReplyText(result.text);
+      messages = [...messages, { role: "assistant", content: replyText }];
       return { messages, stepCount, guestTurnSpanId, firedTags };
     }
 
@@ -416,7 +506,7 @@ export async function runAgentTurn(
 
         return await step.run(`tool-${call.toolName}`, () =>
           withTurnSpan(
-            correlationId,
+            turnAnchor,
             `gen_ai.tool.${call.toolName}`,
             { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
             async (span) => {
@@ -466,10 +556,21 @@ interface GuestTurnRequestedEventData {
   // Row id of the guest's inbound message in whatsapp_messages. Not always
   // set — only real webhook calls have one.
   triggerMessageId?: string;
-  // Random id for this run, set once in the webhook route. Lets
+  // Random id for this run, set once in the webhook route (before any
+  // request validation — see that route's own comment). Lets
   // step.waitForEvent (see missing-info.ts) find this exact suspended run
-  // when the owner's reply comes back as a separate event.
+  // when the owner's reply comes back as a separate event. No longer doing
+  // double duty as a tracing key — see traceAnchor below for that.
   correlationId: string;
+  // The webhook route's real trace root (src/lib/tracing.ts's
+  // startTraceRoot), captured once, before any request validation, from the
+  // "webhook.verify_signature" span. Every withTurnSpan call for this turn,
+  // from the webhook route's own remaining pre-Inngest stages through to the
+  // final reply send, parents to this (or to a real span descended from it —
+  // see runAgentTurn's own turnAnchor), so the whole interaction lands as one
+  // properly nested trace instead of a flat list of spans sharing a
+  // synthetic, never-emitted parent.
+  traceAnchor: TraceAnchor;
 }
 
 export interface RunGuestTurnParams extends GuestTurnRequestedEventData {
@@ -487,18 +588,31 @@ export interface RunGuestTurnParams extends GuestTurnRequestedEventData {
 // spinning up a real Inngest engine — see runGuestTurnFunction below for the
 // thin adapter that actually gets registered with Inngest.
 export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
-  const { conversationId, phone, incomingMessage, triggerMessageId, correlationId, step } = params;
+  const {
+    conversationId,
+    phone,
+    incomingMessage,
+    triggerMessageId,
+    correlationId,
+    traceAnchor,
+    step,
+  } = params;
 
   const result = await runAgentTurn(
     { conversationId, phone, incomingMessage },
-    { triggerMessageId, correlationId, step },
+    { triggerMessageId, correlationId, traceAnchor, step },
   );
 
+  // Deliberately back at traceAnchor (the webhook's "webhook.turn" root),
+  // NOT nested under "braintrust.guest_turn" (unlike runAgentTurn's own
+  // turnAnchor, scoped to just its model/tool-call spans) — these three
+  // spans are delivery/bookkeeping that happens after the guest turn's own
+  // reasoning is done, not part of it, so they sit as its siblings.
   const lastMessage = result.messages.at(-1);
   const replyText =
     lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
       ? lastMessage.content
-      : "Sorry, I couldn't process that — please try again shortly.";
+      : FALLBACK_REPLY_TEXT;
 
   // Retroactive merge-patch: the "braintrust.guest_turn" root marker span
   // (started/closed empty in the "start-trace" step, well before replyText
@@ -513,29 +627,38 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
   // tags field is a set, not a multiset — duplicate entries add nothing.
   const dedupedTags = [...new Set(result.firedTags)];
   await step.run("update-turn-trace-io", () =>
-    updateSpanIO(result.guestTurnSpanId, {
-      input: incomingMessage,
-      output: replyText,
-      ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
-    }),
+    withTurnSpan(traceAnchor, "update-turn-trace-io", {}, () =>
+      updateSpanIO(result.guestTurnSpanId, {
+        input: incomingMessage,
+        output: replyText,
+        ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
+      }),
+    ),
   );
 
   await step.run("record-reply", () =>
-    // A real Braintrust trace id — turnTraceContext/withTurnSpan (see
-    // src/lib/tracing.ts) group every span emitted for this correlationId
-    // (the model call(s), tool calls, the summarizer call) under this exact
-    // trace id, so this DB value doubles as a working pointer into
-    // Braintrust for this turn.
-    recordMessage(conversationId, "assistant", replyText, turnTraceContext(correlationId).traceId),
+    withTurnSpan(traceAnchor, "record-reply", { "gca.conversation_id": conversationId }, () =>
+      // traceAnchor.traceId is a real OTel trace id (see
+      // src/lib/tracing.ts's startTraceRoot) shared by every span emitted
+      // for this turn, so this DB value doubles as a working pointer into
+      // Braintrust/Axiom for this turn.
+      recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
+    ),
   );
 
-  await step.run("send-whatsapp-reply", async () => {
-    const sendResult = await sendWhatsAppMessage(phone, replyText);
-    if (!sendResult.ok) {
-      console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
-    }
-    return sendResult;
-  });
+  await step.run("send-whatsapp-reply", () =>
+    withTurnSpan(traceAnchor, "send-whatsapp-reply", { "gca.phone": phone }, async (span) => {
+      const sendResult = await sendWhatsAppMessage(phone, replyText);
+      if (!sendResult.ok) {
+        console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+        markSpanFailed(
+          span,
+          sendResult.error ?? "sendWhatsAppMessage failed with no error message",
+        );
+      }
+      return sendResult;
+    }),
+  );
 }
 
 // The Inngest function actually registered with /api/inngest (see

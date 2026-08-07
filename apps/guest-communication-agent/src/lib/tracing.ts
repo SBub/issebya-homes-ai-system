@@ -1,56 +1,105 @@
-import crypto from "node:crypto";
 import { type Attributes, context, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 
 const tracer = trace.getTracer("guest-communication-agent");
 
-// Derives a stable trace id and "root" parent span id purely from
-// correlationId (already threaded through this whole codebase — see
-// RunAgentTurnConfig.correlationId in run-turn.ts), via a deterministic
-// hash. No randomness, no memoization needed for the ids themselves —
-// they're identical on every replay by construction.
-//
-// This exists because Inngest's execution model re-runs a function's body
-// OUTSIDE any step.run() callback on every replay (e.g. after
-// missing_info's step.waitForEvent suspends for up to 24h and later
-// resumes) — only a step.run()'s *return value* is memoized. That means no
-// JS state (including a live OTel Span object) can survive across step
-// boundaries, so this turn's trace can't be built by holding one root span
-// open for its duration. Deriving the ids from correlationId instead means
-// every span emitted for the same correlationId lands in the same
-// Braintrust trace, across Inngest replays, without ever holding a live
-// Span object across a step boundary.
-export function turnTraceContext(correlationId: string): { traceId: string; rootSpanId: string } {
-  const hash = crypto.createHash("sha256").update(correlationId).digest("hex");
-  return { traceId: hash.slice(0, 32), rootSpanId: hash.slice(32, 48) };
+// A real span's identity, threaded explicitly (as plain JSON) so later spans
+// — possibly in a different process, or a different Inngest replay — can
+// parent to it without ever holding the original Span object open. See
+// startTraceRoot/withTurnSpan below.
+export interface TraceAnchor {
+  traceId: string;
+  spanId: string;
 }
 
-// Runs `fn` as a new span that's a child of this turn's deterministic root
-// span (see turnTraceContext) — every span emitted for the same
-// correlationId lands in the same Braintrust trace, across Inngest replays,
-// without ever holding a live Span object across a step boundary. Callers
-// MUST wrap every call to this in a step.run() (or only call it from code
-// that only executes once) — see run-turn.ts's SELF_STEPPED_TOOLS comment
-// for why calling this from un-stepped code would duplicate-emit spans on
-// Inngest replay.
+// Stamps the real OTel trace id onto every span as a plain attribute.
+// Braintrust doesn't expose the underlying OTel trace id as a searchable
+// field anywhere in its UI — you can only ever see it after already opening
+// a trace — but it does index arbitrary attributes under a searchable
+// `metadata.*` namespace. Setting it here means pasting an Axiom trace id
+// into Braintrust's search bar as `metadata."gca.trace_id"` actually finds
+// the matching trace.
+function stampTraceId(span: Span): void {
+  span.setAttribute("gca.trace_id", span.spanContext().traceId);
+}
+
+// Starts a genuine trace root: an unparented real span, letting the OTel SDK
+// generate both trace_id and span_id for real (unlike withTurnSpan below,
+// which always parents to an already-known anchor). Call this exactly once
+// per real turn — the webhook route's very first span (route.ts's POST) —
+// then thread the returned `anchor` through everything downstream via
+// withTurnSpan(anchor, ...), including across the webhook-request ->
+// Inngest-function boundary (the triggering event payload carries `anchor`
+// as plain JSON — see run-turn.ts's GuestTurnRequestedEventData).
+//
+// This replaced an earlier design (a `turnTraceContext(correlationId)` hash
+// used as a synthetic, never-actually-emitted parent id) that made every
+// turn's trace look flat in Braintrust — nothing ever nested under
+// "braintrust.guest_turn", since every span pointed at the same fake parent
+// instead of at each other — and showed a "(missing)" root in Axiom's
+// waterfall view, since no span with that id was ever exported for it to
+// find. Threading a real anchor instead fixes both: every span in a turn now
+// genuinely descends from this one real root, and Inngest's own guarantee
+// that `event.data` replays identically is what makes the anchor stable
+// across replays — no hashing needed for that anymore.
+export async function startTraceRoot<T>(
+  name: string,
+  attributes: Attributes,
+  fn: (span: Span) => Promise<T>,
+): Promise<{ anchor: TraceAnchor; result: T }> {
+  return tracer.startActiveSpan(name, { attributes }, async (span) => {
+    stampTraceId(span);
+    const { traceId, spanId } = span.spanContext();
+    try {
+      const result = await fn(span);
+      return { anchor: { traceId, spanId }, result };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+// Runs `fn` as a new span parented to `anchor` (see startTraceRoot/
+// TraceAnchor above) — every span sharing the same anchor.traceId lands in
+// the same Braintrust trace, properly nested under whichever real span
+// anchor.spanId refers to, across Inngest replays, without ever holding a
+// live Span object across a step boundary. Callers MUST wrap every call to
+// this in a step.run() (or only call it from code that only executes once)
+// — see run-turn.ts's SELF_STEPPED_TOOLS comment for why calling this from
+// un-stepped code would duplicate-emit spans on Inngest replay.
+//
+// Deliberately does NOT set an OK status when `fn` resolves without
+// throwing — an unset status already reads as "not an error" in every OTel
+// backend, and explicitly setting OK here used to clobber markSpanFailed's
+// ERROR status on "soft-fail" call sites (e.g. send-whatsapp-reply: `fn`
+// catches sendWhatsAppMessage's failure, calls markSpanFailed, then returns
+// normally without throwing — this function's own success path was
+// overwriting that ERROR back to OK immediately after). Confirmed live via a
+// real Axiom trace: a genuine Twilio delivery failure showed the exception
+// in the span's events but status.code "OK", which would silently undercount
+// in any error-rate query filtering on status. Only ever set ERROR now,
+// never OK — matches OTel's own guidance that an explicit OK is for
+// overriding an already-set error status, not a default to apply everywhere.
 export async function withTurnSpan<T>(
-  correlationId: string,
+  anchor: TraceAnchor,
   name: string,
   attributes: Attributes,
   fn: (span: Span) => Promise<T>,
 ): Promise<T> {
-  const { traceId, rootSpanId } = turnTraceContext(correlationId);
   const parentContext = trace.setSpanContext(context.active(), {
-    traceId,
-    spanId: rootSpanId,
+    traceId: anchor.traceId,
+    spanId: anchor.spanId,
     traceFlags: 1, // sampled
     isRemote: true,
   });
   return context.with(parentContext, () =>
     tracer.startActiveSpan(name, { attributes }, async (span) => {
+      stampTraceId(span);
       try {
-        const result = await fn(span);
-        span.setStatus({ code: SpanStatusCode.OK });
-        return result;
+        return await fn(span);
       } catch (err) {
         span.recordException(err as Error);
         span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
@@ -60,6 +109,54 @@ export async function withTurnSpan<T>(
       }
     }),
   );
+}
+
+// Generic, non-deterministic child span — same lifecycle (recordException +
+// ERROR status on throw, always end()) as withTurnSpan's inner block, minus
+// the deterministic correlationId-derived parent wiring. Nests automatically
+// under whatever span is active via context.active() (e.g. a webhook.* stage
+// span, a gen_ai.tool.* span, a run-turn.ts step span) — no explicit parent
+// needed. If nothing is active, it starts a fresh root trace, which is
+// correct for callers with no ambient turn context (e.g. /api/health's own
+// probe).
+//
+// Same replay-safety caveat as withTurnSpan: only call this from code that
+// runs at most once per real invocation — i.e. from inside an already-
+// established step.run() callback, or from plain (non-Inngest-replayed) HTTP
+// handler code. Calling it from un-stepped Inngest function-body code that
+// re-executes on replay would duplicate-emit spans.
+export async function withSpan<T>(
+  name: string,
+  attributes: Attributes,
+  fn: (span: Span) => Promise<T>,
+): Promise<T> {
+  return tracer.startActiveSpan(name, { attributes }, async (span) => {
+    stampTraceId(span);
+    try {
+      // Same reasoning as withTurnSpan: no explicit OK on success, so a
+      // markSpanFailed call inside `fn` (soft-fail, doesn't throw) isn't
+      // clobbered back to OK right after — see withTurnSpan's own comment.
+      return await fn(span);
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+// Marks a span ERROR without throwing — for call sites that already catch a
+// failure and downgrade it to a plain return value (e.g. sendWhatsAppMessage's
+// `{ ok: false, error }`, requestOwnerNudge's `false`) rather than propagate
+// an exception. Using this instead of a throw keeps existing control flow and
+// return values exactly as they are; it only makes the failure visible on the
+// trace, where before it was invisible even to a wrapping withSpan/
+// withTurnSpan (their catch blocks only fire on a real throw).
+export function markSpanFailed(span: Span, message: string): void {
+  span.recordException(new Error(message));
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
 
 // issebya's Braintrust org is EU-data-plane — same gotcha as everywhere else

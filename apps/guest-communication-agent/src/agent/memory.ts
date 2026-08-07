@@ -3,7 +3,7 @@ import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import { getGuestMemory, loadRecentMessages, type MessageRow, upsertGuestMemory } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
-import { withTurnSpan } from "@/lib/tracing";
+import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
 
 // Combines recent-message loading + token-budget trimming (reuses
 // context.ts's trimToTokenBudget, only correlating its output back to
@@ -48,7 +48,7 @@ function toModelMessage(row: MessageRow): ModelMessage {
 async function summarizeConversation(
   newlyDroppedMessages: ModelMessage[],
   priorSummary: string,
-  correlationId: string,
+  turnAnchor: TraceAnchor,
 ): Promise<string> {
   const transcript = newlyDroppedMessages
     .map(
@@ -73,7 +73,7 @@ async function summarizeConversation(
   // real run; a replay returns the memoized load-memory result without
   // re-running this. Safe to wrap in a span for the same reason.
   return withTurnSpan(
-    correlationId,
+    turnAnchor,
     "gen_ai.chat",
     { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
     async (span) => {
@@ -121,9 +121,9 @@ export function buildContextBlock(summary: string | null): string {
 export async function loadMemory(params: {
   conversationId: string;
   phone: string;
-  correlationId: string;
+  traceAnchor: TraceAnchor;
 }): Promise<AgentMemory> {
-  const { conversationId, phone, correlationId } = params;
+  const { conversationId, phone, traceAnchor } = params;
 
   const [rows, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
@@ -154,7 +154,7 @@ export async function loadMemory(params: {
     summary = await summarizeConversation(
       newlyDroppedMessages,
       existingMemory?.summary ?? "",
-      correlationId,
+      traceAnchor,
     );
 
     const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;

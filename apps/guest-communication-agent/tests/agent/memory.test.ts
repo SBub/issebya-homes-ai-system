@@ -35,6 +35,8 @@ vi.mock("@ai-sdk/openai", () => ({
 
 const { loadMemory, buildContextBlock } = await import("@/agent/memory.js");
 
+const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
 // Builds a MessageRow-shaped object with `content` padded to exactly
 // `chars` characters, same measured-length trick as context.test.ts's
 // messageOfLength, plus the id/created_at fields memory.ts needs for
@@ -89,7 +91,7 @@ describe("loadMemory", () => {
     const result = await loadMemory({
       conversationId: "convo-1",
       phone: "+351900000001",
-      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
     });
 
     expect(result.historyMessages).toHaveLength(3);
@@ -111,7 +113,7 @@ describe("loadMemory", () => {
       // Already-normalized (bare) form — the webhook route normalizes
       // once, at the ingress boundary, before loadMemory ever sees `phone`.
       phone: "+351900000002",
-      correlationId: "corr-2",
+      traceAnchor: TEST_TRACE_ANCHOR,
     });
 
     // Trimmed to the newest 3 rows (msg-5, msg-6, msg-7); the oldest 5
@@ -151,7 +153,7 @@ describe("loadMemory", () => {
     const result = await loadMemory({
       conversationId: "convo-3",
       phone: "+351900000003",
-      correlationId: "corr-3",
+      traceAnchor: TEST_TRACE_ANCHOR,
     });
 
     expect(result.historyMessages).toHaveLength(3);

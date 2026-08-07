@@ -1,6 +1,7 @@
 import { embed, tool } from "ai";
 import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 import { createClient } from "../../lib/supabase";
 
 type DocumentMetadata = {
@@ -41,16 +42,27 @@ export async function runAnswerPropertyQuestion(
     value: args.query,
   });
 
-  const { data, error } = await supabaseAnon.rpc("match_documents", {
-    query_embedding: JSON.stringify(embedding),
-    match_count: 5,
-    match_threshold: 0.3,
-    filter: {},
+  return withSpan("db.matchDocuments", { "db.table": "documents" }, async (span) => {
+    const { data, error } = await supabaseAnon.rpc("match_documents", {
+      query_embedding: JSON.stringify(embedding),
+      match_count: 5,
+      match_threshold: 0.3,
+      filter: {},
+    });
+
+    if (error) {
+      // Previously collapsed into the same "no relevant information found"
+      // string a genuine no-match produces — a DB/RPC outage and "nothing
+      // matched" were indistinguishable. Still returns the same fallback
+      // text (the guest/model shouldn't see a different answer either way),
+      // just makes the real cause visible on the trace.
+      markSpanFailed(span, error.message);
+      return "No relevant information found in the knowledge base.";
+    }
+    if (!data?.length) {
+      return "No relevant information found in the knowledge base.";
+    }
+
+    return (data as DocumentMatch[]).map((d) => d.content).join("\n\n");
   });
-
-  if (error || !data?.length) {
-    return "No relevant information found in the knowledge base.";
-  }
-
-  return (data as DocumentMatch[]).map((d) => d.content).join("\n\n");
 }

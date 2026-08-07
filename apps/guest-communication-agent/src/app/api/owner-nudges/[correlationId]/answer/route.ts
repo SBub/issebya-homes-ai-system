@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handleMissingInfoReplyReceived } from "@/agent/tools/missing-info";
 import { requireApiKey } from "@/lib/auth";
+import { startTraceRoot } from "@/lib/tracing";
 
 /**
  * Closes the human-in-the-loop for a missing_info owner nudge once the owner
@@ -19,6 +20,20 @@ import { requireApiKey } from "@/lib/auth";
  *
  * - 400 if `answer` is missing/blank.
  * - 500 if the KB embed/insert fails, or the Inngest send itself errors.
+ *
+ * Tracing: unlike every other stage of a turn, this handler can't join the
+ * original guest turn's trace — it only ever receives `correlationId` (a
+ * plain string, not the original webhook's real TraceAnchor), often hours
+ * later, from a completely separate process (telegram-router's webhook,
+ * relaying the owner's reply). There's no live/derivable link back to the
+ * original trace's real {traceId, spanId} without either persisting it
+ * somewhere keyed by correlationId (the escalations-table-shaped dependency
+ * this flow deliberately dropped) or having telegram-router carry it through
+ * the `[ref:...]` tag too (a cross-app change). So this handler starts its
+ * OWN small trace root instead (startTraceRoot) — tagged with
+ * gca.correlation_id so it can still be found and manually cross-referenced
+ * against the original turn's trace by that shared id, just not
+ * auto-nested under it.
  * - A duplicate/late POST for the same correlation id is safe to retry:
  *   sending an event nobody's waiting on isn't an error to Inngest, it's
  *   simply never consumed by anything — there's no way to honestly tell a
@@ -47,7 +62,9 @@ export async function POST(
   }
 
   try {
-    await handleMissingInfoReplyReceived({ correlationId, answer });
+    await startTraceRoot("owner_nudges.handle_reply", { "gca.correlation_id": correlationId }, () =>
+      handleMissingInfoReplyReceived({ correlationId, answer }),
+    );
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(

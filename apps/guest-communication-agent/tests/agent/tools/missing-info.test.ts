@@ -46,7 +46,13 @@ const {
   OWNER_NUDGE_ANSWERED_EVENT,
 } = await import("@/agent/tools/missing-info.js");
 
-const toolContextBase = { conversationId: "convo-1", phone: "+351920742845" };
+const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
+const toolContextBase = {
+  conversationId: "convo-1",
+  phone: "+351920742845",
+  traceAnchor: TEST_TRACE_ANCHOR,
+};
 
 const MISSING_INFO_REPLY_TIMEOUT = "24h";
 
@@ -75,7 +81,11 @@ describe("waitForMissingInfoReply", () => {
   it("calls step.waitForEvent with the owner-nudge-answered event, matching on data.correlationId, and the configured timeout, returning a real answer as-is", async () => {
     step.waitForEvent.mockResolvedValueOnce({ data: { answer: "The AC is above the bed" } });
 
-    const result = await waitForMissingInfoReply({ step, correlationId: "corr-abc-123" });
+    const result = await waitForMissingInfoReply({
+      step,
+      correlationId: "corr-abc-123",
+      traceAnchor: TEST_TRACE_ANCHOR,
+    });
 
     expect(step.waitForEvent).toHaveBeenCalledWith("wait-for-owner-answer", {
       event: OWNER_NUDGE_ANSWERED_EVENT,
@@ -89,7 +99,11 @@ describe("waitForMissingInfoReply", () => {
     step.waitForEvent.mockResolvedValueOnce(null);
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await waitForMissingInfoReply({ step, correlationId: "corr-abc-123" });
+    const result = await waitForMissingInfoReply({
+      step,
+      correlationId: "corr-abc-123",
+      traceAnchor: TEST_TRACE_ANCHOR,
+    });
 
     expect(result).toBeNull();
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));

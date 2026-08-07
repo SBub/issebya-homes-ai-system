@@ -1,4 +1,5 @@
 import { createAdminClient } from "./supabase";
+import { withSpan } from "./tracing";
 
 export interface ActiveConversation {
   conversationId: string;
@@ -21,38 +22,44 @@ export interface ActiveConversation {
  * `.maybeSingle()` would error on that instead of degrading gracefully.
  */
 export async function getOrCreateActiveConversation(phone: string): Promise<ActiveConversation> {
-  const supabase = createAdminClient();
+  return withSpan(
+    "db.getOrCreateActiveConversation",
+    { "db.table": "whatsapp_conversations" },
+    async () => {
+      const supabase = createAdminClient();
 
-  const prefixedPhone = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
-  const phoneForms = Array.from(new Set([phone, prefixedPhone]));
+      const prefixedPhone = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
+      const phoneForms = Array.from(new Set([phone, prefixedPhone]));
 
-  const { data: existing } = await supabase
-    .from("whatsapp_conversations")
-    .select("id")
-    .in("phone_number", phoneForms)
-    .eq("status", "active")
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (existing) {
-    return { conversationId: existing.id, isNew: false };
-  }
+      const { data: existing } = await supabase
+        .from("whatsapp_conversations")
+        .select("id")
+        .in("phone_number", phoneForms)
+        .eq("status", "active")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        return { conversationId: existing.id, isNew: false };
+      }
 
-  const { data: created, error } = await supabase
-    .from("whatsapp_conversations")
-    .insert({ phone_number: prefixedPhone })
-    .select("id")
-    .single();
-  if (error || !created) {
-    throw new Error(`Failed to create whatsapp_conversation for ${phone}: ${error?.message}`);
-  }
-  return { conversationId: created.id, isNew: true };
+      const { data: created, error } = await supabase
+        .from("whatsapp_conversations")
+        .insert({ phone_number: prefixedPhone })
+        .select("id")
+        .single();
+      if (error || !created) {
+        throw new Error(`Failed to create whatsapp_conversation for ${phone}: ${error?.message}`);
+      }
+      return { conversationId: created.id, isNew: true };
+    },
+  );
 }
 
 // `traceId` is omitted (not written as null) when absent — matches
-// whatsapp_messages.trace_id's nullable convention (holds a Braintrust
-// trace id, see turnTraceContext in src/lib/tracing.ts; the column briefly
-// went by the stale name langsmith_run_id before being renamed). Returns
+// whatsapp_messages.trace_id's nullable convention (holds a real OTel trace
+// id, see startTraceRoot in src/lib/tracing.ts; the column briefly went by
+// the stale name langsmith_run_id before being renamed). Returns
 // the new row's id, passed through as RunAgentTurnConfig.triggerMessageId
 // (the guest's real original message id, distinct from a tool's own
 // paraphrase).
@@ -62,20 +69,26 @@ export async function recordMessage(
   content: string,
   traceId?: string,
 ): Promise<string> {
-  const supabase = createAdminClient();
-  const insert: Record<string, unknown> = { conversation_id: conversationId, role, content };
-  if (traceId !== undefined) {
-    insert.trace_id = traceId;
-  }
-  const { data, error } = await supabase
-    .from("whatsapp_messages")
-    .insert(insert)
-    .select("id")
-    .single();
-  if (error || !data) {
-    throw new Error(
-      `Failed to record ${role} message for conversation ${conversationId}: ${error?.message}`,
-    );
-  }
-  return data.id;
+  return withSpan(
+    "db.recordMessage",
+    { "db.table": "whatsapp_messages", "gca.conversation_id": conversationId, "gca.role": role },
+    async () => {
+      const supabase = createAdminClient();
+      const insert: Record<string, unknown> = { conversation_id: conversationId, role, content };
+      if (traceId !== undefined) {
+        insert.trace_id = traceId;
+      }
+      const { data, error } = await supabase
+        .from("whatsapp_messages")
+        .insert(insert)
+        .select("id")
+        .single();
+      if (error || !data) {
+        throw new Error(
+          `Failed to record ${role} message for conversation ${conversationId}: ${error?.message}`,
+        );
+      }
+      return data.id;
+    },
+  );
 }

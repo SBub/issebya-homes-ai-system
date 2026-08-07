@@ -1,4 +1,4 @@
-import { trace } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -100,6 +100,8 @@ const { runAgentTurn, runGuestTurn, sanitizeReplyText } = await import("@/agent/
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
 
+const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
 // Hand-rolled Inngest step mock — mirrors how @dbos-inc/dbos-sdk used to be
 // hand-mocked in this suite. step.run immediately invokes its callback
 // (matching how a real step.run behaves from the caller's perspective once
@@ -151,6 +153,17 @@ function toolCallResponse(
   };
 }
 
+// A round where the model produced neither text nor a tool call — the
+// degenerate response modelTurn's retry loop exists for.
+function emptyResponse(finishReason: string) {
+  return {
+    text: "",
+    toolCalls: [] as unknown[],
+    response: { messages: [] as ModelMessage[] },
+    finishReason,
+  };
+}
+
 describe("runAgentTurn", () => {
   let step: ReturnType<typeof makeStepMock>;
 
@@ -191,13 +204,13 @@ describe("runAgentTurn", () => {
         phone: "+3519",
         incomingMessage: "Also, is breakfast included?",
       },
-      { correlationId: "corr-1", step },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     expect(loadMemoryMock).toHaveBeenCalledWith({
       conversationId: "convo-1",
       phone: "+3519",
-      correlationId: "corr-1",
+      traceAnchor: expect.any(Object),
     });
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
@@ -219,13 +232,76 @@ describe("runAgentTurn", () => {
         phone: "+3519",
         incomingMessage: "Is there a hairdryer?",
       },
-      { correlationId: "corr-1", step },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     expect(result.stepCount).toBe(1);
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
       content: "The Hairdryer is in the bathroom, just ask if you need help.",
+    });
+  });
+
+  it("retries a model round that returns empty text and no tool calls, using the retry's reply once it succeeds", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(emptyResponse("stop"))
+      .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-retry", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    // Two generateText calls, but one reasoning round from step.run's
+    // perspective — the retry happens inside modelTurn's own step, not as an
+    // extra "model-N" step.
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    expect(result.stepCount).toBe(1);
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Sure, small pets are welcome!",
+    });
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.status.code).not.toBe(SpanStatusCode.ERROR);
+    expect(chatSpan?.events).toContainEqual(
+      expect.objectContaining({
+        name: "gen_ai.retry",
+        attributes: { attempt: 1, finishReason: "stop" },
+      }),
+    );
+  });
+
+  it("gives up after 3 empty attempts, falls back to the generic apology reply, and marks the span failed", async () => {
+    generateTextMock.mockImplementation(() => emptyResponse("stop"));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-empty", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(generateTextMock).toHaveBeenCalledTimes(3);
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Sorry, I couldn't process that — please try again shortly.",
+    });
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  it("does not retry a content-filter finish, even with attempts remaining", async () => {
+    generateTextMock.mockResolvedValueOnce(emptyResponse("content-filter"));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Sorry, I couldn't process that — please try again shortly.",
     });
   });
 
@@ -240,7 +316,7 @@ describe("runAgentTurn", () => {
 
     await runAgentTurn(
       { conversationId: "convo-1", phone: "+3519", incomingMessage: "How much is room 1?" },
-      { correlationId: "corr-1", step },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     const stepIds = step.run.mock.calls.map((call) => call[0]);
@@ -274,7 +350,7 @@ describe("runAgentTurn", () => {
         phone: "+3519",
         incomingMessage: "Book room 1 for Ana, Sep 1-5",
       },
-      { correlationId: "corr-1", step },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     expect(generateTextMock).toHaveBeenCalledTimes(2);
@@ -333,7 +409,12 @@ describe("runAgentTurn", () => {
         phone: "+351900000099",
         incomingMessage: "Is there a juicer in the kitchen?",
       },
-      { triggerMessageId: "trigger-1", correlationId: "corr-cap", step },
+      {
+        triggerMessageId: "trigger-1",
+        correlationId: "corr-cap",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
     );
 
     expect(generateTextMock).toHaveBeenCalledTimes(8);
@@ -368,7 +449,7 @@ describe("runAgentTurn", () => {
         phone: "+351900000002",
         incomingMessage: "Is there a sauna?",
       },
-      { correlationId: "corr-sticky", step },
+      { correlationId: "corr-sticky", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     // The loop kept going after the tool call — the model got a second
@@ -425,7 +506,7 @@ describe("runAgentTurn", () => {
         phone: "+351900000003",
         incomingMessage: "I want to talk to a person",
       },
-      { correlationId: "corr-wants-human", step },
+      { correlationId: "corr-wants-human", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
@@ -466,7 +547,7 @@ describe("runAgentTurn", () => {
         phone: "+351900000010",
         incomingMessage: "Book it and also let me talk to someone",
       },
-      { correlationId: "corr-hitl", step },
+      { correlationId: "corr-hitl", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     // Both gated tools still ran to completion (their real side effects
@@ -503,7 +584,7 @@ describe("runAgentTurn", () => {
         phone: "+351900000011",
         incomingMessage: "How much is room 1?",
       },
-      { correlationId: "corr-no-hitl", step },
+      { correlationId: "corr-no-hitl", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
     expect(consoleWarnSpy).not.toHaveBeenCalled();
@@ -521,7 +602,7 @@ describe("runAgentTurn", () => {
     await expect(
       runAgentTurn(
         { conversationId: "convo-bogus", phone: "+351900000005", incomingMessage: "Whatever" },
-        { correlationId: "corr-bogus", step },
+        { correlationId: "corr-bogus", traceAnchor: TEST_TRACE_ANCHOR, step },
       ),
     ).rejects.toThrow(/unknown tool name.*bogusTool/i);
   });
@@ -573,6 +654,7 @@ describe("runGuestTurn", () => {
       incomingMessage: "Is room 1 free?",
       triggerMessageId: "msg-user-1",
       correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
       step,
     });
 
@@ -615,6 +697,7 @@ describe("runGuestTurn", () => {
       phone: "+351920742845",
       incomingMessage: "I want to talk to a person",
       correlationId: "corr-tags",
+      traceAnchor: TEST_TRACE_ANCHOR,
       step,
     });
 
@@ -639,6 +722,7 @@ describe("runGuestTurn", () => {
       phone: "+351920742845",
       incomingMessage: "???",
       correlationId: "corr-2",
+      traceAnchor: TEST_TRACE_ANCHOR,
       step,
     });
 
@@ -666,6 +750,7 @@ describe("runGuestTurn", () => {
         phone: "+351920742845",
         incomingMessage: "Hi",
         correlationId: "corr-3",
+        traceAnchor: TEST_TRACE_ANCHOR,
         step,
       }),
     ).resolves.toBeUndefined();
