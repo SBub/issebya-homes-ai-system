@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm.js";
 
-// Same "throws on failure" client convention test shape as
-// tests/lib/telegram/notifications.test.ts — these calls sit in the
+// Same "throws on failure" client convention test shape as this router's
+// other X-API-Key-guarded clients — these calls sit in the
 // nudge_approve/nudge_reject request-handling path, not a fire-and-forget
 // side effect path.
 describe("crm client", () => {

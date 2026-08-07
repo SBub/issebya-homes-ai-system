@@ -1,10 +1,10 @@
-import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { renderSeedContext } from "@/lib/social/seed-vocabulary";
 
 // createOpenRouter() with no `apiKey` option reads OPENROUTER_API_KEY from the
-// environment lazily, same convention as apps/orch-a/src/mastra/agents/reporter-agent.ts.
+// environment lazily.
 const openrouter = createOpenRouter();
 
 const socialPostSchema = z.object({
@@ -55,18 +55,7 @@ const INSTRUCTIONS =
   "Only use what's actually implied by the given post description plus the fixed context below " +
   "— never invent details, amenities, or claims that aren't there.";
 
-function createSocialAgent() {
-  return new Agent({
-    id: "social-post-generator",
-    name: "Social Media Post Generator",
-    description:
-      "Generates alt text (AEO/SEO prose) and a caption (accommodation-intent + 5 hashtags) for a social post.",
-    instructions: INSTRUCTIONS,
-    model: openrouter.chat("deepseek/deepseek-v4-pro"),
-  });
-}
-
-const socialAgent = createSocialAgent();
+const socialModel = openrouter.chat("deepseek/deepseek-v4-pro");
 
 /** Pure prompt-building, factored out so it's testable without an LLM call. */
 export function buildPrompt(idea: string): string {
@@ -78,8 +67,11 @@ export function buildPrompt(idea: string): string {
 }
 
 export async function generateSocialPost(idea: string): Promise<SocialPost> {
-  const result = await socialAgent.generate(buildPrompt(idea), {
-    structuredOutput: { schema: socialPostSchema },
+  const result = await generateObject({
+    model: socialModel,
+    system: INSTRUCTIONS,
+    prompt: buildPrompt(idea),
+    schema: socialPostSchema,
   });
   return result.object;
 }

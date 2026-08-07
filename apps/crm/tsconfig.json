@@ -1,6 +1,6 @@
 {
   // Deliberately NOT extending ../../tsconfig.base.json — same reasoning as
-  // apps/finance, apps/social-media, apps/telegram-router, apps/notifications,
+  // apps/finance, apps/social-media, apps/telegram-router,
   // apps/guest-communication-agent's tsconfig.json.
   "compilerOptions": {
     "target": "ES2017",

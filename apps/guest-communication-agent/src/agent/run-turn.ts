@@ -84,7 +84,7 @@ const tools = {
 // Tools that require a human's go-ahead before they run, checked in this
 // file's own loop before dispatch (deliberately visible here, not hidden in
 // a tool file). Gating sendBookingLink here means approval happens before
-// the tool ever creates the booking URL / inserts booking_link_requests.
+// the tool ever creates the booking URL.
 const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
 
 // Tools whose own implementation calls context.step directly:

@@ -35,14 +35,11 @@ vi.mock("@/agent/memory.js", () => ({
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
 // embedding call, so neither is exercised here. No more escalations table —
-// requestOwnerNudge talks to telegram-router only, not Supabase.
-const mockBookingInsert = vi.fn();
-const fromMock = vi.fn((table: string) => {
-  if (table === "booking_link_requests") return { insert: mockBookingInsert };
-  throw new Error(`run-turn.test.ts fromMock: unexpected table "${table}"`);
-});
+// requestOwnerNudge talks to telegram-router only, not Supabase. sendBookingLink
+// is a pure stub now (no DB write), so createAdminClient is never actually
+// called from any path this file exercises.
 vi.mock("@/lib/supabase.js", () => ({
-  createAdminClient: () => ({ from: fromMock }),
+  createAdminClient: vi.fn(() => ({})),
   // property-question.ts calls createClient() at module load time, so this
   // must be present even though no test here calls that tool.
   createClient: vi.fn(() => ({})),
@@ -181,7 +178,6 @@ describe("runAgentTurn", () => {
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
     });
-    mockBookingInsert.mockResolvedValue({ data: null, error: null });
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
@@ -361,14 +357,6 @@ describe("runAgentTurn", () => {
     const parts = toolMessages[0].content as Array<{ toolCallId: string; toolName: string }>;
     expect(parts.find((p) => p.toolCallId === "call_price")?.toolName).toBe("getPricing");
     expect(parts.find((p) => p.toolCallId === "call_book")?.toolName).toBe("sendBookingLink");
-
-    expect(mockBookingInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversation_id: "convo-1",
-        phone_number: "+3519",
-        guest_name: "Ana",
-      }),
-    );
 
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
@@ -553,7 +541,9 @@ describe("runAgentTurn", () => {
     // Both gated tools still ran to completion (their real side effects
     // fired) since the stub always approves — see run-turn.ts's
     // requestHitlApproval and NEEDS_HITL.
-    expect(mockBookingInsert).toHaveBeenCalled();
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const bookParts = toolMessage?.content as Array<{ toolCallId: string; toolName: string }>;
+    expect(bookParts.find((p) => p.toolCallId === "call_book")?.toolName).toBe("sendBookingLink");
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "wants_human" }),
     );

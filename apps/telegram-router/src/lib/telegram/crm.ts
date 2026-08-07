@@ -38,9 +38,9 @@ function apiKey(): string {
  * on the result (issued vs already-handled vs a real failure) — unlike
  * apps/finance's fire-and-forget syncGuestContacts, this throws on any
  * failure (missing config, non-2xx, unparseable body) rather than
- * swallowing into null, matching this router's existing
- * notifications.ts/social.ts client convention for calls that need to know
- * success vs failure to decide what to do next.
+ * swallowing into null, matching this router's existing social.ts
+ * client convention for calls that need to know success vs failure to
+ * decide what to do next.
  */
 export async function getPromoCode(promoCodeId: string): Promise<PromoCode> {
   const res = await fetch(`${baseUrl()}/api/promo-codes/${encodeURIComponent(promoCodeId)}`, {

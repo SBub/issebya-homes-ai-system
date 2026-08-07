@@ -9,8 +9,6 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "start": "turbo run start",
-    "run:heartbeat": "yarn workspace orch-a run run:heartbeat",
-    "preview:digest": "yarn workspace orch-a run preview:digest",
     "dev:webhook-gateway": "tsx scripts/dev-webhook-gateway.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

@@ -1,9 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// lib/telegram/db.ts throws at import time if DATABASE_URL isn't set, even
-// though these tests never touch a real DB (pg.Pool itself is lazy).
-process.env.DATABASE_URL = "postgresql://test/test";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-webhook-secret";
 
 const getPromoCodeMock = vi.fn();

@@ -1,7 +1,6 @@
 {
   // Deliberately NOT extending ../../tsconfig.base.json — same reasoning as
-  // apps/finance, apps/social-media, apps/telegram-router, apps/notifications'
-  // tsconfig.json.
+  // apps/finance, apps/social-media, apps/telegram-router's tsconfig.json.
   "compilerOptions": {
     "target": "ES2017",
     "lib": ["dom", "dom.iterable", "esnext"],

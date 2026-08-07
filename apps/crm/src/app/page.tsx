@@ -66,10 +66,6 @@ import {
 type FunnelStage = "new" | "informed" | "link_sent" | "booked";
 type Platform = "airbnb" | "booking_com" | "direct";
 type StayLengthBucket = "long_term" | "short_term";
-// Derived purely for the Escalations tab's "Resolved" filter chips — see
-// escalationResolutionStatus/the hidden `resolved` column below, same
-// "string-enum bucket derived from a real column" shape as StayLengthBucket.
-type EscalationResolutionStatus = "resolved" | "open";
 
 interface GuestContact {
   id: string;
@@ -163,38 +159,6 @@ interface Campaign {
   // candidate_count above, since GET /api/campaigns is the only place a
   // frontend Campaign object ever comes from.
   has_run: boolean;
-}
-
-// Escalations tab — a browsable, filterable log over escalations rows
-// created by apps/guest-communication-agent's own escalateToOwner tool /
-// performEscalation (see that app's src/graph/tools.ts). Deliberately
-// separate from the existing eval-feedback feature (the conversation
-// history panel's thumbs-up/down controls further below): that feature
-// judges reply *quality* after the fact; this tab instead shows *why* the
-// agent handed a conversation off to the owner in the first place —
-// specifically, whether it was because of a real property-knowledge-base
-// gap (reason_category: "missing_info") as opposed to a request for a
-// human or an unrelated complaint. No join to guest_contacts
-// here (see GET /api/escalations's own doc comment) — just the raw phone
-// number, and no "mark as resolved" workflow, just a log.
-interface Escalation {
-  id: string;
-  conversation_id: string;
-  phone_number: string;
-  reason: string;
-  // Nullable: the one escalations row that predates this column (see
-  // supabase/migrations/20260725100000_add_reason_category_to_escalations.sql)
-  // has no category — every row created since always has one, enforced by
-  // escalateToOwner's own required Zod field.
-  reason_category: "wants_human" | "complaint" | "missing_info" | null;
-  created_at: string;
-  // Both populated by GCA's owner-reply flow on Telegram once a human
-  // answers a missing_info (or other) escalation — see GET
-  // /api/escalations' own doc comment (apps/guest-communication-agent). Null
-  // together for every still-open escalation; resolved_at is set the moment
-  // an owner's reply is recorded, answer holds that reply's text.
-  resolved_at: string | null;
-  answer: string | null;
 }
 
 // A dismissible toast-style banner — see notifications state below. Kept
@@ -350,57 +314,6 @@ const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "false", label: "Not run" },
 ];
 
-// Escalations tab's own "Reason" chip group — human-readable labels for
-// Escalation.reason_category's three enum values (see that interface's own
-// comment for why it's nullable). No option for the null/uncategorized case
-// — there's exactly one such row today (predating the column entirely) and
-// it isn't worth a permanent fourth filter chip for that.
-const ESCALATION_REASON_FILTER_OPTIONS: { value: string; label: string }[] = [
-  { value: "wants_human", label: "Wants human" },
-  { value: "complaint", label: "Complaint" },
-  { value: "missing_info", label: "Missing info" },
-];
-
-// "Resolved" filter chips for the Escalations tab — filters against the
-// hidden `resolved` derived column (see escalationResolutionStatus and
-// ESCALATIONS_COLUMN_VISIBILITY below), not resolved_at directly:
-// resolved_at is a nullable timestamp, and filterValueIncludes compares
-// stringified row values against stringified filter values, so filtering on
-// the raw timestamp would require every distinct timestamp to be listed as
-// its own filter option. Bucketing to "resolved"/"open" first keeps this on
-// the same shared filterValueIncludes/toggleColumnFilterValue machinery as
-// every other chip-group filter on this page (reason_category above,
-// stay_length_bucket/platform/funnel_stage on the CRM tab) without touching
-// that shared helper.
-const ESCALATION_RESOLVED_FILTER_OPTIONS: { value: EscalationResolutionStatus; label: string }[] = [
-  { value: "resolved", label: "Resolved" },
-  { value: "open", label: "Open" },
-];
-
-// Badge color per reason_category — chosen to read distinctly at a glance:
-// missing_info is this feature's whole reason for existing (the
-// knowledge-base-gap signal), so it gets its own color (purple) rather than
-// blending in with the other two. Uncategorized (null, the one
-// pre-existing row) falls back to gray in the cell renderer below rather
-// than needing an entry here.
-const ESCALATION_REASON_CATEGORY_COLOR: Record<
-  "wants_human" | "complaint" | "missing_info",
-  "blue" | "red" | "purple"
-> = {
-  wants_human: "blue",
-  complaint: "red",
-  missing_info: "purple",
-};
-
-const ESCALATION_REASON_CATEGORY_LABEL: Record<
-  "wants_human" | "complaint" | "missing_info",
-  string
-> = {
-  wants_human: "Wants human",
-  complaint: "Complaint",
-  missing_info: "Missing info",
-};
-
 // Explicit per-column pixel widths, applied alongside `tableLayout: "fixed"`
 // on each table's Table.Root below. Radix's Table.Root otherwise renders a
 // plain HTML <table> with the browser default `table-layout: auto`, which
@@ -438,15 +351,6 @@ const CAMPAIGN_COLUMN_WIDTHS: Record<string, number> = {
   offer: 184,
   message_template: 327,
   actions: 124,
-};
-
-const ESCALATION_COLUMN_WIDTHS: Record<string, number> = {
-  phone_number: 150,
-  reason_category: 150,
-  resolved_at: 150,
-  reason: 400,
-  conversation_id: 290,
-  created_at: 170,
 };
 
 // Shared day-diff math, used by stayLengthBucket below and the "Nights"
@@ -549,19 +453,6 @@ function isColumnFilterValueActive(
 // offers to toggle it back on.
 const COLUMN_VISIBILITY = { stay_length_bucket: false };
 
-// Same "hidden derived filter-only column" trick as stay_length_bucket
-// above, for the Escalations tab's own resolved/open bucket (see the hidden
-// `resolved` column in escalationColumns and ESCALATION_RESOLVED_FILTER_OPTIONS).
-const ESCALATIONS_COLUMN_VISIBILITY = { resolved: false };
-
-// Buckets an escalation's nullable resolved_at timestamp into the
-// "resolved"/"open" string enum the hidden `resolved` column filters on —
-// mirrors stayLengthBucket's own "derive a filterable bucket from a real
-// column" shape further below.
-function escalationResolutionStatus(escalation: Escalation): EscalationResolutionStatus {
-  return escalation.resolved_at !== null ? "resolved" : "open";
-}
-
 function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "—";
@@ -580,18 +471,17 @@ function formatDateOnly(value: string | null | undefined): string {
   return new Date(value).toLocaleDateString();
 }
 
-// Default page size shared by all three tables (CRM tab's guests,
-// Campaigns, Escalations) — same mechanism wired into every
-// useReactTable instance below even though Campaigns/Escalations rarely
-// have more than 20 rows today, so the three tables stay consistent
-// rather than only the guest table supporting pagination.
+// Default page size shared by both tables (CRM tab's guests, Campaigns) —
+// same mechanism wired into every useReactTable instance below even though
+// Campaigns rarely has more than 20 rows today, so the two tables stay
+// consistent rather than only the guest table supporting pagination.
 const TABLE_PAGE_SIZE = 20;
 
 // "Showing X–Y of Z <label>" range text for one table's current page,
 // against its own *filtered* row count (not the unfiltered total) — e.g.
-// "1–20 of 47". Generic over TData so the same helper covers the guest,
-// campaign, and escalation tables, mirroring filterValueIncludes' own
-// "one generic implementation, instantiated per TData" convention above.
+// "1–20 of 47". Generic over TData so the same helper covers the guest and
+// campaign tables, mirroring filterValueIncludes' own "one generic
+// implementation, instantiated per TData" convention above.
 function paginationRangeText<TData>(table: ReactTableInstance<TData>): string {
   const filteredCount = table.getFilteredRowModel().rows.length;
   if (filteredCount === 0) {
@@ -604,8 +494,8 @@ function paginationRangeText<TData>(table: ReactTableInstance<TData>): string {
 }
 
 // Shared Previous/Next + "Page X of Y" control, rendered below each of the
-// three tables — extracted once rather than three near-identical copies,
-// same reasoning as filterValueIncludes/toggleColumnFilterValue above.
+// two tables — extracted once rather than near-identical copies, same
+// reasoning as filterValueIncludes/toggleColumnFilterValue above.
 // TanStack's own standard pagination API (getCanPreviousPage/
 // getCanNextPage/previousPage/nextPage/getPageCount) — no custom paging
 // logic here.
@@ -650,11 +540,9 @@ export default function DashboardPage() {
   const [isApiKeyDialogOpen, setIsApiKeyDialogOpen] = useState(true);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
 
-  // Which tab is currently active — needed (unlike before) so the
-  // Escalations tab can auto-load itself the first time it becomes active
-  // (see the effect near loadEscalations below). Controlled Tabs.Root
-  // (value/onValueChange) instead of the previous uncontrolled
-  // defaultValue="crm", purely so this component can observe tab changes.
+  // Which tab is currently active. Controlled Tabs.Root (value/
+  // onValueChange) instead of an uncontrolled defaultValue="crm", so this
+  // component can observe tab changes.
   const [activeTab, setActiveTab] = useState("crm");
 
   // Fixed-position toast stack (see the Box rendered near the top of the
@@ -826,38 +714,6 @@ export default function DashboardPage() {
     }
   }
 
-  // Escalations tab state — separate from both the CRM tab's guest state and
-  // the Campaigns tab's own state above, sharing only `apiKey`. Auto-loaded
-  // the first time the Escalations tab becomes active (see the effect near
-  // loadEscalations below) rather than an explicit button — no established
-  // reason to require a manual click here, once activeTab makes "the owner
-  // just opened this tab" observable.
-  const [escalations, setEscalations] = useState<Escalation[]>([]);
-  const [escalationsLoading, setEscalationsLoading] = useState(false);
-  const [escalationsError, setEscalationsError] = useState<string | null>(null);
-  const [hasLoadedEscalations, setHasLoadedEscalations] = useState(false);
-  // Own sorting/filter state for the Escalations tab's table — mirrors
-  // campaignsSorting/campaignsColumnFilters' own "separate instance per tab"
-  // pattern above.
-  const [escalationsSorting, setEscalationsSorting] = useState<SortingState>([]);
-  const [escalationsColumnFilters, setEscalationsColumnFilters] = useState<ColumnFiltersState>([]);
-  // Escalations tab's own pagination state — same pattern/default as
-  // `pagination`/`campaignsPagination` above.
-  const [escalationsPagination, setEscalationsPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: TABLE_PAGE_SIZE,
-  });
-  // Same render-time reset-page-to-0-on-filter-change pattern as
-  // `pagination`/`campaignsPagination` above.
-  const [prevEscalationsColumnFilters, setPrevEscalationsColumnFilters] =
-    useState(escalationsColumnFilters);
-  if (escalationsColumnFilters !== prevEscalationsColumnFilters) {
-    setPrevEscalationsColumnFilters(escalationsColumnFilters);
-    if (escalationsPagination.pageIndex !== 0) {
-      setEscalationsPagination((prev) => ({ ...prev, pageIndex: 0 }));
-    }
-  }
-
   // Inline phone edit — only one cell can be in edit mode at a time, tracked
   // by guest id rather than per-row state.
   const [editingGuestId, setEditingGuestId] = useState<string | null>(null);
@@ -922,16 +778,16 @@ export default function DashboardPage() {
   // the modal instead of a permanent button. Passes the just-typed key
   // straight to loadGuests (see that function's own comment) rather than
   // relying on the `apiKey` state update having landed yet.
-  // Resets Campaigns/Escalations' own hasLoaded*/​*Error state on every
-  // submit, not just the first — hasLoadedCampaigns/hasLoadedEscalations are
-  // now set on *any* completed attempt (success or failure, see
-  // loadCampaigns/loadEscalations' own doc comments on why), so without this
-  // reset, correcting a bad key here would leave those two tabs permanently
-  // stuck showing their first attempt's stale error: their auto-load effects
-  // guard on hasLoaded* already being true and would never fire again for
-  // the corrected key. loadGuests itself needs no equivalent reset — it's
-  // never behind an effect that re-fires on hasLoaded flipping back to
-  // false, so calling it again below with the new key is already enough.
+  // Resets Campaigns' own hasLoaded*/​*Error state on every submit, not just
+  // the first — hasLoadedCampaigns is now set on *any* completed attempt
+  // (success or failure, see loadCampaigns' own doc comment on why), so
+  // without this reset, correcting a bad key here would leave that tab
+  // permanently stuck showing its first attempt's stale error: its auto-load
+  // effect guards on hasLoaded* already being true and would never fire
+  // again for the corrected key. loadGuests itself needs no equivalent
+  // reset — it's never behind an effect that re-fires on hasLoaded flipping
+  // back to false, so calling it again below with the new key is already
+  // enough.
   function submitApiKey() {
     const key = apiKeyDraft.trim();
     if (!key) {
@@ -941,64 +797,19 @@ export default function DashboardPage() {
     setIsApiKeyDialogOpen(false);
     setHasLoadedCampaigns(false);
     setCampaignsError(null);
-    setHasLoadedEscalations(false);
-    setEscalationsError(null);
     void loadGuests(key);
   }
 
   // Mirrors loadGuests' own loading/error/hasLoaded pattern, just against GET
-  // /api/escalations (CRM's own proxy to GCA's identically-named endpoint)
-  // instead — with one deliberate difference: hasLoadedEscalations is set in
-  // `finally`, unconditionally, rather than only after a successful
-  // response. Setting it only on success used to mean a failed attempt (a
-  // stale/invalid API key 401ing, or a network error) left
-  // hasLoadedEscalations false forever — so once escalationsLoading reset to
-  // false in that same `finally`, the auto-load effect below would see its
-  // own guard (activeTab === "escalations", apiKey set, hasLoadedEscalations
-  // still false, escalationsLoading now false again) pass and immediately
-  // re-fire, fail again, and repeat — an unthrottled infinite retry loop
-  // firing as fast as each response came back (confirmed live: over a
-  // thousand back-to-back 401s within a few seconds of opening the
-  // Escalations tab with a bad key). A failed attempt still counts as "we
-  // tried" — escalationsError already surfaces the failure to the owner, and
-  // there's no reason to keep silently hammering the endpoint every render.
-  // Auto-loaded the first time the Escalations tab becomes active (see the
-  // effect below, right after loadCampaigns' own auto-load effect) rather
-  // than behind an explicit button — a useCallback, same reason loadCampaigns
-  // is one, to give that effect a stable dependency.
-  const loadEscalations = useCallback(async () => {
-    setEscalationsLoading(true);
-    setEscalationsError(null);
-    try {
-      const res = await fetch("/api/escalations", { headers: { "X-API-Key": apiKey } });
-      const json = await res.json();
-      if (!res.ok) {
-        setEscalationsError(
-          typeof json.error === "string" ? json.error : "Failed to load escalations",
-        );
-        setEscalations([]);
-        return;
-      }
-      setEscalations((json.escalations ?? []) as Escalation[]);
-    } catch (err) {
-      setEscalationsError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setEscalationsLoading(false);
-      setHasLoadedEscalations(true);
-    }
-  }, [apiKey]);
-
-  // Mirrors loadGuests' own loading/error/hasLoaded pattern, just against GET
   // /api/campaigns instead — same "hasLoadedCampaigns is set in `finally`,
-  // unconditionally" fix as loadEscalations above, for the identical
-  // infinite-retry-loop reason (a failed attempt left hasLoadedCampaigns
-  // false forever, so the auto-load effect below would keep re-firing every
-  // time campaignsLoading reset to false — just slower here, gated by the
-  // effect's own 600ms timer instead of firing immediately). Unlike
-  // loadGuests (still behind the CRM tab's explicit "Load guests" button),
-  // this is auto-fetched — see the useEffect right below — so it's a
-  // useCallback rather than a plain function, to give that effect a stable
-  // dependency.
+  // unconditionally" fix, for the identical infinite-retry-loop reason (a
+  // failed attempt left hasLoadedCampaigns false forever, so the auto-load
+  // effect below would keep re-firing every time campaignsLoading reset to
+  // false — just slower here, gated by the effect's own 600ms timer instead
+  // of firing immediately). Unlike loadGuests (still behind the CRM tab's
+  // explicit "Load guests" button), this is auto-fetched — see the
+  // useEffect right below — so it's a useCallback rather than a plain
+  // function, to give that effect a stable dependency.
   const loadCampaigns = useCallback(async () => {
     setCampaignsLoading(true);
     setCampaignsError(null);
@@ -1029,8 +840,7 @@ export default function DashboardPage() {
   // the API-key modal's submit handler below (see submitApiKey) — never
   // typed character-by-character into a field this effect watches — so
   // there's nothing left to debounce against; the modal's own apiKeyDraft
-  // field absorbs every keystroke instead, same reasoning as the
-  // Escalations auto-load effect below never having needed a debounce.
+  // field absorbs every keystroke instead.
   // hasLoadedCampaigns/campaignsLoading still guard duplicate/overlapping
   // fetches once a real attempt is in flight or has already been attempted
   // (successfully or not — see loadCampaigns' own hasLoadedCampaigns
@@ -1042,26 +852,6 @@ export default function DashboardPage() {
     }
     void loadCampaigns();
   }, [apiKey, hasLoadedCampaigns, campaignsLoading, loadCampaigns]);
-
-  // Auto-loads escalations the first time the Escalations tab becomes
-  // active — not on initial page load (activeTab starts "crm"), and not
-  // every time the owner switches back to a tab already loaded once
-  // (hasLoadedEscalations/escalationsLoading guard duplicate/overlapping
-  // fetches, same as loadCampaigns' own auto-load effect above). No
-  // debounce needed here (unlike that effect used to have) — apiKey is only
-  // ever set once, atomically, by the API-key modal's submit handler below,
-  // never typed character-by-character into a field this effect watches.
-  useEffect(() => {
-    if (
-      activeTab !== "escalations" ||
-      apiKey.length === 0 ||
-      hasLoadedEscalations ||
-      escalationsLoading
-    ) {
-      return;
-    }
-    void loadEscalations();
-  }, [activeTab, apiKey, hasLoadedEscalations, escalationsLoading, loadEscalations]);
 
   // Toggling a campaign's enabled Switch — confirmation-based (not
   // optimistic): the Switch only flips once PATCH /api/campaigns/[id]
@@ -1634,22 +1424,6 @@ export default function DashboardPage() {
     [campaignsColumnFilters],
   );
 
-  // Escalations tab's own filter-chip toggling (Reason), against
-  // escalationsColumnFilters instead of either tab's own filters above —
-  // same shared helpers, separate state, same "instantiate for a new TData"
-  // convention as filterValueIncludes<Escalation> below.
-  const toggleEscalationFilterValue = useCallback(
-    (columnId: string, value: string) =>
-      toggleColumnFilterValue(setEscalationsColumnFilters, columnId, value),
-    [],
-  );
-
-  const isEscalationFilterValueActive = useCallback(
-    (columnId: string, value: string) =>
-      isColumnFilterValueActive(escalationsColumnFilters, columnId, value),
-    [escalationsColumnFilters],
-  );
-
   const columns = useMemo<ColumnDef<GuestContact>[]>(
     () => [
       {
@@ -2078,134 +1852,6 @@ export default function DashboardPage() {
     getPaginationRowModel: getPaginationRowModel(),
   });
 
-  // Escalations tab's own columns — mirrors the CRM/Campaigns tabs' own
-  // `columns`/`campaignColumns` useMemo above in shape/conventions, over
-  // Escalation rows. No per-row action/edit affordances here (this is a
-  // read-only log, unlike the other two tabs), so every column is a plain
-  // accessor + cell renderer.
-  const escalationColumns = useMemo<ColumnDef<Escalation>[]>(
-    () => [
-      {
-        accessorKey: "phone_number",
-        header: "Phone",
-      },
-      {
-        accessorKey: "reason_category",
-        header: "Reason category",
-        filterFn: filterValueIncludes<Escalation>,
-        cell: (info) => {
-          const category = info.getValue() as Escalation["reason_category"];
-          if (category === null) {
-            return <Badge color="gray">Uncategorized</Badge>;
-          }
-          return (
-            <Badge color={ESCALATION_REASON_CATEGORY_COLOR[category]}>
-              {ESCALATION_REASON_CATEGORY_LABEL[category]}
-            </Badge>
-          );
-        },
-      },
-      {
-        // resolved_at itself isn't filtered on directly (see the hidden
-        // `resolved` column below/its own comment) — this column is purely
-        // the at-a-glance Badge, same green-solid/gray-soft "status Badge"
-        // convention as FUNNEL_STAGE_COLOR elsewhere on this page.
-        accessorKey: "resolved_at",
-        header: "Resolved",
-        cell: (info) => {
-          const resolvedAt = info.getValue() as string | null;
-          return resolvedAt !== null ? (
-            <Badge color="green" variant="solid">
-              Resolved
-            </Badge>
-          ) : (
-            <Badge color="gray" variant="soft">
-              Open
-            </Badge>
-          );
-        },
-      },
-      {
-        // Free-text explanation — can run long, so this just lets it wrap
-        // within the column's own fixed width (ESCALATION_COLUMN_WIDTHS)
-        // rather than truncating or requiring a clamp/expand interaction —
-        // simplest option that still keeps every other column's width
-        // stable (see CRM_COLUMN_WIDTHS' own comment on why fixed widths
-        // matter here at all). Also renders the recorded owner answer, when
-        // present, as a second/muted line under the reason itself — same
-        // "secondary text in gray under the primary line" convention as the
-        // conversation panel's "Marked 👍/👎" + comment-in-gray feedback
-        // display further below, rather than a separate column (keeps
-        // unresolved rows, which have no answer, at their existing row
-        // height).
-        accessorKey: "reason",
-        header: "Reason",
-        cell: (info) => {
-          const escalation = info.row.original;
-          return (
-            <Box>
-              <Text as="div" size="2" style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-                {info.getValue() as string}
-              </Text>
-              {escalation.answer !== null && (
-                <Text
-                  as="div"
-                  size="1"
-                  color="gray"
-                  mt="1"
-                  style={{ whiteSpace: "normal", wordBreak: "break-word" }}
-                >
-                  Answer: {escalation.answer}
-                </Text>
-              )}
-            </Box>
-          );
-        },
-      },
-      {
-        // Raw conversation id, not a link — there's no per-conversation
-        // detail view in this app to deep-link into yet.
-        accessorKey: "conversation_id",
-        header: "Conversation",
-      },
-      {
-        accessorKey: "created_at",
-        header: "Created",
-        cell: (info) => formatDate(info.getValue() as string),
-      },
-      {
-        // Hidden derived column — see escalationResolutionStatus's own
-        // comment above. Exists only to be filtered via columnFilters (see
-        // ESCALATIONS_COLUMN_VISIBILITY), never rendered as a header/cell —
-        // same trick as the CRM tab's own hidden stay_length_bucket column.
-        id: "resolved",
-        accessorFn: escalationResolutionStatus,
-        enableHiding: true,
-        filterFn: filterValueIncludes<Escalation>,
-      },
-    ],
-    [],
-  );
-
-  const escalationsTable = useReactTable({
-    data: escalations,
-    columns: escalationColumns,
-    state: {
-      sorting: escalationsSorting,
-      columnFilters: escalationsColumnFilters,
-      columnVisibility: ESCALATIONS_COLUMN_VISIBILITY,
-      pagination: escalationsPagination,
-    },
-    onSortingChange: setEscalationsSorting,
-    onColumnFiltersChange: setEscalationsColumnFilters,
-    onPaginationChange: setEscalationsPagination,
-    getRowId: (row) => row.id,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
-
   return (
     <Box p="5">
       {/* Fixed-position toast stack — rendered here, outside Tabs.Root, so
@@ -2300,7 +1946,6 @@ export default function DashboardPage() {
         <Tabs.List mb="4">
           <Tabs.Trigger value="crm">CRM</Tabs.Trigger>
           <Tabs.Trigger value="campaigns">Campaigns</Tabs.Trigger>
-          <Tabs.Trigger value="escalations">Escalations</Tabs.Trigger>
         </Tabs.List>
 
         <Tabs.Content value="crm">
@@ -3036,123 +2681,6 @@ export default function DashboardPage() {
             </Table.Root>
           )}
           {campaigns.length > 0 && <PaginationControls table={campaignsTable} />}
-        </Tabs.Content>
-
-        <Tabs.Content value="escalations">
-          {escalationsError && (
-            <Text as="p" color="red" mb="3">
-              {escalationsError}
-            </Text>
-          )}
-
-          {!apiKey && !hasLoadedEscalations && !escalationsLoading && (
-            <Text color="gray">Sign in with your CRM API key above to load escalations.</Text>
-          )}
-          {escalationsLoading && <Text color="gray">Loading…</Text>}
-          {hasLoadedEscalations && escalations.length === 0 && (
-            <Text color="gray">No escalations yet.</Text>
-          )}
-
-          {escalations.length > 0 && (
-            <>
-              <Flex wrap="wrap" gap="7" align="start" mb="4">
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Reason
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {ESCALATION_REASON_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        color="gray"
-                        highContrast
-                        variant={
-                          isEscalationFilterValueActive("reason_category", option.value)
-                            ? "solid"
-                            : "soft"
-                        }
-                        onClick={() => toggleEscalationFilterValue("reason_category", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-                <Box>
-                  <Text as="div" size="2" weight="medium" mb="1">
-                    Resolved
-                  </Text>
-                  <Flex gap="2" wrap="wrap">
-                    {ESCALATION_RESOLVED_FILTER_OPTIONS.map((option) => (
-                      <Button
-                        key={option.value}
-                        size="1"
-                        color="gray"
-                        highContrast
-                        variant={
-                          isEscalationFilterValueActive("resolved", option.value) ? "solid" : "soft"
-                        }
-                        onClick={() => toggleEscalationFilterValue("resolved", option.value)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Box>
-              </Flex>
-
-              <Text as="p" size="2" color="gray" mb="2">
-                Showing {paginationRangeText(escalationsTable)} escalations
-              </Text>
-
-              <Table.Root variant="surface" style={{ tableLayout: "fixed" }}>
-                <Table.Header>
-                  {escalationsTable.getHeaderGroups().map((headerGroup) => (
-                    <Table.Row key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => {
-                        const sortState = header.column.getIsSorted();
-                        return (
-                          <Table.ColumnHeaderCell
-                            key={header.id}
-                            onClick={header.column.getToggleSortingHandler()}
-                            style={{
-                              cursor: "pointer",
-                              userSelect: "none",
-                              width: ESCALATION_COLUMN_WIDTHS[header.column.id],
-                            }}
-                          >
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            <span
-                              style={{
-                                display: "inline-block",
-                                width: "1em",
-                                textAlign: "center",
-                              }}
-                            >
-                              {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
-                            </span>
-                          </Table.ColumnHeaderCell>
-                        );
-                      })}
-                    </Table.Row>
-                  ))}
-                </Table.Header>
-                <Table.Body>
-                  {escalationsTable.getRowModel().rows.map((row) => (
-                    <Table.Row key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <Table.Cell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </Table.Cell>
-                      ))}
-                    </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-              <PaginationControls table={escalationsTable} />
-            </>
-          )}
         </Tabs.Content>
       </Tabs.Root>
     </Box>

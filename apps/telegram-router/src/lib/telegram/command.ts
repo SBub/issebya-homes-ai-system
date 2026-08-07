@@ -4,29 +4,6 @@ import type { TelegramUpdate } from "./telegram.js";
 // span multiple lines, hence [\s\S] instead of "." (which doesn't match \n).
 const COMMAND_PATTERN = /^\/social(?:@\w+)?(?:\s+([\s\S]+))?$/i;
 
-// Telegram attaches the "@BotName" mention directly to the command token
-// itself (e.g. "/cron@IssebyaBot list"), not to the end of the phrase.
-const CRON_LIST_PATTERN = /^\/cron(?:@\w+)?\s+list$/i;
-
-const DIGEST_PATTERN = /^\/digest(?:@\w+)?$/i;
-
-const HEARTBEAT_PATTERN = /^\/heartbeat(?:@\w+)?$/i;
-
-/** Shared chat-gating + pattern match behind isCronListCommand/isDigestCommand/isHeartbeatCommand. */
-function isCommandFromHostChat(update: TelegramUpdate, pattern: RegExp): boolean {
-  const message = update.message;
-  if (!message?.text) {
-    return false;
-  }
-
-  const expectedChatId = process.env.TELEGRAM_CHAT_ID;
-  if (!expectedChatId || String(message.chat.id) !== expectedChatId) {
-    return false;
-  }
-
-  return pattern.test(message.text.trim());
-}
-
 /**
  * Extracts the post idea from a "/social <idea>" message. Returns null if
  * the update isn't a text message, isn't from the configured host chat, isn't
@@ -47,30 +24,4 @@ export function parseSocialCommand(update: TelegramUpdate): string | null {
   const match = COMMAND_PATTERN.exec(message.text.trim());
   const idea = match?.[1]?.trim();
   return idea ? idea : null;
-}
-
-/**
- * True for a "/cron list" message from the configured host chat.
- */
-export function isCronListCommand(update: TelegramUpdate): boolean {
-  return isCommandFromHostChat(update, CRON_LIST_PATTERN);
-}
-
-/**
- * True for a "/digest" message from the configured host chat — an on-demand
- * digest send, independent of whatever schedule check-digest ends up running
- * on.
- */
-export function isDigestCommand(update: TelegramUpdate): boolean {
-  return isCommandFromHostChat(update, DIGEST_PATTERN);
-}
-
-/**
- * True for a "/heartbeat" message from the configured host chat — an
- * on-demand system liveness check, independent of whatever schedule
- * check-health ends up running on. Distinct from /digest: this checks
- * whether every service is up, it doesn't send Orch-A's report.
- */
-export function isHeartbeatCommand(update: TelegramUpdate): boolean {
-  return isCommandFromHostChat(update, HEARTBEAT_PATTERN);
 }
