@@ -11,8 +11,8 @@ describe("checkTarget", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    process.env.NOTIFICATIONS_API_URL = "http://localhost:3004";
-    process.env.NOTIFICATIONS_API_KEY = "test-key";
+    process.env.TEST_SERVICE_API_URL = "http://localhost:3999";
+    process.env.TEST_SERVICE_API_KEY = "test-key";
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -22,31 +22,33 @@ describe("checkTarget", () => {
     vi.unstubAllGlobals();
   });
 
-  const notificationsTarget = {
-    service: "notifications",
-    urlEnvVar: "NOTIFICATIONS_API_URL",
-    keyEnvVar: "NOTIFICATIONS_API_KEY",
+  // A synthetic target, not one of HEALTH_TARGETS' real entries — isolates
+  // checkTarget's own behavior from whatever services are actually wired up.
+  const testTarget = {
+    service: "test-service",
+    urlEnvVar: "TEST_SERVICE_API_URL",
+    keyEnvVar: "TEST_SERVICE_API_KEY",
     path: "/api/health",
   };
 
   it("returns ok: true on a 200 response, with the X-API-Key header", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
-    const result = await checkTarget(notificationsTarget);
+    const result = await checkTarget(testTarget);
 
-    expect(result).toEqual({ service: "notifications", ok: true });
+    expect(result).toEqual({ service: "test-service", ok: true });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:3004/api/health");
+    expect(url).toBe("http://localhost:3999/api/health");
     expect(init.headers["X-API-Key"]).toBe("test-key");
   });
 
   it("returns ok: false with the status on a non-200 response", async () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 503 }));
 
-    const result = await checkTarget(notificationsTarget);
+    const result = await checkTarget(testTarget);
 
     expect(result).toEqual({
-      service: "notifications",
+      service: "test-service",
       ok: false,
       error: "/api/health returned 503",
     });
@@ -55,22 +57,22 @@ describe("checkTarget", () => {
   it("returns ok: false with the error message when fetch throws", async () => {
     fetchMock.mockRejectedValueOnce(new Error("network unreachable"));
 
-    const result = await checkTarget(notificationsTarget);
+    const result = await checkTarget(testTarget);
 
     expect(result).toEqual({
-      service: "notifications",
+      service: "test-service",
       ok: false,
       error: "network unreachable",
     });
   });
 
   it("returns ok: false without calling fetch when the URL/key env vars aren't configured", async () => {
-    delete process.env.NOTIFICATIONS_API_URL;
+    delete process.env.TEST_SERVICE_API_URL;
 
-    const result = await checkTarget(notificationsTarget);
+    const result = await checkTarget(testTarget);
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("NOTIFICATIONS_API_URL");
+    expect(result.error).toContain("TEST_SERVICE_API_URL");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -101,8 +103,8 @@ describe("checkAllTargets", () => {
 
 describe("renderHealthSummary", () => {
   it("marks a healthy service with a green circle", () => {
-    const text = renderHealthSummary([{ service: "notifications", ok: true }]);
-    expect(text).toContain("🟢 notifications: ok");
+    const text = renderHealthSummary([{ service: "test-service", ok: true }]);
+    expect(text).toContain("🟢 test-service: ok");
   });
 
   it("marks an unhealthy service with a red circle and its error", () => {
@@ -114,11 +116,11 @@ describe("renderHealthSummary", () => {
 
   it("lists every service, one line each", () => {
     const text = renderHealthSummary([
-      { service: "notifications", ok: true },
+      { service: "test-service", ok: true },
       { service: "finance", ok: false, error: "timeout" },
     ]);
     const lines = text.split("\n");
-    expect(lines).toContain("🟢 notifications: ok");
+    expect(lines).toContain("🟢 test-service: ok");
     expect(lines).toContain("🔴 finance: timeout");
   });
 });

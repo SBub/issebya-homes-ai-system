@@ -7,7 +7,6 @@ import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { runCheckHealth } from "@/lib/telegram/health-monitor";
 import { renderHealthSummary } from "@/lib/telegram/health-targets";
-import { acknowledgeReminder } from "@/lib/telegram/notifications";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
 import {
@@ -17,7 +16,6 @@ import {
   sendWithRetry,
 } from "@/lib/telegram/telegram";
 
-const DONE_PREFIX = "done:";
 const NUDGE_APPROVE_PREFIX = "nudge_approve:";
 const NUDGE_REJECT_PREFIX = "nudge_reject:";
 
@@ -181,23 +179,7 @@ async function handleCallbackQuery(
     return;
   }
 
-  if (!data?.startsWith(DONE_PREFIX)) {
-    await answerCallbackQuery(callbackQueryId);
-    return;
-  }
-
-  const key = data.slice(DONE_PREFIX.length);
-  try {
-    await acknowledgeReminder(key);
-    await answerCallbackQuery(callbackQueryId, "Marked done ✅");
-    if (message) {
-      await editMessageText(message.message_id, `${message.text ?? ""}\n\n✅ Marked done`);
-    }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("[telegram-router] reminder ack failed:", errorMessage);
-    await answerCallbackQuery(callbackQueryId, "Failed to mark done — try again");
-  }
+  await answerCallbackQuery(callbackQueryId);
 }
 
 // The one Telegram webhook for the whole system; dispatches by command to

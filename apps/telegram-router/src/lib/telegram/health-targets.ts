@@ -15,19 +15,13 @@ export interface HealthTarget {
  * external uptime monitoring (hitting its public URL from outside this
  * system entirely) — out of scope here.
  *
- * notifications/finance get a deep check (their own /api/health does a real
- * DB round-trip) since both silently stop doing their one job if their
- * Postgres dependency dies while the process stays up. social-media is
- * shallow (process responds only) — see its own health route for the
- * per-app reasoning.
+ * finance gets a deep check (its own /api/health does a real DB
+ * round-trip) since it silently stops doing its one job if its Postgres
+ * dependency dies while the process stays up. social-media is shallow
+ * (process responds only) — see its own health route for the per-app
+ * reasoning.
  */
 export const HEALTH_TARGETS: HealthTarget[] = [
-  {
-    service: "notifications",
-    urlEnvVar: "NOTIFICATIONS_API_URL",
-    keyEnvVar: "NOTIFICATIONS_API_KEY",
-    path: "/api/health",
-  },
   {
     service: "finance",
     urlEnvVar: "FINANCE_API_URL",

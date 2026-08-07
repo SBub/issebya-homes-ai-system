@@ -71,6 +71,8 @@ Event-driven — triggered when the uploaded month closes a quarter; CSV attachm
 ## Notification Center
 
 ### NOTIF — Notification Center (apps/notifications)
+**Removed 2026-08-07** — `apps/notifications` and its `apps/telegram-router` integration (the reminder "✅ Done" button, `POST /api/cron/check-reminders`, and the `notifications` HEALTH liveness target) were deleted entirely. The description below is preserved as build history, not current state. Its `reminders` table (`supabase/migrations/20260720120000_create_reminders.sql`) is left in place with its seeded rows — no migration was dropped — but nothing reads from or writes to it anymore.
+
 Plain logic API, no Telegram awareness — `GET /api/reminders/due`, `POST .../ack`, `POST .../sent`. A reminder is due when unacknowledged, past `due_at`, and `renotify_every` has elapsed since last sent (or never sent at all). Recurrence isn't auto-regenerated — a documented gap, not an oversight.
 
 ### CRON_RFI — Cron: Annual (January)
@@ -96,9 +98,11 @@ Not an LLM agent — receives cleaning lady messages via webhook, drafts a reply
 ## System Health
 
 ### HEALTH — System Health Monitor
-Runs via `apps/telegram-router`'s `POST /api/cron/check-health` (no real external scheduler wired yet, same open question as check-reminders) or the on-demand `/heartbeat` command (same underlying check; always additionally replies with current status). Checks liveness of notifications, finance, and social-media via each app's own `GET /api/health` (deep: real Postgres `SELECT 1` for notifications/finance, since both silently stop working if their DB dies while the process stays up; shallow process-check for social-media). State persisted per-service in Postgres table `health_check_state` (`is_healthy`, `last_checked_at`, `last_status_change_at`, `last_error`, `consecutive_failures`). Alert-on-transition only: red alert sent the moment a service goes healthy->unhealthy, silent while it stays down, green recovery message with downtime duration on unhealthy->healthy, silent while healthy. Does not check `apps/telegram-router` itself (self-check would be trivially always-healthy; real self-monitoring needs external uptime monitoring, out of scope).
+Runs via `apps/telegram-router`'s `POST /api/cron/check-health` (no real external scheduler wired yet, same open question every scheduled endpoint here has) or the on-demand `/heartbeat` command (same underlying check; always additionally replies with current status). Checks liveness of finance and social-media via each app's own `GET /api/health` (deep: real Postgres `SELECT 1` for finance, since it silently stops working if its DB dies while the process stays up; shallow process-check for social-media). State persisted per-service in Postgres table `health_check_state` (`is_healthy`, `last_checked_at`, `last_status_change_at`, `last_error`, `consecutive_failures`). Alert-on-transition only: red alert sent the moment a service goes healthy->unhealthy, silent while it stays down, green recovery message with downtime duration on unhealthy->healthy, silent while healthy. Does not check `apps/telegram-router` itself (self-check would be trivially always-healthy; real self-monitoring needs external uptime monitoring, out of scope).
 
 **2026-08-07: orch-a removed.** Orch-A (and its `apps/orch-a` liveness target) was removed from this system entirely — see the Orchestrator (Orch-A) section below, now historical. HEALTH no longer checks it, and the digest feature that depended on it (see ROUTER below) was removed along with it.
+
+**2026-08-07: notifications removed.** `apps/notifications` (and its `notifications` liveness target) was also removed entirely — see the Notification Center section above, now historical. HEALTH no longer checks it either; it now only checks finance and social-media.
 
 ## Social Media System
 
@@ -108,9 +112,11 @@ Single LLM call, not an autonomous agent — receives a post idea via an HTTP ca
 ## Telegram Router
 
 ### ROUTER — Telegram Router
-Owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — `/social` -> social-media, `/heartbeat` -> runs the same liveness check as check-health across notifications/finance/social-media and always replies with current status, `/cron list` -> renders the seeded reminder cron jobs, a reminder's "Done" button and the periodic due-check -> apps/notifications.
+Owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — `/social` -> social-media, `/heartbeat` -> runs the same liveness check as check-health across finance/social-media and always replies with current status, `/cron list` -> renders this router's own cron-job manifest (empty as of 2026-08-07, see below).
 
 **2026-08-07: `/digest` and `check-digest` removed**, along with `src/lib/telegram/digest.ts` and `src/lib/telegram/orch-a.ts` — both existed solely to call Orch-A's `GET /digest`, which no longer exists now that orch-a is gone (see the Orchestrator (Orch-A) section below).
+
+**2026-08-07: the reminder "Done" button and `check-reminders` removed**, along with `src/lib/telegram/notifications.ts` (the apps/notifications API client) — both existed solely to call apps/notifications, which no longer exists (see the Notification Center section above). `src/lib/telegram/cron-jobs.ts`'s `CRON_JOBS` manifest is now empty (`check-reminders` was its only entry; `check-health` was never listed there, a pre-existing gap this removal didn't introduce).
 
 Since 2026-07-21 also its first-ever callee, not just caller: new `POST /api/campaign-drafts` (guarded by `X-API-Key` against `TELEGRAM_ROUTER_API_KEY`, this app's first inbound API-key-guarded route — every other route here has instead guarded inbound Telegram/cron callers via `verifyWebhookSecret`/`verifyCronSecret`) receives a drafted campaign nudge from CRM's check-stalled-guests cron and sends it to TG as a message with two inline buttons (Approve / Reject, callback data `nudge_approve:<id>`/`nudge_reject:<id>`). The existing webhook's callback-query handling now branches on those prefixes: approve calls CRM's `GET /api/promo-codes/:id` first (guards against a double-tap or retry acting twice), then GCA's new `POST /api/send`, then — only after a successful send — CRM's mark-sent; reject calls CRM's mark-rejected directly, no GCA involvement. Live-verified this session end-to-end via direct authenticated webhook calls simulating both button presses: confirmed reject sets the promo code to `'rejected'` and a double-tap gracefully no-ops, confirmed approve's full send-then-mark-sent chain fired for real, including a real call to Twilio's live API (one of Twilio's own documented magic/test numbers, so nothing reached a real device).
 

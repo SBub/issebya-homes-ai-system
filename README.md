@@ -16,22 +16,19 @@ in other apps, which have zero Telegram awareness of their own:
   `check-health` below, just triggered by the user instead of a schedule. Always
   replies with every service's current status (unlike the scheduled path, a manual
   trigger means "tell me now," not just "page me if something changed")
-- a reminder's "✅ Done" button (`callback_query`) -> `apps/notifications`' ack endpoint
-- `POST /api/cron/check-reminders` (`X-Cron-Secret`-protected) -> pulls due reminders
-  from `apps/notifications` and sends each one itself, button attached
 - `POST /api/cron/check-health` (`X-Cron-Secret`-protected) -> checks each service's
-  liveness (`apps/notifications`, `apps/finance`, `apps/social-media` —
+  liveness (`apps/finance`, `apps/social-media` —
   this router excludes itself, see `src/lib/telegram/health-targets.ts`'s doc comment)
   and alerts via Telegram only on a healthy↔unhealthy transition, persisted in the
   `health_check_state` table (Postgres) so restarts don't lose known-bad state and cause
   a spurious re-alert or a silently-swallowed recovery message. This
   is the `HEALTH` node in `docs/agent-architecture.mmd`, previously marked "needs design."
 
-Sends every reply/reminder itself, retrying once on failure. If a send still fails
+Sends every reply itself, retrying once on failure. If a send still fails
 after the retry, it's recorded in a shared `telegram_delivery_failures` table (Postgres,
 `DATABASE_URL` — same local Supabase instance every other app uses) instead of just
 logged — a durable last-resort record, not the primary alerting mechanism, shared across
-all send paths (`source` column: `'social'` | `'reminder'` | `'health'`).
+all send paths (`source` column: `'social'` | `'health'`).
 
 Framed as a "calling system" for now — the plan is for it to grow into an actual
 orchestrator (deciding which agent to delegate to) once the systems it calls become
@@ -39,24 +36,15 @@ real agents, reactive instead of scheduled.
 
 > **Note:** only registered against a temporary ngrok tunnel used for testing — no
 > permanent public URL yet (same open deployment/hosting question as the rest of this
-> repo). Nothing calls `/api/cron/check-reminders` on a real schedule yet either.
+> repo).
 
-## apps/notifications
-
-Notification Center (`NOTIF` in `docs/agent-architecture.mmd`) — reminders that nag until
-acknowledged. Plain logic API, no Telegram knowledge: `GET /api/reminders/due` (what's
-due to send/re-send right now), `POST /api/reminders/:key/ack` (stop nagging, called from
-the Done button), `POST /api/reminders/:key/sent` (record delivery, paces re-nags).
-`apps/telegram-router` is the only caller, authenticated via `NOTIFICATIONS_API_KEY`.
-
-A reminder's `reminders` table row (`supabase/migrations/20260720120000_create_reminders.sql`)
-is due when unacknowledged, past `due_at`, and either never sent or `renotify_every` has
-elapsed since `last_sent_at` (null `renotify_every` = send once, never repeat). Seeded
-with the three known candidates from `docs/notification-center-todo.md`.
-
-> **Note:** recurrence (e.g. auto-creating next month's CSV-upload reminder once this
-> month's is acknowledged) isn't automated — a documented gap, not an oversight. New
-> cycles need a new seed row for now.
+**2026-08-07: `apps/notifications` removed**, along with its `apps/telegram-router`
+integration (the reminder "✅ Done" button, `POST /api/cron/check-reminders`, and the
+`notifications` liveness target). It was Notification Center (`NOTIF` in
+`docs/agent-architecture.mmd`) — reminders that nag until acknowledged. Its
+`reminders` table (`supabase/migrations/20260720120000_create_reminders.sql`) is left
+in place with its seeded rows (historical data, no migration was dropped), but nothing
+reads from or writes to it anymore.
 
 ## apps/social-media
 
@@ -124,13 +112,10 @@ cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
                        # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
-                       # NOTIFICATIONS_API_URL, NOTIFICATIONS_API_KEY (same value as
-                       # apps/notifications'), FINANCE_API_URL, FINANCE_API_KEY (same value
+                       # FINANCE_API_URL, FINANCE_API_KEY (same value
                        # as apps/finance's — used only for /api/health today), CRON_SECRET,
                        # DATABASE_URL (from `supabase start` output, see below — for the
                        # shared telegram_delivery_failures + health_check_state tables)
-cp apps/notifications/.env.example apps/notifications/.env  # fill in DATABASE_URL,
-                       # NOTIFICATIONS_API_KEY (same value as apps/telegram-router's)
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `supabase status`, Publishable/Secret on newer CLI versions),
@@ -147,7 +132,7 @@ cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.e
 ```bash
 yarn dev              # starts every app's dev server in parallel (turbo run dev) —
                        # apps/finance :3001, apps/social-media :3002,
-                       # apps/telegram-router :3003, apps/notifications :3004,
+                       # apps/telegram-router :3003,
                        # apps/guest-communication-agent (tsx watch), apps/crm :3006.
                        # Bring up Supabase yourself first (`supabase start`,
                        # applying supabase/migrations) — Ctrl+C stops the dev

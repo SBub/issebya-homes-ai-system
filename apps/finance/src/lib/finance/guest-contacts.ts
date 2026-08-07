@@ -20,8 +20,7 @@ export function guestContactsSyncConfigured(): boolean {
  * which does its own read of finance_bookings and upsert into its own
  * guest_contacts table. This app never reaches into CRM's tables directly —
  * same cross-app-call pattern as apps/telegram-router calling
- * apps/notifications/apps/social-media/apps/finance's own X-API-Key-guarded
- * routes.
+ * apps/social-media/apps/finance's own X-API-Key-guarded routes.
  */
 export async function syncGuestContacts(): Promise<GuestContactsSyncResult> {
   const baseUrl = process.env.CRM_API_URL;

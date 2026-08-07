@@ -10,7 +10,7 @@ import { withSpan } from "@/lib/tracing";
  * Postgres is unreachable the Next.js process stays up and answers HTTP
  * fine, but every inbound webhook silently 500s recording the message — a
  * shallow "process responds" check would miss exactly that failure mode.
- * Matches the existing pattern in apps/notifications and apps/finance
+ * Matches the existing pattern in apps/finance
  * (GET, X-API-Key-guarded, deep = real query against Postgres).
  *
  * `{ head: true, count: "exact" }` issues a HEAD request — Supabase/

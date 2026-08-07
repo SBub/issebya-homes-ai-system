@@ -41,7 +41,7 @@ export function verifyCronSecret(request: NextRequest): NextResponse | null {
 /**
  * Shared X-Api-Key check for POST /api/campaign-drafts, checked against
  * TELEGRAM_ROUTER_API_KEY — same requireApiKey pattern every other app in
- * this repo already uses (apps/crm's, apps/notifications', apps/finance's,
+ * this repo already uses (apps/crm's, apps/finance's,
  * apps/guest-communication-agent's own requireApiKey), this app just hasn't
  * needed one before now: it's only ever been a caller of other apps'
  * X-API-Key-guarded routes (verifyWebhookSecret/verifyCronSecret above
