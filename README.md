@@ -9,8 +9,6 @@ Owns all Telegram I/O for the whole system — the one webhook a bot token allow
 registered once. Parses incoming commands/callbacks and dispatches to plain logic APIs
 in other apps, which have zero Telegram awareness of their own:
 - `/social <idea>` -> `apps/social-media`'s `/api/generate`
-- `/cron list` -> replies with the manifest in `src/lib/telegram/cron-jobs.ts` (what
-  cron endpoints exist, since nothing calls them on a real schedule yet)
 
 Sends every reply itself, retrying once on failure. If a send still fails
 after the retry, it's recorded in a shared `telegram_delivery_failures` table (Postgres,

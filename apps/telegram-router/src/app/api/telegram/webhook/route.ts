@@ -1,8 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import { isCronListCommand, parseSocialCommand } from "@/lib/telegram/command";
+import { parseSocialCommand } from "@/lib/telegram/command";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
-import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { generateSocialPost } from "@/lib/telegram/social";
@@ -201,11 +200,6 @@ export async function POST(request: NextRequest) {
     if (handled) {
       return NextResponse.json({ ok: true });
     }
-  }
-
-  if (update && isCronListCommand(update)) {
-    await sendMessage(renderCronJobsList());
-    return NextResponse.json({ ok: true });
   }
 
   const idea = update ? parseSocialCommand(update) : null;
