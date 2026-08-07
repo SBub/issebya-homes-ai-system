@@ -98,11 +98,13 @@ Not an LLM agent — receives cleaning lady messages via webhook, drafts a reply
 ## System Health
 
 ### HEALTH — System Health Monitor
-Runs via `apps/telegram-router`'s `POST /api/cron/check-health` (no real external scheduler wired yet, same open question every scheduled endpoint here has) or the on-demand `/heartbeat` command (same underlying check; always additionally replies with current status). Checks liveness of finance and social-media via each app's own `GET /api/health` (deep: real Postgres `SELECT 1` for finance, since it silently stops working if its DB dies while the process stays up; shallow process-check for social-media). State persisted per-service in Postgres table `health_check_state` (`is_healthy`, `last_checked_at`, `last_status_change_at`, `last_error`, `consecutive_failures`). Alert-on-transition only: red alert sent the moment a service goes healthy->unhealthy, silent while it stays down, green recovery message with downtime duration on unhealthy->healthy, silent while healthy. Does not check `apps/telegram-router` itself (self-check would be trivially always-healthy; real self-monitoring needs external uptime monitoring, out of scope).
+**Removed 2026-08-07** — the entire health-monitor feature was retired as one unit: `apps/telegram-router`'s `POST /api/cron/check-health` route, its on-demand `/heartbeat` command, `src/lib/telegram/health-monitor.ts` and `health-targets.ts`, and both `apps/finance`'s and `apps/guest-communication-agent`'s own `GET /api/health` routes. The description below is preserved as build history, not current state.
 
-**2026-08-07: orch-a removed.** Orch-A (and its `apps/orch-a` liveness target) was removed from this system entirely — see the Orchestrator (Orch-A) section below, now historical. HEALTH no longer checks it, and the digest feature that depended on it (see ROUTER below) was removed along with it.
+Ran via `apps/telegram-router`'s `POST /api/cron/check-health` (no real external scheduler wired yet, same open question every scheduled endpoint here has) or the on-demand `/heartbeat` command (same underlying check; always additionally replies with current status). Checked liveness of finance and social-media via each app's own `GET /api/health` (deep: real Postgres `SELECT 1` for finance, since it silently stops working if its DB dies while the process stays up; shallow process-check for social-media). State was persisted per-service in Postgres table `health_check_state` (`is_healthy`, `last_checked_at`, `last_status_change_at`, `last_error`, `consecutive_failures`) — this table is left in place with its history, no migration was dropped, but nothing reads from or writes to it anymore. Alert-on-transition only: red alert sent the moment a service goes healthy->unhealthy, silent while it stays down, green recovery message with downtime duration on unhealthy->healthy, silent while healthy. Never checked `apps/telegram-router` itself (self-check would be trivially always-healthy; real self-monitoring needs external uptime monitoring, out of scope).
 
-**2026-08-07: notifications removed.** `apps/notifications` (and its `notifications` liveness target) was also removed entirely — see the Notification Center section above, now historical. HEALTH no longer checks it either; it now only checks finance and social-media.
+**2026-08-07: orch-a removed.** Orch-A (and its `apps/orch-a` liveness target) was removed from this system entirely — see the Orchestrator (Orch-A) section below, now historical. HEALTH no longer checked it, and the digest feature that depended on it (see ROUTER below) was removed along with it.
+
+**2026-08-07: notifications removed.** `apps/notifications` (and its `notifications` liveness target) was also removed entirely — see the Notification Center section above, now historical. HEALTH no longer checked it either; it only checked finance and social-media right up until its own removal.
 
 ## Social Media System
 
@@ -112,7 +114,9 @@ Single LLM call, not an autonomous agent — receives a post idea via an HTTP ca
 ## Telegram Router
 
 ### ROUTER — Telegram Router
-Owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — `/social` -> social-media, `/heartbeat` -> runs the same liveness check as check-health across finance/social-media and always replies with current status, `/cron list` -> renders this router's own cron-job manifest (empty as of 2026-08-07, see below).
+Owns all Telegram I/O (webhook + sending); dispatches commands to plain logic APIs in other apps — `/social` -> social-media, `/cron list` -> renders this router's own cron-job manifest (empty as of 2026-08-07, see below).
+
+**2026-08-07: `/heartbeat` and `check-health` removed**, along with the rest of the health-monitor feature — see the System Health section above, now historical.
 
 **2026-08-07: `/digest` and `check-digest` removed**, along with `src/lib/telegram/digest.ts` and `src/lib/telegram/orch-a.ts` — both existed solely to call Orch-A's `GET /digest`, which no longer exists now that orch-a is gone (see the Orchestrator (Orch-A) section below).
 

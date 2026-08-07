@@ -11,8 +11,8 @@ interface CronJob {
  * in the README).
  *
  * Empty since 2026-08-07: check-reminders was removed along with
- * apps/notifications (its sole reason to exist). check-health isn't
- * listed here either — a pre-existing gap, not introduced by that removal.
+ * apps/notifications (its sole reason to exist), and check-health was
+ * later removed along with the rest of the health-monitor feature.
  */
 const CRON_JOBS: CronJob[] = [];
 

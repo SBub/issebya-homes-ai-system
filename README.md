@@ -11,24 +11,20 @@ in other apps, which have zero Telegram awareness of their own:
 - `/social <idea>` -> `apps/social-media`'s `/api/generate`
 - `/cron list` -> replies with the manifest in `src/lib/telegram/cron-jobs.ts` (what
   cron endpoints exist, since nothing calls them on a real schedule yet)
-- `/heartbeat` -> runs a real system liveness check right now, on demand — same
-  underlying check (`src/lib/telegram/health-monitor.ts`'s `runCheckHealth`) as
-  `check-health` below, just triggered by the user instead of a schedule. Always
-  replies with every service's current status (unlike the scheduled path, a manual
-  trigger means "tell me now," not just "page me if something changed")
-- `POST /api/cron/check-health` (`X-Cron-Secret`-protected) -> checks each service's
-  liveness (`apps/finance`, `apps/social-media` —
-  this router excludes itself, see `src/lib/telegram/health-targets.ts`'s doc comment)
-  and alerts via Telegram only on a healthy↔unhealthy transition, persisted in the
-  `health_check_state` table (Postgres) so restarts don't lose known-bad state and cause
-  a spurious re-alert or a silently-swallowed recovery message. This
-  is the `HEALTH` node in `docs/agent-architecture.mmd`, previously marked "needs design."
 
 Sends every reply itself, retrying once on failure. If a send still fails
 after the retry, it's recorded in a shared `telegram_delivery_failures` table (Postgres,
 `DATABASE_URL` — same local Supabase instance every other app uses) instead of just
-logged — a durable last-resort record, not the primary alerting mechanism, shared across
-all send paths (`source` column: `'social'` | `'health'`).
+logged — a durable last-resort record, not the primary alerting mechanism (`source`
+column: `'social'`).
+
+**2026-08-07: the health-monitor feature removed entirely** — the `/heartbeat`
+command, `POST /api/cron/check-health`, `src/lib/telegram/health-monitor.ts` and
+`health-targets.ts`, and both `apps/finance`'s and
+`apps/guest-communication-agent`'s own `GET /api/health` routes. It was the
+`HEALTH` node in `docs/agent-architecture.mmd`. The `health_check_state` table
+(`supabase/migrations/20260720140000_create_health_check_state.sql`) is left in
+place with its history, but nothing reads from or writes to it anymore.
 
 Framed as a "calling system" for now — the plan is for it to grow into an actual
 orchestrator (deciding which agent to delegate to) once the systems it calls become
@@ -112,10 +108,8 @@ cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
                        # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
-                       # FINANCE_API_URL, FINANCE_API_KEY (same value
-                       # as apps/finance's — used only for /api/health today), CRON_SECRET,
                        # DATABASE_URL (from `supabase start` output, see below — for the
-                       # shared telegram_delivery_failures + health_check_state tables)
+                       # shared telegram_delivery_failures table)
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `supabase status`, Publishable/Secret on newer CLI versions),

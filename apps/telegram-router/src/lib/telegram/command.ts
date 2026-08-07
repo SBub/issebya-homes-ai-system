@@ -8,9 +8,7 @@ const COMMAND_PATTERN = /^\/social(?:@\w+)?(?:\s+([\s\S]+))?$/i;
 // itself (e.g. "/cron@IssebyaBot list"), not to the end of the phrase.
 const CRON_LIST_PATTERN = /^\/cron(?:@\w+)?\s+list$/i;
 
-const HEARTBEAT_PATTERN = /^\/heartbeat(?:@\w+)?$/i;
-
-/** Shared chat-gating + pattern match behind isCronListCommand/isHeartbeatCommand. */
+/** Shared chat-gating + pattern match behind isCronListCommand. */
 function isCommandFromHostChat(update: TelegramUpdate, pattern: RegExp): boolean {
   const message = update.message;
   if (!message?.text) {
@@ -52,13 +50,4 @@ export function parseSocialCommand(update: TelegramUpdate): string | null {
  */
 export function isCronListCommand(update: TelegramUpdate): boolean {
   return isCommandFromHostChat(update, CRON_LIST_PATTERN);
-}
-
-/**
- * True for a "/heartbeat" message from the configured host chat — an
- * on-demand system liveness check, independent of whatever schedule
- * check-health ends up running on.
- */
-export function isHeartbeatCommand(update: TelegramUpdate): boolean {
-  return isCommandFromHostChat(update, HEARTBEAT_PATTERN);
 }

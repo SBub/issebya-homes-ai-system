@@ -117,8 +117,8 @@ export async function withTurnSpan<T>(
 // under whatever span is active via context.active() (e.g. a webhook.* stage
 // span, a gen_ai.tool.* span, a run-turn.ts step span) — no explicit parent
 // needed. If nothing is active, it starts a fresh root trace, which is
-// correct for callers with no ambient turn context (e.g. /api/health's own
-// probe).
+// correct for callers with no ambient turn context (e.g. a standalone
+// probe outside any guest turn).
 //
 // Same replay-safety caveat as withTurnSpan: only call this from code that
 // runs at most once per real invocation — i.e. from inside an already-

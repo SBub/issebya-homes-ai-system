@@ -1,12 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import { isCronListCommand, isHeartbeatCommand, parseSocialCommand } from "@/lib/telegram/command";
+import { isCronListCommand, parseSocialCommand } from "@/lib/telegram/command";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
-import { runCheckHealth } from "@/lib/telegram/health-monitor";
-import { renderHealthSummary } from "@/lib/telegram/health-targets";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
 import {
@@ -208,13 +206,6 @@ export async function POST(request: NextRequest) {
   if (update && isCronListCommand(update)) {
     await sendMessage(renderCronJobsList());
     return NextResponse.json({ ok: true });
-  }
-
-  if (update && isHeartbeatCommand(update)) {
-    // Unlike /digest, always replies with current status directly.
-    const results = await runCheckHealth();
-    await sendMessage(renderHealthSummary(results));
-    return NextResponse.json({ results });
   }
 
   const idea = update ? parseSocialCommand(update) : null;
