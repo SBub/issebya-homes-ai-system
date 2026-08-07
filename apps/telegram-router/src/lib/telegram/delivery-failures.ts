@@ -12,9 +12,10 @@ export type DeliverySource = "social";
  * observability conversation) — just makes sure a failed send isn't
  * silently lost.
  *
- * Replaces apps/orch-a's old `orch_a_failed_deliveries` table (left in place
- * for its historical data, no longer written to — see
- * supabase/migrations/20260720130000_create_telegram_delivery_failures.sql).
+ * Replaces apps/orch-a's old `orch_a_failed_deliveries` table (created by
+ * supabase/migrations/20260718123130_create_orch_a_tables.sql), which has
+ * since been dropped entirely — see
+ * supabase/migrations/20260807100000_drop_dead_tables.sql.
  */
 export async function recordDeliveryFailure(
   source: DeliverySource,

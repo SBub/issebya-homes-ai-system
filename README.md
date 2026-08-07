@@ -21,8 +21,9 @@ command, `POST /api/cron/check-health`, `src/lib/telegram/health-monitor.ts` and
 `health-targets.ts`, and both `apps/finance`'s and
 `apps/guest-communication-agent`'s own `GET /api/health` routes. It was the
 `HEALTH` node in `docs/agent-architecture.mmd`. The `health_check_state` table
-(`supabase/migrations/20260720140000_create_health_check_state.sql`) is left in
-place with its history, but nothing reads from or writes to it anymore.
+(created by `supabase/migrations/20260720140000_create_health_check_state.sql`)
+has since been dropped entirely — see
+`supabase/migrations/20260807100000_drop_dead_tables.sql`.
 
 Framed as a "calling system" for now — the plan is for it to grow into an actual
 orchestrator (deciding which agent to delegate to) once the systems it calls become
@@ -36,9 +37,10 @@ real agents, reactive instead of scheduled.
 integration (the reminder "✅ Done" button, `POST /api/cron/check-reminders`, and the
 `notifications` liveness target). It was Notification Center (`NOTIF` in
 `docs/agent-architecture.mmd`) — reminders that nag until acknowledged. Its
-`reminders` table (`supabase/migrations/20260720120000_create_reminders.sql`) is left
-in place with its seeded rows (historical data, no migration was dropped), but nothing
-reads from or writes to it anymore.
+`reminders` table (created by
+`supabase/migrations/20260720120000_create_reminders.sql`) has since been
+dropped entirely — see
+`supabase/migrations/20260807100000_drop_dead_tables.sql`.
 
 ## apps/social-media
 
