@@ -16,11 +16,6 @@ const CRON_JOBS: CronJob[] = [
     endpoint: "POST /api/cron/check-reminders",
     description: 'sends due reminders from apps/notifications, each with a "✅ Done" button',
   },
-  {
-    name: "check-digest",
-    endpoint: "POST /api/cron/check-digest",
-    description: "sends apps/orch-a's daily digest",
-  },
 ];
 
 export function renderCronJobsList(): string {

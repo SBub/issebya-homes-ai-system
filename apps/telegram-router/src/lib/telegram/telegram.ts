@@ -64,13 +64,6 @@ async function parseTelegramResponse(res: Response, action: string): Promise<Tel
   return body;
 }
 
-export interface SendMessageOptions {
-  /** Telegram's HTML parse mode — needed for Orch-A's digest, which is
-   * pre-rendered with `<b>`/`<i>` tags (see apps/orch-a/src/core/models.ts's
-   * renderReport). Omitted entirely means plain text, same as before. */
-  parseMode?: "HTML";
-}
-
 /**
  * Plain text message, optionally with one row of inline buttons (e.g.
  * reminders' single "✅ Done" button — pass `[button]` — or the campaign-
@@ -80,7 +73,6 @@ export interface SendMessageOptions {
 export async function sendMessage(
   text: string,
   buttons?: InlineButton[],
-  options?: SendMessageOptions,
 ): Promise<TelegramResult & { messageId?: number }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -97,9 +89,6 @@ export async function sendMessage(
         ],
       };
     }
-    if (options?.parseMode) {
-      payload.parse_mode = options.parseMode;
-    }
     const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -113,9 +102,8 @@ export async function sendMessage(
 }
 
 /**
- * Retries a send once on failure — matches apps/orch-a's old `sendReport`
- * contract (2 attempts total), now generalized so every Telegram send in
- * this router (social replies, reminders, the digest) gets the same
+ * Retries a send once on failure (2 attempts total) — every Telegram send in
+ * this router (social replies, reminders, health alerts) gets the same
  * retry-once behavior. Never throws: `send` itself (e.g. `sendMessage`)
  * already turns failures into a `{ ok: false }` result.
  */

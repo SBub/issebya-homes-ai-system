@@ -1,15 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import {
-  isCronListCommand,
-  isDigestCommand,
-  isHeartbeatCommand,
-  parseSocialCommand,
-} from "@/lib/telegram/command";
+import { isCronListCommand, isHeartbeatCommand, parseSocialCommand } from "@/lib/telegram/command";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
 import { renderCronJobsList } from "@/lib/telegram/cron-jobs";
 import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
-import { sendDigestNow } from "@/lib/telegram/digest";
 import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { runCheckHealth } from "@/lib/telegram/health-monitor";
 import { renderHealthSummary } from "@/lib/telegram/health-targets";
@@ -232,12 +226,6 @@ export async function POST(request: NextRequest) {
   if (update && isCronListCommand(update)) {
     await sendMessage(renderCronJobsList());
     return NextResponse.json({ ok: true });
-  }
-
-  if (update && isDigestCommand(update)) {
-    // On-demand digest send, independent of check-digest's cron schedule.
-    const result = await sendDigestNow();
-    return NextResponse.json(result);
   }
 
   if (update && isHeartbeatCommand(update)) {

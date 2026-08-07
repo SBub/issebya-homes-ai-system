@@ -6,10 +6,8 @@ export interface HealthTarget {
 }
 
 /**
- * Services this router checks for liveness/reachability — a different
- * concern from Orch-A's own data-freshness checks (checkHeartbeat etc. in
- * apps/orch-a/src/health/checks.ts), which answer "is the data stale" from
- * inside its own scheduled run. This answers "is the process even up."
+ * Services this router checks for liveness/reachability — answers "is the
+ * process even up."
  *
  * apps/telegram-router itself is deliberately excluded: it's the one running
  * these checks, so a self-check would be trivially always-healthy and add no
@@ -19,9 +17,9 @@ export interface HealthTarget {
  *
  * notifications/finance get a deep check (their own /api/health does a real
  * DB round-trip) since both silently stop doing their one job if their
- * Postgres dependency dies while the process stays up. social-media/orch-a
- * are shallow (process responds only) — see each app's own health route for
- * the per-app reasoning.
+ * Postgres dependency dies while the process stays up. social-media is
+ * shallow (process responds only) — see its own health route for the
+ * per-app reasoning.
  */
 export const HEALTH_TARGETS: HealthTarget[] = [
   {
@@ -41,15 +39,6 @@ export const HEALTH_TARGETS: HealthTarget[] = [
     urlEnvVar: "SOCIAL_MEDIA_API_URL",
     keyEnvVar: "SOCIAL_MEDIA_API_KEY",
     path: "/api/health",
-  },
-  {
-    // Not /health: Mastra's own deployer ships a built-in, unauthenticated
-    // GET /health that shadows any custom route at that exact path — see
-    // apps/orch-a/src/mastra/routes/health-check.ts's doc comment.
-    service: "orch-a",
-    urlEnvVar: "ORCH_A_API_URL",
-    keyEnvVar: "ORCH_A_API_KEY",
-    path: "/health-check",
   },
 ];
 

@@ -1,10 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
-    "apps/orch-a": {
-      "entry": ["src/mastra/index.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
-    },
     "apps/finance": {
       "next": true,
       "entry": ["tests/**/*.test.ts"],

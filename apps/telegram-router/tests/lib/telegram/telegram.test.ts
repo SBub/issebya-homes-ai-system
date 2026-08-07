@@ -135,19 +135,6 @@ describe("sendMessage", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body)).toEqual({ chat_id: "test-chat-id", text: "hello" });
   });
-
-  it("includes parse_mode: HTML when given — needed for Orch-A's pre-rendered digest", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-
-    await sendMessage("<b>Digest</b>", undefined, { parseMode: "HTML" });
-
-    const [, init] = fetchMock.mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({
-      chat_id: "test-chat-id",
-      text: "<b>Digest</b>",
-      parse_mode: "HTML",
-    });
-  });
 });
 
 describe("sendWithRetry", () => {

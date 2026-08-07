@@ -1,7 +1,7 @@
 {
   // Deliberately NOT extending ../../tsconfig.base.json — same reasoning as
   // apps/finance/tsconfig.json: Next.js's own TS plugin needs its own
-  // opinionated option set that doesn't compose cleanly with orch-a's
+  // opinionated option set that doesn't compose cleanly with the shared
   // plain-Node base config.
   "compilerOptions": {
     "target": "ES2017",

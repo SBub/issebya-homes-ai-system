@@ -1,6 +1,6 @@
 {
   // Deliberately NOT extending ../../tsconfig.base.json: that base config is
-  // tailored for orch-a, a plain Node/Mastra backend (module: "ES2022",
+  // tailored for plain Node backends (module: "ES2022",
   // noUncheckedIndexedAccess, no JSX). Next.js's own TS plugin requires a
   // specific, opinionated set of options (allowJs, jsx, isolatedModules,
   // resolveJsonModule, the "next" plugin entry, and its generated

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { renderSeedContext } from "@/lib/social/seed-vocabulary";
 
 // createOpenRouter() with no `apiKey` option reads OPENROUTER_API_KEY from the
-// environment lazily, same convention as apps/orch-a/src/mastra/agents/reporter-agent.ts.
+// environment lazily.
 const openrouter = createOpenRouter();
 
 const socialPostSchema = z.object({
