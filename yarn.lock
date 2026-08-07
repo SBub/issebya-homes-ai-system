@@ -7592,11 +7592,9 @@ __metadata:
   resolution: "telegram-router@workspace:apps/telegram-router"
   dependencies:
     "@types/node": "npm:^26.1.1"
-    "@types/pg": "npm:^8.20.0"
     "@types/react": "npm:^19"
     "@types/react-dom": "npm:^19"
     next: "npm:^16.2.1"
-    pg: "npm:^8.22.0"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
     typescript: "npm:^5.9.3"

@@ -10,11 +10,13 @@ registered once. Parses incoming commands/callbacks and dispatches to plain logi
 in other apps, which have zero Telegram awareness of their own:
 - `/social <idea>` -> `apps/social-media`'s `/api/generate`
 
-Sends every reply itself, retrying once on failure. If a send still fails
-after the retry, it's recorded in a shared `telegram_delivery_failures` table (Postgres,
-`DATABASE_URL` — same local Supabase instance every other app uses) instead of just
-logged — a durable last-resort record, not the primary alerting mechanism (`source`
-column: `'social'`).
+Sends every reply itself, retrying once on failure.
+
+**2026-08-07: the `telegram_delivery_failures` durable-fallback table removed** —
+along with `src/lib/telegram/delivery-failures.ts` and `src/lib/telegram/db.ts`
+(the `pg` pool that existed only for this). Delivery-failure monitoring will be
+handled via OTel instead, not a DB table. The table itself was dropped — see
+`supabase/migrations/20260807110000_drop_telegram_delivery_failures.sql`.
 
 **2026-08-07: the health-monitor feature removed entirely** — the `/heartbeat`
 command, `POST /api/cron/check-health`, `src/lib/telegram/health-monitor.ts` and
@@ -107,9 +109,7 @@ cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA
                        # OPENROUTER_API_KEY
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
-                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's),
-                       # DATABASE_URL (from `supabase start` output, see below — for the
-                       # shared telegram_delivery_failures table)
+                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's)
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `supabase status`, Publishable/Secret on newer CLI versions),

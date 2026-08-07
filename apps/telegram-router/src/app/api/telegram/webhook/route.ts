@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
 import { parseSocialCommand } from "@/lib/telegram/command";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
-import { recordDeliveryFailure } from "@/lib/telegram/delivery-failures";
 import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
@@ -153,12 +152,9 @@ async function handleOwnerNudgeReply(
   return true;
 }
 
-/** Sends a social reply with the shared retry-once + durable-fallback behavior. */
+/** Sends a social reply with the shared retry-once behavior. */
 async function sendSocialReply(text: string): Promise<void> {
-  const result = await sendWithRetry(() => sendMessage(text));
-  if (!result.ok) {
-    await recordDeliveryFailure("social", text, result.error ?? "sendMessage failed");
-  }
+  await sendWithRetry(() => sendMessage(text));
 }
 
 async function handleCallbackQuery(

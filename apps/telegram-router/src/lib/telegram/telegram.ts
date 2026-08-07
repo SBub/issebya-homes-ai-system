@@ -65,9 +65,8 @@ async function parseTelegramResponse(res: Response, action: string): Promise<Tel
 }
 
 /**
- * Plain text message, optionally with one row of inline buttons (e.g.
- * reminders' single "✅ Done" button — pass `[button]` — or the campaign-
- * draft approve/reject prompt's two buttons — pass `[approveButton,
+ * Plain text message, optionally with one row of inline buttons (e.g. the
+ * campaign-draft approve/reject prompt's two buttons — pass `[approveButton,
  * rejectButton]`). All buttons render in a single row, in array order.
  */
 export async function sendMessage(
@@ -103,9 +102,8 @@ export async function sendMessage(
 
 /**
  * Retries a send once on failure (2 attempts total) — every Telegram send in
- * this router (social replies, reminders, health alerts) gets the same
- * retry-once behavior. Never throws: `send` itself (e.g. `sendMessage`)
- * already turns failures into a `{ ok: false }` result.
+ * this router gets the same retry-once behavior. Never throws: `send` itself
+ * (e.g. `sendMessage`) already turns failures into a `{ ok: false }` result.
  */
 export async function sendWithRetry<T extends TelegramResult>(send: () => Promise<T>): Promise<T> {
   const first = await send();
