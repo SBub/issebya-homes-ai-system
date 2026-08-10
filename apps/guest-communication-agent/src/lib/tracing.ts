@@ -1,4 +1,6 @@
 import { type Attributes, context, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
+import type { GetStepTools } from "inngest";
+import type { inngest } from "@/lib/inngest";
 
 const tracer = trace.getTracer("guest-communication-agent");
 
@@ -109,6 +111,43 @@ export async function withTurnSpan<T>(
       }
     }),
   );
+}
+
+// Collapses the two-call nesting that shows up at every real call site in
+// this app — `step.run(stepId, () => withTurnSpan(anchor, name, attrs, fn))`
+// — into one call, so the actual business logic (`fn`) isn't buried two
+// closures deep behind boilerplate that's identical everywhere it appears.
+// The two calls being combined do genuinely different jobs and both still
+// happen, in the same order, with the same semantics:
+//   - step.run (Inngest's GetStepTools, from `inngest`'s own types) is the
+//     durability/replay-memoization primitive — Inngest persists `fn`'s
+//     result under `stepId` and, on any later replay of this function (e.g.
+//     after a step.waitForEvent elsewhere resumes), returns the memoized
+//     result instead of re-running `fn`. That's what makes it safe to send a
+//     real Telegram/WhatsApp message or write to Postgres inside `fn`.
+//   - withTurnSpan (above) is this app's own OTel span helper — it opens a
+//     span parented to `traceAnchor`, runs `fn`, and closes the span,
+//     recording an exception/ERROR status if `fn` throws.
+// step.run must wrap withTurnSpan, not the other way around, so the span
+// itself is also only ever created once (inside the memoized callback), not
+// re-emitted on every replay.
+export async function steppedSpan<T>(
+  step: GetStepTools<typeof inngest>,
+  stepId: string,
+  traceAnchor: TraceAnchor,
+  spanName: string,
+  attributes: Attributes,
+  fn: (span: Span) => Promise<T>,
+): Promise<T> {
+  // Cast needed: step.run()'s return type is run through Inngest's Jsonify
+  // transform (step results are actually persisted as JSON and rehydrated on
+  // replay), which narrows types like FilePart's `data: URL | DataContent`
+  // down to their JSON-safe equivalents. Every call site returns a plain
+  // JSON-safe value (a string, a DB row, a fetch result, etc.), so the
+  // narrowing is a false positive here — same reasoning each call site used
+  // to spell out individually with its own `as X` cast before this helper
+  // existed.
+  return step.run(stepId, () => withTurnSpan(traceAnchor, spanName, attributes, fn)) as Promise<T>;
 }
 
 // Generic, non-deterministic child span — same lifecycle (recordException +

@@ -1,6 +1,6 @@
 import type { GetStepTools } from "inngest";
 import { inngest } from "@/lib/inngest";
-import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
+import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import type { OwnerNudgeReason } from "./owner-nudge";
 import { requestOwnerNudge } from "./owner-nudge";
 
@@ -83,42 +83,41 @@ export async function requestApprovalGate(params: {
     traceAnchor,
   } = params;
 
-  // Wrapped in its own step.run, distinct from the wait-for-decision step
-  // below — sending the nudge and waiting for the decision are two
-  // different kinds of operation. Without this, a replay of this Inngest
-  // function (guaranteed once step.waitForEvent below suspends and later
-  // resumes, since Inngest replays the whole function body from the top)
-  // would re-send this real Telegram nudge every single time, since
-  // un-stepped code isn't memoized across replays the way step.waitForEvent
-  // itself is. Mirrors missing-info.ts's "owner-nudge-missing-info" step and
-  // booking.ts's original "owner-nudge-send-booking-link" step, which this
-  // generalizes.
-  const nudged = await step.run(`owner-nudge-${toolName}`, () =>
-    withTurnSpan(
-      traceAnchor,
-      `owner_nudge.${toolName}`,
-      { "gca.conversation_id": conversationId, "gca.phone": phone },
-      (span) => {
-        // Braintrust aggregates a `braintrust.tags` value set on ANY span in
-        // a trace up to the whole trace, so tagging this one span keeps a
-        // turn that attempted a gated tool call filterable by tool name,
-        // the same way run-turn.ts's old generic "tool-${toolName}" wrapper
-        // tag did before this tool moved to SELF_STEPPED_TOOLS dispatch (see
-        // run-turn.ts's comment there). Tagged at nudge-send time, not once
-        // the decision is known, since a rejected/timed-out call is still
-        // worth being able to find in a trace search. String arrays are a
-        // native OTel attribute value — no JSON.stringify needed.
-        span.setAttribute("braintrust.tags", [toolName]);
-        return requestOwnerNudge({
-          conversationId,
-          phone,
-          reason,
-          reasonCategory,
-          correlationId,
-          step,
-        });
-      },
-    ),
+  // Its own step, distinct from the wait-for-decision step below — sending
+  // the nudge and waiting for the decision are two different kinds of
+  // operation. Without this, a replay of this Inngest function (guaranteed
+  // once step.waitForEvent below suspends and later resumes, since Inngest
+  // replays the whole function body from the top) would re-send this real
+  // Telegram nudge every single time, since un-stepped code isn't memoized
+  // across replays the way step.waitForEvent itself is. Mirrors
+  // missing-info.ts's "owner-nudge-missing-info" step and booking.ts's
+  // original "owner-nudge-send-booking-link" step, which this generalizes.
+  const nudged = await steppedSpan(
+    step,
+    `owner-nudge-${toolName}`,
+    traceAnchor,
+    `owner_nudge.${toolName}`,
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    (span) => {
+      // Braintrust aggregates a `braintrust.tags` value set on ANY span in
+      // a trace up to the whole trace, so tagging this one span keeps a
+      // turn that attempted a gated tool call filterable by tool name,
+      // the same way run-turn.ts's old generic "tool-${toolName}" wrapper
+      // tag did before this tool moved to SELF_STEPPED_TOOLS dispatch (see
+      // run-turn.ts's comment there). Tagged at nudge-send time, not once
+      // the decision is known, since a rejected/timed-out call is still
+      // worth being able to find in a trace search. String arrays are a
+      // native OTel attribute value — no JSON.stringify needed.
+      span.setAttribute("braintrust.tags", [toolName]);
+      return requestOwnerNudge({
+        conversationId,
+        phone,
+        reason,
+        reasonCategory,
+        correlationId,
+        step,
+      });
+    },
   );
 
   // Nudge failed to send — skip straight to the not-approved result; there's
@@ -139,20 +138,20 @@ export async function requestApprovalGate(params: {
     console.warn(
       `[approval-gate] requestApprovalGate("${toolName}") timed out after ${timeout} waiting for correlationId ${correlationId}'s decision — treating as not approved`,
     );
-    // Own step.run — same replay-safety reasoning as the nudge-send step
-    // above: without it, a later replay of this run would re-run this
-    // un-stepped branch and duplicate-emit this span every time, since
+    // Own step — same replay-safety reasoning as the nudge-send step above:
+    // without it, a later replay of this run would re-run this un-stepped
+    // branch and duplicate-emit this span every time, since
     // step.waitForEvent's memoized resolution doesn't memoize the code
     // around it. In practice a well-chosen `timeout` should make this branch
     // rare-to-never for a tool like sendBookingLink, whose caller picks an
     // effectively-unbounded timeout.
-    await step.run(`${toolName}-approval-timeout`, () =>
-      withTurnSpan(
-        traceAnchor,
-        `owner_nudge.${toolName}.no_reply`,
-        { "gca.timeout": timeout },
-        async () => {},
-      ),
+    await steppedSpan(
+      step,
+      `${toolName}-approval-timeout`,
+      traceAnchor,
+      `owner_nudge.${toolName}.no_reply`,
+      { "gca.timeout": timeout },
+      async () => {},
     );
     return false;
   }

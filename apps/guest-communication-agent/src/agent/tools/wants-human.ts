@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { withTurnSpan } from "@/lib/tracing";
+import { steppedSpan } from "@/lib/tracing";
 import type { ToolContext } from "./config";
 import { requestOwnerNudge } from "./owner-nudge";
 
@@ -24,26 +24,27 @@ export const wantsHuman = tool({
 
 export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
   const { conversationId, phone, step, traceAnchor } = context;
-  // Wrapped in its own step.run — wants_human is dispatched directly from
+  // Its own step (see steppedSpan's doc comment for why step.run + a span
+  // are paired at all) — wants_human is dispatched directly from
   // run-turn.ts's loop (see SELF_STEPPED_TOOLS there), never nested inside an
   // outer step.run. Without this, a replay of this Inngest function (e.g. a
   // retry of a later step in the same run, like record-reply or
   // send-whatsapp-reply) would re-execute this real Telegram send every
   // time, since un-stepped code isn't memoized across replays.
-  await step.run("owner-nudge-wants-human", () =>
-    withTurnSpan(
-      traceAnchor,
-      "owner_nudge.wants_human",
-      { "gca.conversation_id": conversationId, "gca.phone": phone },
-      () =>
-        requestOwnerNudge({
-          conversationId,
-          phone,
-          reason: args.reason,
-          reasonCategory: "wants_human",
-          step,
-        }),
-    ),
+  await steppedSpan(
+    step,
+    "owner-nudge-wants-human",
+    traceAnchor,
+    "owner_nudge.wants_human",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "wants_human",
+        step,
+      }),
   );
   return {
     escalated: true,

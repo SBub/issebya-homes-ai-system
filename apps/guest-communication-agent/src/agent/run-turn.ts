@@ -22,7 +22,13 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
-import { markSpanFailed, type TraceAnchor, updateSpanIO, withTurnSpan } from "@/lib/tracing";
+import {
+  markSpanFailed,
+  steppedSpan,
+  type TraceAnchor,
+  updateSpanIO,
+  withTurnSpan,
+} from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -405,23 +411,23 @@ export async function runAgentTurn(
   // can be retroactively patched with the turn's real input/output once the
   // final reply exists — see updateSpanIO's own comment (src/lib/tracing.ts)
   // and the "update-turn-trace-io" step in runGuestTurn below.
-  const guestTurnSpanId = await step.run("start-trace", () =>
-    withTurnSpan(
-      traceAnchor,
-      // Must start with one of @braintrust/otel's AISpanProcessor
-      // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
-      // checked against the span name AND non-system attribute keys — see
-      // node_modules/@braintrust/otel/dist/index.js's isAISpan) or
-      // filterAISpans: true (instrumentation.ts) silently drops this span
-      // before export. Neither "guest-turn" nor this span's own attributes
-      // (gca.conversation_id/gca.phone) matched any prefix, which is why it
-      // never showed up in Braintrust at all. "braintrust." is an honest
-      // prefix for this — it's a Braintrust-observability-specific marker
-      // span, not a real gen_ai call.
-      "braintrust.guest_turn",
-      { "gca.conversation_id": conversationId, "gca.phone": phone },
-      async (span) => span.spanContext().spanId,
-    ),
+  const guestTurnSpanId = await steppedSpan(
+    step,
+    "start-trace",
+    traceAnchor,
+    // Must start with one of @braintrust/otel's AISpanProcessor
+    // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
+    // checked against the span name AND non-system attribute keys — see
+    // node_modules/@braintrust/otel/dist/index.js's isAISpan) or
+    // filterAISpans: true (instrumentation.ts) silently drops this span
+    // before export. Neither "guest-turn" nor this span's own attributes
+    // (gca.conversation_id/gca.phone) matched any prefix, which is why it
+    // never showed up in Braintrust at all. "braintrust." is an honest
+    // prefix for this — it's a Braintrust-observability-specific marker
+    // span, not a real gen_ai call.
+    "braintrust.guest_turn",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    async (span) => span.spanContext().spanId,
   );
 
   // Every span from here on nests under the real "braintrust.guest_turn"
@@ -450,10 +456,13 @@ export async function runAgentTurn(
   // memory.ts — always user/assistant text content, never a file part — so
   // the narrowing is a false positive here too, same as the model-${stepCount}
   // step below.
-  const { historyMessages, contextBlock } = (await step.run("load-memory", () =>
-    withTurnSpan(turnAnchor, "load-memory", { "gca.conversation_id": conversationId }, () =>
-      loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
-    ),
+  const { historyMessages, contextBlock } = (await steppedSpan(
+    step,
+    "load-memory",
+    turnAnchor,
+    "load-memory",
+    { "gca.conversation_id": conversationId },
+    () => loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
   )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
@@ -475,8 +484,13 @@ export async function runAgentTurn(
   // structurally loses its methods). The system prompt here is always a
   // plain string, so the narrowing is a false positive for this call site
   // too, same as the model-${stepCount} and load-memory step calls below.
-  const system = (await step.run("load-system-prompt", () =>
-    withTurnSpan(turnAnchor, "load-system-prompt", {}, async () => {
+  const system = (await steppedSpan(
+    step,
+    "load-system-prompt",
+    turnAnchor,
+    "load-system-prompt",
+    {},
+    async () => {
       const promptTemplate = await loadPrompt({
         projectId: process.env.BRAINTRUST_PROJECT_ID,
         slug: SYSTEM_PROMPT_SLUG,
@@ -484,7 +498,7 @@ export async function runAgentTurn(
       });
       const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
       return messages[0].content as string;
-    }),
+    },
   )) as string;
 
   console.log("contextBlock", contextBlock);
@@ -583,27 +597,27 @@ export async function runAgentTurn(
           return output;
         }
 
-        return await step.run(`tool-${call.toolName}`, () =>
-          withTurnSpan(
-            turnAnchor,
-            `gen_ai.tool.${call.toolName}`,
-            { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-            async (span) => {
-              const output = await runToolCall(call.toolName, call.input, toolContext);
-              span.setAttribute("gca.tool.input", JSON.stringify(call.input));
-              span.setAttribute("gca.tool.output", JSON.stringify(output));
-              // See modelTurn's matching comment above — "braintrust.*"
-              // is the namespace that actually maps to the span's
-              // top-level input/output fields in Braintrust's UI.
-              span.setAttribute("braintrust.input", JSON.stringify(call.input));
-              span.setAttribute("braintrust.output", JSON.stringify(output));
-              // sendBookingLink no longer reaches this generic wrapper (see
-              // SELF_STEPPED_TOOLS above) — its own "braintrust.tags"
-              // tagging now happens inside approval-gate.ts's
-              // requestApprovalGate span instead.
-              return output;
-            },
-          ),
+        return await steppedSpan(
+          step,
+          `tool-${call.toolName}`,
+          turnAnchor,
+          `gen_ai.tool.${call.toolName}`,
+          { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
+          async (span) => {
+            const output = await runToolCall(call.toolName, call.input, toolContext);
+            span.setAttribute("gca.tool.input", JSON.stringify(call.input));
+            span.setAttribute("gca.tool.output", JSON.stringify(output));
+            // See modelTurn's matching comment above — "braintrust.*"
+            // is the namespace that actually maps to the span's
+            // top-level input/output fields in Braintrust's UI.
+            span.setAttribute("braintrust.input", JSON.stringify(call.input));
+            span.setAttribute("braintrust.output", JSON.stringify(output));
+            // sendBookingLink no longer reaches this generic wrapper (see
+            // SELF_STEPPED_TOOLS above) — its own "braintrust.tags"
+            // tagging now happens inside approval-gate.ts's
+            // requestApprovalGate span instead.
+            return output;
+          },
         );
       }),
     );
@@ -701,28 +715,35 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
   // across rounds (each dispatch pushes into firedTags), but Braintrust's
   // tags field is a set, not a multiset — duplicate entries add nothing.
   const dedupedTags = [...new Set(result.firedTags)];
-  await step.run("update-turn-trace-io", () =>
-    withTurnSpan(traceAnchor, "update-turn-trace-io", {}, () =>
-      updateSpanIO(result.guestTurnSpanId, {
-        input: incomingMessage,
-        output: replyText,
-        ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
-      }),
-    ),
+  await steppedSpan(step, "update-turn-trace-io", traceAnchor, "update-turn-trace-io", {}, () =>
+    updateSpanIO(result.guestTurnSpanId, {
+      input: incomingMessage,
+      output: replyText,
+      ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
+    }),
   );
 
-  await step.run("record-reply", () =>
-    withTurnSpan(traceAnchor, "record-reply", { "gca.conversation_id": conversationId }, () =>
+  await steppedSpan(
+    step,
+    "record-reply",
+    traceAnchor,
+    "record-reply",
+    { "gca.conversation_id": conversationId },
+    () =>
       // traceAnchor.traceId is a real OTel trace id (see
       // src/lib/tracing.ts's startTraceRoot) shared by every span emitted
       // for this turn, so this DB value doubles as a working pointer into
       // Braintrust/Axiom for this turn.
       recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
-    ),
   );
 
-  await step.run("send-whatsapp-reply", () =>
-    withTurnSpan(traceAnchor, "send-whatsapp-reply", { "gca.phone": phone }, async (span) => {
+  await steppedSpan(
+    step,
+    "send-whatsapp-reply",
+    traceAnchor,
+    "send-whatsapp-reply",
+    { "gca.phone": phone },
+    async (span) => {
       const sendResult = await sendWhatsAppMessage(phone, replyText);
       if (!sendResult.ok) {
         console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
@@ -732,7 +753,7 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
         );
       }
       return sendResult;
-    }),
+    },
   );
 }
 

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
 import { createAdminClient } from "@/lib/supabase";
-import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
+import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import type { ToolContext } from "./config";
 import { requestOwnerNudge } from "./owner-nudge";
 
@@ -74,18 +74,18 @@ export async function waitForMissingInfoReply(params: {
     console.warn(
       `[missing-info] waitForMissingInfoReply timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId}'s reply`,
     );
-    // Own step.run — without it, a later replay of this run (e.g. a retry of
+    // Own step — without it, a later replay of this run (e.g. a retry of
     // a subsequent step, same class of concern as owner-nudge-missing-info's
-    // own step.run above) would re-run this un-stepped branch and duplicate-
+    // own step below) would re-run this un-stepped branch and duplicate-
     // emit this span every time, since step.waitForEvent's memoized
     // resolution doesn't memoize the code around it.
-    await step.run("missing-info-no-reply", () =>
-      withTurnSpan(
-        traceAnchor,
-        "missing_info.no_reply",
-        { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT },
-        () => handleMissingInfoNoReply({ correlationId }),
-      ),
+    await steppedSpan(
+      step,
+      "missing-info-no-reply",
+      traceAnchor,
+      "missing_info.no_reply",
+      { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT },
+      () => handleMissingInfoNoReply({ correlationId }),
     );
     return null;
   }
@@ -150,28 +150,28 @@ export async function runMissingInfo(
 ) {
   const { conversationId, phone, step, correlationId, traceAnchor } = context;
 
-  // Wrapped in its own step.run, distinct from "wait-for-owner-answer" below
-  // — sending the nudge and waiting for the reply are two different kinds of
-  // operation. Without this, a replay of this Inngest function (guaranteed
-  // once step.waitForEvent below suspends and later resumes, since Inngest
+  // Its own step, distinct from "wait-for-owner-answer" below — sending the
+  // nudge and waiting for the reply are two different kinds of operation.
+  // Without this, a replay of this Inngest function (guaranteed once
+  // step.waitForEvent below suspends and later resumes, since Inngest
   // replays the whole function body from the top) would re-send this real
   // Telegram nudge every single time, since un-stepped code isn't memoized
   // across replays the way step.waitForEvent itself is.
-  const nudged = await step.run("owner-nudge-missing-info", () =>
-    withTurnSpan(
-      traceAnchor,
-      "owner_nudge.missing_info",
-      { "gca.conversation_id": conversationId, "gca.phone": phone },
-      () =>
-        requestOwnerNudge({
-          conversationId,
-          phone,
-          reason: args.reason,
-          reasonCategory: "missing_info",
-          correlationId,
-          step,
-        }),
-    ),
+  const nudged = await steppedSpan(
+    step,
+    "owner-nudge-missing-info",
+    traceAnchor,
+    "owner_nudge.missing_info",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "missing_info",
+        correlationId,
+        step,
+      }),
   );
 
   // Nudge failed to send — skip straight to the same fallback a timeout
