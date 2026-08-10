@@ -34,6 +34,20 @@ export const answerPropertyQuestion = tool({
 
 // Always searches unfiltered — a prior `filter.type` param was dropped after
 // the model guessing a wrong type silently excluded relevant content.
+//
+// The withSpan below is a deliberate, narrow exception to run-turn.ts's "tool
+// files stay pure, no step/span" rule (see that file's comment near `tools`):
+// it wraps only this file's own DB call, never touches `step`/Inngest, and
+// carries none of the replay-safety hazard that rule exists to prevent (see
+// SELF_STEPPED_TOOLS's comment in run-turn.ts for that hazard). It nests
+// automatically (via OTel's ambient context) inside the generic per-tool span
+// run-turn.ts's dispatch loop already opens for this call, giving fine-grained
+// timing on the DB query specifically — separate from embed() and the rest of
+// this function. Moving it to run-turn.ts would mean moving the Supabase call
+// itself there too (the span has to wrap the actual query), which would pull
+// real business logic into the orchestrator — exactly backwards from what the
+// rule is for. Kept here on purpose; do not treat this as license to add
+// `step`/Inngest usage to this file.
 export async function runAnswerPropertyQuestion(
   args: z.infer<typeof answerPropertyQuestionSchema>,
 ) {

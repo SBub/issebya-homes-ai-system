@@ -1,13 +1,17 @@
-import type { GetStepTools } from "inngest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { inngest } from "@/lib/inngest";
 
-// Mocks every real external boundary: Postgres (documents insert only —
-// there's no escalations table anymore), the embedding call, telegram-router,
-// and inngest.send. step is a hand-rolled mock (run/waitForEvent), matching
-// how @dbos-inc/dbos-sdk used to be hand-mocked — run-turn.ts now threads
-// `step` in as a plain explicit parameter instead of an ambient import, so a
-// plain mock object is enough; no need for @inngest/test's heavier harness.
+// missing-info.ts is now the pure remainder of the missing_info flow: the
+// tool schema/declaration, the shared event/timeout constants, and both
+// non-step branches of what happens once a nudge is settled. The real
+// suspend/wait (nudge-send step, step.waitForEvent, no-reply-timeout
+// fallback step) moved into run-turn.ts's private runMissingInfo — see
+// run-turn.test.ts's "missing_info" coverage for that behavior now (it can
+// only be exercised indirectly through runAgentTurn, since runMissingInfo
+// isn't exported from run-turn.ts).
+//
+// Mocks every real external boundary this file still touches: Postgres (the
+// documents insert), the embedding call, and inngest.send — there's no more
+// `step` here at all, so no hand-rolled step mock is needed.
 const mockDocInsert = vi.fn();
 
 const mockFrom = vi.fn((table: string) => {
@@ -17,11 +21,6 @@ const mockFrom = vi.fn((table: string) => {
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
-}));
-
-const sendOwnerNudgeMock = vi.fn();
-vi.mock("@/lib/telegram-router.js", () => ({
-  sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
 const embedMock = vi.fn();
@@ -38,192 +37,29 @@ vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
 }));
 
-const {
-  runMissingInfo,
-  waitForMissingInfoReply,
-  handleMissingInfoNoReply,
-  handleMissingInfoReplyReceived,
-  OWNER_NUDGE_ANSWERED_EVENT,
-} = await import("@/agent/tools/missing-info.js");
-
-const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
-
-const toolContextBase = {
-  conversationId: "convo-1",
-  phone: "+351920742845",
-  traceAnchor: TEST_TRACE_ANCHOR,
-};
+const { handleMissingInfoNoReply, handleMissingInfoReplyReceived, OWNER_NUDGE_ANSWERED_EVENT } =
+  await import("@/agent/tools/missing-info.js");
 
 const MISSING_INFO_REPLY_TIMEOUT = "24h";
 
-type StepTools = GetStepTools<typeof inngest>;
-
-// Only `run`/`waitForEvent` are exercised by real code here — the rest of
-// the real StepTools surface is cast away rather than stubbed out, since
-// nothing under test calls it.
-function makeStepMock() {
-  return {
-    run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
-    waitForEvent: vi.fn(),
-  } as unknown as StepTools & {
-    run: ReturnType<typeof vi.fn>;
-    waitForEvent: ReturnType<typeof vi.fn>;
-  };
-}
-
-describe("waitForMissingInfoReply", () => {
-  let step: ReturnType<typeof makeStepMock>;
-
-  beforeEach(() => {
-    step = makeStepMock();
-  });
-
-  it("calls step.waitForEvent with the owner-nudge-answered event, matching on data.correlationId, and the configured timeout, returning a real answer as-is", async () => {
-    step.waitForEvent.mockResolvedValueOnce({ data: { answer: "The AC is above the bed" } });
-
-    const result = await waitForMissingInfoReply({
-      step,
-      correlationId: "corr-abc-123",
-      traceAnchor: TEST_TRACE_ANCHOR,
-    });
-
-    expect(step.waitForEvent).toHaveBeenCalledWith("wait-for-owner-answer", {
-      event: OWNER_NUDGE_ANSWERED_EVENT,
-      match: "data.correlationId",
-      timeout: MISSING_INFO_REPLY_TIMEOUT,
-    });
-    expect(result).toBe("The AC is above the bed");
-  });
-
-  it("returns null and calls handleMissingInfoNoReply when step.waitForEvent times out (resolves null)", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const result = await waitForMissingInfoReply({
-      step,
-      correlationId: "corr-abc-123",
-      traceAnchor: TEST_TRACE_ANCHOR,
-    });
-
-    expect(result).toBeNull();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));
-    consoleWarnSpy.mockRestore();
-  });
-});
-
 describe("handleMissingInfoNoReply", () => {
-  it("resolves after logging — no DB side effects (see waitForMissingInfoReply, the only real caller)", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("resolves after logging — no DB side effects", async () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(
       handleMissingInfoNoReply({ correlationId: "corr-abc-123" }),
     ).resolves.toBeUndefined();
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(MISSING_INFO_REPLY_TIMEOUT),
+    );
     expect(mockFrom).not.toHaveBeenCalled();
 
     consoleWarnSpy.mockRestore();
-  });
-});
-
-describe("runMissingInfo", () => {
-  let step: ReturnType<typeof makeStepMock>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    step = makeStepMock();
-    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("step 1 (real): sends the Telegram nudge exactly like the other owner-nudge tools", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-
-    await runMissingInfo({ reason: "Guest asked about the AC" }, { ...toolContextBase, step });
-
-    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phone: "+351920742845",
-        reason: "Guest asked about the AC",
-        reasonCategory: "missing_info",
-        conversationId: "convo-1",
-      }),
-    );
-  });
-
-  it("reads context.correlationId and passes it through to requestOwnerNudge when set", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-
-    await runMissingInfo(
-      { reason: "Guest asked about the AC" },
-      { ...toolContextBase, step, correlationId: "corr-abc-123" },
-    );
-
-    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ correlationId: "corr-abc-123" }),
-    );
-  });
-
-  it("passes correlationId: undefined when context.correlationId is undefined (no live run context)", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-
-    await runMissingInfo({ reason: "Guest asked about the AC" }, { ...toolContextBase, step });
-
-    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ correlationId: undefined }),
-    );
-  });
-
-  it("returns the answer directly as its own tool result when step.waitForEvent resolves with a real answer — no re-embedding at this call site", async () => {
-    step.waitForEvent.mockResolvedValueOnce({ data: { answer: "The AC is above the bed" } });
-
-    const result = await runMissingInfo(
-      { reason: "Guest asked about the AC" },
-      { ...toolContextBase, step },
-    );
-
-    expect(result).toEqual({ escalated: true, answer: "The AC is above the bed" });
-    // The embedding already happened on the resolve-route side (see
-    // handleMissingInfoReplyReceived's own tests below) BEFORE the
-    // owner-nudge-answered event delivered this answer here — runMissingInfo
-    // must not re-embed.
-    expect(embedMock).not.toHaveBeenCalled();
-    expect(mockDocInsert).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the owner-notified response when step.waitForEvent times out (resolves null)", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const result = await runMissingInfo(
-      { reason: "Guest asked about the AC" },
-      { ...toolContextBase, step },
-    );
-
-    expect(result).toEqual({
-      escalated: true,
-      message: "The owner has been notified and will be in touch shortly.",
-    });
-    consoleWarnSpy.mockRestore();
-  });
-
-  it("skips the step.waitForEvent wait entirely (and still returns the fallback message) when the nudge itself failed", async () => {
-    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
-    vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const result = await runMissingInfo(
-      { reason: "Guest asked about the AC" },
-      { ...toolContextBase, step },
-    );
-
-    expect(result).toEqual({
-      escalated: true,
-      message: "The owner has been notified and will be in touch shortly.",
-    });
-    // Nudge failed means nothing to wait on — step.waitForEvent is never called.
-    expect(step.waitForEvent).not.toHaveBeenCalled();
   });
 });
 

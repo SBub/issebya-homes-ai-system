@@ -13,8 +13,13 @@ import {
 } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
-import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
-import type { OwnerNudgeReason } from "@/agent/tools/owner-nudge";
+import {
+  handleMissingInfoNoReply,
+  MISSING_INFO_REPLY_TIMEOUT,
+  missingInfo,
+  OWNER_NUDGE_ANSWERED_EVENT,
+} from "@/agent/tools/missing-info";
+import { type OwnerNudgeReason, requestOwnerNudge } from "@/agent/tools/owner-nudge";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runCode, runRunCode } from "@/agent/tools/run-code";
@@ -85,6 +90,16 @@ const model = openrouter.chat(MODEL);
 // silently return an empty string. 1000 leaves headroom for both.
 const MAX_OUTPUT_TOKENS = 1000;
 
+// RULE: tool files (src/agent/tools/*.ts, except approval-gate.ts) must stay
+// pure — no step/span/Inngest imports. All durability/tracing plumbing
+// belongs here, in run-turn.ts's dispatch loop, or in approval-gate.ts's
+// shared gate. Reason: keeps "where's the real business logic" (any tools/*
+// file) a one-glance answer, separate from "where's the durability/tracing
+// plumbing" (this file + approval-gate.ts). booking.ts is the model for what
+// "pure" looks like. One deliberate, narrow exception: property-question.ts
+// keeps a plain OTel span (no step, no Inngest) around its own DB call — see
+// that file's own comment for why.
+
 // Schema-only tool declarations — dispatch happens manually in runToolCall()
 // below. The owner-nudge tools' keys are the literal snake_case tool names
 // the model sees (deliberately unlike the camelCase tools here).
@@ -99,19 +114,17 @@ const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Tools whose own dispatch calls step.waitForEvent (directly, or indirectly
-// via approval-gate.ts's requestApprovalGate) to suspend: missing_info's
-// waitForMissingInfoReply, and sendBookingLink via the APPROVAL_GATES check
-// below. Inngest doesn't support calling a step tool from inside another
-// step.run()'s callback — the callback must be a self-contained unit of
-// work — so wants_human, missing_info, and sendBookingLink are all
-// dispatched directly from the loop below (never wrapped in an outer
-// step.run) and manage their own checkpointing internally where they have
-// any (wants_human currently has none of its own — it's grouped here for
-// the same "never nest inside an outer step.run" reasoning, not because it
-// calls step itself today). Every other tool has no step usage of its own,
-// so wrapping the whole call in one step.run is safe and gives it real
-// memoization/replay safety.
+// Tools whose dispatch itself calls step.run/step.waitForEvent (via this
+// file's own private dispatchWantsHuman/runMissingInfo, or indirectly via
+// approval-gate.ts's requestApprovalGate for sendBookingLink) — see the "tool
+// files stay pure" rule above for why that plumbing lives here rather than in
+// wants-human.ts/missing-info.ts/booking.ts themselves. Inngest doesn't
+// support calling a step tool from inside another step.run()'s callback —
+// the callback must be a self-contained unit of work — so wants_human,
+// missing_info, and sendBookingLink are all dispatched directly from the loop
+// below (never wrapped in an outer step.run). Every other tool has no step
+// usage of its own, so wrapping the whole call in one step.run is safe and
+// gives it real memoization/replay safety.
 const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "sendBookingLink"]);
 
 // The gating POLICY table: which tools require real owner approve/reject
@@ -262,6 +275,117 @@ async function modelTurn(
   );
 }
 
+// Sends wants_human's owner nudge, stepped/spanned for replay-safety, then
+// returns the tool's (pure, constant) result. This is the "durability/tracing
+// plumbing" half of wants_human that used to live in wants-human.ts's own
+// runWantsHuman before the "tool files stay pure" rule above — see that
+// file's own comment. Step id/span name/attributes preserved exactly as
+// before this moved. Private: only called from runToolCall's "wants_human"
+// case below, never nested inside another step.run (see SELF_STEPPED_TOOLS's
+// comment for why).
+async function dispatchWantsHuman(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<ReturnType<typeof runWantsHuman>> {
+  const { conversationId, phone, step, traceAnchor } = context;
+  await steppedSpan(
+    step,
+    "owner-nudge-wants-human",
+    traceAnchor,
+    "owner_nudge.wants_human",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "wants_human",
+        step,
+      }),
+  );
+  return runWantsHuman();
+}
+
+// missing_info's full suspend/resume dispatch: sends the owner nudge (its own
+// step), then genuinely suspends via step.waitForEvent until the owner
+// replies (handleMissingInfoReplyReceived, called from the API route, sends
+// OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses, running the
+// no-reply-timeout fallback step in that case. This is the "durability/
+// tracing plumbing" half of missing_info that used to live in
+// missing-info.ts's own runMissingInfo/waitForMissingInfoReply before the
+// "tool files stay pure" rule above — see missing-info.ts's own comment.
+// Step ids/span names/attributes/event/timeout/return shapes all preserved
+// exactly as before this moved. Private and named to match the tool-dispatch
+// pattern used elsewhere in this switch (no exported runMissingInfo exists in
+// missing-info.ts anymore, so no import to shadow) — called from runToolCall's
+// "missing_info" case below, never nested inside another step.run (see
+// SELF_STEPPED_TOOLS's comment for why).
+async function runMissingInfo(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<{ escalated: true; answer: string } | { escalated: true; message: string }> {
+  const { conversationId, phone, step, correlationId, traceAnchor } = context;
+
+  // Its own step, distinct from "wait-for-owner-answer" below — sending the
+  // nudge and waiting for the reply are two different kinds of operation,
+  // each needing its own memoized step id (see steppedSpan's doc comment in
+  // tracing.ts for why un-stepped code would otherwise re-send this real
+  // Telegram nudge on every replay).
+  const nudged = await steppedSpan(
+    step,
+    "owner-nudge-missing-info",
+    traceAnchor,
+    "owner_nudge.missing_info",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "missing_info",
+        correlationId,
+        step,
+      }),
+  );
+
+  // Nudge failed to send — skip straight to the same fallback a timeout
+  // would produce; there's no point suspending if the owner was never told.
+  if (nudged) {
+    const result = await step.waitForEvent("wait-for-owner-answer", {
+      event: OWNER_NUDGE_ANSWERED_EVENT,
+      match: "data.correlationId",
+      timeout: MISSING_INFO_REPLY_TIMEOUT,
+    });
+
+    const answer = (result?.data.answer as string | undefined) ?? null;
+    if (answer !== null) {
+      // Embedding already happened in handleMissingInfoReplyReceived before
+      // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
+      // re-embed here.
+      return { escalated: true, answer };
+    }
+
+    console.warn(
+      `[run-turn] runMissingInfo timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
+    );
+    // Own step — same replay-safety reasoning as the nudge-send step above.
+    await steppedSpan(
+      step,
+      "missing-info-no-reply",
+      traceAnchor,
+      "missing_info.no_reply",
+      { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT },
+      () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
+    );
+    // Timed out — handleMissingInfoNoReply already ran above.
+  }
+
+  return {
+    escalated: true,
+    message: "The owner has been notified and will be in touch shortly.",
+  };
+}
+
 // Dispatches a requested tool call to its run<ToolName> implementation.
 // Called after any configured APPROVAL_GATES check has already approved the
 // call (see below), never before it.
@@ -284,9 +408,9 @@ async function runToolCall(
     case "runCode":
       return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
-      return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
+      return dispatchWantsHuman(input as { reason: string }, context);
     case "missing_info":
-      return runMissingInfo(input as Parameters<typeof runMissingInfo>[0], context);
+      return runMissingInfo(input as { reason: string }, context);
     default:
       // Native function-calling is supposed to constrain the model to exact
       // registered tool names, but some models (deepseek included) have been

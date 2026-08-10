@@ -494,6 +494,106 @@ describe("runAgentTurn", () => {
     expect(result.firedTags).toEqual(["missing_info"]);
   });
 
+  // The rest of missing_info's suspend/resume behavior — previously unit
+  // tested directly against missing-info.ts's exported runMissingInfo/
+  // waitForMissingInfoReply — now lives in run-turn.ts's private
+  // runMissingInfo (see that file's "tool files stay pure" rule) and can only
+  // be exercised indirectly through runAgentTurn, same as sendBookingLink's
+  // approval-gate flow above.
+  it("sends the missing_info owner nudge with the reason, conversationId, phone, and correlationId, and falls back to the owner-notified message (running the no-reply-timeout step) when step.waitForEvent times out", async () => {
+    // This suite's default: step.waitForEvent resolves null (a timeout).
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "missing_info",
+            input: { reason: "Guest asked about the sauna" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-sauna-timeout", phone: "+351900000020", incomingMessage: "Sauna?" },
+      { correlationId: "corr-sauna-timeout", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "convo-sauna-timeout",
+        phone: "+351900000020",
+        reason: "Guest asked about the sauna",
+        reasonCategory: "missing_info",
+        correlationId: "corr-sauna-timeout",
+      }),
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as
+      | Array<{ toolCallId: string; output: unknown }>
+      | undefined;
+    expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
+      type: "json",
+      value: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
+
+    // Both of missing_info's own steps ran: the nudge send and the
+    // no-reply-timeout fallback (which calls missing-info.ts's
+    // handleMissingInfoNoReply — a pure, unmocked, log-only function here).
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("owner-nudge-missing-info");
+    expect(stepIds).toContain("missing-info-no-reply");
+
+    const nudgeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.missing_info");
+    expect(nudgeSpan).toBeDefined();
+    const timeoutSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "missing_info.no_reply");
+    expect(timeoutSpan).toBeDefined();
+  });
+
+  it("skips the missing_info wait entirely (and still returns the fallback message) when the nudge itself failed to send", async () => {
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "missing_info",
+            input: { reason: "Guest asked about the sauna" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-nudge-fail", phone: "+351900000021", incomingMessage: "Sauna?" },
+      { correlationId: "corr-nudge-fail", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as
+      | Array<{ toolCallId: string; output: unknown }>
+      | undefined;
+    expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
+      type: "json",
+      value: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
+    // Nudge failed means nothing to wait on.
+    expect(step.waitForEvent).not.toHaveBeenCalled();
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("missing-info-no-reply");
+  });
+
   it("escalates a wants_human tool call as its own reason_category", async () => {
     generateTextMock
       .mockResolvedValueOnce(
@@ -517,10 +617,27 @@ describe("runAgentTurn", () => {
     );
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ reasonCategory: "wants_human" }),
+      expect.objectContaining({
+        conversationId: "convo-wants-human",
+        phone: "+351900000003",
+        reason: "Guest wants a human",
+        reasonCategory: "wants_human",
+      }),
     );
     // Same nesting concern as missing_info above.
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-wants_human");
+    // wants_human's owner-nudge send — previously wants-human.ts's own
+    // steppedSpan, now run-turn.ts's private dispatchWantsHuman (see that
+    // file's "tool files stay pure" rule) — keeps the exact same step id and
+    // span name.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-wants-human");
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "owner_nudge.wants_human"),
+    ).toBeDefined();
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Sure, the owner will reach out shortly.",
+    });
     expect(result.firedTags).toEqual(["wants_human"]);
   });
 

@@ -1,8 +1,5 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { steppedSpan } from "@/lib/tracing";
-import type { ToolContext } from "./config";
-import { requestOwnerNudge } from "./owner-nudge";
 
 const wantsHumanSchema = z.object({
   reason: z
@@ -22,30 +19,16 @@ export const wantsHuman = tool({
   inputSchema: wantsHumanSchema,
 });
 
-export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
-  const { conversationId, phone, step, traceAnchor } = context;
-  // Its own step — wants_human is dispatched directly from run-turn.ts's
-  // loop (see SELF_STEPPED_TOOLS there for why it must never be nested
-  // inside an outer step.run) and needs the wrapping anyway: without it, a
-  // replay of this Inngest function (e.g. a retry of a later step in the
-  // same run, like record-reply or send-whatsapp-reply) would re-execute
-  // this real Telegram send every time — see steppedSpan's doc comment in
-  // tracing.ts for the general mechanism.
-  await steppedSpan(
-    step,
-    "owner-nudge-wants-human",
-    traceAnchor,
-    "owner_nudge.wants_human",
-    { "gca.conversation_id": conversationId, "gca.phone": phone },
-    () =>
-      requestOwnerNudge({
-        conversationId,
-        phone,
-        reason: args.reason,
-        reasonCategory: "wants_human",
-        step,
-      }),
-  );
+// Pure — no step/span/Inngest of any kind (see run-turn.ts's "tool files
+// stay pure" rule near `tools`). The real work (sending the owner nudge,
+// stepped/spanned for replay-safety) now lives in run-turn.ts's private
+// dispatchWantsHuman, called from the SELF_STEPPED_TOOLS branch; this
+// function is left with only the tool's own result shape, which never
+// depends on the input args — kept as a real function (not inlined at the
+// call site) for consistency with the rest of this app's run<ToolName>
+// dispatch pattern (see current-date.ts's runGetCurrentDate for the same
+// zero-arg shape).
+export function runWantsHuman() {
   return {
     escalated: true,
     message: "The owner has been notified and will be in touch shortly.",

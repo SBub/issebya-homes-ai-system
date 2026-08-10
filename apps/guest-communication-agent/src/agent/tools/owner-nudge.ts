@@ -8,6 +8,16 @@ import { markSpanFailed, withSpan } from "@/lib/tracing";
 // already encodes this.
 export type OwnerNudgeReason = "wants_human" | "missing_info" | "send_booking_link";
 
+// Status re run-turn.ts's "tool files stay pure" rule (see that file's
+// comment near `tools`): this is shared plumbing CALLED BY tool-dispatch
+// code (run-turn.ts's dispatchWantsHuman/runMissingInfo, and
+// approval-gate.ts's requestApprovalGate), not one tool's own business
+// logic — structurally the same role as approval-gate.ts itself, not a
+// dispatched tool. Its withSpan is a plain OTel span (no step, no Inngest),
+// same shape as property-question.ts's own narrow exception. Kept here
+// rather than folded into each call site so the three callers share one
+// implementation instead of duplicating the span wrap.
+//
 // No escalations table — this just pushes a nudge through
 // apps/telegram-router's POST /api/owner-nudges; telegram-router owns
 // composing/sending the actual Telegram message for every category.

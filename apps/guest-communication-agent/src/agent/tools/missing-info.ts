@@ -1,27 +1,26 @@
 import { embed, tool } from "ai";
-import type { GetStepTools } from "inngest";
 import { z } from "zod";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
 import { createAdminClient } from "@/lib/supabase";
-import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
-import type { ToolContext } from "./config";
-import { requestOwnerNudge } from "./owner-nudge";
 
-// Consolidated home for the missing_info human-in-the-loop flow: the tool
-// the model calls to ask (runMissingInfo), and both branches of what happens
-// once it's settled — reply arrives (handleMissingInfoReplyReceived) or
-// doesn't (handleMissingInfoNoReply). POST /api/owner-nudges/[correlationId]/answer
-// is a thin trigger that calls handleMissingInfoReplyReceived, not its own logic.
+// Consolidated home for the missing_info tool's pure parts: the schema/
+// declaration the model sees, the shared event/timeout constants, and both
+// non-step branches of what happens once a nudge is settled — reply arrives
+// (handleMissingInfoReplyReceived) or doesn't (handleMissingInfoNoReply).
+// POST /api/owner-nudges/[correlationId]/answer is a thin trigger that calls
+// handleMissingInfoReplyReceived, not its own logic.
 //
-// The suspend/wait is real Inngest: runMissingInfo runs inside a
-// run-guest-turn function and genuinely suspends via step.waitForEvent until
-// handleMissingInfoReplyReceived sends OWNER_NUDGE_ANSWERED_EVENT carrying
-// the same correlationId (or the timeout elapses). There is no escalations
-// DB row — the correlation id itself, embedded in the Telegram nudge text
-// as `[ref:<correlationId>]` and echoed back via the owner's reply, is the
-// only correlation key (see owner-nudge.ts and apps/telegram-router's
-// webhook route).
+// The real suspend/wait — sending the nudge (its own step), step.waitForEvent
+// itself, and the no-reply-timeout fallback step — lives in run-turn.ts's
+// private runMissingInfo, not here (see run-turn.ts's "tool files stay pure"
+// rule near `tools`). This file has no step/span/Inngest-function import of
+// its own; inngest.send below is a plain event send, not a step.
+//
+// There is no escalations DB row — the correlation id itself, embedded in
+// the Telegram nudge text as `[ref:<correlationId>]` and echoed back via the
+// owner's reply, is the only correlation key (see owner-nudge.ts and
+// apps/telegram-router's webhook route).
 
 const missingInfoSchema = z.object({
   reason: z
@@ -31,8 +30,8 @@ const missingInfoSchema = z.object({
     ),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runMissingInfo below by name (tool name "missing_info", matching this
+// Schema-only declaration (no `execute`) — run-turn.ts dispatches to its own
+// private runMissingInfo by name (tool name "missing_info", matching this
 // literal key in run-turn.ts's `tools` ToolSet).
 export const missingInfo = tool({
   description:
@@ -40,57 +39,17 @@ export const missingInfo = tool({
   inputSchema: missingInfoSchema,
 });
 
-// The event waitForMissingInfoReply waits for and handleMissingInfoReplyReceived
-// sends — shared as a constant so the two ends can't drift apart.
+// The event run-turn.ts's runMissingInfo waits for and
+// handleMissingInfoReplyReceived below sends — shared as a constant so the
+// two ends can't drift apart.
 export const OWNER_NUDGE_ANSWERED_EVENT = "gca/owner-nudge.answered";
 
 // 24h — same order of magnitude as harness-engineering's APPROVAL_TIMEOUT_S:
 // long enough for a human reply, but the guest still deserves a response
-// within their own conversation rather than waiting forever.
-const MISSING_INFO_REPLY_TIMEOUT = "24h";
-
-/**
- * Suspends the current run via step.waitForEvent until
- * handleMissingInfoReplyReceived sends OWNER_NUDGE_ANSWERED_EVENT with a
- * matching correlationId, or the timeout elapses. Must only be called from
- * inside a runGuestTurn Inngest function. Returns null on timeout
- * (step.waitForEvent resolves null rather than throwing).
- */
-export async function waitForMissingInfoReply(params: {
-  step: GetStepTools<typeof inngest>;
-  correlationId: string;
-  traceAnchor: TraceAnchor;
-}): Promise<string | null> {
-  const { step, correlationId, traceAnchor } = params;
-
-  const result = await step.waitForEvent("wait-for-owner-answer", {
-    event: OWNER_NUDGE_ANSWERED_EVENT,
-    match: "data.correlationId",
-    timeout: MISSING_INFO_REPLY_TIMEOUT,
-  });
-
-  const answer = (result?.data.answer as string | undefined) ?? null;
-  if (answer === null) {
-    console.warn(
-      `[missing-info] waitForMissingInfoReply timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId}'s reply`,
-    );
-    // Own step — same replay-safety reasoning as approval-gate.ts's
-    // equivalent timeout branch (e.g. a retry of a subsequent step, same
-    // class of concern as owner-nudge-missing-info's own step below; see
-    // steppedSpan's doc comment in tracing.ts for the general mechanism).
-    await steppedSpan(
-      step,
-      "missing-info-no-reply",
-      traceAnchor,
-      "missing_info.no_reply",
-      { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT },
-      () => handleMissingInfoNoReply({ correlationId }),
-    );
-    return null;
-  }
-
-  return answer;
-}
+// within their own conversation rather than waiting forever. Exported for
+// run-turn.ts's private runMissingInfo, which is the sole step.waitForEvent
+// caller now.
+export const MISSING_INFO_REPLY_TIMEOUT = "24h";
 
 // "Reply received" branch: embeds the owner's answer into the KB (same
 // embedding model/table property-question.ts reads from), then sends
@@ -132,61 +91,13 @@ export async function handleMissingInfoReplyReceived(params: {
   await inngest.send({ name: OWNER_NUDGE_ANSWERED_EVENT, data: { correlationId, answer } });
 }
 
-// Stub: only logs. No timeout/expiry side effect (re-nudging owner) exists yet.
+// Stub: only logs. No timeout/expiry side effect (re-nudging owner) exists
+// yet. Called by run-turn.ts's private runMissingInfo (wrapped in its own
+// step/span there, since this function itself must stay step/span-free) once
+// its step.waitForEvent times out.
 export async function handleMissingInfoNoReply(params: { correlationId: string }): Promise<void> {
   const { correlationId } = params;
   console.warn(
     `[missing-info] handleMissingInfoNoReply called for correlationId ${correlationId} — no reply arrived within ${MISSING_INFO_REPLY_TIMEOUT}, falling back to the owner-notified response for this turn.`,
   );
-}
-
-export async function runMissingInfo(
-  args: z.infer<typeof missingInfoSchema>,
-  context: ToolContext,
-) {
-  const { conversationId, phone, step, correlationId, traceAnchor } = context;
-
-  // Its own step, distinct from "wait-for-owner-answer" below — sending the
-  // nudge and waiting for the reply are two different kinds of operation,
-  // each needing its own memoized step id (see steppedSpan's doc comment in
-  // tracing.ts for why un-stepped code would otherwise re-send this real
-  // Telegram nudge on every replay).
-  const nudged = await steppedSpan(
-    step,
-    "owner-nudge-missing-info",
-    traceAnchor,
-    "owner_nudge.missing_info",
-    { "gca.conversation_id": conversationId, "gca.phone": phone },
-    () =>
-      requestOwnerNudge({
-        conversationId,
-        phone,
-        reason: args.reason,
-        reasonCategory: "missing_info",
-        correlationId,
-        step,
-      }),
-  );
-
-  // Nudge failed to send — skip straight to the same fallback a timeout
-  // would produce; there's no point suspending if the owner was never told.
-  if (nudged) {
-    const answer = await waitForMissingInfoReply({
-      step,
-      correlationId: correlationId ?? "unknown",
-      traceAnchor,
-    });
-    if (answer !== null) {
-      // Embedding already happened in handleMissingInfoReplyReceived before
-      // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
-      // re-embed here.
-      return { escalated: true, answer };
-    }
-    // Timed out — handleMissingInfoNoReply already ran inside the wait above.
-  }
-
-  return {
-    escalated: true,
-    message: "The owner has been notified and will be in touch shortly.",
-  };
 }
