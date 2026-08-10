@@ -12,8 +12,10 @@ const wantsHumanSchema = z.object({
     ),
 });
 
-// Schema-only declaration — dispatched by run-turn.ts's runToolCall.
-// Also NEEDS_HITL-gated there via requestHitlApproval before dispatch.
+// Schema-only declaration — dispatched by run-turn.ts's runToolCall. A
+// one-way alert with no decision to approve, so it has no entry in
+// run-turn.ts's APPROVAL_GATES table and dispatches directly, the same as
+// getPricing/checkAvailability.
 export const wantsHuman = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person.",

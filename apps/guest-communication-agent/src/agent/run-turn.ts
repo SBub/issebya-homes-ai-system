@@ -2,11 +2,19 @@ import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "a
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, loadMemory } from "@/agent/memory";
+import { requestApprovalGate } from "@/agent/tools/approval-gate";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
-import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
+import {
+  BOOKING_LINK_APPROVAL_EVENT,
+  BOOKING_LINK_APPROVAL_TIMEOUT,
+  buildBookingApprovalReason,
+  runSendBookingLink,
+  sendBookingLink,
+} from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
 import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
+import type { OwnerNudgeReason } from "@/agent/tools/owner-nudge";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
@@ -38,15 +46,23 @@ const MODEL = "deepseek/deepseek-v4-pro";
 
 // The system prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID,
 // slug below), not this repo — it used to live in LangSmith's Prompt Hub
-// before a one-time migration moved it into Braintrust. Pinned to an exact
-// version rather than loadPrompt({ environment: "production" }) because
-// issebya's Braintrust org has no "production" environment set up yet. To
-// ship an edited prompt: edit it in Braintrust's UI, then copy the new
-// version id here.
-// SYSTEM_PROMPT_VERSION_OVERRIDE is for CI eval jobs only — must never be
-// set in a real runtime environment.
+// before a one-time migration moved it into Braintrust. No pinned version id
+// here — Braintrust's loadPrompt(), when called with neither `version` nor
+// `environment`, fetches the slug's latest saved version (see
+// node_modules/braintrust/dist/chunk-QRHGVBKU.js's loadPrompt: an empty
+// versionOrEnvironment object omits both query params entirely). That would
+// ideally be `environment: "production"` instead, so editing in Braintrust's
+// UI doesn't go live until explicitly promoted — but Environments is a Pro
+// plan feature (confirmed: gated behind "Upgrade to Pro" in this org's
+// Braintrust settings), not available here. Trade-off accepted: every save
+// in Braintrust's UI is immediately what this app uses on the next request,
+// no staging gate. Braintrust is still the sole source of version control —
+// nothing in this repo needs to change to ship an edited prompt.
+// SYSTEM_PROMPT_VERSION_OVERRIDE pins an exact version instead, for CI eval
+// jobs that need a fixed prompt regardless of whatever's currently saved —
+// must never be set in a real runtime environment.
 const SYSTEM_PROMPT_SLUG = "gca-system";
-const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "1000197640483751332";
+const SYSTEM_PROMPT_VERSION_OVERRIDE = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE;
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
@@ -81,39 +97,56 @@ const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Tools that require a human's go-ahead before they run, checked in this
-// file's own loop before dispatch (deliberately visible here, not hidden in
-// a tool file). Gating sendBookingLink here means approval happens before
-// the tool ever creates the booking URL.
-const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
-
-// Tools whose own implementation calls context.step directly:
-// missing_info's waitForMissingInfoReply calls step.waitForEvent to
-// suspend. Inngest doesn't support calling a step tool from inside another
+// Tools whose own dispatch calls step.waitForEvent (directly, or indirectly
+// via approval-gate.ts's requestApprovalGate) to suspend: missing_info's
+// waitForMissingInfoReply, and sendBookingLink via the APPROVAL_GATES check
+// below. Inngest doesn't support calling a step tool from inside another
 // step.run()'s callback — the callback must be a self-contained unit of
-// work — so wants_human and missing_info are both dispatched directly from
-// the loop below (never wrapped in an outer step.run) and manage their own
-// checkpointing internally where they have any (wants_human currently has
-// none of its own — it's grouped here for the same "never nest inside an
-// outer step.run" reasoning, not because it calls step itself today). Every
-// other tool has no step usage of its own, so wrapping the whole call in one
-// step.run is safe and gives it real memoization/replay safety — the actual
-// point of this migration.
-const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info"]);
+// work — so wants_human, missing_info, and sendBookingLink are all
+// dispatched directly from the loop below (never wrapped in an outer
+// step.run) and manage their own checkpointing internally where they have
+// any (wants_human currently has none of its own — it's grouped here for
+// the same "never nest inside an outer step.run" reasoning, not because it
+// calls step itself today). Every other tool has no step usage of its own,
+// so wrapping the whole call in one step.run is safe and gives it real
+// memoization/replay safety — the actual point of this migration.
+const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "sendBookingLink"]);
 
-// STUB — NOT REAL APPROVAL LOGIC. No durable suspend/pause yet; always
-// resolves approved so wants_human/sendBookingLink keep working end-to-end.
-// TODO(hitl): replace with a real suspend/resume once Inngest-backed approval exists.
-async function requestHitlApproval(
-  toolName: string,
-  _input: Record<string, unknown>,
-  _context: ToolContext,
-): Promise<{ approved: boolean }> {
-  console.warn(
-    `[run-turn] requestHitlApproval STUB called for "${toolName}" — always approving, this is not real HITL yet`,
-  );
-  return { approved: true };
-}
+// The gating POLICY table: which tools require real owner approve/reject
+// before they're allowed to dispatch, and how (which Telegram nudge reason
+// text/category, which Inngest event, how long to wait for a decision).
+// Deliberately visible here, in the runtime dispatch loop, rather than
+// buried inside each tool's own file — this is the one place to read
+// "which tool calls need approval and how" at a glance. The generic
+// suspend/nudge/wait MECHANISM those approved tools reuse lives in
+// approval-gate.ts's requestApprovalGate; this table only supplies the
+// per-tool policy values that mechanism needs.
+//
+// wants_human and missing_info have no entry here on purpose: wants_human is
+// a one-way alert with no decision to approve, and missing_info's
+// suspend/resume resolves to an answer STRING to embed in the KB, not a
+// yes/no decision — neither is approve/reject-shaped, so neither goes
+// through this gate. Both still dispatch via SELF_STEPPED_TOOLS below,
+// exactly as before.
+const APPROVAL_GATES: Partial<
+  Record<
+    string,
+    {
+      reasonCategory: OwnerNudgeReason;
+      buildReason: (input: Record<string, unknown>) => string;
+      event: string;
+      timeout: string;
+    }
+  >
+> = {
+  sendBookingLink: {
+    reasonCategory: "send_booking_link",
+    buildReason: (input) =>
+      buildBookingApprovalReason(input as Parameters<typeof buildBookingApprovalReason>[0]),
+    event: BOOKING_LINK_APPROVAL_EVENT,
+    timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
+  },
+};
 
 // One model call per round. Since none of `tools` has an `execute`,
 // generateText only ever returns the model's requested tool calls — it
@@ -231,7 +264,8 @@ async function modelTurn(
 }
 
 // Dispatches a requested tool call to its run<ToolName> implementation.
-// Called after the NEEDS_HITL gate below, never before it.
+// Called after any configured APPROVAL_GATES check has already approved the
+// call (see below), never before it.
 async function runToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -245,7 +279,7 @@ async function runToolCall(
     case "answerPropertyQuestion":
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
     case "sendBookingLink":
-      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0]);
     case "getCurrentDate":
       return runGetCurrentDate();
     case "wants_human":
@@ -253,7 +287,16 @@ async function runToolCall(
     case "missing_info":
       return runMissingInfo(input as Parameters<typeof runMissingInfo>[0], context);
     default:
-      throw new Error(`Unknown tool name: "${toolName}"`);
+      // Native function-calling is supposed to constrain the model to exact
+      // registered tool names, but some models (deepseek included) have been
+      // observed hallucinating a close-but-wrong name (e.g. "getCurrentDates"
+      // for "getCurrentDate") anyway. Throwing here used to crash the whole
+      // Inngest step with no reply sent to the guest at all — this is
+      // recoverable instead, so the model sees the error and can retry with
+      // a real tool name in the same turn.
+      return {
+        error: `Unknown tool name: "${toolName}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
+      };
   }
 }
 
@@ -317,11 +360,18 @@ export interface RunAgentTurnResult {
   // "update-turn-trace-io" step there).
   guestTurnSpanId: string;
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
-  // missing_info) — Braintrust aggregates a `braintrust.tags` value set on
-  // ANY span in a trace up to the whole trace, but wants_human/missing_info
-  // never get a span of their own (see SELF_STEPPED_TOOLS's comment), so
-  // there's nowhere to set that attribute directly. Threaded out instead so
-  // runGuestTurn can pass it to updateSpanIO's merge-patch on the
+  // missing_info, sendBookingLink) — Braintrust aggregates a
+  // `braintrust.tags` value set on ANY span in a trace up to the whole
+  // trace, but wants_human/missing_info never get a span of their own (see
+  // SELF_STEPPED_TOOLS's comment), so there's nowhere to set that attribute
+  // directly for them. sendBookingLink DOES get its own span now (inside
+  // approval-gate.ts's requestApprovalGate, tagged there directly), so it
+  // doesn't strictly need to ride along in firedTags too — but it's
+  // dispatched via this same SELF_STEPPED_TOOLS branch below, which pushes
+  // every self-stepped tool name in on dispatch (approved or rejected — see
+  // the branch's own comment), so it ends up here as a harmless natural side
+  // effect rather than something worth special-casing out. Threaded out
+  // instead so runGuestTurn can pass it to updateSpanIO's merge-patch on the
   // "braintrust.guest_turn" root span, the same deferred route
   // guestTurnSpanId already uses for output.
   firedTags: string[];
@@ -426,7 +476,7 @@ export async function runAgentTurn(
       const promptTemplate = await loadPrompt({
         projectId: process.env.BRAINTRUST_PROJECT_ID,
         slug: SYSTEM_PROMPT_SLUG,
-        version: SYSTEM_PROMPT_VERSION,
+        ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
       });
       const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
       return messages[0].content as string;
@@ -466,40 +516,65 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a rejected NEEDS_HITL call never reaches runToolCall.
+    // message ourselves; a rejected APPROVAL_GATES call never reaches
+    // runToolCall.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
-        if (NEEDS_HITL.has(call.toolName)) {
-          const decision = await step.run(`hitl-approval-${call.toolName}`, () =>
-            requestHitlApproval(call.toolName, call.input, toolContext),
-          );
-          if (!decision.approved) {
-            return {
-              approved: false,
-              message: "This action was not approved. Do not retry it automatically.",
-            };
-          }
-        }
-
-        // See SELF_STEPPED_TOOLS above — wants_human/missing_info manage
-        // their own step checkpointing and must not be nested inside
-        // another step.run() call.
-        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info are
-        // never wrapped here: their dispatch call site (the branch below)
-        // re-executes on every Inngest replay, so tracing it would
-        // duplicate-emit a span every time the function replays after a
-        // suspend (missing_info's up-to-24h step.waitForEvent wait is
-        // exactly the highest-value case this would corrupt). Every other
-        // tool IS already inside step.run(`tool-${call.toolName}`, ...),
-        // which Inngest only actually executes once — replays return the
-        // memoized value without re-running the callback — so wrapping the
+        // See SELF_STEPPED_TOOLS above — wants_human/missing_info/
+        // sendBookingLink manage their own step checkpointing and must not
+        // be nested inside another step.run() call.
+        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info/
+        // sendBookingLink are never wrapped here: their dispatch call site
+        // (this branch) re-executes on every Inngest replay, so tracing it
+        // would duplicate-emit a span every time the function replays after
+        // a suspend (missing_info's up-to-24h and sendBookingLink's
+        // effectively-forever step.waitForEvent waits — the latter now
+        // inside approval-gate.ts's requestApprovalGate — are exactly the
+        // highest-value case this would corrupt). Every other tool IS
+        // already inside step.run(`tool-${call.toolName}`, ...), which
+        // Inngest only actually executes once — replays return the memoized
+        // value without re-running the callback — so wrapping the
         // runToolCall call inside it here is replay-safe.
         if (SELF_STEPPED_TOOLS.has(call.toolName)) {
+          // The gating check itself: only tools with an APPROVAL_GATES entry
+          // (sendBookingLink today) go through requestApprovalGate at all —
+          // wants_human/missing_info have no entry (see APPROVAL_GATES'
+          // comment) and fall straight through to runToolCall below,
+          // unchanged from before this table existed.
+          const gate = APPROVAL_GATES[call.toolName];
+          if (gate) {
+            const approved = await requestApprovalGate({
+              toolName: call.toolName,
+              event: gate.event,
+              timeout: gate.timeout,
+              reason: gate.buildReason(call.input),
+              reasonCategory: gate.reasonCategory,
+              conversationId,
+              phone,
+              correlationId,
+              step,
+              traceAnchor: turnAnchor,
+            });
+            if (!approved) {
+              // Same shape a rejected/timed-out gate has always returned to
+              // the model. Pushed into firedTags here too (rather than only
+              // on the approved path below) — a gated call that got a real
+              // nudge sent and a real decision made is still worth being
+              // able to find in this turn's trace tags, same as it was
+              // before this table existed (sendBookingLink's own internal
+              // rejection branch used to fall through to the same
+              // firedTags.push below regardless of outcome).
+              firedTags.push(call.toolName);
+              return {
+                approved: false,
+                message: "This action was not approved. Do not retry it automatically.",
+              };
+            }
+          }
+
           const output = await runToolCall(call.toolName, call.input, toolContext);
-          // Only reached once the tool actually dispatched — a HITL-rejected
-          // call (wants_human is NEEDS_HITL-gated) returns earlier, above,
-          // and never reaches this line. See RunAgentTurnResult.firedTags for
-          // why this is collected here rather than as a span attribute.
+          // See RunAgentTurnResult.firedTags for why this is collected here
+          // rather than as a span attribute.
           firedTags.push(call.toolName);
           return output;
         }
@@ -518,14 +593,10 @@ export async function runAgentTurn(
               // top-level input/output fields in Braintrust's UI.
               span.setAttribute("braintrust.input", JSON.stringify(call.input));
               span.setAttribute("braintrust.output", JSON.stringify(output));
-              if (call.toolName === "sendBookingLink") {
-                // Braintrust aggregates a `braintrust.tags` value set on ANY
-                // span up to the whole trace, so tagging this one span makes
-                // the entire turn's trace filterable by "sent a booking
-                // link". String arrays are a native OTel attribute value —
-                // no JSON.stringify needed, unlike the JSON blobs above.
-                span.setAttribute("braintrust.tags", ["sendBookingLink"]);
-              }
+              // sendBookingLink no longer reaches this generic wrapper (see
+              // SELF_STEPPED_TOOLS above) — its own "braintrust.tags"
+              // tagging now happens inside approval-gate.ts's
+              // requestApprovalGate span instead.
               return output;
             },
           ),

@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
 import { parseSocialCommand } from "@/lib/telegram/command";
 import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
-import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
+import { answerBookingLinkApproval, answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
 import { generateSocialPost } from "@/lib/telegram/social";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
 import {
@@ -14,6 +14,12 @@ import {
 
 const NUDGE_APPROVE_PREFIX = "nudge_approve:";
 const NUDGE_REJECT_PREFIX = "nudge_reject:";
+// Distinct prefixes from the promo-code nudge_approve/nudge_reject pair
+// above — send_booking_link is a different feature (GCA's real
+// suspend/resume HITL flow, see booking.ts) with different downstream logic
+// (relaying a decision to GCA, not touching promo codes/CRM).
+const BOOKING_APPROVE_PREFIX = "booking_approve:";
+const BOOKING_REJECT_PREFIX = "booking_reject:";
 
 type CallbackMessage = NonNullable<TelegramUpdate["callback_query"]>["message"];
 
@@ -95,6 +101,45 @@ async function handleNudgeReject(
   }
 }
 
+// Owner tapped ✅ Approve / ❌ Reject on a send_booking_link nudge (composed
+// in GCA's booking.ts, relayed through .../api/owner-nudges/route.ts).
+// Unlike handleNudgeApprove/handleNudgeReject above, there's no DB row to
+// check for a double-tap guard — correlationId only ever identifies a
+// (possibly already-resolved, possibly long-gone) suspended run-guest-turn
+// Inngest function on GCA's side. A duplicate tap or webhook retry just
+// resends the approval event to GCA; if nothing is still waiting on it,
+// that's a safe no-op there too (see answerBookingLinkApproval's own
+// comment) — so this handler doesn't attempt to detect "already handled" the
+// way the promo-code flow above does.
+async function handleBookingLinkDecision(
+  callbackQueryId: string,
+  message: CallbackMessage,
+  correlationId: string,
+  approved: boolean,
+): Promise<void> {
+  try {
+    const result = await answerBookingLinkApproval(correlationId, approved);
+    if (!result.ok) {
+      console.error(
+        `[telegram-router] booking-link ${approved ? "approve" : "reject"} failed for correlationId ${correlationId}:`,
+        result.error,
+      );
+      await answerCallbackQuery(callbackQueryId, "Failed — try again");
+      return;
+    }
+
+    const outcomeLabel = approved ? "✅ Approved" : "❌ Rejected";
+    await answerCallbackQuery(callbackQueryId, outcomeLabel);
+    if (message) {
+      await editMessageText(message.message_id, `${message.text ?? ""}\n\n${outcomeLabel}`);
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[telegram-router] booking-link decision failed:", errorMessage);
+    await answerCallbackQuery(callbackQueryId, "Failed — try again");
+  }
+}
+
 // Matches a `[ref:<correlationId>]` tag at the very end of a missing_info
 // nudge's text (see GCA's owner-nudge.ts/missing-info.ts, which embed
 // it two newlines after the human-readable nudge body). The correlation id
@@ -169,6 +214,26 @@ async function handleCallbackQuery(
 
   if (data?.startsWith(NUDGE_REJECT_PREFIX)) {
     await handleNudgeReject(callbackQueryId, message, data.slice(NUDGE_REJECT_PREFIX.length));
+    return;
+  }
+
+  if (data?.startsWith(BOOKING_APPROVE_PREFIX)) {
+    await handleBookingLinkDecision(
+      callbackQueryId,
+      message,
+      data.slice(BOOKING_APPROVE_PREFIX.length),
+      true,
+    );
+    return;
+  }
+
+  if (data?.startsWith(BOOKING_REJECT_PREFIX)) {
+    await handleBookingLinkDecision(
+      callbackQueryId,
+      message,
+      data.slice(BOOKING_REJECT_PREFIX.length),
+      false,
+    );
     return;
   }
 

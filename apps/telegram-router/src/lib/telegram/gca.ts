@@ -88,3 +88,53 @@ export async function answerOwnerNudge(
   }
   return { ok: true };
 }
+
+export type AnswerBookingLinkApprovalResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Calls GCA's POST /api/owner-nudges/:correlationId/approve: relays the
+ * owner's approve/reject decision (tapped as a Telegram button, not typed as
+ * free text) so GCA can send the event that wakes its suspended
+ * run-guest-turn Inngest function — see booking.ts's
+ * waitForBookingLinkApproval/handleBookingLinkApprovalReceived.
+ * `correlationId` rides directly in the tapped button's callback_data (see
+ * the webhook route's handleCallbackQuery), not parsed out of reply text the
+ * way answerOwnerNudge's missing_info flow does.
+ *
+ * Same "no resumed signal" contract as answerOwnerNudge: GCA has no way to
+ * tell us whether a suspended run was actually still waiting on this
+ * decision, so this only reports whether the call itself succeeded. A
+ * duplicate tap (or webhook retry) just resends an event nobody's waiting on
+ * if it was already resolved — a safe no-op, same reasoning as
+ * answerOwnerNudge, which is also why there's no DB-backed double-tap guard
+ * possible here (there's no row to check).
+ */
+export async function answerBookingLinkApproval(
+  correlationId: string,
+  approved: boolean,
+): Promise<AnswerBookingLinkApprovalResult> {
+  const baseUrl = process.env.GUEST_COMMUNICATION_AGENT_API_URL;
+  const apiKey = process.env.GUEST_COMMUNICATION_AGENT_API_KEY;
+  if (!baseUrl || !apiKey) {
+    throw new Error(
+      "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
+    );
+  }
+
+  const res = await fetch(
+    `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/approve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ approved }),
+    },
+  );
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: `GCA approve for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`,
+    };
+  }
+  return { ok: true };
+}
