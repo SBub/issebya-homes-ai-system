@@ -52,10 +52,11 @@ export type SandboxResult =
   | { ok: true; result: unknown; logs: string[] }
   | { ok: false; error: string; logs: string[] };
 
-// biome-ignore lint/suspicious/noExplicitAny: matches the reference harness's
-// SandboxApi shape exactly — a generic "callable tool" bag whose members
-// each have their own real, specific arg types at the call site (see
-// run-code.ts's sandboxApi), so a narrower shared signature isn't possible.
+// Matches the reference harness's SandboxApi shape exactly — a generic
+// "callable tool" bag whose members each have their own real, specific arg
+// types at the call site (see run-code.ts's sandboxApi), so a narrower
+// shared signature isn't possible.
+// biome-ignore lint/suspicious/noExplicitAny: see comment above.
 export type SandboxApi = Record<string, (...args: any[]) => unknown>;
 
 // Rooms this property has. Duplicated from the z.enum(["room1", "room2"])
