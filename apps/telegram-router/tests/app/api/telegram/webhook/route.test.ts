@@ -14,9 +14,11 @@ vi.mock("@/lib/telegram/crm.js", () => ({
 
 const sendGuestMessageMock = vi.fn();
 const answerOwnerNudgeMock = vi.fn();
+const answerBookingLinkApprovalMock = vi.fn();
 vi.mock("@/lib/telegram/gca.js", () => ({
   sendGuestMessage: sendGuestMessageMock,
   answerOwnerNudge: answerOwnerNudgeMock,
+  answerBookingLinkApproval: answerBookingLinkApprovalMock,
 }));
 
 const answerCallbackQueryMock = vi.fn();
@@ -204,6 +206,85 @@ describe("POST /api/telegram/webhook — nudge_approve/nudge_reject callbacks", 
       expect(answerCallbackQueryMock).toHaveBeenCalledWith("cbq-1", "Failed to reject — try again");
       expect(consoleErrorSpy).toHaveBeenCalled();
       consoleErrorSpy.mockRestore();
+    });
+  });
+});
+
+describe("POST /api/telegram/webhook — booking_approve/booking_reject callbacks", () => {
+  beforeEach(() => {
+    answerBookingLinkApprovalMock.mockReset();
+    answerCallbackQueryMock.mockReset();
+    editMessageTextMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const bookingNudgeMessage = {
+    message_id: 77,
+    text: "🔗 Booking link\nAna wants to book room1 from 2026-09-01 to 2026-09-05.\n\nApprove sending the booking link to the guest?",
+  };
+
+  describe("booking_approve:<correlationId>", () => {
+    it("relays approved: true, acks, and edits the message to show Approved", async () => {
+      answerBookingLinkApprovalMock.mockResolvedValueOnce({ ok: true });
+
+      const res = await POST(
+        makeCallbackRequest("booking_approve:corr-abc-123", bookingNudgeMessage),
+      );
+
+      expect(res.status).toBe(200);
+      expect(answerBookingLinkApprovalMock).toHaveBeenCalledWith("corr-abc-123", true);
+      expect(answerCallbackQueryMock).toHaveBeenCalledWith("cbq-1", "✅ Approved");
+      expect(editMessageTextMock).toHaveBeenCalledWith(77, expect.stringContaining("✅ Approved"));
+    });
+
+    it("shows an error toast, without editing the message, when the relay call fails", async () => {
+      answerBookingLinkApprovalMock.mockResolvedValueOnce({ ok: false, error: "GCA down" });
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await POST(makeCallbackRequest("booking_approve:corr-abc-123", bookingNudgeMessage));
+
+      expect(answerCallbackQueryMock).toHaveBeenCalledWith("cbq-1", "Failed — try again");
+      expect(editMessageTextMock).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      consoleErrorSpy.mockRestore();
+    });
+
+    it("shows an error toast when answerBookingLinkApproval itself throws", async () => {
+      answerBookingLinkApprovalMock.mockRejectedValueOnce(new Error("GCA unreachable"));
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await POST(makeCallbackRequest("booking_approve:corr-abc-123", bookingNudgeMessage));
+
+      expect(answerCallbackQueryMock).toHaveBeenCalledWith("cbq-1", "Failed — try again");
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      consoleErrorSpy.mockRestore();
+    });
+  });
+
+  describe("booking_reject:<correlationId>", () => {
+    it("relays approved: false, acks, and edits the message to show Rejected", async () => {
+      answerBookingLinkApprovalMock.mockResolvedValueOnce({ ok: true });
+
+      const res = await POST(
+        makeCallbackRequest("booking_reject:corr-abc-123", bookingNudgeMessage),
+      );
+
+      expect(res.status).toBe(200);
+      expect(answerBookingLinkApprovalMock).toHaveBeenCalledWith("corr-abc-123", false);
+      expect(answerCallbackQueryMock).toHaveBeenCalledWith("cbq-1", "❌ Rejected");
+      expect(editMessageTextMock).toHaveBeenCalledWith(77, expect.stringContaining("❌ Rejected"));
+    });
+
+    it("does not call answerOwnerNudge/sendGuestMessage — booking decisions never touch those paths", async () => {
+      answerBookingLinkApprovalMock.mockResolvedValueOnce({ ok: true });
+
+      await POST(makeCallbackRequest("booking_reject:corr-abc-123", bookingNudgeMessage));
+
+      expect(answerOwnerNudgeMock).not.toHaveBeenCalled();
+      expect(sendGuestMessageMock).not.toHaveBeenCalled();
     });
   });
 });

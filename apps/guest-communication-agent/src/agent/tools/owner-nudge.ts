@@ -4,9 +4,9 @@ import { sendOwnerNudge } from "@/lib/telegram-router";
 import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 // Plain string union, not a zod schema — nothing parses untrusted input
-// into it; each tool's identity (wants_human/missing_info) already
-// encodes this.
-export type OwnerNudgeReason = "wants_human" | "missing_info";
+// into it; each tool's identity (wants_human/missing_info/send_booking_link)
+// already encodes this.
+export type OwnerNudgeReason = "wants_human" | "missing_info" | "send_booking_link";
 
 // No more escalations table — the app owner decided it overcomplicated
 // things unnecessarily (see supabase/migrations/*_drop_escalations_table.sql
@@ -24,6 +24,12 @@ export type OwnerNudgeReason = "wants_human" | "missing_info";
 // straight out — no DB lookup, no GCA API call. wants_human never expects a
 // reply, so it never passes correlationId.
 //
+// send_booking_link also passes correlationId, but for a different transport:
+// telegram-router sends its nudge WITH inline approve/reject buttons whose
+// callback_data carries the correlationId directly (not the `[ref:...]` text
+// tag), since a button tap is more reliable than parsing free text. See
+// booking.ts and telegram-router's owner-nudges route/webhook route.
+//
 // Returns whether the Telegram send itself succeeded — there's no more
 // DB-generated id to hand back.
 export async function requestOwnerNudge(params: {
@@ -31,8 +37,8 @@ export async function requestOwnerNudge(params: {
   phone: string;
   reason: string;
   reasonCategory: OwnerNudgeReason;
-  // Current run's correlation id. Only missing_info passes this — see the
-  // module comment above for what it's used for.
+  // Current run's correlation id. missing_info and send_booking_link both
+  // pass this — see the module comment above for what each uses it for.
   correlationId?: string;
   // This turn's Inngest step tools. Kept required here since every real
   // caller already threads one through ToolContext; this function itself no
@@ -42,16 +48,16 @@ export async function requestOwnerNudge(params: {
   const { conversationId, phone, reason, reasonCategory, correlationId } = params;
 
   // Generic withSpan, not withTurnSpan: this `correlationId` param is
-  // requestOwnerNudge's own business-logic value (only missing_info ever
-  // sets it — see the doc comment above), not necessarily the turn's real
-  // correlation id (wants_human never passes one on here, even though its
-  // own ToolContext.correlationId is real). Using it as a deterministic
-  // trace key would give every wants_human call (which all resolve
-  // correlationId to undefined here) the SAME shared trace id. Callers
-  // (missing-info.ts, wants-human.ts) already wrap their own step.run
-  // callback in withTurnSpan(context.correlationId, ...) before calling this
-  // — that's the real, per-turn trace key. This span just needs to nest
-  // under it via ambient context, which withSpan does automatically.
+  // requestOwnerNudge's own business-logic value (missing_info and
+  // send_booking_link both set it — see the doc comment above), not
+  // necessarily the turn's real correlation id (wants_human never passes one
+  // on here, even though its own ToolContext.correlationId is real). Using
+  // it as a deterministic trace key would give every wants_human call (which
+  // all resolve correlationId to undefined here) the SAME shared trace id.
+  // Callers (missing-info.ts, wants-human.ts, booking.ts) already wrap their
+  // own step.run callback in withTurnSpan(context.correlationId, ...) before
+  // calling this — that's the real, per-turn trace key. This span just needs
+  // to nest under it via ambient context, which withSpan does automatically.
   return withSpan(
     "owner_nudge.request",
     {

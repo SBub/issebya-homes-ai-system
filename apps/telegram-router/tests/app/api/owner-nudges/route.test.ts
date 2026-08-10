@@ -125,4 +125,62 @@ describe("POST /api/owner-nudges", () => {
     expect(res.status).toBe(500);
     expect(json).toEqual({ ok: false, error: "Telegram down" });
   });
+
+  describe("send_booking_link", () => {
+    const bookingBody = {
+      phone: "+351920742845",
+      reason: "Ana wants to book room1 from 2026-09-01 to 2026-09-05.",
+      reasonCategory: "send_booking_link",
+      conversationId: "convo-1",
+      correlationId: "corr-abc-123",
+    };
+
+    it("returns 400 when correlationId is missing — approval is meaningless without it", async () => {
+      const { correlationId: _correlationId, ...rest } = bookingBody;
+      const res = await POST(makeRequest(rest));
+
+      expect(res.status).toBe(400);
+      expect(sendMessageMock).not.toHaveBeenCalled();
+    });
+
+    it("sends the reason text (reused as-is) WITH approve/reject inline buttons, keyed by correlationId", async () => {
+      const res = await POST(makeRequest(bookingBody));
+      const json = await res.json();
+
+      expect(json).toEqual({ ok: true });
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      const [text, buttons] = sendMessageMock.mock.calls[0];
+      expect(text).toContain("Ana wants to book room1 from 2026-09-01 to 2026-09-05.");
+      expect(buttons).toEqual([
+        { text: "✅ Approve", callbackData: "booking_approve:corr-abc-123" },
+        { text: "❌ Reject", callbackData: "booking_reject:corr-abc-123" },
+      ]);
+    });
+
+    it("does not append a [ref:...] tag — the correlationId travels in the button's callback_data instead", async () => {
+      await POST(makeRequest(bookingBody));
+
+      const [text] = sendMessageMock.mock.calls[0];
+      expect(text).not.toContain("[ref:");
+    });
+
+    it("does not reuse the promo-code nudge_approve/nudge_reject callback prefixes", async () => {
+      await POST(makeRequest(bookingBody));
+
+      const [, buttons] = sendMessageMock.mock.calls[0];
+      for (const button of buttons) {
+        expect(button.callbackData).not.toMatch(/^nudge_/);
+      }
+    });
+
+    it("returns 500 with the error when the send fails even after retry", async () => {
+      sendMessageMock.mockResolvedValue({ ok: false, error: "Telegram down" });
+
+      const res = await POST(makeRequest(bookingBody));
+      const json = await res.json();
+
+      expect(res.status).toBe(500);
+      expect(json).toEqual({ ok: false, error: "Telegram down" });
+    });
+  });
 });

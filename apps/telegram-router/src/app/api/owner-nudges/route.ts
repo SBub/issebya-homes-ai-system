@@ -31,6 +31,17 @@ import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
  *    reply, with the `[ref:...]` tag appended.
  *  - wants_human: "🙋 Wants human" — a plain one-way alert, no reply
  *    invitation, no ref tag.
+ *  - send_booking_link: "🔗 Booking link" — sent WITH inline ✅ Approve /
+ *    ❌ Reject buttons (`booking_approve:<correlationId>` /
+ *    `booking_reject:<correlationId>`, handled by the webhook route's
+ *    handleCallbackQuery), unlike the two plain-text categories above.
+ *    `reason` already contains the human-readable guest/room/dates summary
+ *    GCA's runSendBookingLink built — reused as-is, not re-parsed here. No
+ *    `[ref:...]` tag: correlationId travels directly in each button's
+ *    callback_data instead, which is more reliable than round-tripping it
+ *    through Telegram's reply-echo text. `correlationId` is REQUIRED for this
+ *    category specifically — approval is meaningless without something to
+ *    correlate it back to.
  *
  * Sent via the same sendMessage/sendWithRetry every other Telegram send in
  * this router uses.
@@ -70,6 +81,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (reasonCategory === "send_booking_link" && !correlationId) {
+    return NextResponse.json(
+      { error: "Missing correlationId in request body — required for send_booking_link" },
+      { status: 400 },
+    );
+  }
+
   let text: string;
   switch (reasonCategory) {
     case "missing_info":
@@ -81,8 +99,21 @@ export async function POST(request: NextRequest) {
     case "wants_human":
       text = `🙋 Wants human\nGuest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
       break;
+    case "send_booking_link":
+      text = `🔗 Booking link\n${reason}\n\nApprove sending the booking link to the guest?`;
+      break;
     default:
       text = `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+  }
+
+  if (reasonCategory === "send_booking_link" && correlationId) {
+    const approveButton = { text: "✅ Approve", callbackData: `booking_approve:${correlationId}` };
+    const rejectButton = { text: "❌ Reject", callbackData: `booking_reject:${correlationId}` };
+    const result = await sendWithRetry(() => sendMessage(text, [approveButton, rejectButton]));
+    if (!result.ok) {
+      return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true });
   }
 
   const result = await sendWithRetry(() => sendMessage(text));

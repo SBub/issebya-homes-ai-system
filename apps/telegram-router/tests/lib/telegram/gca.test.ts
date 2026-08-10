@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca.js";
+import {
+  answerBookingLinkApproval,
+  answerOwnerNudge,
+  sendGuestMessage,
+} from "@/lib/telegram/gca.js";
 
 describe("sendGuestMessage", () => {
   const originalEnv = { ...process.env };
@@ -102,6 +106,64 @@ describe("answerOwnerNudge", () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
 
     const result = await answerOwnerNudge("corr-abc-123", "The AC is above the bed");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("500");
+    }
+  });
+});
+
+describe("answerBookingLinkApproval", () => {
+  const originalEnv = { ...process.env };
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env.GUEST_COMMUNICATION_AGENT_API_URL = "http://localhost:3005";
+    process.env.GUEST_COMMUNICATION_AGENT_API_KEY = "test-key";
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unstubAllGlobals();
+  });
+
+  it("throws when not configured, without calling fetch", async () => {
+    delete process.env.GUEST_COMMUNICATION_AGENT_API_URL;
+    await expect(answerBookingLinkApproval("corr-abc-123", true)).rejects.toThrow(
+      "GUEST_COMMUNICATION_AGENT_API_URL/GUEST_COMMUNICATION_AGENT_API_KEY are not configured",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts { approved: true } to the correlation id's approve path and returns ok: true on success", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const result = await answerBookingLinkApproval("corr-abc-123", true);
+
+    expect(result).toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:3005/api/owner-nudges/corr-abc-123/approve");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json", "X-API-Key": "test-key" });
+    expect(JSON.parse(init.body)).toEqual({ approved: true });
+  });
+
+  it("posts { approved: false } for a rejection", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    await answerBookingLinkApproval("corr-abc-123", false);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ approved: false });
+  });
+
+  it("returns ok: false with an error on a real failure — no 409/already-resolved outcome, same as answerOwnerNudge", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
+
+    const result = await answerBookingLinkApproval("corr-abc-123", true);
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
