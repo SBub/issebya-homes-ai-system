@@ -8,16 +8,14 @@ import { markSpanFailed, withSpan } from "@/lib/tracing";
 // already encodes this.
 export type OwnerNudgeReason = "wants_human" | "missing_info" | "send_booking_link";
 
-// No more escalations table — the app owner decided it overcomplicated
-// things unnecessarily (see supabase/migrations/*_drop_escalations_table.sql
-// for the removal and the full rationale). This just pushes a nudge through
+// No escalations table — this just pushes a nudge through
 // apps/telegram-router's POST /api/owner-nudges; telegram-router owns
 // composing/sending the actual Telegram message for every category.
 //
 // missing_info's one genuinely load-bearing need — correlating a later
 // owner reply back to the specific suspended run-guest-turn Inngest function
-// waiting on it — no longer goes through a DB row at all. correlationId
-// (when supplied) rides along to telegram-router, which embeds it as a
+// waiting on it — happens without a DB row. correlationId (when supplied)
+// rides along to telegram-router, which embeds it as a
 // `[ref:<correlationId>]` tag at the end of the nudge text; the owner's
 // reply then carries that same tag back via Telegram's own
 // `reply_to_message.text`, and telegram-router's webhook route parses it
@@ -30,7 +28,7 @@ export type OwnerNudgeReason = "wants_human" | "missing_info" | "send_booking_li
 // tag), since a button tap is more reliable than parsing free text. See
 // booking.ts and telegram-router's owner-nudges route/webhook route.
 //
-// Returns whether the Telegram send itself succeeded — there's no more
+// Returns whether the Telegram send itself succeeded — there's no
 // DB-generated id to hand back.
 export async function requestOwnerNudge(params: {
   conversationId: string;
@@ -41,8 +39,8 @@ export async function requestOwnerNudge(params: {
   // pass this — see the module comment above for what each uses it for.
   correlationId?: string;
   // This turn's Inngest step tools. Kept required here since every real
-  // caller already threads one through ToolContext; this function itself no
-  // longer does anything with it.
+  // caller already threads one through ToolContext, even though this
+  // function itself doesn't use it.
   step: GetStepTools<typeof inngest>;
 }): Promise<boolean> {
   const { conversationId, phone, reason, reasonCategory, correlationId } = params;

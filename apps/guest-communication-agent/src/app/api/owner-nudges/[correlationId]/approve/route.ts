@@ -11,7 +11,7 @@ import { startTraceRoot } from "@/lib/tracing";
  *
  * The dynamic segment is the suspended run-guest-turn Inngest function's own
  * correlation id, same as .../answer/route.ts's — there is no escalations
- * DB row anymore, so there's nothing to look up by. Unlike missing_info's
+ * DB row, so there's nothing to look up by. Unlike missing_info's
  * flow, the correlationId doesn't travel via a `[ref:...]` text tag here — it
  * rides directly in the Telegram button's callback_data (see
  * apps/telegram-router's owner-nudges route/webhook route), which is more

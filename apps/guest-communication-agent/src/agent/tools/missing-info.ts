@@ -18,10 +18,10 @@ import { requestOwnerNudge } from "./owner-nudge";
 // run-guest-turn function and genuinely suspends via step.waitForEvent until
 // handleMissingInfoReplyReceived sends OWNER_NUDGE_ANSWERED_EVENT carrying
 // the same correlationId (or the timeout elapses). There is no escalations
-// DB row anymore — the correlation id itself, embedded in the Telegram
-// nudge text as `[ref:<correlationId>]` and echoed back via the owner's
-// reply, is the only correlation key (see owner-nudge.ts and
-// apps/telegram-router's webhook route).
+// DB row — the correlation id itself, embedded in the Telegram nudge text
+// as `[ref:<correlationId>]` and echoed back via the owner's reply, is the
+// only correlation key (see owner-nudge.ts and apps/telegram-router's
+// webhook route).
 
 const missingInfoSchema = z.object({
   reason: z
@@ -74,11 +74,10 @@ export async function waitForMissingInfoReply(params: {
     console.warn(
       `[missing-info] waitForMissingInfoReply timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId}'s reply`,
     );
-    // Own step — without it, a later replay of this run (e.g. a retry of
-    // a subsequent step, same class of concern as owner-nudge-missing-info's
-    // own step below) would re-run this un-stepped branch and duplicate-
-    // emit this span every time, since step.waitForEvent's memoized
-    // resolution doesn't memoize the code around it.
+    // Own step — same replay-safety reasoning as approval-gate.ts's
+    // equivalent timeout branch (e.g. a retry of a subsequent step, same
+    // class of concern as owner-nudge-missing-info's own step below; see
+    // steppedSpan's doc comment in tracing.ts for the general mechanism).
     await steppedSpan(
       step,
       "missing-info-no-reply",
@@ -103,15 +102,12 @@ export async function waitForMissingInfoReply(params: {
 // correlationId comes straight from the Telegram-embedded `[ref:...]` tag
 // (extracted by telegram-router's webhook route) — no DB lookup involved.
 //
-// Throws if the KB write fails, before the event is ever sent. Unlike
-// DBOS.send, which threw DBOSNonExistentWorkflowError for a target workflow
-// that no longer existed (letting the old code tell a duplicate/late reply
-// apart from a real resume), inngest.send() gives no equivalent signal:
-// sending an event nobody's waiting on isn't an error, it's simply never
-// consumed by anything. There's no honest way to report from here whether a
-// matching waiter still existed, so this function no longer promises to
-// know that — it resolves once the KB write has succeeded and the event has
-// been accepted by Inngest, nothing more.
+// Throws if the KB write fails, before the event is ever sent. inngest.send()
+// gives no signal about whether a matching waiter still exists — sending an
+// event nobody's waiting on isn't an error, it's simply never consumed by
+// anything. This resolves once the KB write has succeeded and the event has
+// been accepted by Inngest, nothing more; a duplicate or late call is a safe
+// no-op.
 export async function handleMissingInfoReplyReceived(params: {
   correlationId: string;
   answer: string;
@@ -151,12 +147,10 @@ export async function runMissingInfo(
   const { conversationId, phone, step, correlationId, traceAnchor } = context;
 
   // Its own step, distinct from "wait-for-owner-answer" below — sending the
-  // nudge and waiting for the reply are two different kinds of operation.
-  // Without this, a replay of this Inngest function (guaranteed once
-  // step.waitForEvent below suspends and later resumes, since Inngest
-  // replays the whole function body from the top) would re-send this real
-  // Telegram nudge every single time, since un-stepped code isn't memoized
-  // across replays the way step.waitForEvent itself is.
+  // nudge and waiting for the reply are two different kinds of operation,
+  // each needing its own memoized step id (see steppedSpan's doc comment in
+  // tracing.ts for why un-stepped code would otherwise re-send this real
+  // Telegram nudge on every replay).
   const nudged = await steppedSpan(
     step,
     "owner-nudge-missing-info",

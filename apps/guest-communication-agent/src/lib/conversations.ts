@@ -11,9 +11,9 @@ export interface ActiveConversation {
  * Finds the guest's currently-active conversation, or starts a new one.
  *
  * Checks both phone forms: Twilio's inbound webhook stores phone_number
- * "whatsapp:"-prefixed, but a bare (unprefixed) form has also been passed
- * in by past callers — an unqualified lookup missed the guest's real active
- * conversation and silently created a fragmented duplicate. A new row is
+ * "whatsapp:"-prefixed, but some callers pass a bare (unprefixed) form —
+ * an unqualified lookup on only one form would miss the guest's real active
+ * conversation and create a fragmented duplicate. A new row is
  * always inserted under the prefixed form so future inbound replies
  * (always prefixed) converge on it.
  *
@@ -58,11 +58,9 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
 
 // `traceId` is omitted (not written as null) when absent — matches
 // whatsapp_messages.trace_id's nullable convention (holds a real OTel trace
-// id, see startTraceRoot in src/lib/tracing.ts; the column briefly went by
-// the stale name langsmith_run_id before being renamed). Returns
-// the new row's id, passed through as RunAgentTurnConfig.triggerMessageId
-// (the guest's real original message id, distinct from a tool's own
-// paraphrase).
+// id, see startTraceRoot in src/lib/tracing.ts). Returns the new row's id,
+// passed through as RunAgentTurnConfig.triggerMessageId (the guest's real
+// original message id, distinct from a tool's own paraphrase).
 export async function recordMessage(
   conversationId: string,
   role: "user" | "assistant",

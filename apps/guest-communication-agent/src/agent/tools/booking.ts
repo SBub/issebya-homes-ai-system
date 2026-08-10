@@ -40,8 +40,8 @@ export const sendBookingLink = tool({
 // handleBookingLinkApprovalReceived below sends — shared as a constant so the
 // two ends can't drift apart, same reasoning as missing-info.ts's
 // OWNER_NUDGE_ANSWERED_EVENT. Exported for run-turn.ts's APPROVAL_GATES
-// table (the gate's caller, not this file, is what actually waits on it now
-// — see approval-gate.ts's requestApprovalGate).
+// table — the gate's caller, not this file, is what actually waits on it
+// (see approval-gate.ts's requestApprovalGate).
 export const BOOKING_LINK_APPROVAL_EVENT = "gca/booking-link.approval";
 
 // Inngest's step.waitForEvent requires a bounded `timeout` string (see
@@ -51,8 +51,8 @@ export const BOOKING_LINK_APPROVAL_EVENT = "gca/booking-link.approval";
 // the request after a fixed window like missing_info's 24h. "52w" (~1 year)
 // is the longest practical stand-in for "forever" this constraint allows.
 // Exported for run-turn.ts's APPROVAL_GATES table — still a booking-specific
-// policy value, just consumed by the runtime dispatch loop now instead of
-// used internally here.
+// policy value, just consumed by the runtime dispatch loop instead of used
+// internally here.
 export const BOOKING_LINK_APPROVAL_TIMEOUT = "52w";
 
 // Renders an ISO YYYY-MM-DD date as European DD-MM-YYYY for human display —
@@ -68,8 +68,8 @@ function toEuropeanDate(isoDate: string): string {
 // text itself, not re-parsed downstream (see telegram-router's owner-nudges
 // route, which composes the approve/reject message straight from this
 // string). Dates rendered European-style for display. Called by
-// run-turn.ts's APPROVAL_GATES table (buildReason) before the gate ever
-// dispatches the nudge — this file no longer sends the nudge itself.
+// run-turn.ts's APPROVAL_GATES table (buildReason) before the gate
+// dispatches the nudge — this file doesn't send the nudge itself.
 export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkSchema>): string {
   const { guestName, room, checkIn, checkOut } = args;
   return `${guestName} wants to book ${room} from ${toEuropeanDate(checkIn)} to ${toEuropeanDate(checkOut)}.`;
@@ -78,8 +78,7 @@ export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkS
 // Pure URL builder — no nudge, no suspend/wait, no ToolContext. By the time
 // run-turn.ts calls this, its own APPROVAL_GATES check (backed by
 // approval-gate.ts's requestApprovalGate) has already run and approved the
-// call, same as the pre-HITL version of this function used to look before
-// the real Telegram approve/reject flow existed.
+// call.
 export async function runSendBookingLink(args: z.infer<typeof sendBookingLinkSchema>) {
   const { room, checkIn, checkOut } = args;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";

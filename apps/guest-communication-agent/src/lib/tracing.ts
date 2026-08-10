@@ -33,16 +33,12 @@ function stampTraceId(span: Span): void {
 // Inngest-function boundary (the triggering event payload carries `anchor`
 // as plain JSON — see run-turn.ts's GuestTurnRequestedEventData).
 //
-// This replaced an earlier design (a `turnTraceContext(correlationId)` hash
-// used as a synthetic, never-actually-emitted parent id) that made every
-// turn's trace look flat in Braintrust — nothing ever nested under
-// "braintrust.guest_turn", since every span pointed at the same fake parent
-// instead of at each other — and showed a "(missing)" root in Axiom's
-// waterfall view, since no span with that id was ever exported for it to
-// find. Threading a real anchor instead fixes both: every span in a turn now
-// genuinely descends from this one real root, and Inngest's own guarantee
-// that `event.data` replays identically is what makes the anchor stable
-// across replays — no hashing needed for that anymore.
+// The anchor must be a real, emitted span id, not a synthetic/hashed
+// placeholder — a fake, never-emitted parent id would make every span in a
+// turn point at the same non-existent parent instead of at each other,
+// leaving the trace flat in Braintrust and showing a "(missing)" root in
+// Axiom's waterfall view. Inngest's guarantee that `event.data` replays
+// identically is what keeps the anchor stable across replays.
 export async function startTraceRoot<T>(
   name: string,
   attributes: Attributes,
@@ -75,16 +71,14 @@ export async function startTraceRoot<T>(
 //
 // Deliberately does NOT set an OK status when `fn` resolves without
 // throwing — an unset status already reads as "not an error" in every OTel
-// backend, and explicitly setting OK here used to clobber markSpanFailed's
+// backend, and explicitly setting OK here would clobber markSpanFailed's
 // ERROR status on "soft-fail" call sites (e.g. send-whatsapp-reply: `fn`
 // catches sendWhatsAppMessage's failure, calls markSpanFailed, then returns
-// normally without throwing — this function's own success path was
-// overwriting that ERROR back to OK immediately after). Confirmed live via a
-// real Axiom trace: a genuine Twilio delivery failure showed the exception
-// in the span's events but status.code "OK", which would silently undercount
-// in any error-rate query filtering on status. Only ever set ERROR now,
-// never OK — matches OTel's own guidance that an explicit OK is for
-// overriding an already-set error status, not a default to apply everywhere.
+// normally without throwing — an explicit OK on success would overwrite
+// that ERROR status right after, silently undercounting failures in any
+// error-rate query filtered on status). Only ever set ERROR, never OK —
+// matches OTel's own guidance that an explicit OK is for overriding an
+// already-set error status, not a default to apply everywhere.
 export async function withTurnSpan<T>(
   anchor: TraceAnchor,
   name: string,
@@ -112,6 +106,32 @@ export async function withTurnSpan<T>(
     }),
   );
 }
+
+// Braintrust reads specific attribute namespaces to populate its UI — set
+// the wrong one and the data is still in the trace (visible in Axiom/OTel)
+// but invisible in Braintrust's own views. Three distinct facts, easy to
+// conflate because they share the "braintrust." prefix but govern different
+// parts of the UI — this comment is the one canonical explanation of all
+// three; call sites that set these attributes should point back here rather
+// than re-explain:
+//   - `braintrust.input`/`braintrust.output` map to a span's top-level
+//     Input/Output fields (Traces list + per-span view). `gen_ai.*`
+//     attributes (gen_ai.input.messages, etc.) only ever land in the span's
+//     Metadata tab — @braintrust/otel's BraintrustSpanProcessor does no
+//     gen_ai.*-to-input/output conversion of its own (see
+//     node_modules/@braintrust/otel/dist/index.js). Any call site that wants
+//     its gen_ai.* content to actually show up as Input/Output has to
+//     duplicate it under braintrust.input/braintrust.output too — see
+//     run-turn.ts's modelTurn for a real example.
+//   - `braintrust.tags` aggregates from ANY span in a trace up to the whole
+//     trace level, making the whole trace filterable by a tag set on one
+//     span deep in the tree — see run-turn.ts's firedTags for how this app
+//     uses that. String arrays are a native OTel attribute value — no
+//     JSON.stringify needed.
+// Both are plain span.setAttribute(...) calls made at each call site, not
+// something withTurnSpan/withSpan set automatically — there's no single
+// choke point to hang this logic on, which is exactly why the explanation
+// tends to drift when repeated instead of referenced.
 
 // Collapses the two-call nesting that shows up at every real call site in
 // this app — `step.run(stepId, () => withTurnSpan(anchor, name, attrs, fn))`
@@ -144,9 +164,7 @@ export async function steppedSpan<T>(
   // replay), which narrows types like FilePart's `data: URL | DataContent`
   // down to their JSON-safe equivalents. Every call site returns a plain
   // JSON-safe value (a string, a DB row, a fetch result, etc.), so the
-  // narrowing is a false positive here — same reasoning each call site used
-  // to spell out individually with its own `as X` cast before this helper
-  // existed.
+  // narrowing is a false positive here.
   return step.run(stepId, () => withTurnSpan(traceAnchor, spanName, attributes, fn)) as Promise<T>;
 }
 

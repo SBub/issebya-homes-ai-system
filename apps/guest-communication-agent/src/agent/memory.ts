@@ -17,9 +17,12 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 // This prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID, slug
-// below) — same version-pinning rationale as run-turn.ts's
-// SYSTEM_PROMPT_VERSION (that file's comment on it has the full explanation
-// of why it's pinned rather than loadPrompt({ environment: "production" })).
+// below), like run-turn.ts's system prompt — but pinned to a fixed version
+// id by default here, unlike that one (which defaults to the slug's latest
+// saved version; see run-turn.ts's SYSTEM_PROMPT_SLUG comment for the full
+// loadPrompt() version/environment behavior).
+// SUMMARIZER_PROMPT_VERSION_OVERRIDE can override the pinned id, e.g. for
+// testing against a draft version.
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 const SUMMARIZER_PROMPT_VERSION =
   process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197636062690373";
@@ -28,8 +31,7 @@ export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
   historyMessages: ModelMessage[];
   // The rolling summary — fills the prompt template's {guest_memory_block}
-  // variable directly, replacing the guestContext-only value run-turn.ts
-  // used to build itself.
+  // variable directly.
   contextBlock: string;
 }
 
@@ -86,10 +88,9 @@ async function summarizeConversation(
       const result = await generateText({ model, messages: messages as ModelMessage[] });
 
       span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
-      // "braintrust.*" is the namespace that actually maps to a span's
-      // top-level input/output fields in Braintrust's UI — see run-turn.ts's
-      // modelTurn for the full explanation (same gen_ai.chat-shaped span
-      // wrapping pattern as here).
+      // Same braintrust.* duplication as run-turn.ts's modelTurn (same
+      // gen_ai.chat-shaped span wrapping pattern as here) — see tracing.ts's
+      // withTurnSpan doc comment for why.
       span.setAttribute("braintrust.input", JSON.stringify(messages));
       // Optional chaining throughout: `response`/`usage` are always present
       // on a real AI SDK generateText() result, but memory.test.ts's mock

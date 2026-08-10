@@ -24,13 +24,13 @@ export const wantsHuman = tool({
 
 export async function runWantsHuman(args: z.infer<typeof wantsHumanSchema>, context: ToolContext) {
   const { conversationId, phone, step, traceAnchor } = context;
-  // Its own step (see steppedSpan's doc comment for why step.run + a span
-  // are paired at all) — wants_human is dispatched directly from
-  // run-turn.ts's loop (see SELF_STEPPED_TOOLS there), never nested inside an
-  // outer step.run. Without this, a replay of this Inngest function (e.g. a
-  // retry of a later step in the same run, like record-reply or
-  // send-whatsapp-reply) would re-execute this real Telegram send every
-  // time, since un-stepped code isn't memoized across replays.
+  // Its own step — wants_human is dispatched directly from run-turn.ts's
+  // loop (see SELF_STEPPED_TOOLS there for why it must never be nested
+  // inside an outer step.run) and needs the wrapping anyway: without it, a
+  // replay of this Inngest function (e.g. a retry of a later step in the
+  // same run, like record-reply or send-whatsapp-reply) would re-execute
+  // this real Telegram send every time — see steppedSpan's doc comment in
+  // tracing.ts for the general mechanism.
   await steppedSpan(
     step,
     "owner-nudge-wants-human",
