@@ -1,3 +1,4 @@
+import type { Span } from "@opentelemetry/api";
 import { generateText, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
@@ -17,9 +18,12 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 // This prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID, slug
-// below) — same version-pinning rationale as run-turn.ts's
-// SYSTEM_PROMPT_VERSION (that file's comment on it has the full explanation
-// of why it's pinned rather than loadPrompt({ environment: "production" })).
+// below), like run-turn.ts's system prompt — but pinned to a fixed version
+// id by default here, unlike that one (which defaults to the slug's latest
+// saved version; see run-turn.ts's SYSTEM_PROMPT_SLUG comment for the full
+// loadPrompt() version/environment behavior).
+// SUMMARIZER_PROMPT_VERSION_OVERRIDE can override the pinned id, e.g. for
+// testing against a draft version.
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 const SUMMARIZER_PROMPT_VERSION =
   process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197636062690373";
@@ -28,8 +32,7 @@ export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
   historyMessages: ModelMessage[];
   // The rolling summary — fills the prompt template's {guest_memory_block}
-  // variable directly, replacing the guestContext-only value run-turn.ts
-  // used to build itself.
+  // variable directly.
   contextBlock: string;
 }
 
@@ -66,6 +69,37 @@ async function summarizeConversation(
     transcript,
   });
 
+  // Cast needed: build()'s messages are typed as OpenAI-shaped chat
+  // params (content can be a content-part array, for image/tool
+  // messages), while generateText wants ModelMessage. SUMMARIZER_PROMPT
+  // (see the migration script) only ever has plain-string system/user
+  // content, so the two shapes coincide here even though their types
+  // don't structurally align.
+  async function generateSummaryText(span: Span): Promise<string> {
+    const result = await generateText({ model, messages: messages as ModelMessage[] });
+
+    span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+    // Same braintrust.* duplication as run-turn.ts's modelTurn (same
+    // gen_ai.chat-shaped span wrapping pattern as here) — see tracing.ts's
+    // withTurnSpan doc comment for why.
+    span.setAttribute("braintrust.input", JSON.stringify(messages));
+    // Optional chaining throughout: `response`/`usage` are always present
+    // on a real AI SDK generateText() result, but memory.test.ts's mock
+    // returns a trimmed-down `{ text }`-only shape.
+    if (result.response?.messages !== undefined) {
+      span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
+    }
+    if (result.usage?.inputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+    }
+    if (result.usage?.outputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+    }
+
+    return result.text;
+  }
+
   // Not inside any step.run() of its own — but it's only ever called from
   // loadMemory, which itself runs inside run-turn.ts's outer
   // step.run("load-memory", ...), so (like the model-call/tool-call
@@ -76,37 +110,7 @@ async function summarizeConversation(
     turnAnchor,
     "gen_ai.chat",
     { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
-    async (span) => {
-      // Cast needed: build()'s messages are typed as OpenAI-shaped chat
-      // params (content can be a content-part array, for image/tool
-      // messages), while generateText wants ModelMessage. SUMMARIZER_PROMPT
-      // (see the migration script) only ever has plain-string system/user
-      // content, so the two shapes coincide here even though their types
-      // don't structurally align.
-      const result = await generateText({ model, messages: messages as ModelMessage[] });
-
-      span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
-      // "braintrust.*" is the namespace that actually maps to a span's
-      // top-level input/output fields in Braintrust's UI — see run-turn.ts's
-      // modelTurn for the full explanation (same gen_ai.chat-shaped span
-      // wrapping pattern as here).
-      span.setAttribute("braintrust.input", JSON.stringify(messages));
-      // Optional chaining throughout: `response`/`usage` are always present
-      // on a real AI SDK generateText() result, but memory.test.ts's mock
-      // returns a trimmed-down `{ text }`-only shape.
-      if (result.response?.messages !== undefined) {
-        span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
-        span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
-      }
-      if (result.usage?.inputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
-      }
-      if (result.usage?.outputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
-      }
-
-      return result.text;
-    },
+    generateSummaryText,
   );
 }
 

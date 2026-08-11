@@ -22,12 +22,12 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  * startTraceRoot) — a plain Next.js request handler runs exactly once per
  * real inbound webhook call, not a replayed Inngest step, so it's safe to
  * start a real, unparented span here. It's a near-zero-duration marker, not
- * a stage of its own (deliberately not named "webhook.verify_signature" —
- * an earlier version used that stage's own span as the anchor, which meant
- * every later webhook.* stage AND the entire guest turn ended up nested
- * *inside* what's supposed to be a narrow signature check, reading as one
- * long inexplicable "verify_signature" span holding everything). Every
- * later stage in this request, AND every span run-turn.ts's triggered
+ * a stage of its own — deliberately not named "webhook.verify_signature" or
+ * any other real stage's name, since using a stage's own span as the anchor
+ * would nest every later webhook.* stage AND the entire guest turn *inside*
+ * that one stage's span (e.g. reading as one long "verify_signature" span
+ * holding everything, when it's supposed to be a narrow signature check).
+ * Every later stage in this request, AND every span run-turn.ts's triggered
  * function emits, parents to this marker's real {traceId, spanId} (its
  * "anchor") instead of a synthetic stand-in — the anchor rides along in the
  * enqueued event's own data (see run-turn.ts's GuestTurnRequestedEventData)
@@ -46,9 +46,9 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  */
 export async function POST(request: NextRequest) {
   // Correlates a later owner reply back to this exact suspended run (see
-  // missing-info.ts) — unrelated to tracing now that the trace anchor below
-  // covers that job; kept as its own id since it means something different
-  // (an Inngest waitForEvent key, not a span parent).
+  // missing-info.ts) — unrelated to tracing (the trace anchor below covers
+  // that job); kept as its own id because it means something different: an
+  // Inngest waitForEvent key, not a span parent.
   const correlationId = crypto.randomUUID();
 
   try {

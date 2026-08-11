@@ -1,12 +1,26 @@
+import type { Span } from "@opentelemetry/api";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, loadMemory } from "@/agent/memory";
+import { requestApprovalGate } from "@/agent/tools/approval-gate";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
-import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
+import {
+  BOOKING_LINK_APPROVAL_EVENT,
+  BOOKING_LINK_APPROVAL_TIMEOUT,
+  buildBookingApprovalReason,
+  runSendBookingLink,
+  sendBookingLink,
+} from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
-import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
+import {
+  handleMissingInfoNoReply,
+  MISSING_INFO_REPLY_TIMEOUT,
+  missingInfo,
+  OWNER_NUDGE_ANSWERED_EVENT,
+} from "@/agent/tools/missing-info";
+import { type OwnerNudgeReason, requestOwnerNudge } from "@/agent/tools/owner-nudge";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runCode, runRunCode } from "@/agent/tools/run-code";
@@ -14,7 +28,13 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
-import { markSpanFailed, type TraceAnchor, updateSpanIO, withTurnSpan } from "@/lib/tracing";
+import {
+  markSpanFailed,
+  steppedSpan,
+  type TraceAnchor,
+  updateSpanIO,
+  withTurnSpan,
+} from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -27,9 +47,8 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 // with the /api/inngest serve endpoint (see src/app/api/inngest/route.ts).
 // The webhook route triggers it fire-and-forget by sending
 // GUEST_TURN_REQUESTED_EVENT. runGuestTurn is kept as a plain, directly
-// callable/testable function — same shape DBOS.registerWorkflow used to
-// wrap — so tests can drive it with a hand-rolled `step` mock instead of a
-// real Inngest engine.
+// callable/testable function so tests can drive it with a hand-rolled `step`
+// mock instead of a real Inngest engine.
 //
 // runAgentTurn itself stays free of guest-delivery side effects (recording
 // the reply, the proactive Twilio send) so it's easy to test/reason about in
@@ -38,16 +57,19 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 const MODEL = "deepseek/deepseek-v4-pro";
 
 // The system prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID,
-// slug below), not this repo — it used to live in LangSmith's Prompt Hub
-// before a one-time migration moved it into Braintrust. Pinned to an exact
-// version rather than loadPrompt({ environment: "production" }) because
-// issebya's Braintrust org has no "production" environment set up yet. To
-// ship an edited prompt: edit it in Braintrust's UI, then copy the new
-// version id here.
-// SYSTEM_PROMPT_VERSION_OVERRIDE is for CI eval jobs only — must never be
-// set in a real runtime environment.
+// slug below), not this repo. No pinned version id here — Braintrust's
+// loadPrompt(), when called with neither `version` nor `environment`,
+// fetches the slug's latest saved version, so every save in Braintrust's UI
+// is immediately what this app uses on the next request. This would ideally
+// be `environment: "production"` instead, so edits don't go live until
+// explicitly promoted, but Environments is a Pro-plan-only feature,
+// unavailable in this org. Braintrust is still the sole source of version
+// control — nothing in this repo needs to change to ship an edited prompt.
+// SYSTEM_PROMPT_VERSION_OVERRIDE pins an exact version instead, for CI eval
+// jobs that need a fixed prompt regardless of whatever's currently saved —
+// must never be set in a real runtime environment.
 const SYSTEM_PROMPT_SLUG = "gca-system";
-const SYSTEM_PROMPT_VERSION = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE ?? "1000197640483751332";
+const SYSTEM_PROMPT_VERSION_OVERRIDE = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE;
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
@@ -69,6 +91,16 @@ const model = openrouter.chat(MODEL);
 // silently return an empty string. 1000 leaves headroom for both.
 const MAX_OUTPUT_TOKENS = 1000;
 
+// RULE: tool files (src/agent/tools/*.ts, except approval-gate.ts) must stay
+// pure — no step/span/Inngest imports. All durability/tracing plumbing
+// belongs here, in run-turn.ts's dispatch loop, or in approval-gate.ts's
+// shared gate. Reason: keeps "where's the real business logic" (any tools/*
+// file) a one-glance answer, separate from "where's the durability/tracing
+// plumbing" (this file + approval-gate.ts). booking.ts is the model for what
+// "pure" looks like. One deliberate, narrow exception: property-question.ts
+// keeps a plain OTel span (no step, no Inngest) around its own DB call — see
+// that file's own comment for why.
+
 // Schema-only tool declarations — dispatch happens manually in runToolCall()
 // below. The owner-nudge tools' keys are the literal snake_case tool names
 // the model sees (deliberately unlike the camelCase tools here).
@@ -83,39 +115,54 @@ const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Tools that require a human's go-ahead before they run, checked in this
-// file's own loop before dispatch (deliberately visible here, not hidden in
-// a tool file). Gating sendBookingLink here means approval happens before
-// the tool ever creates the booking URL.
-const NEEDS_HITL = new Set(["wants_human", "sendBookingLink"]);
+// Tools whose dispatch itself calls step.run/step.waitForEvent (via this
+// file's own private dispatchWantsHuman/runMissingInfo, or indirectly via
+// approval-gate.ts's requestApprovalGate for sendBookingLink) — see the "tool
+// files stay pure" rule above for why that plumbing lives here rather than in
+// wants-human.ts/missing-info.ts/booking.ts themselves. Inngest doesn't
+// support calling a step tool from inside another step.run()'s callback —
+// the callback must be a self-contained unit of work — so wants_human,
+// missing_info, and sendBookingLink are all dispatched directly from the loop
+// below (never wrapped in an outer step.run). Every other tool has no step
+// usage of its own, so wrapping the whole call in one step.run is safe and
+// gives it real memoization/replay safety.
+const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "sendBookingLink"]);
 
-// Tools whose own implementation calls context.step directly:
-// missing_info's waitForMissingInfoReply calls step.waitForEvent to
-// suspend. Inngest doesn't support calling a step tool from inside another
-// step.run()'s callback — the callback must be a self-contained unit of
-// work — so wants_human and missing_info are both dispatched directly from
-// the loop below (never wrapped in an outer step.run) and manage their own
-// checkpointing internally where they have any (wants_human currently has
-// none of its own — it's grouped here for the same "never nest inside an
-// outer step.run" reasoning, not because it calls step itself today). Every
-// other tool has no step usage of its own, so wrapping the whole call in one
-// step.run is safe and gives it real memoization/replay safety — the actual
-// point of this migration.
-const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info"]);
-
-// STUB — NOT REAL APPROVAL LOGIC. No durable suspend/pause yet; always
-// resolves approved so wants_human/sendBookingLink keep working end-to-end.
-// TODO(hitl): replace with a real suspend/resume once Inngest-backed approval exists.
-async function requestHitlApproval(
-  toolName: string,
-  _input: Record<string, unknown>,
-  _context: ToolContext,
-): Promise<{ approved: boolean }> {
-  console.warn(
-    `[run-turn] requestHitlApproval STUB called for "${toolName}" — always approving, this is not real HITL yet`,
-  );
-  return { approved: true };
-}
+// The gating POLICY table: which tools require real owner approve/reject
+// before they're allowed to dispatch, and how (which Telegram nudge reason
+// text/category, which Inngest event, how long to wait for a decision).
+// Deliberately visible here, in the runtime dispatch loop, rather than
+// buried inside each tool's own file — this is the one place to read
+// "which tool calls need approval and how" at a glance. The generic
+// suspend/nudge/wait MECHANISM those approved tools reuse lives in
+// approval-gate.ts's requestApprovalGate; this table only supplies the
+// per-tool policy values that mechanism needs.
+//
+// wants_human and missing_info have no entry here on purpose: wants_human is
+// a one-way alert with no decision to approve, and missing_info's
+// suspend/resume resolves to an answer STRING to embed in the KB, not a
+// yes/no decision — neither is approve/reject-shaped, so neither goes
+// through this gate. Both still dispatch via SELF_STEPPED_TOOLS below,
+// exactly as before.
+const APPROVAL_GATES: Partial<
+  Record<
+    string,
+    {
+      reasonCategory: OwnerNudgeReason;
+      buildReason: (input: Record<string, unknown>) => string;
+      event: string;
+      timeout: string;
+    }
+  >
+> = {
+  sendBookingLink: {
+    reasonCategory: "send_booking_link",
+    buildReason: (input) =>
+      buildBookingApprovalReason(input as Parameters<typeof buildBookingApprovalReason>[0]),
+    event: BOOKING_LINK_APPROVAL_EVENT,
+    timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
+  },
+};
 
 // One model call per round. Since none of `tools` has an `execute`,
 // generateText only ever returns the model's requested tool calls — it
@@ -144,96 +191,207 @@ async function modelTurn(
   messages: ModelMessage[],
   turnAnchor: TraceAnchor,
 ): Promise<ModelTurnResult> {
+  async function runModelChatTurn(span: Span): Promise<ModelTurnResult> {
+    // Plain non-generic closure over `tools`, purely so `typeof callModel`
+    // below gives `result` the exact GenerateTextResult<typeof tools, ...>
+    // shape — `ReturnType<typeof generateText>` on the generic function
+    // itself widens back to a bare ToolSet and loses the specific tool
+    // types.
+    const callModel = () =>
+      generateText({
+        model,
+        system,
+        messages,
+        tools,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+      });
+
+    let result: Awaited<ReturnType<typeof callModel>>;
+    let attempt = 0;
+    for (;;) {
+      attempt++;
+      result = await callModel();
+      const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
+      if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
+        break;
+      }
+      console.warn(
+        `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
+      );
+      // Same signal as the console.warn above, but attached to the span so
+      // it's visible in the Axiom/Braintrust trace itself, not just server
+      // logs nobody is watching.
+      span.addEvent("gen_ai.retry", {
+        attempt,
+        finishReason: result.finishReason,
+      });
+    }
+
+    span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+    span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+    span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
+    span.setAttribute("gen_ai.request.attempt_count", attempt);
+    // Duplicated under braintrust.* so it actually shows up as this
+    // span's Input/Output in Braintrust's UI — the gen_ai.* attributes
+    // above alone only ever land in Metadata. See the doc comment above
+    // withTurnSpan in tracing.ts for the full braintrust.* mapping.
+    span.setAttribute("braintrust.input", JSON.stringify(messages));
+    span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
+    // Optional chaining: `usage` is always present on a real AI SDK
+    // generateText() result, but test mocks in this repo return a
+    // trimmed-down shape without it.
+    if (result.usage?.inputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+    }
+    if (result.usage?.outputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+    }
+
+    // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
+    // content-filter finish) — flag it so it shows up as an ERROR span
+    // instead of blending into every other "OK" span in the trace. See
+    // markSpanFailed's own comment for why this doesn't need to throw to
+    // be visible.
+    if (result.text.trim() === "" && result.toolCalls.length === 0) {
+      markSpanFailed(
+        span,
+        `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
+      );
+    }
+
+    return {
+      text: result.text,
+      toolCalls: result.toolCalls.map((call) => ({
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: call.input as Record<string, unknown>,
+      })),
+      response: { messages: result.response.messages },
+    };
+  }
+
   return withTurnSpan(
     turnAnchor,
     "gen_ai.chat",
     { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
-    async (span) => {
-      // Plain non-generic closure over `tools`, purely so `typeof callModel`
-      // below gives `result` the exact GenerateTextResult<typeof tools, ...>
-      // shape — `ReturnType<typeof generateText>` on the generic function
-      // itself widens back to a bare ToolSet and loses the specific tool
-      // types.
-      const callModel = () =>
-        generateText({
-          model,
-          system,
-          messages,
-          tools,
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-        });
-
-      let result: Awaited<ReturnType<typeof callModel>>;
-      let attempt = 0;
-      for (;;) {
-        attempt++;
-        result = await callModel();
-        const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
-        if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
-          break;
-        }
-        console.warn(
-          `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
-        );
-        // Same signal as the console.warn above, but attached to the span so
-        // it's visible in the Axiom/Braintrust trace itself, not just server
-        // logs nobody is watching.
-        span.addEvent("gen_ai.retry", {
-          attempt,
-          finishReason: result.finishReason,
-        });
-      }
-
-      span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
-      span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
-      span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
-      span.setAttribute("gen_ai.request.attempt_count", attempt);
-      // "braintrust.*" is the attribute namespace that actually maps to a
-      // span's top-level input/output fields in Braintrust's UI (Traces
-      // list + per-span view) — the gen_ai.* attributes above only ever
-      // land in `metadata`, since @braintrust/otel's BraintrustSpanProcessor
-      // does no gen_ai.*-to-input/output conversion of its own (see
-      // node_modules/@braintrust/otel/dist/index.js). Duplicating the same
-      // values under this namespace is what makes them actually visible.
-      span.setAttribute("braintrust.input", JSON.stringify(messages));
-      span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
-      // Optional chaining: `usage` is always present on a real AI SDK
-      // generateText() result, but test mocks in this repo return a
-      // trimmed-down shape without it.
-      if (result.usage?.inputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
-      }
-      if (result.usage?.outputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
-      }
-
-      // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
-      // content-filter finish) — flag it so it shows up as an ERROR span
-      // instead of blending into every other "OK" span in the trace. See
-      // markSpanFailed's own comment for why this doesn't need to throw to
-      // be visible.
-      if (result.text.trim() === "" && result.toolCalls.length === 0) {
-        markSpanFailed(
-          span,
-          `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
-        );
-      }
-
-      return {
-        text: result.text,
-        toolCalls: result.toolCalls.map((call) => ({
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          input: call.input as Record<string, unknown>,
-        })),
-        response: { messages: result.response.messages },
-      };
-    },
+    runModelChatTurn,
   );
 }
 
+// Sends wants_human's owner nudge, stepped/spanned for replay-safety, then
+// returns the tool's (pure, constant) result. This is the "durability/tracing
+// plumbing" half of wants_human that used to live in wants-human.ts's own
+// runWantsHuman before the "tool files stay pure" rule above — see that
+// file's own comment. Step id/span name/attributes preserved exactly as
+// before this moved. Private: only called from runToolCall's "wants_human"
+// case below, never nested inside another step.run (see SELF_STEPPED_TOOLS's
+// comment for why).
+async function dispatchWantsHuman(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<ReturnType<typeof runWantsHuman>> {
+  const { conversationId, phone, step, traceAnchor } = context;
+  await steppedSpan(
+    step,
+    "owner-nudge-wants-human",
+    traceAnchor,
+    "owner_nudge.wants_human",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "wants_human",
+        step,
+      }),
+  );
+  return runWantsHuman();
+}
+
+// missing_info's full suspend/resume dispatch: sends the owner nudge (its own
+// step), then genuinely suspends via step.waitForEvent until the owner
+// replies (handleMissingInfoReplyReceived, called from the API route, sends
+// OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses, running the
+// no-reply-timeout fallback step in that case. This is the "durability/
+// tracing plumbing" half of missing_info that used to live in
+// missing-info.ts's own runMissingInfo/waitForMissingInfoReply before the
+// "tool files stay pure" rule above — see missing-info.ts's own comment.
+// Step ids/span names/attributes/event/timeout/return shapes all preserved
+// exactly as before this moved. Private and named to match the tool-dispatch
+// pattern used elsewhere in this switch (no exported runMissingInfo exists in
+// missing-info.ts anymore, so no import to shadow) — called from runToolCall's
+// "missing_info" case below, never nested inside another step.run (see
+// SELF_STEPPED_TOOLS's comment for why).
+async function runMissingInfo(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<{ escalated: true; answer: string } | { escalated: true; message: string }> {
+  const { conversationId, phone, step, correlationId, traceAnchor } = context;
+
+  // Its own step, distinct from "wait-for-owner-answer" below — sending the
+  // nudge and waiting for the reply are two different kinds of operation,
+  // each needing its own memoized step id (see steppedSpan's doc comment in
+  // tracing.ts for why un-stepped code would otherwise re-send this real
+  // Telegram nudge on every replay).
+  const nudged = await steppedSpan(
+    step,
+    "owner-nudge-missing-info",
+    traceAnchor,
+    "owner_nudge.missing_info",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "missing_info",
+        correlationId,
+        step,
+      }),
+  );
+
+  // Nudge failed to send — skip straight to the same fallback a timeout
+  // would produce; there's no point suspending if the owner was never told.
+  if (nudged) {
+    const result = await step.waitForEvent("wait-for-owner-answer", {
+      event: OWNER_NUDGE_ANSWERED_EVENT,
+      match: "data.correlationId",
+      timeout: MISSING_INFO_REPLY_TIMEOUT,
+    });
+
+    const answer = (result?.data.answer as string | undefined) ?? null;
+    if (answer !== null) {
+      // Embedding already happened in handleMissingInfoReplyReceived before
+      // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
+      // re-embed here.
+      return { escalated: true, answer };
+    }
+
+    console.warn(
+      `[run-turn] runMissingInfo timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
+    );
+    // Own step — same replay-safety reasoning as the nudge-send step above.
+    await steppedSpan(
+      step,
+      "missing-info-no-reply",
+      traceAnchor,
+      "missing_info.no_reply",
+      { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT },
+      () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
+    );
+    // Timed out — handleMissingInfoNoReply already ran above.
+  }
+
+  return {
+    escalated: true,
+    message: "The owner has been notified and will be in touch shortly.",
+  };
+}
+
 // Dispatches a requested tool call to its run<ToolName> implementation.
-// Called after the NEEDS_HITL gate below, never before it.
+// Called after any configured APPROVAL_GATES check has already approved the
+// call (see below), never before it.
 async function runToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -247,17 +405,26 @@ async function runToolCall(
     case "answerPropertyQuestion":
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
     case "sendBookingLink":
-      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0]);
     case "getCurrentDate":
       return runGetCurrentDate();
     case "runCode":
       return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
-      return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
+      return dispatchWantsHuman(input as { reason: string }, context);
     case "missing_info":
-      return runMissingInfo(input as Parameters<typeof runMissingInfo>[0], context);
+      return runMissingInfo(input as { reason: string }, context);
     default:
-      throw new Error(`Unknown tool name: "${toolName}"`);
+      // Native function-calling is supposed to constrain the model to exact
+      // registered tool names, but some models (deepseek included) have been
+      // observed hallucinating a close-but-wrong name (e.g. "getCurrentDates"
+      // for "getCurrentDate") anyway. Returns a recoverable error instead of
+      // throwing — throwing here would crash the whole Inngest step with no
+      // reply sent to the guest at all — so the model sees the error and can
+      // retry with a real tool name in the same turn.
+      return {
+        error: `Unknown tool name: "${toolName}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
+      };
   }
 }
 
@@ -321,11 +488,19 @@ export interface RunAgentTurnResult {
   // "update-turn-trace-io" step there).
   guestTurnSpanId: string;
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
-  // missing_info) — Braintrust aggregates a `braintrust.tags` value set on
-  // ANY span in a trace up to the whole trace, but wants_human/missing_info
+  // missing_info, sendBookingLink) — exists because wants_human/missing_info
   // never get a span of their own (see SELF_STEPPED_TOOLS's comment), so
-  // there's nowhere to set that attribute directly. Threaded out instead so
-  // runGuestTurn can pass it to updateSpanIO's merge-patch on the
+  // there's nowhere to set a braintrust.tags attribute directly for them
+  // (braintrust.tags aggregates up to the whole trace from any span — see
+  // tracing.ts's withTurnSpan doc comment). sendBookingLink DOES get its own
+  // span now (inside
+  // approval-gate.ts's requestApprovalGate, tagged there directly), so it
+  // doesn't strictly need to ride along in firedTags too — but it's
+  // dispatched via this same SELF_STEPPED_TOOLS branch below, which pushes
+  // every self-stepped tool name in on dispatch (approved or rejected — see
+  // the branch's own comment), so it ends up here as a harmless natural side
+  // effect rather than something worth special-casing out. Threaded out
+  // instead so runGuestTurn can pass it to updateSpanIO's merge-patch on the
   // "braintrust.guest_turn" root span, the same deferred route
   // guestTurnSpanId already uses for output.
   firedTags: string[];
@@ -355,23 +530,23 @@ export async function runAgentTurn(
   // can be retroactively patched with the turn's real input/output once the
   // final reply exists — see updateSpanIO's own comment (src/lib/tracing.ts)
   // and the "update-turn-trace-io" step in runGuestTurn below.
-  const guestTurnSpanId = await step.run("start-trace", () =>
-    withTurnSpan(
-      traceAnchor,
-      // Must start with one of @braintrust/otel's AISpanProcessor
-      // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
-      // checked against the span name AND non-system attribute keys — see
-      // node_modules/@braintrust/otel/dist/index.js's isAISpan) or
-      // filterAISpans: true (instrumentation.ts) silently drops this span
-      // before export. Neither "guest-turn" nor this span's own attributes
-      // (gca.conversation_id/gca.phone) matched any prefix, which is why it
-      // never showed up in Braintrust at all. "braintrust." is an honest
-      // prefix for this — it's a Braintrust-observability-specific marker
-      // span, not a real gen_ai call.
-      "braintrust.guest_turn",
-      { "gca.conversation_id": conversationId, "gca.phone": phone },
-      async (span) => span.spanContext().spanId,
-    ),
+  const guestTurnSpanId = await steppedSpan(
+    step,
+    "start-trace",
+    traceAnchor,
+    // Must start with one of @braintrust/otel's AISpanProcessor
+    // FILTER_PREFIXES ("gen_ai."/"llm."/"ai."/"braintrust."/"traceloop.",
+    // checked against the span name AND non-system attribute keys — see
+    // node_modules/@braintrust/otel/dist/index.js's isAISpan) or
+    // filterAISpans: true (instrumentation.ts) silently drops this span
+    // before export. Neither "guest-turn" nor this span's own attributes
+    // (gca.conversation_id/gca.phone) matched any prefix, which is why it
+    // never showed up in Braintrust at all. "braintrust." is an honest
+    // prefix for this — it's a Braintrust-observability-specific marker
+    // span, not a real gen_ai call.
+    "braintrust.guest_turn",
+    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    async (span) => span.spanContext().spanId,
   );
 
   // Every span from here on nests under the real "braintrust.guest_turn"
@@ -391,19 +566,18 @@ export async function runAgentTurn(
     step,
   };
 
-  // Cast needed: step.run()'s return type is run through Inngest's Jsonify
-  // transform (step results are actually persisted as JSON and rehydrated on
-  // replay), which narrows types like FilePart's `data: URL | DataContent`
-  // down to their JSON-safe equivalents (an ArrayBuffer, for instance,
-  // structurally loses its methods). loadMemory's historyMessages is a
-  // ModelMessage[] built from plain DB rows via toModelMessage() in
-  // memory.ts — always user/assistant text content, never a file part — so
-  // the narrowing is a false positive here too, same as the model-${stepCount}
-  // step below.
-  const { historyMessages, contextBlock } = (await step.run("load-memory", () =>
-    withTurnSpan(turnAnchor, "load-memory", { "gca.conversation_id": conversationId }, () =>
-      loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
-    ),
+  // Cast needed — see steppedSpan's doc comment in tracing.ts for why
+  // step.run()'s return type gets narrowed at all. loadMemory's
+  // historyMessages is a ModelMessage[] built from plain DB rows via
+  // toModelMessage() in memory.ts — always user/assistant text content,
+  // never a file part — so the narrowing is a false positive here.
+  const { historyMessages, contextBlock } = (await steppedSpan(
+    step,
+    "load-memory",
+    turnAnchor,
+    "load-memory",
+    { "gca.conversation_id": conversationId },
+    () => loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
   )) as AgentMemory;
   let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
 
@@ -413,28 +587,28 @@ export async function runAgentTurn(
   // derived from it. Un-stepped code between step.run checkpoints re-runs on
   // every Inngest replay — left inside the loop, a replay reaching round N
   // would re-fetch the Braintrust prompt for every round 1..N that already
-  // ran (wasted API calls). SYSTEM_PROMPT_VERSION is pinned (see its own
-  // comment above), so unlike the old LangSmith ":production" tag this can
-  // no longer change mid-turn — but the hoist still avoids the redundant
-  // fetches on replay.
-  //
-  // Cast needed: step.run()'s return type is run through Inngest's Jsonify
-  // transform (step results are actually persisted as JSON and rehydrated on
-  // replay), which narrows types like FilePart's `data: URL | DataContent`
-  // down to their JSON-safe equivalents (an ArrayBuffer, for instance,
-  // structurally loses its methods). The system prompt here is always a
-  // plain string, so the narrowing is a false positive for this call site
-  // too, same as the model-${stepCount} and load-memory step calls below.
-  const system = (await step.run("load-system-prompt", () =>
-    withTurnSpan(turnAnchor, "load-system-prompt", {}, async () => {
-      const promptTemplate = await loadPrompt({
-        projectId: process.env.BRAINTRUST_PROJECT_ID,
-        slug: SYSTEM_PROMPT_SLUG,
-        version: SYSTEM_PROMPT_VERSION,
-      });
-      const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
-      return messages[0].content as string;
-    }),
+  // ran (wasted API calls).
+  async function loadSystemPromptText(): Promise<string> {
+    const promptTemplate = await loadPrompt({
+      projectId: process.env.BRAINTRUST_PROJECT_ID,
+      slug: SYSTEM_PROMPT_SLUG,
+      ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
+    });
+    const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
+    return messages[0].content as string;
+  }
+
+  // Cast needed — see steppedSpan's doc comment in tracing.ts for why
+  // step.run()'s return type gets narrowed at all. The system prompt here
+  // is always a plain string, so the narrowing is a false positive for this
+  // call site.
+  const system = (await steppedSpan(
+    step,
+    "load-system-prompt",
+    turnAnchor,
+    "load-system-prompt",
+    {},
+    loadSystemPromptText,
   )) as string;
 
   console.log("contextBlock", contextBlock);
@@ -450,14 +624,13 @@ export async function runAgentTurn(
   while (stepCount < MAX_AGENT_STEPS) {
     stepCount++;
 
-    // Cast needed: step.run()'s return type is run through Inngest's Jsonify
-    // transform (step results are actually persisted as JSON and rehydrated
-    // on replay), which narrows types like FilePart's `data: URL |
-    // DataContent` down to their JSON-safe equivalents (an ArrayBuffer, for
-    // instance, structurally loses its methods). GCA's ModelMessage content
-    // here is always plain text/tool-call parts — this agent never sends or
-    // receives file attachments — so the narrowing is a false positive for
-    // this call site specifically, not a real runtime concern.
+    // Cast needed — see steppedSpan's doc comment in tracing.ts for why
+    // step.run()'s return type gets narrowed at all (this call uses raw
+    // step.run, not steppedSpan, since modelTurn already opens its own
+    // withTurnSpan internally — same cast concern either way). GCA's
+    // ModelMessage content here is always plain text/tool-call parts — this
+    // agent never sends or receives file attachments — so the narrowing is
+    // a false positive for this call site specifically.
     const result = (await step.run(`model-${stepCount}`, () =>
       modelTurn(system, messages, turnAnchor),
     )) as ModelTurnResult;
@@ -470,69 +643,85 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a rejected NEEDS_HITL call never reaches runToolCall.
+    // message ourselves; a rejected APPROVAL_GATES call never reaches
+    // runToolCall.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
-        if (NEEDS_HITL.has(call.toolName)) {
-          const decision = await step.run(`hitl-approval-${call.toolName}`, () =>
-            requestHitlApproval(call.toolName, call.input, toolContext),
-          );
-          if (!decision.approved) {
-            return {
-              approved: false,
-              message: "This action was not approved. Do not retry it automatically.",
-            };
-          }
-        }
-
-        // See SELF_STEPPED_TOOLS above — wants_human/missing_info manage
-        // their own step checkpointing and must not be nested inside
-        // another step.run() call.
-        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info are
-        // never wrapped here: their dispatch call site (the branch below)
-        // re-executes on every Inngest replay, so tracing it would
+        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info/
+        // sendBookingLink are dispatched directly here instead of wrapped in
+        // step.run. Concretely: this branch (like the rest of the loop body)
+        // re-executes on every Inngest replay, so tracing it here would
         // duplicate-emit a span every time the function replays after a
-        // suspend (missing_info's up-to-24h step.waitForEvent wait is
-        // exactly the highest-value case this would corrupt). Every other
-        // tool IS already inside step.run(`tool-${call.toolName}`, ...),
-        // which Inngest only actually executes once — replays return the
-        // memoized value without re-running the callback — so wrapping the
-        // runToolCall call inside it here is replay-safe.
+        // suspend (missing_info's up-to-24h and sendBookingLink's
+        // effectively-forever step.waitForEvent waits — the latter now
+        // inside approval-gate.ts's requestApprovalGate — are exactly the
+        // highest-value case this would corrupt). Every other tool IS
+        // already inside step.run(`tool-${call.toolName}`, ...) below, which
+        // Inngest only actually executes once — replays return the memoized
+        // value without re-running the callback — so wrapping the
+        // runToolCall call inside it there is replay-safe.
         if (SELF_STEPPED_TOOLS.has(call.toolName)) {
+          // The gating check itself: only tools with an APPROVAL_GATES entry
+          // (sendBookingLink today) go through requestApprovalGate at all —
+          // wants_human/missing_info have no entry (see APPROVAL_GATES'
+          // comment) and fall straight through to runToolCall below.
+          const gate = APPROVAL_GATES[call.toolName];
+          if (gate) {
+            const approved = await requestApprovalGate({
+              toolName: call.toolName,
+              event: gate.event,
+              timeout: gate.timeout,
+              reason: gate.buildReason(call.input),
+              reasonCategory: gate.reasonCategory,
+              conversationId,
+              phone,
+              correlationId,
+              step,
+              traceAnchor: turnAnchor,
+            });
+            if (!approved) {
+              // Same shape a rejected/timed-out gate has always returned to
+              // the model. Pushed into firedTags here too (rather than only
+              // on the approved path below) — a gated call that got a real
+              // nudge sent and a real decision made is still worth being
+              // able to find in this turn's trace tags.
+              firedTags.push(call.toolName);
+              return {
+                approved: false,
+                message: "This action was not approved. Do not retry it automatically.",
+              };
+            }
+          }
+
           const output = await runToolCall(call.toolName, call.input, toolContext);
-          // Only reached once the tool actually dispatched — a HITL-rejected
-          // call (wants_human is NEEDS_HITL-gated) returns earlier, above,
-          // and never reaches this line. See RunAgentTurnResult.firedTags for
-          // why this is collected here rather than as a span attribute.
+          // See RunAgentTurnResult.firedTags for why this is collected here
+          // rather than as a span attribute.
           firedTags.push(call.toolName);
           return output;
         }
 
-        return await step.run(`tool-${call.toolName}`, () =>
-          withTurnSpan(
-            turnAnchor,
-            `gen_ai.tool.${call.toolName}`,
-            { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-            async (span) => {
-              const output = await runToolCall(call.toolName, call.input, toolContext);
-              span.setAttribute("gca.tool.input", JSON.stringify(call.input));
-              span.setAttribute("gca.tool.output", JSON.stringify(output));
-              // See modelTurn's matching comment above — "braintrust.*"
-              // is the namespace that actually maps to the span's
-              // top-level input/output fields in Braintrust's UI.
-              span.setAttribute("braintrust.input", JSON.stringify(call.input));
-              span.setAttribute("braintrust.output", JSON.stringify(output));
-              if (call.toolName === "sendBookingLink") {
-                // Braintrust aggregates a `braintrust.tags` value set on ANY
-                // span up to the whole trace, so tagging this one span makes
-                // the entire turn's trace filterable by "sent a booking
-                // link". String arrays are a native OTel attribute value —
-                // no JSON.stringify needed, unlike the JSON blobs above.
-                span.setAttribute("braintrust.tags", ["sendBookingLink"]);
-              }
-              return output;
-            },
-          ),
+        async function dispatchTracedToolCall(span: Span) {
+          const output = await runToolCall(call.toolName, call.input, toolContext);
+          span.setAttribute("gca.tool.input", JSON.stringify(call.input));
+          span.setAttribute("gca.tool.output", JSON.stringify(output));
+          // Same braintrust.* duplication as modelTurn above — see
+          // tracing.ts's withTurnSpan doc comment for why.
+          span.setAttribute("braintrust.input", JSON.stringify(call.input));
+          span.setAttribute("braintrust.output", JSON.stringify(output));
+          // sendBookingLink doesn't reach this generic wrapper (see
+          // SELF_STEPPED_TOOLS above) — its "braintrust.tags" tagging
+          // happens inside approval-gate.ts's requestApprovalGate span
+          // instead.
+          return output;
+        }
+
+        return await steppedSpan(
+          step,
+          `tool-${call.toolName}`,
+          turnAnchor,
+          `gen_ai.tool.${call.toolName}`,
+          { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
+          dispatchTracedToolCall,
         );
       }),
     );
@@ -563,8 +752,9 @@ interface GuestTurnRequestedEventData {
   // Random id for this run, set once in the webhook route (before any
   // request validation — see that route's own comment). Lets
   // step.waitForEvent (see missing-info.ts) find this exact suspended run
-  // when the owner's reply comes back as a separate event. No longer doing
-  // double duty as a tracing key — see traceAnchor below for that.
+  // when the owner's reply comes back as a separate event. Used only for
+  // that event match, not for tracing — traceAnchor below carries the trace
+  // context.
   correlationId: string;
   // The webhook route's real trace root (src/lib/tracing.ts's
   // startTraceRoot), captured once, before any request validation, from the
@@ -630,38 +820,44 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
   // across rounds (each dispatch pushes into firedTags), but Braintrust's
   // tags field is a set, not a multiset — duplicate entries add nothing.
   const dedupedTags = [...new Set(result.firedTags)];
-  await step.run("update-turn-trace-io", () =>
-    withTurnSpan(traceAnchor, "update-turn-trace-io", {}, () =>
-      updateSpanIO(result.guestTurnSpanId, {
-        input: incomingMessage,
-        output: replyText,
-        ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
-      }),
-    ),
+  await steppedSpan(step, "update-turn-trace-io", traceAnchor, "update-turn-trace-io", {}, () =>
+    updateSpanIO(result.guestTurnSpanId, {
+      input: incomingMessage,
+      output: replyText,
+      ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
+    }),
   );
 
-  await step.run("record-reply", () =>
-    withTurnSpan(traceAnchor, "record-reply", { "gca.conversation_id": conversationId }, () =>
+  await steppedSpan(
+    step,
+    "record-reply",
+    traceAnchor,
+    "record-reply",
+    { "gca.conversation_id": conversationId },
+    () =>
       // traceAnchor.traceId is a real OTel trace id (see
       // src/lib/tracing.ts's startTraceRoot) shared by every span emitted
       // for this turn, so this DB value doubles as a working pointer into
       // Braintrust/Axiom for this turn.
       recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
-    ),
   );
 
-  await step.run("send-whatsapp-reply", () =>
-    withTurnSpan(traceAnchor, "send-whatsapp-reply", { "gca.phone": phone }, async (span) => {
-      const sendResult = await sendWhatsAppMessage(phone, replyText);
-      if (!sendResult.ok) {
-        console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
-        markSpanFailed(
-          span,
-          sendResult.error ?? "sendWhatsAppMessage failed with no error message",
-        );
-      }
-      return sendResult;
-    }),
+  async function sendGuestWhatsAppReply(span: Span) {
+    const sendResult = await sendWhatsAppMessage(phone, replyText);
+    if (!sendResult.ok) {
+      console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+      markSpanFailed(span, sendResult.error ?? "sendWhatsAppMessage failed with no error message");
+    }
+    return sendResult;
+  }
+
+  await steppedSpan(
+    step,
+    "send-whatsapp-reply",
+    traceAnchor,
+    "send-whatsapp-reply",
+    { "gca.phone": phone },
+    sendGuestWhatsAppReply,
   );
 }
 

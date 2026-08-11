@@ -10,8 +10,8 @@ import { startTraceRoot } from "@/lib/tracing";
  * handleMissingInfoReplyReceived.
  *
  * The dynamic segment is the suspended run-guest-turn Inngest function's own
- * correlation id — there is no escalations DB row anymore, so there's
- * nothing to look up by. apps/telegram-router's webhook route extracts this
+ * correlation id — there is no escalations DB row, so there's nothing to
+ * look up by. apps/telegram-router's webhook route extracts this
  * id straight out of the owner's Telegram reply (the `[ref:<correlationId>]`
  * tag embedded in the original nudge text, see
  * owner-nudge.ts/missing-info.ts) and calls this route directly with it.
@@ -27,20 +27,18 @@ import { startTraceRoot } from "@/lib/tracing";
  * later, from a completely separate process (telegram-router's webhook,
  * relaying the owner's reply). There's no live/derivable link back to the
  * original trace's real {traceId, spanId} without either persisting it
- * somewhere keyed by correlationId (the escalations-table-shaped dependency
- * this flow deliberately dropped) or having telegram-router carry it through
- * the `[ref:...]` tag too (a cross-app change). So this handler starts its
- * OWN small trace root instead (startTraceRoot) — tagged with
- * gca.correlation_id so it can still be found and manually cross-referenced
- * against the original turn's trace by that shared id, just not
- * auto-nested under it.
+ * somewhere keyed by correlationId (a DB dependency this flow deliberately
+ * avoids) or having telegram-router carry it through the `[ref:...]` tag too
+ * (a cross-app change). So this handler starts its OWN small trace root
+ * instead (startTraceRoot) — tagged with gca.correlation_id so it can still
+ * be found and manually cross-referenced against the original turn's trace
+ * by that shared id, just not auto-nested under it.
  * - A duplicate/late POST for the same correlation id is safe to retry:
  *   sending an event nobody's waiting on isn't an error to Inngest, it's
- *   simply never consumed by anything — there's no way to honestly tell a
- *   late reply apart from a real resume anymore (see
- *   handleMissingInfoReplyReceived's own comment), so this route no longer
- *   reports a `resumed` flag. There's no 409/already-resolved concept
- *   either — there's no row to hold that state.
+ *   simply never consumed by anything. There's no way to honestly tell a
+ *   late reply apart from a real resume (see handleMissingInfoReplyReceived's
+ *   own comment), so this route reports no `resumed` flag and has no
+ *   409/already-resolved concept — there's no row to hold that state.
  * - Otherwise `{ ok: true }`.
  */
 export async function POST(

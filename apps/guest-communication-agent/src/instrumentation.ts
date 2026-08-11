@@ -130,9 +130,9 @@ export async function register(): Promise<void> {
   // parent, fragmenting what should be one trace into many. Unconditional —
   // NOT gated behind either vendor's own env-var check below — because
   // context propagation is needed for Next.js's own auto-instrumentation and
-  // any processor, not just Braintrust (this used to live inside the
-  // Braintrust-only guard, which meant an unset BRAINTRUST_API_KEY silently
-  // broke span nesting for everything, Axiom included).
+  // any processor, not just Braintrust. Gating this behind
+  // BRAINTRUST_API_KEY would silently break span nesting for everything,
+  // Axiom included, whenever Braintrust is unconfigured.
   // AsyncHooksContextManager (async_hooks/AsyncLocalStorage-backed) is the
   // Node-appropriate choice here — the browser-only alternative
   // (ZoneContextManager) doesn't apply to this server-only instrumentation.

@@ -322,6 +322,11 @@ describe("runAgentTurn", () => {
   });
 
   it("fans out to every tool call in one round and correlates tool results by tool_call_id, then loops back to the model", async () => {
+    // sendBookingLink now genuinely suspends on step.waitForEvent, via
+    // run-turn.ts's APPROVAL_GATES table + approval-gate.ts's
+    // requestApprovalGate — resolve it approved so this test can still
+    // assert on a real { url } tool result and a real final reply.
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -354,32 +359,46 @@ describe("runAgentTurn", () => {
 
     const toolMessages = result.messages.filter((m) => m.role === "tool");
     expect(toolMessages).toHaveLength(1);
-    const parts = toolMessages[0].content as Array<{ toolCallId: string; toolName: string }>;
+    const parts = toolMessages[0].content as Array<{
+      toolCallId: string;
+      toolName: string;
+      output: unknown;
+    }>;
     expect(parts.find((p) => p.toolCallId === "call_price")?.toolName).toBe("getPricing");
     expect(parts.find((p) => p.toolCallId === "call_book")?.toolName).toBe("sendBookingLink");
+    expect(parts.find((p) => p.toolCallId === "call_book")?.output).toEqual({
+      type: "json",
+      value: { url: expect.stringContaining("room=room1") },
+    });
 
     expect(result.messages.at(-1)).toEqual({
       role: "assistant",
       content: "All set, here is your link!",
     });
 
-    // sendBookingLink already gets a real span of its own (the
-    // "tool-sendBookingLink" step.run/withTurnSpan wrapping) — unlike
-    // wants_human/missing_info, it's tagged directly on that span rather
-    // than through firedTags/updateSpanIO. Braintrust aggregates a tag set
-    // on any span in a trace up to the whole trace (see run-turn.ts's
-    // comment at the setAttribute call site), so tagging just this span is
-    // enough to make the whole turn filterable.
-    const toolSpan = spanExporter
+    // sendBookingLink no longer passes through the generic
+    // "tool-${toolName}" wrapper (it's SELF_STEPPED_TOOLS now — see
+    // run-turn.ts's comment), so there's no "gen_ai.tool.sendBookingLink"
+    // span anymore. Its own "owner_nudge.sendBookingLink" span (opened
+    // inside approval-gate.ts's requestApprovalGate, invoked here via
+    // run-turn.ts's APPROVAL_GATES table) carries the "braintrust.tags" tag
+    // instead, preserving the same trace filterability the old wrapper's
+    // tag gave.
+    const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.sendBookingLink");
-    expect(toolSpan?.attributes["braintrust.tags"]).toEqual(["sendBookingLink"]);
+      .find((span) => span.name === "owner_nudge.sendBookingLink");
+    expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["sendBookingLink"]);
 
     // getPricing isn't sendBookingLink — its own span must not pick up the tag.
     const pricingSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "gen_ai.tool.getPricing");
     expect(pricingSpan?.attributes["braintrust.tags"]).toBeUndefined();
+
+    // sendBookingLink is SELF_STEPPED_TOOLS now, like wants_human/missing_info
+    // — it must not also be nested inside an outer "tool-sendBookingLink"
+    // step.run.
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-sendBookingLink");
   });
 
   it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an owner nudge", async () => {
@@ -475,6 +494,106 @@ describe("runAgentTurn", () => {
     expect(result.firedTags).toEqual(["missing_info"]);
   });
 
+  // The rest of missing_info's suspend/resume behavior — previously unit
+  // tested directly against missing-info.ts's exported runMissingInfo/
+  // waitForMissingInfoReply — now lives in run-turn.ts's private
+  // runMissingInfo (see that file's "tool files stay pure" rule) and can only
+  // be exercised indirectly through runAgentTurn, same as sendBookingLink's
+  // approval-gate flow above.
+  it("sends the missing_info owner nudge with the reason, conversationId, phone, and correlationId, and falls back to the owner-notified message (running the no-reply-timeout step) when step.waitForEvent times out", async () => {
+    // This suite's default: step.waitForEvent resolves null (a timeout).
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "missing_info",
+            input: { reason: "Guest asked about the sauna" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-sauna-timeout", phone: "+351900000020", incomingMessage: "Sauna?" },
+      { correlationId: "corr-sauna-timeout", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "convo-sauna-timeout",
+        phone: "+351900000020",
+        reason: "Guest asked about the sauna",
+        reasonCategory: "missing_info",
+        correlationId: "corr-sauna-timeout",
+      }),
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as
+      | Array<{ toolCallId: string; output: unknown }>
+      | undefined;
+    expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
+      type: "json",
+      value: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
+
+    // Both of missing_info's own steps ran: the nudge send and the
+    // no-reply-timeout fallback (which calls missing-info.ts's
+    // handleMissingInfoNoReply — a pure, unmocked, log-only function here).
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("owner-nudge-missing-info");
+    expect(stepIds).toContain("missing-info-no-reply");
+
+    const nudgeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.missing_info");
+    expect(nudgeSpan).toBeDefined();
+    const timeoutSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "missing_info.no_reply");
+    expect(timeoutSpan).toBeDefined();
+  });
+
+  it("skips the missing_info wait entirely (and still returns the fallback message) when the nudge itself failed to send", async () => {
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: false, error: "boom" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "missing_info",
+            input: { reason: "Guest asked about the sauna" },
+            toolCallId: "call_esc",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-nudge-fail", phone: "+351900000021", incomingMessage: "Sauna?" },
+      { correlationId: "corr-nudge-fail", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as
+      | Array<{ toolCallId: string; output: unknown }>
+      | undefined;
+    expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
+      type: "json",
+      value: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
+    // Nudge failed means nothing to wait on.
+    expect(step.waitForEvent).not.toHaveBeenCalled();
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("missing-info-no-reply");
+  });
+
   it("escalates a wants_human tool call as its own reason_category", async () => {
     generateTextMock
       .mockResolvedValueOnce(
@@ -498,15 +617,34 @@ describe("runAgentTurn", () => {
     );
 
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ reasonCategory: "wants_human" }),
+      expect.objectContaining({
+        conversationId: "convo-wants-human",
+        phone: "+351900000003",
+        reason: "Guest wants a human",
+        reasonCategory: "wants_human",
+      }),
     );
     // Same nesting concern as missing_info above.
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-wants_human");
+    // wants_human's owner-nudge send — previously wants-human.ts's own
+    // steppedSpan, now run-turn.ts's private dispatchWantsHuman (see that
+    // file's "tool files stay pure" rule) — keeps the exact same step id and
+    // span name.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-wants-human");
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "owner_nudge.wants_human"),
+    ).toBeDefined();
+    expect(result.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Sure, the owner will reach out shortly.",
+    });
     expect(result.firedTags).toEqual(["wants_human"]);
   });
 
-  it("routes wants_human and sendBookingLink through the stub HITL gate (which always approves today) before running them", async () => {
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("dispatches wants_human directly with no approval gate, while sendBookingLink goes through its own real APPROVAL_GATES-driven wait", async () => {
+    // sendBookingLink's approval-gate wait — resolve it approved so the call
+    // completes with a real { url } result in the same turn.
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -538,28 +676,78 @@ describe("runAgentTurn", () => {
       { correlationId: "corr-hitl", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
-    // Both gated tools still ran to completion (their real side effects
-    // fired) since the stub always approves — see run-turn.ts's
-    // requestHitlApproval and NEEDS_HITL.
+    // Both tools ran to completion — wants_human has no APPROVAL_GATES entry
+    // so it dispatches straight through with zero gating, sendBookingLink
+    // went through its own real requestApprovalGate wait (resolved approved
+    // above).
     const toolMessage = result.messages.find((m) => m.role === "tool");
     const bookParts = toolMessage?.content as Array<{ toolCallId: string; toolName: string }>;
     expect(bookParts.find((p) => p.toolCallId === "call_book")?.toolName).toBe("sendBookingLink");
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "wants_human" }),
     );
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("sendBookingLink"));
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("wants_human"));
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCategory: "send_booking_link" }),
+    );
+    // wants_human has no entry in run-turn.ts's APPROVAL_GATES table, so
+    // there's no nudge/wait step under its name at all — only
+    // sendBookingLink's, driven by requestApprovalGate.
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("owner-nudge-wants_human");
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-sendBookingLink");
     expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Sure thing!" });
-    // sendBookingLink isn't SELF_STEPPED_TOOLS-dispatched, so it never pushes
-    // into firedTags — it gets a real span of its own and is tagged there
-    // instead (see the "tags sendBookingLink's own span" test below).
-    expect(result.firedTags).toEqual(["wants_human"]);
-
-    consoleWarnSpy.mockRestore();
+    // Both tools are SELF_STEPPED_TOOLS, so both push into firedTags — order
+    // isn't asserted since the two dispatches run concurrently via
+    // Promise.all.
+    expect(result.firedTags).toEqual(expect.arrayContaining(["wants_human", "sendBookingLink"]));
+    expect(result.firedTags).toHaveLength(2);
   });
 
-  it("does not route getPricing through the stub HITL gate (only wants_human/sendBookingLink are gated)", async () => {
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("returns the not-approved result and never calls runSendBookingLink when the owner rejects a sendBookingLink approval", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "sendBookingLink",
+            input: {
+              guestName: "Ana",
+              room: "room1",
+              checkIn: "2026-09-01",
+              checkOut: "2026-09-05",
+            },
+            toolCallId: "call_book",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("No problem, let me know if anything changes."));
+
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-hitl-reject",
+        phone: "+351900000012",
+        incomingMessage: "Book it",
+      },
+      { correlationId: "corr-hitl-reject", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as Array<{ toolCallId: string; output: unknown }>;
+    // Rejected before ever reaching runSendBookingLink — the tool result is
+    // exactly the not-approved shape, never a { url }.
+    expect(parts.find((p) => p.toolCallId === "call_book")?.output).toEqual({
+      type: "json",
+      value: {
+        approved: false,
+        message: "This action was not approved. Do not retry it automatically.",
+      },
+    });
+    // A rejected gate still pushes into firedTags — same as before
+    // APPROVAL_GATES existed (a gated call that got a real nudge sent and a
+    // real decision made is still worth finding in this turn's trace tags).
+    expect(result.firedTags).toEqual(["sendBookingLink"]);
+  });
+
+  it("does not gate getPricing at all (no APPROVAL_GATES entry, so no nudge and no wait)", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -570,31 +758,39 @@ describe("runAgentTurn", () => {
 
     await runAgentTurn(
       {
-        conversationId: "convo-no-hitl",
+        conversationId: "convo-no-gate",
         phone: "+351900000011",
         incomingMessage: "How much is room 1?",
       },
-      { correlationId: "corr-no-hitl", traceAnchor: TEST_TRACE_ANCHOR, step },
+      { correlationId: "corr-no-gate", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
-    consoleWarnSpy.mockRestore();
+    expect(sendOwnerNudgeMock).not.toHaveBeenCalled();
+    expect(step.waitForEvent).not.toHaveBeenCalled();
   });
 
-  // generateText is mocked wholesale, so nothing stops it from "returning" a
-  // tool call for a name outside the real `tools` ToolSet — runToolCall()'s
-  // default case is what guards against that.
-  it("throws for an unrecognized tool call name", async () => {
-    generateTextMock.mockResolvedValueOnce(
-      toolCallResponse([{ toolName: "bogusTool", input: {}, toolCallId: "call_bogus" }]),
+  // Some models (deepseek included) have been observed hallucinating a
+  // close-but-wrong tool name in production despite native function-calling
+  // supposedly constraining them to the real `tools` ToolSet. runToolCall()'s
+  // default case turns that into a recoverable tool-result instead of
+  // crashing the whole turn, so the model can retry with a real name.
+  it("recovers from an unrecognized tool call name instead of crashing the turn", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([{ toolName: "bogusTool", input: {}, toolCallId: "call_bogus" }]),
+      )
+      .mockResolvedValueOnce(textResponse("Sorted, here you go."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-bogus", phone: "+351900000005", incomingMessage: "Whatever" },
+      { correlationId: "corr-bogus", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
-    await expect(
-      runAgentTurn(
-        { conversationId: "convo-bogus", phone: "+351900000005", incomingMessage: "Whatever" },
-        { correlationId: "corr-bogus", traceAnchor: TEST_TRACE_ANCHOR, step },
-      ),
-    ).rejects.toThrow(/unknown tool name.*bogusTool/i);
+    const toolMessage = result.messages.find((m) => m.role === "tool") as ModelMessage & {
+      content: Array<{ toolCallId: string; output: { value: unknown } }>;
+    };
+    const output = toolMessage?.content.find((p) => p.toolCallId === "call_bogus")?.output.value;
+    expect(output).toMatchObject({ error: expect.stringMatching(/unknown tool name.*bogusTool/i) });
   });
 });
 
