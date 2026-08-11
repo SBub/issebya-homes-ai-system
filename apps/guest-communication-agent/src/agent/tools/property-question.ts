@@ -1,3 +1,4 @@
+import type { Span } from "@opentelemetry/api";
 import { embed, tool } from "ai";
 import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
@@ -56,7 +57,7 @@ export async function runAnswerPropertyQuestion(
     value: args.query,
   });
 
-  return withSpan("db.matchDocuments", { "db.table": "documents" }, async (span) => {
+  async function matchDocumentsForQuery(span: Span): Promise<string> {
     const { data, error } = await supabaseAnon.rpc("match_documents", {
       query_embedding: JSON.stringify(embedding),
       match_count: 5,
@@ -78,5 +79,7 @@ export async function runAnswerPropertyQuestion(
     }
 
     return (data as DocumentMatch[]).map((d) => d.content).join("\n\n");
-  });
+  }
+
+  return withSpan("db.matchDocuments", { "db.table": "documents" }, matchDocumentsForQuery);
 }

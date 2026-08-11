@@ -1,3 +1,4 @@
+import type { Span } from "@opentelemetry/api";
 import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
 import { sendOwnerNudge } from "@/lib/telegram-router";
@@ -55,6 +56,26 @@ export async function requestOwnerNudge(params: {
 }): Promise<boolean> {
   const { conversationId, phone, reason, reasonCategory, correlationId } = params;
 
+  async function sendTelegramOwnerNudge(span: Span): Promise<boolean> {
+    const nudgeResult = await sendOwnerNudge({
+      phone,
+      reason,
+      reasonCategory,
+      conversationId,
+      correlationId,
+    });
+    if (!nudgeResult.ok) {
+      console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
+      markSpanFailed(
+        span,
+        nudgeResult.error ?? "telegram-router nudge failed with no error message",
+      );
+      return false;
+    }
+
+    return true;
+  }
+
   // Generic withSpan, not withTurnSpan: this `correlationId` param is
   // requestOwnerNudge's own business-logic value (missing_info and
   // send_booking_link both set it — see the doc comment above), not
@@ -73,24 +94,6 @@ export async function requestOwnerNudge(params: {
       "gca.conversation_id": conversationId,
       "gca.reason_category": reasonCategory,
     },
-    async (span) => {
-      const nudgeResult = await sendOwnerNudge({
-        phone,
-        reason,
-        reasonCategory,
-        conversationId,
-        correlationId,
-      });
-      if (!nudgeResult.ok) {
-        console.error("[owner-nudge] telegram-router nudge failed:", nudgeResult.error);
-        markSpanFailed(
-          span,
-          nudgeResult.error ?? "telegram-router nudge failed with no error message",
-        );
-        return false;
-      }
-
-      return true;
-    },
+    sendTelegramOwnerNudge,
   );
 }

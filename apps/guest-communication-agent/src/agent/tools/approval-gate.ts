@@ -1,3 +1,4 @@
+import type { Span } from "@opentelemetry/api";
 import type { GetStepTools } from "inngest";
 import { inngest } from "@/lib/inngest";
 import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
@@ -88,29 +89,31 @@ export async function requestApprovalGate(params: {
   // this real Telegram nudge on every replay). Mirrors missing-info.ts's
   // "owner-nudge-missing-info" step and booking.ts's original
   // "owner-nudge-send-booking-link" step, which this generalizes.
+  // braintrust.tags aggregates up to the whole trace from any span (see
+  // tracing.ts's withTurnSpan doc comment), so tagging this one span
+  // keeps a turn that attempted a gated tool call filterable by tool
+  // name. Tagged at nudge-send time, not once the decision is known,
+  // since a rejected/timed-out call is still worth being able to find
+  // in a trace search.
+  function sendGatedOwnerNudge(span: Span): Promise<boolean> {
+    span.setAttribute("braintrust.tags", [toolName]);
+    return requestOwnerNudge({
+      conversationId,
+      phone,
+      reason,
+      reasonCategory,
+      correlationId,
+      step,
+    });
+  }
+
   const nudged = await steppedSpan(
     step,
     `owner-nudge-${toolName}`,
     traceAnchor,
     `owner_nudge.${toolName}`,
     { "gca.conversation_id": conversationId, "gca.phone": phone },
-    (span) => {
-      // braintrust.tags aggregates up to the whole trace from any span (see
-      // tracing.ts's withTurnSpan doc comment), so tagging this one span
-      // keeps a turn that attempted a gated tool call filterable by tool
-      // name. Tagged at nudge-send time, not once the decision is known,
-      // since a rejected/timed-out call is still worth being able to find
-      // in a trace search.
-      span.setAttribute("braintrust.tags", [toolName]);
-      return requestOwnerNudge({
-        conversationId,
-        phone,
-        reason,
-        reasonCategory,
-        correlationId,
-        step,
-      });
-    },
+    sendGatedOwnerNudge,
   );
 
   // Nudge failed to send — skip straight to the not-approved result; there's

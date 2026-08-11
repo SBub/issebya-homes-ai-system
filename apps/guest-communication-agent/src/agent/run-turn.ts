@@ -1,3 +1,4 @@
+import type { Span } from "@opentelemetry/api";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
@@ -190,88 +191,90 @@ async function modelTurn(
   messages: ModelMessage[],
   turnAnchor: TraceAnchor,
 ): Promise<ModelTurnResult> {
+  async function runModelChatTurn(span: Span): Promise<ModelTurnResult> {
+    // Plain non-generic closure over `tools`, purely so `typeof callModel`
+    // below gives `result` the exact GenerateTextResult<typeof tools, ...>
+    // shape — `ReturnType<typeof generateText>` on the generic function
+    // itself widens back to a bare ToolSet and loses the specific tool
+    // types.
+    const callModel = () =>
+      generateText({
+        model,
+        system,
+        messages,
+        tools,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+      });
+
+    let result: Awaited<ReturnType<typeof callModel>>;
+    let attempt = 0;
+    for (;;) {
+      attempt++;
+      result = await callModel();
+      const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
+      if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
+        break;
+      }
+      console.warn(
+        `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
+      );
+      // Same signal as the console.warn above, but attached to the span so
+      // it's visible in the Axiom/Braintrust trace itself, not just server
+      // logs nobody is watching.
+      span.addEvent("gen_ai.retry", {
+        attempt,
+        finishReason: result.finishReason,
+      });
+    }
+
+    span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+    span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+    span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
+    span.setAttribute("gen_ai.request.attempt_count", attempt);
+    // Duplicated under braintrust.* so it actually shows up as this
+    // span's Input/Output in Braintrust's UI — the gen_ai.* attributes
+    // above alone only ever land in Metadata. See the doc comment above
+    // withTurnSpan in tracing.ts for the full braintrust.* mapping.
+    span.setAttribute("braintrust.input", JSON.stringify(messages));
+    span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
+    // Optional chaining: `usage` is always present on a real AI SDK
+    // generateText() result, but test mocks in this repo return a
+    // trimmed-down shape without it.
+    if (result.usage?.inputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+    }
+    if (result.usage?.outputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+    }
+
+    // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
+    // content-filter finish) — flag it so it shows up as an ERROR span
+    // instead of blending into every other "OK" span in the trace. See
+    // markSpanFailed's own comment for why this doesn't need to throw to
+    // be visible.
+    if (result.text.trim() === "" && result.toolCalls.length === 0) {
+      markSpanFailed(
+        span,
+        `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
+      );
+    }
+
+    return {
+      text: result.text,
+      toolCalls: result.toolCalls.map((call) => ({
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: call.input as Record<string, unknown>,
+      })),
+      response: { messages: result.response.messages },
+    };
+  }
+
   return withTurnSpan(
     turnAnchor,
     "gen_ai.chat",
     { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
-    async (span) => {
-      // Plain non-generic closure over `tools`, purely so `typeof callModel`
-      // below gives `result` the exact GenerateTextResult<typeof tools, ...>
-      // shape — `ReturnType<typeof generateText>` on the generic function
-      // itself widens back to a bare ToolSet and loses the specific tool
-      // types.
-      const callModel = () =>
-        generateText({
-          model,
-          system,
-          messages,
-          tools,
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-        });
-
-      let result: Awaited<ReturnType<typeof callModel>>;
-      let attempt = 0;
-      for (;;) {
-        attempt++;
-        result = await callModel();
-        const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
-        if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
-          break;
-        }
-        console.warn(
-          `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
-        );
-        // Same signal as the console.warn above, but attached to the span so
-        // it's visible in the Axiom/Braintrust trace itself, not just server
-        // logs nobody is watching.
-        span.addEvent("gen_ai.retry", {
-          attempt,
-          finishReason: result.finishReason,
-        });
-      }
-
-      span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
-      span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
-      span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
-      span.setAttribute("gen_ai.request.attempt_count", attempt);
-      // Duplicated under braintrust.* so it actually shows up as this
-      // span's Input/Output in Braintrust's UI — the gen_ai.* attributes
-      // above alone only ever land in Metadata. See the doc comment above
-      // withTurnSpan in tracing.ts for the full braintrust.* mapping.
-      span.setAttribute("braintrust.input", JSON.stringify(messages));
-      span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
-      // Optional chaining: `usage` is always present on a real AI SDK
-      // generateText() result, but test mocks in this repo return a
-      // trimmed-down shape without it.
-      if (result.usage?.inputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
-      }
-      if (result.usage?.outputTokens !== undefined) {
-        span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
-      }
-
-      // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
-      // content-filter finish) — flag it so it shows up as an ERROR span
-      // instead of blending into every other "OK" span in the trace. See
-      // markSpanFailed's own comment for why this doesn't need to throw to
-      // be visible.
-      if (result.text.trim() === "" && result.toolCalls.length === 0) {
-        markSpanFailed(
-          span,
-          `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
-        );
-      }
-
-      return {
-        text: result.text,
-        toolCalls: result.toolCalls.map((call) => ({
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          input: call.input as Record<string, unknown>,
-        })),
-        response: { messages: result.response.messages },
-      };
-    },
+    runModelChatTurn,
   );
 }
 
@@ -585,7 +588,16 @@ export async function runAgentTurn(
   // every Inngest replay — left inside the loop, a replay reaching round N
   // would re-fetch the Braintrust prompt for every round 1..N that already
   // ran (wasted API calls).
-  //
+  async function loadSystemPromptText(): Promise<string> {
+    const promptTemplate = await loadPrompt({
+      projectId: process.env.BRAINTRUST_PROJECT_ID,
+      slug: SYSTEM_PROMPT_SLUG,
+      ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
+    });
+    const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
+    return messages[0].content as string;
+  }
+
   // Cast needed — see steppedSpan's doc comment in tracing.ts for why
   // step.run()'s return type gets narrowed at all. The system prompt here
   // is always a plain string, so the narrowing is a false positive for this
@@ -596,15 +608,7 @@ export async function runAgentTurn(
     turnAnchor,
     "load-system-prompt",
     {},
-    async () => {
-      const promptTemplate = await loadPrompt({
-        projectId: process.env.BRAINTRUST_PROJECT_ID,
-        slug: SYSTEM_PROMPT_SLUG,
-        ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
-      });
-      const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
-      return messages[0].content as string;
-    },
+    loadSystemPromptText,
   )) as string;
 
   console.log("contextBlock", contextBlock);
@@ -696,26 +700,28 @@ export async function runAgentTurn(
           return output;
         }
 
+        async function dispatchTracedToolCall(span: Span) {
+          const output = await runToolCall(call.toolName, call.input, toolContext);
+          span.setAttribute("gca.tool.input", JSON.stringify(call.input));
+          span.setAttribute("gca.tool.output", JSON.stringify(output));
+          // Same braintrust.* duplication as modelTurn above — see
+          // tracing.ts's withTurnSpan doc comment for why.
+          span.setAttribute("braintrust.input", JSON.stringify(call.input));
+          span.setAttribute("braintrust.output", JSON.stringify(output));
+          // sendBookingLink doesn't reach this generic wrapper (see
+          // SELF_STEPPED_TOOLS above) — its "braintrust.tags" tagging
+          // happens inside approval-gate.ts's requestApprovalGate span
+          // instead.
+          return output;
+        }
+
         return await steppedSpan(
           step,
           `tool-${call.toolName}`,
           turnAnchor,
           `gen_ai.tool.${call.toolName}`,
           { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-          async (span) => {
-            const output = await runToolCall(call.toolName, call.input, toolContext);
-            span.setAttribute("gca.tool.input", JSON.stringify(call.input));
-            span.setAttribute("gca.tool.output", JSON.stringify(output));
-            // Same braintrust.* duplication as modelTurn above — see
-            // tracing.ts's withTurnSpan doc comment for why.
-            span.setAttribute("braintrust.input", JSON.stringify(call.input));
-            span.setAttribute("braintrust.output", JSON.stringify(output));
-            // sendBookingLink doesn't reach this generic wrapper (see
-            // SELF_STEPPED_TOOLS above) — its "braintrust.tags" tagging
-            // happens inside approval-gate.ts's requestApprovalGate span
-            // instead.
-            return output;
-          },
+          dispatchTracedToolCall,
         );
       }),
     );
@@ -836,23 +842,22 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
   );
 
+  async function sendGuestWhatsAppReply(span: Span) {
+    const sendResult = await sendWhatsAppMessage(phone, replyText);
+    if (!sendResult.ok) {
+      console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
+      markSpanFailed(span, sendResult.error ?? "sendWhatsAppMessage failed with no error message");
+    }
+    return sendResult;
+  }
+
   await steppedSpan(
     step,
     "send-whatsapp-reply",
     traceAnchor,
     "send-whatsapp-reply",
     { "gca.phone": phone },
-    async (span) => {
-      const sendResult = await sendWhatsAppMessage(phone, replyText);
-      if (!sendResult.ok) {
-        console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
-        markSpanFailed(
-          span,
-          sendResult.error ?? "sendWhatsAppMessage failed with no error message",
-        );
-      }
-      return sendResult;
-    },
+    sendGuestWhatsAppReply,
   );
 }
 
