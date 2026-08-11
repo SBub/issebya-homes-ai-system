@@ -9,6 +9,7 @@ import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
 import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
+import { runCode, runRunCode } from "@/agent/tools/run-code";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
@@ -77,6 +78,7 @@ const tools = {
   answerPropertyQuestion,
   sendBookingLink,
   getCurrentDate,
+  runCode,
   wants_human: wantsHuman,
   missing_info: missingInfo,
 } satisfies ToolSet;
@@ -248,6 +250,8 @@ async function runToolCall(
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
     case "getCurrentDate":
       return runGetCurrentDate();
+    case "runCode":
+      return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
       return runWantsHuman(input as Parameters<typeof runWantsHuman>[0], context);
     case "missing_info":

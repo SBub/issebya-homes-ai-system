@@ -1,0 +1,9 @@
+.vercel
+# `.env.local` is pulled via `vercel env pull .env.local` (see
+# scripts/verify-vercel-sandbox.ts) — contains VERCEL_OIDC_TOKEN, a real
+# (short-lived) credential. Must be a Next.js-recognized dotenv filename
+# (.env.local, not an arbitrary name like .env.vercel.local) so `next dev`/
+# `next start` actually load it into process.env — an arbitrary filename
+# silently never gets read by the running app, which is what let Sandbox.create()
+# fall back to an ambient default project instead of this one. Never commit it.
+.env*.local
