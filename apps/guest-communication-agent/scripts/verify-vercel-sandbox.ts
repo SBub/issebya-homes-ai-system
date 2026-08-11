@@ -1,7 +1,7 @@
 // THROWAWAY verification script — proves Vercel Sandbox creds/connectivity
 // work end to end before wiring runCode into the real agent. Not part of the
 // app; run manually with:
-//   yarn tsx --env-file=.env.vercel.local scripts/verify-vercel-sandbox.ts
+//   yarn tsx --env-file=.env.local scripts/verify-vercel-sandbox.ts
 // Delete (or keep as a smoke test) once verified.
 import { Sandbox } from "@vercel/sandbox";
 
