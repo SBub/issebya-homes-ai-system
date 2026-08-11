@@ -21,6 +21,14 @@ import { runInSandbox, type SandboxApi } from "@/agent/tools/sandbox";
 
 const runCodeSchema = z.object({ code: z.string() });
 
+// Mirrors sandbox.ts's SandboxResult exactly — gives the model (and anything
+// typing off this tool) the real output shape instead of only a prose
+// description of it.
+const runCodeOutputSchema = z.union([
+  z.object({ ok: z.literal(true), result: z.unknown(), logs: z.array(z.string()) }),
+  z.object({ ok: z.literal(false), error: z.string(), logs: z.array(z.string()) }),
+]);
+
 // Real closures, called in THIS process — exactly the reference's
 // `sandboxApi` object. sandbox.ts's Vercel Sandbox implementation can't ship
 // these closures into the remote VM directly (see its top-of-file comment);
@@ -57,9 +65,9 @@ export const runCode = tool({
     "  • console.log(...) for debugging — captured and returned in `logs`",
     "Use `return` to return your result (any JSON-serializable value).",
     "This does NOT have access to sendBookingLink or any tool that moves real state/money — those must still be called normally, after the guest/owner has approved.",
-    "Returns { ok: true, result, logs } on success, or { ok: false, error, logs } if the program threw or timed out.",
   ].join("\n"),
   inputSchema: runCodeSchema,
+  outputSchema: runCodeOutputSchema,
 });
 
 export async function runRunCode(args: z.infer<typeof runCodeSchema>) {
