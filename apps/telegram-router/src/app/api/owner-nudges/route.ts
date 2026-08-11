@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/telegram/auth";
 import { sendMessage, sendWithRetry } from "@/lib/telegram/telegram";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 /**
  * Inbound endpoint for apps/guest-communication-agent's own
@@ -88,38 +89,49 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let text: string;
-  switch (reasonCategory) {
-    case "missing_info":
-      text = `🔍 Missing info\nGuest ${phone} asked: "${reason}"\n\nReply to this message with the answer — I'll send it to the guest and add it to the knowledge base.`;
-      if (correlationId) {
-        text += `\n\n[ref:${correlationId}]`;
+  return withSpan(
+    "owner_nudges.send",
+    { "gca.reason_category": reasonCategory, "gca.conversation_id": conversationId },
+    async (span) => {
+      let text: string;
+      switch (reasonCategory) {
+        case "missing_info":
+          text = `🔍 Missing info\nGuest ${phone} asked: "${reason}"\n\nReply to this message with the answer — I'll send it to the guest and add it to the knowledge base.`;
+          if (correlationId) {
+            text += `\n\n[ref:${correlationId}]`;
+          }
+          break;
+        case "wants_human":
+          text = `🙋 Wants human\nGuest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
+          break;
+        case "send_booking_link":
+          text = `🔗 Booking link\n${reason}\n\nApprove sending the booking link to the guest?`;
+          break;
+        default:
+          text = `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
       }
-      break;
-    case "wants_human":
-      text = `🙋 Wants human\nGuest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
-      break;
-    case "send_booking_link":
-      text = `🔗 Booking link\n${reason}\n\nApprove sending the booking link to the guest?`;
-      break;
-    default:
-      text = `Guest ${phone} needs you: ${reason}\n\nConversation: ${conversationId}`;
-  }
 
-  if (reasonCategory === "send_booking_link" && correlationId) {
-    const approveButton = { text: "✅ Approve", callbackData: `booking_approve:${correlationId}` };
-    const rejectButton = { text: "❌ Reject", callbackData: `booking_reject:${correlationId}` };
-    const result = await sendWithRetry(() => sendMessage(text, [approveButton, rejectButton]));
-    if (!result.ok) {
-      return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
-    }
-    return NextResponse.json({ ok: true });
-  }
+      if (reasonCategory === "send_booking_link" && correlationId) {
+        const approveButton = {
+          text: "✅ Approve",
+          callbackData: `booking_approve:${correlationId}`,
+        };
+        const rejectButton = { text: "❌ Reject", callbackData: `booking_reject:${correlationId}` };
+        const result = await sendWithRetry(() => sendMessage(text, [approveButton, rejectButton]));
+        if (!result.ok) {
+          markSpanFailed(span, result.error ?? "sendMessage failed");
+          return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+        }
+        return NextResponse.json({ ok: true });
+      }
 
-  const result = await sendWithRetry(() => sendMessage(text));
-  if (!result.ok) {
-    return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
-  }
+      const result = await sendWithRetry(() => sendMessage(text));
+      if (!result.ok) {
+        markSpanFailed(span, result.error ?? "sendMessage failed");
+        return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+      }
 
-  return NextResponse.json({ ok: true });
+      return NextResponse.json({ ok: true });
+    },
+  );
 }

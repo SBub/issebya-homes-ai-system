@@ -3,6 +3,7 @@ import { z } from "zod";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
 import { createAdminClient } from "@/lib/supabase";
+import { withSpan } from "@/lib/tracing";
 
 // Consolidated home for the missing_info tool's pure parts: the schema/
 // declaration the model sees, the shared event/timeout constants, and both
@@ -14,8 +15,12 @@ import { createAdminClient } from "@/lib/supabase";
 // The real suspend/wait — sending the nudge (its own step), step.waitForEvent
 // itself, and the no-reply-timeout fallback step — lives in run-turn.ts's
 // private runMissingInfo, not here (see run-turn.ts's "tool files stay pure"
-// rule near `tools`). This file has no step/span/Inngest-function import of
-// its own; inngest.send below is a plain event send, not a step.
+// rule near `tools`). This file has no step/Inngest-function import of its
+// own; inngest.send below is a plain event send, not a step. The withSpan
+// import is the same narrow exception property-question.ts documents near
+// its db.matchDocuments call: it wraps only this file's own DB write, never
+// touches step/Inngest, and nests under the trace root the calling route
+// (owner-nudges/[correlationId]/answer/route.ts) already opens.
 //
 // There is no escalations DB row — the correlation id itself, embedded in
 // the Telegram nudge text as `[ref:<correlationId>]` and echoed back via the
@@ -84,18 +89,21 @@ export async function handleMissingInfoReplyReceived(params: {
     value: answer,
   });
 
-  const { data: inserted, error: insertError } = await supabase
-    .from("documents")
-    .insert({
-      content: answer,
-      embedding: JSON.stringify(embedding),
-      metadata: { source: "owner_nudge_answer" },
-    })
-    .select("id")
-    .single();
-  if (insertError || !inserted) {
-    throw new Error(insertError?.message ?? "documents insert returned no row");
-  }
+  const inserted = await withSpan("db.insertDocument", { "db.table": "documents" }, async () => {
+    const { data, error: insertError } = await supabase
+      .from("documents")
+      .insert({
+        content: answer,
+        embedding: JSON.stringify(embedding),
+        metadata: { source: "owner_nudge_answer" },
+      })
+      .select("id")
+      .single();
+    if (insertError || !data) {
+      throw new Error(insertError?.message ?? "documents insert returned no row");
+    }
+    return data;
+  });
 
   await inngest.send({ name: OWNER_NUDGE_ANSWERED_EVENT, data: { correlationId, answer } });
 

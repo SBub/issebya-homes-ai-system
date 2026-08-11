@@ -1,3 +1,5 @@
+import { markSpanFailed, withSpan } from "@/lib/tracing";
+
 const TELEGRAM_API = "https://api.telegram.org";
 
 export interface TelegramResult {
@@ -79,25 +81,29 @@ export async function sendMessage(
     return { ok: true };
   }
 
-  try {
-    const payload: Record<string, unknown> = { chat_id: chatId, text };
-    if (buttons && buttons.length > 0) {
-      payload.reply_markup = {
-        inline_keyboard: [
-          buttons.map((button) => ({ text: button.text, callback_data: button.callbackData })),
-        ],
-      };
+  return withSpan("telegram.send_message", {}, async (span) => {
+    try {
+      const payload: Record<string, unknown> = { chat_id: chatId, text };
+      if (buttons && buttons.length > 0) {
+        payload.reply_markup = {
+          inline_keyboard: [
+            buttons.map((button) => ({ text: button.text, callback_data: button.callbackData })),
+          ],
+        };
+      }
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await parseTelegramResponse(res, "sendMessage");
+      return { ok: true, messageId: body.result?.message_id };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      markSpanFailed(span, message);
+      return { ok: false, error: message };
     }
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const body = await parseTelegramResponse(res, "sendMessage");
-    return { ok: true, messageId: body.result?.message_id };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  });
 }
 
 /**
@@ -127,17 +133,21 @@ export async function answerCallbackQuery(
     return { ok: true };
   }
 
-  try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
-    });
-    await parseTelegramResponse(res, "answerCallbackQuery");
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return withSpan("telegram.answer_callback", {}, async (span) => {
+    try {
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+      });
+      await parseTelegramResponse(res, "answerCallbackQuery");
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      markSpanFailed(span, message);
+      return { ok: false, error: message };
+    }
+  });
 }
 
 /** Edits a previously-sent message's text and clears its inline keyboard (e.g. after ack). */
@@ -148,20 +158,24 @@ export async function editMessageText(messageId: number, text: string): Promise<
     return { ok: true };
   }
 
-  try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text,
-        reply_markup: { inline_keyboard: [] },
-      }),
-    });
-    await parseTelegramResponse(res, "editMessageText");
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return withSpan("telegram.edit_message", {}, async (span) => {
+    try {
+      const res = await fetch(`${TELEGRAM_API}/bot${token}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          text,
+          reply_markup: { inline_keyboard: [] },
+        }),
+      });
+      await parseTelegramResponse(res, "editMessageText");
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      markSpanFailed(span, message);
+      return { ok: false, error: message };
+    }
+  });
 }

@@ -7725,6 +7725,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "telegram-router@workspace:apps/telegram-router"
   dependencies:
+    "@opentelemetry/api": "npm:^1.9.1"
+    "@opentelemetry/context-async-hooks": "npm:^2.10.0"
+    "@opentelemetry/exporter-trace-otlp-http": "npm:^0.221.0"
+    "@opentelemetry/resources": "npm:^2.0.0"
+    "@opentelemetry/sdk-trace-base": "npm:^2.10.0"
+    "@opentelemetry/semantic-conventions": "npm:^1.43.0"
     "@types/node": "npm:^26.1.1"
     "@types/react": "npm:^19"
     "@types/react-dom": "npm:^19"
