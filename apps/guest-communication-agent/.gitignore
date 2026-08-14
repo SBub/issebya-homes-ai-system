@@ -1,4 +1,8 @@
 .vercel
+# `bt functions push`'s local cache of downloaded bundler/runner tooling
+# (versioned by `bt` release, e.g. .bt/functions-runners/0.12.0/) — CLI
+# tooling cache, not project source, safe to redownload.
+.bt/
 # `.env.local` is pulled via `vercel env pull .env.local` (see
 # scripts/verify-vercel-sandbox.ts) — contains VERCEL_OIDC_TOKEN, a real
 # (short-lived) credential. Must be a Next.js-recognized dotenv filename
