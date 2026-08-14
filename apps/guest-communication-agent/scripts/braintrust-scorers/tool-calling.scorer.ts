@@ -66,27 +66,27 @@ function toolDescription(name: string, t: { description?: string }): string {
 // keyed in snake_case to match the literal tool names the model sees (same
 // as run-turn.ts's `tools` object).
 const TOOL_DESCRIPTIONS: Record<string, string> = {
-  getPricing: toolDescription("getPricing", getPricing),
-  checkAvailability: toolDescription("checkAvailability", checkAvailability),
-  answerPropertyQuestion: toolDescription("answerPropertyQuestion", answerPropertyQuestion),
-  getCurrentDate: toolDescription("getCurrentDate", getCurrentDate),
-  runCode: toolDescription("runCode", runCode),
-  sendBookingLink: toolDescription("sendBookingLink", sendBookingLink),
+  get_pricing: toolDescription("get_pricing", getPricing),
+  check_availability: toolDescription("check_availability", checkAvailability),
+  answer_property_question: toolDescription("answer_property_question", answerPropertyQuestion),
+  get_current_date: toolDescription("get_current_date", getCurrentDate),
+  run_code: toolDescription("run_code", runCode),
+  send_booking_link: toolDescription("send_booking_link", sendBookingLink),
   wants_human: toolDescription("wants_human", wantsHuman),
   missing_info: toolDescription("missing_info", missingInfo),
 };
 
 // Tools whose gen_ai.tool.* span isn't guaranteed every time they fire (see
 // SELF_STEPPED_TOOLS in run-turn.ts), so a guest_turn span's `tags` array is
-// gatherToolsCalled's fallback signal for them: sendBookingLink only gets one
-// on the approved path (a rejected/timed-out call has no span, only the tag).
-// missing_info and wants_human used to belong here too, but run-turn.ts's
-// runMissingInfo/dispatchWantsHuman now each wrap their final result in a
-// steppedSpan unconditionally — every exit path gets a real
+// gatherToolsCalled's fallback signal for them: send_booking_link only gets
+// one on the approved path (a rejected/timed-out call has no span, only the
+// tag). missing_info and wants_human used to belong here too, but
+// run-turn.ts's runMissingInfo/dispatchWantsHuman now each wrap their final
+// result in a steppedSpan unconditionally — every exit path gets a real
 // gen_ai.tool.missing_info/gen_ai.tool.wants_human span, so their tag is
 // always redundant with a span gatherToolsCalled already found (defensive
 // dedup still applies below regardless).
-const TAG_ONLY_TOOLS = new Set(["sendBookingLink"]);
+const TAG_ONLY_TOOLS = new Set(["send_booking_link"]);
 
 const RUBRIC_PROMPT = `You are evaluating whether the issebya.homes WhatsApp concierge agent (a guest house in Almoçageme, Portugal) called the right tool(s), if any, while handling one guest message.
 
@@ -106,7 +106,7 @@ Guest message:
 {{input}}
 """
 
-Tools called this turn (name, and real input/output where available — a rejected/timed-out sendBookingLink never gets a logged input/output, only its name, since it's detected via a different code path):
+Tools called this turn (name, and real input/output where available — a rejected/timed-out send_booking_link never gets a logged input/output, only its name, since it's detected via a different code path):
 {{toolsCalled}}
 
 Concierge's final reply:
@@ -199,8 +199,8 @@ interface ToolCallInfo {
   name: string;
   // Present whenever a real gen_ai.tool.* span was found (the 5 non-gated
   // tools, missing_info/wants_human unconditionally, and an approved
-  // sendBookingLink). Undefined only for a rejected/timed-out sendBookingLink,
-  // which is tag-only evidence — see TAG_ONLY_TOOLS above.
+  // send_booking_link). Undefined only for a rejected/timed-out
+  // send_booking_link, which is tag-only evidence — see TAG_ONLY_TOOLS above.
   input?: string;
   output?: string;
 }
@@ -318,7 +318,7 @@ project.scorers.create({
   name: "Correct Tool Calling",
   slug: "gca-correct-tool-calling",
   description:
-    "LLM-judge scorer: did GCA call the right tool(s), if any, for the guest's message? Correlates sibling gen_ai.tool.* spans and tag-only tools (wants_human/missing_info/sendBookingLink) via trace.getSpans(). 3 temperature-0 trials averaged, real chain-of-thought.",
+    "LLM-judge scorer: did GCA call the right tool(s), if any, for the guest's message? Correlates sibling gen_ai.tool.* spans and tag-only tools (wants_human/missing_info/send_booking_link) via trace.getSpans(). 3 temperature-0 trials averaged, real chain-of-thought.",
   ifExists: "replace",
   handler: async ({ input, output, trace }) => {
     // Braintrust's online-scoring rule fires on both the near-empty

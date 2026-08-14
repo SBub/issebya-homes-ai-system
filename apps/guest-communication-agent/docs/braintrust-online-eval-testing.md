@@ -3669,3 +3669,165 @@ example that exists.
   produces a real `0` on organic post-recreation traffic, treat that as
   confirmed recurrence and re-escalate. No further code change is in scope
   here per this task's own read-only constraint.
+
+## 14. Tool-name naming-convention rename — repo-side DONE 2026-08-14, live Braintrust prompt edit NOT YET PUBLISHED
+
+Executes the plan section 9 laid out (audit + proposal only, nothing
+executed). This section is the actual rename: all 6 previously-camelCase
+tool names are now snake_case everywhere they appear as a model-facing
+string (object keys, span/step-id string literals, scorer constants, test
+fixtures). The 2 already-snake_case tools (`wants_human`, `missing_info`)
+were left untouched. TS identifiers (the function/variable names imported
+from each tool's own file — `sendBookingLink`, `getPricing`,
+`checkAvailability`, `answerPropertyQuestion`, `getCurrentDate`, `runCode`,
+`wantsHuman`, `missingInfo`, and every `run<ToolName>`/`dispatch<ToolName>`
+helper) are **unchanged** — only the model-facing string names changed.
+
+| Before | After |
+|---|---|
+| `getPricing` | `get_pricing` |
+| `checkAvailability` | `check_availability` |
+| `answerPropertyQuestion` | `answer_property_question` |
+| `sendBookingLink` | `send_booking_link` |
+| `getCurrentDate` | `get_current_date` |
+| `runCode` | `run_code` |
+| `wants_human` | unchanged |
+| `missing_info` | unchanged |
+
+### 14a. Files changed
+
+- **`src/agent/run-turn.ts`** — the `tools` object literal's keys (the real
+  AI-SDK-facing declaration passed to `generateText({ tools, ... })`);
+  `SELF_STEPPED_TOOLS`'s `"sendBookingLink"` entry; `APPROVAL_GATES`'s
+  `sendBookingLink:` key; `runToolCall`'s `switch` case labels; every prose
+  comment referencing a renamed tool by its old string name (the "tool files
+  stay pure" block's own tools-declaration comment, `SELF_STEPPED_TOOLS`'s
+  comment, `APPROVAL_GATES`'s comment, `dispatchGatedToolCall`'s comment,
+  `RunAgentTurnResult.firedTags`'s comment, and the dispatch loop's own
+  inline comments), plus the default-case hallucination example
+  (`"getCurrentDates"` → `"get_current_dates"`).
+- **`src/agent/tools/approval-gate.ts`** — **no change needed.** Confirmed by
+  full read: every span name/step id here (`` `owner_nudge.${toolName}` ``
+  etc.) is templated off the `toolName` parameter passed in by the caller, not
+  hardcoded — it picks up the rename automatically once run-turn.ts passes
+  the new snake_case string.
+- **`scripts/braintrust-scorers/hitl-compliance.scorer.ts`** — the 4
+  hardcoded span-name constants (`EXECUTION_SPAN_NAME`, `DECISION_SPAN_NAME`,
+  `TIMEOUT_SPAN_NAME`, `NUDGE_SPAN_NAME`, all `sendBookingLink`-specific, per
+  9a's own finding that these — unlike approval-gate.ts's generic templates —
+  are NOT computed), plus every prose comment/rationale string that named the
+  tool by its old string.
+- **`scripts/braintrust-scorers/tool-calling.scorer.ts`** — `TOOL_DESCRIPTIONS`'s
+  6 renamed keys (object keys only; the values still call the real, unchanged
+  `toolDescription("get_pricing", getPricing)`-style TS identifiers);
+  `TAG_ONLY_TOOLS`'s `"sendBookingLink"` entry; the `RUBRIC_PROMPT` template
+  text (the literal string sent to the LLM judge); every prose
+  comment/`description` string naming the tool.
+- **`tests/agent/tools/approval-gate.test.ts`** — `gateParamsBase.toolName`
+  (the stand-in value this file uses to exercise the generic gate mechanism)
+  and every span-name string built from it in assertions. Note:
+  `gateParamsBase.reasonCategory` was already `"send_booking_link"` before
+  this rename (a separate, pre-existing `OwnerNudgeReason` value, per 9c) —
+  it now reads identically to the renamed `toolName`, which is a coincidence
+  of the rename, not a merge of two previously-distinct concepts. See 14c.
+- **`tests/agent/run-turn.test.ts`** — every `toolName: "..."` fixture value
+  in `toolCallResponse([...])` calls, every derived span-name/step-id string
+  assertion (`gen_ai.tool.*`, `owner_nudge.*`, `tool-*`, `execute-*`,
+  `update-*-trace-io`, `owner-nudge-*`), and prose comments naming a tool.
+  This was the largest single file (72 lines touched).
+- **`tests/scripts/braintrust-scorers/hitl-compliance.scorer.test.ts`** —
+  every fixture's `span_attributes.name`/`tags`/`metadata["gen_ai.tool.name"]`
+  value that encoded the old `sendBookingLink` span-name convention, plus
+  prose test descriptions/comments.
+- **`tests/agent/tools/booking.test.ts`** — read in full; confirmed no
+  model-facing tool-name string literal exists in this file (it only
+  references the unchanged TS identifiers `runSendBookingLink`,
+  `buildBookingApprovalReason`, `handleBookingLinkApprovalReceived`,
+  `BOOKING_LINK_APPROVAL_EVENT`) — **no edit made.**
+- No `tests/scripts/braintrust-scorers/tool-calling.scorer.test.ts` exists
+  (checked) — nothing to update there.
+
+### 14b. Deliberately left alone: `src/agent/tools/run-code.ts` / `sandbox.ts`'s inner sandbox API
+
+Per 9a's own flag, `run_code`'s tool `description` string documents a
+**separate, third naming surface**: the agent-authored sandbox script calls
+`tools.checkAvailability(...)`, `tools.getPricing(...)`,
+`tools.getCurrentDate()` as plain JS object keys inside the sandboxed
+program, backed by `sandbox.ts`'s `SUPPORTED_TOOLS` allowlist and
+hand-written method shims. This task's explicit scope was the top-level
+`tools` object in run-turn.ts and its listed lockstep touch points — nothing
+in the task instructions named this inner API, and 9a already flagged
+renaming it as "a conscious call, not a miss" requiring its own decision, not
+something to fold silently into this pass. Left entirely untouched:
+`SUPPORTED_TOOLS`, `buildScript`'s `requested.has(...)` checks, the generated
+script's own `tools.*` method names, `sandboxApi`'s object keys in
+run-code.ts, and that file's `description` string and top-of-file prose
+comments (including two lines — "call checkAvailability 5+ times" and
+"runCode lets it write" — that read as describing the top-level renamed
+tools but sit inside the same comment block as the inner-API discussion; left
+alone rather than picked apart line-by-line). **Flagged for human review**:
+decide whether this inner sandbox API should also go snake_case for
+consistency, as its own separate change.
+
+### 14c. `send_booking_link` (tool name) vs `send_booking_link` (nudge reason category) — same string now, still two different fields
+
+`src/agent/tools/owner-nudge.ts`'s `OwnerNudgeReason` type already had a
+`"send_booking_link"` member before this rename (a pre-existing, independent
+naming space for the Telegram-nudge reason category, unrelated to the
+AI-SDK tool-calling name — see 9a). That type and its 3 literal values were
+**not touched** by this rename. The coincidence flagged in 9c is now real:
+`APPROVAL_GATES`'s key (`send_booking_link`, the tool name) and
+`gate.reasonCategory`'s value (`send_booking_link`, the nudge category) read
+identically, but remain two different fields on two different objects
+(`run-turn.ts`'s `APPROVAL_GATES[toolName]` vs.
+`ApprovalGateConfig.reasonCategory`) that happen to share spelling now. No
+code conflict; noted here so a future reader doesn't assume they were merged
+into one concept.
+
+### 14d. Verification
+
+- `yarn tsc --noEmit` — clean, no errors.
+- `yarn vitest run` — 15 test files, 118 tests, all passing.
+- Full-repo grep for the 6 old camelCase names as quoted string literals
+  (`"sendBookingLink"`, `"getPricing"`, `"checkAvailability"`,
+  `"answerPropertyQuestion"`, `"getCurrentDate"`, `"runCode"`, across
+  `.ts`/`.tsx`/`.json`/`.md`) turns up zero remaining hits anywhere in
+  `src/`, `scripts/`, `tests/` except the two deliberately-excluded files in
+  14b.
+
+### 14e. The live Braintrust `gca-system` prompt — fetched, staged, NOT published
+
+Confirms 9b's finding against the real, currently-live prompt (fetched via
+`GET /v1/prompt?project_id=...&slug=gca-system`, prompt id
+`a3a26262-ffd9-45fd-97f5-cc69ac4962ab`, `_xact_id`
+`1000197663151289351`, `created: 2026-08-10T11:09:02.383Z`): the live prompt
+text names 4 of the 6 renamed tools by their exact old literal string, in
+real behavioral instructions, exactly matching 9b's counts —
+`sendBookingLink` (6 mentions, rules 5 + closing reminder),
+`answerPropertyQuestion` (3, rule 1), `getPricing` (1, rule 4),
+`checkAvailability` (1, rule 3). `getCurrentDate` and `runCode` are not
+mentioned anywhere in the prompt (0 mentions each — repo-only, already safe
+today with no prompt coordination needed).
+
+**A full substitution-only staged version was prepared** — the exact current
+prompt text with only the 4 tool names swapped to their new snake_case form
+(`answerPropertyQuestion`→`answer_property_question`,
+`checkAvailability`→`check_availability`, `getPricing`→`get_pricing`,
+`sendBookingLink`→`send_booking_link`), nothing else changed (confirmed via
+`diff` against the fetched original — only those 13 word-boundary
+substitutions differ, no wording/formatting/rule changed). Saved to:
+
+- `apps/guest-communication-agent/.bt-staged-prompt-gca-system.txt` (plain
+  text, for easy diffing against the live prompt)
+
+**This has NOT been published.** No write/PATCH/POST call was made against
+Braintrust's prompt API — `loadPrompt`'s `slug`/version resolution in
+run-turn.ts is untouched, `SYSTEM_PROMPT_VERSION_OVERRIDE` was not set or
+changed. Per 9b's own sequencing finding, this org has no Environments
+feature, so there is no staged rollout available: publishing the prompt edit
+and deploying this repo's rename must happen in the same tight window, or
+guests mid-conversation see a model instructed (by the still-old prompt) to
+call a tool name (e.g. `sendBookingLink`) that the deployed `tools` object no
+longer has — the exact failure mode 9b already described. **This step needs
+explicit human sign-off before going out**; the code-side rename in this
+section is otherwise ready and fully tested on its own.

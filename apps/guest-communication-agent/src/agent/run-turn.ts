@@ -103,15 +103,17 @@ const MAX_OUTPUT_TOKENS = 1000;
 // that file's own comment for why.
 
 // Schema-only tool declarations — dispatch happens manually in runToolCall()
-// below. The owner-nudge tools' keys are the literal snake_case tool names
-// the model sees (deliberately unlike the camelCase tools here).
+// below. Every key here is the literal snake_case tool name the model sees
+// via native tool-calling — the TS identifiers on the right (sendBookingLink,
+// wantsHuman, etc.) stay camelCase; only the model-facing string names are
+// snake_case.
 const tools = {
-  getPricing,
-  checkAvailability,
-  answerPropertyQuestion,
-  sendBookingLink,
-  getCurrentDate,
-  runCode,
+  get_pricing: getPricing,
+  check_availability: checkAvailability,
+  answer_property_question: answerPropertyQuestion,
+  send_booking_link: sendBookingLink,
+  get_current_date: getCurrentDate,
+  run_code: runCode,
   wants_human: wantsHuman,
   missing_info: missingInfo,
 } satisfies ToolSet;
@@ -119,16 +121,16 @@ const tools = {
 // Tools whose dispatch itself calls step.run/step.waitForEvent (via this
 // file's own private dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall
 // — the last of these also calls into approval-gate.ts's requestApprovalGate
-// for any APPROVAL_GATES-gated tool, sendBookingLink today) — see the "tool
+// for any APPROVAL_GATES-gated tool, send_booking_link today) — see the "tool
 // files stay pure" rule above for why that plumbing lives here rather than in
 // wants-human.ts/missing-info.ts/booking.ts themselves. Inngest doesn't
 // support calling a step tool from inside another step.run()'s callback —
 // the callback must be a self-contained unit of work — so wants_human,
-// missing_info, and sendBookingLink are all dispatched directly from the loop
-// below (never wrapped in an outer step.run). Every other tool has no step
-// usage of its own, so wrapping the whole call in one step.run is safe and
-// gives it real memoization/replay safety.
-const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "sendBookingLink"]);
+// missing_info, and send_booking_link are all dispatched directly from the
+// loop below (never wrapped in an outer step.run). Every other tool has no
+// step usage of its own, so wrapping the whole call in one step.run is safe
+// and gives it real memoization/replay safety.
+const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "send_booking_link"]);
 
 // The gating POLICY table: which tools require real owner approve/reject
 // before they're allowed to dispatch, and how (which Telegram nudge reason
@@ -158,7 +160,7 @@ interface ApprovalGateConfig {
 }
 
 const APPROVAL_GATES: Partial<Record<string, ApprovalGateConfig>> = {
-  sendBookingLink: {
+  send_booking_link: {
     reasonCategory: "send_booking_link",
     buildReason: (input) =>
       buildBookingApprovalReason(input as Parameters<typeof buildBookingApprovalReason>[0]),
@@ -546,7 +548,7 @@ async function runMissingInfo(
   return result;
 }
 
-// APPROVAL_GATES-gated dispatch (sendBookingLink today, any future gated
+// APPROVAL_GATES-gated dispatch (send_booking_link today, any future gated
 // tool tomorrow): creates the real gen_ai.tool.<name> execution span FIRST —
 // before requestApprovalGate ever runs — with the model's real tool-call
 // `input` set at creation, same shape dispatchWantsHuman/runMissingInfo above
@@ -642,17 +644,17 @@ async function runToolCall(
   context: ToolContext,
 ): Promise<unknown> {
   switch (toolName) {
-    case "getPricing":
+    case "get_pricing":
       return runGetPricing(input as Parameters<typeof runGetPricing>[0]);
-    case "checkAvailability":
+    case "check_availability":
       return runCheckAvailability(input as Parameters<typeof runCheckAvailability>[0]);
-    case "answerPropertyQuestion":
+    case "answer_property_question":
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
-    case "sendBookingLink":
+    case "send_booking_link":
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0]);
-    case "getCurrentDate":
+    case "get_current_date":
       return runGetCurrentDate();
-    case "runCode":
+    case "run_code":
       return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
       return dispatchWantsHuman(input as { reason: string }, context);
@@ -661,8 +663,8 @@ async function runToolCall(
     default:
       // Native function-calling is supposed to constrain the model to exact
       // registered tool names, but some models (deepseek included) have been
-      // observed hallucinating a close-but-wrong name (e.g. "getCurrentDates"
-      // for "getCurrentDate") anyway. Returns a recoverable error instead of
+      // observed hallucinating a close-but-wrong name (e.g. "get_current_dates"
+      // for "get_current_date") anyway. Returns a recoverable error instead of
       // throwing — throwing here would crash the whole Inngest step with no
       // reply sent to the guest at all — so the model sees the error and can
       // retry with a real tool name in the same turn.
@@ -732,10 +734,10 @@ export interface RunAgentTurnResult {
   // "update-turn-trace-io" step there).
   guestTurnSpanId: string;
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
-  // missing_info, sendBookingLink). All three now get their own
+  // missing_info, send_booking_link). All three now get their own
   // gen_ai.tool.* execution span too, unconditionally (wants_human's via
   // dispatchWantsHuman's own steppedSpan; missing_info's via runMissingInfo's
-  // own steppedSpan; sendBookingLink's via dispatchGatedToolCall's own
+  // own steppedSpan; send_booking_link's via dispatchGatedToolCall's own
   // steppedSpan — created in this file, before requestApprovalGate ever
   // runs, not inside approval-gate.ts, which only creates that span's own
   // nudge/decision/timeout children), so none of the three strictly needs to
@@ -892,11 +894,11 @@ export async function runAgentTurn(
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         // See SELF_STEPPED_TOOLS above for why wants_human/missing_info/
-        // sendBookingLink are dispatched directly here instead of wrapped in
+        // send_booking_link are dispatched directly here instead of wrapped in
         // step.run. Concretely: this branch (like the rest of the loop body)
         // re-executes on every Inngest replay, so tracing it here would
         // duplicate-emit a span every time the function replays after a
-        // suspend (missing_info's up-to-24h and sendBookingLink's
+        // suspend (missing_info's up-to-24h and send_booking_link's
         // effectively-forever step.waitForEvent waits — the latter now
         // inside approval-gate.ts's requestApprovalGate — are exactly the
         // highest-value case this would corrupt). Every other tool IS
@@ -906,7 +908,7 @@ export async function runAgentTurn(
         // runToolCall call inside it there is replay-safe.
         if (SELF_STEPPED_TOOLS.has(call.toolName)) {
           // The gating check itself: only tools with an APPROVAL_GATES entry
-          // (sendBookingLink today) go through dispatchGatedToolCall at all —
+          // (send_booking_link today) go through dispatchGatedToolCall at all —
           // wants_human/missing_info have no entry (see APPROVAL_GATES'
           // comment) and fall straight through to runToolCall below.
           const gate = APPROVAL_GATES[call.toolName];
@@ -929,7 +931,7 @@ export async function runAgentTurn(
 
         // Every other tool (not self-stepped, not gated): dispatchToolExecution
         // gives it the same gen_ai.tool.* execution span shape as the gated/
-        // wants_human call sites above. sendBookingLink never reaches this
+        // wants_human call sites above. send_booking_link never reaches this
         // branch (see SELF_STEPPED_TOOLS above) — its "braintrust.tags"
         // tagging happens inside approval-gate.ts's requestApprovalGate span
         // instead.
