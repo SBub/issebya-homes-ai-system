@@ -67,10 +67,15 @@ export const MISSING_INFO_REPLY_TIMEOUT = "24h";
 // anything. This resolves once the KB write has succeeded and the event has
 // been accepted by Inngest, nothing more; a duplicate or late call is a safe
 // no-op.
+//
+// Returns the inserted document's real row id and the embedding's real
+// dimension count — not used by this function's own logic, but the caller
+// (the owner-nudges answer route) needs real output to attach to this step's
+// gen_ai.embed.missing_info_answer span; see that route's own comment.
 export async function handleMissingInfoReplyReceived(params: {
   correlationId: string;
   answer: string;
-}): Promise<void> {
+}): Promise<{ documentId: number; embeddingDimensions: number }> {
   const { correlationId, answer } = params;
   const supabase = createAdminClient();
 
@@ -79,16 +84,22 @@ export async function handleMissingInfoReplyReceived(params: {
     value: answer,
   });
 
-  const { error: insertError } = await supabase.from("documents").insert({
-    content: answer,
-    embedding: JSON.stringify(embedding),
-    metadata: { source: "owner_nudge_answer" },
-  });
-  if (insertError) {
-    throw new Error(insertError.message);
+  const { data: inserted, error: insertError } = await supabase
+    .from("documents")
+    .insert({
+      content: answer,
+      embedding: JSON.stringify(embedding),
+      metadata: { source: "owner_nudge_answer" },
+    })
+    .select("id")
+    .single();
+  if (insertError || !inserted) {
+    throw new Error(insertError?.message ?? "documents insert returned no row");
   }
 
   await inngest.send({ name: OWNER_NUDGE_ANSWERED_EVENT, data: { correlationId, answer } });
+
+  return { documentId: inserted.id as number, embeddingDimensions: embedding.length };
 }
 
 // Stub: only logs. No timeout/expiry side effect (re-nudging owner) exists

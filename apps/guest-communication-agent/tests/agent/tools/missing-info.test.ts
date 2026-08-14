@@ -12,7 +12,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mocks every real external boundary this file still touches: Postgres (the
 // documents insert), the embedding call, and inngest.send — there's no more
 // `step` here at all, so no hand-rolled step mock is needed.
-const mockDocInsert = vi.fn();
+//
+// The insert chain is insert().select("id").single() (see conversations.ts's
+// getOrCreateActiveConversation for the same pattern elsewhere in this app)
+// — handleMissingInfoReplyReceived needs the real inserted row id back so
+// its own caller (the owner-nudges answer route) can attach it as the
+// gen_ai.embed.missing_info_answer span's real output.
+const mockSingle = vi.fn();
+const mockSelect = vi.fn(() => ({ single: mockSingle }));
+const mockDocInsert = vi.fn(() => ({ select: mockSelect }));
 
 const mockFrom = vi.fn((table: string) => {
   if (table === "documents") return { insert: mockDocInsert };
@@ -67,15 +75,17 @@ describe("handleMissingInfoReplyReceived", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     embedMock.mockResolvedValue({ embedding: [0.1, 0.2, 0.3] });
-    mockDocInsert.mockResolvedValue({ error: null });
+    mockSingle.mockResolvedValue({ data: { id: 42 }, error: null });
     inngestSendMock.mockResolvedValue({ ids: ["evt-1"] });
   });
 
   it("embeds the answer, inserts into documents, then sends the owner-nudge-answered event with the correlation id", async () => {
-    await handleMissingInfoReplyReceived({
-      correlationId: "corr-abc-123",
-      answer: "The AC is above the bed",
-    });
+    await expect(
+      handleMissingInfoReplyReceived({
+        correlationId: "corr-abc-123",
+        answer: "The AC is above the bed",
+      }),
+    ).resolves.toEqual({ documentId: 42, embeddingDimensions: 3 });
 
     expect(embedMock).toHaveBeenCalledWith(
       expect.objectContaining({ value: "The AC is above the bed" }),
@@ -86,10 +96,13 @@ describe("handleMissingInfoReplyReceived", () => {
       embedding: JSON.stringify([0.1, 0.2, 0.3]),
       metadata: { source: "owner_nudge_answer" },
     });
+    expect(mockSelect).toHaveBeenCalledWith("id");
 
     // Order matters (per the app owner): the KB embed/insert must happen
-    // BEFORE the event that wakes a suspended run is sent.
-    const docInsertOrder = mockDocInsert.mock.invocationCallOrder[0];
+    // BEFORE the event that wakes a suspended run is sent. mockSingle is the
+    // call that actually resolves the insert (insert()/select() just build
+    // the chain synchronously), so it's the right proxy for "insert done."
+    const docInsertOrder = mockSingle.mock.invocationCallOrder[0];
     const sendOrder = inngestSendMock.mock.invocationCallOrder[0];
     expect(docInsertOrder).toBeLessThan(sendOrder);
 
@@ -100,7 +113,7 @@ describe("handleMissingInfoReplyReceived", () => {
   });
 
   it("throws when the documents insert fails, before touching inngest.send", async () => {
-    mockDocInsert.mockResolvedValueOnce({ error: { message: "insert boom" } });
+    mockSingle.mockResolvedValueOnce({ data: null, error: { message: "insert boom" } });
 
     await expect(
       handleMissingInfoReplyReceived({

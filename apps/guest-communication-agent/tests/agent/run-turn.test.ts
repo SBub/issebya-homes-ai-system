@@ -1,8 +1,11 @@
+import { BraintrustSpanProcessor } from "@braintrust/otel";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
+  type ReadableSpan,
   SimpleSpanProcessor,
+  type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import type { ModelMessage } from "ai";
 import type { GetStepTools } from "inngest";
@@ -35,11 +38,17 @@ vi.mock("@/agent/memory.js", () => ({
 
 // checkAvailability does a real fetch() and answerPropertyQuestion a real
 // embedding call, so neither is exercised here. No more escalations table —
-// requestOwnerNudge talks to telegram-router only, not Supabase. sendBookingLink
-// is a pure stub now (no DB write), so createAdminClient is never actually
-// called from any path this file exercises.
+// requestOwnerNudge talks to telegram-router only, not Supabase.
+// sendBookingLink is a pure stub now (no DB write). The one real caller left
+// is tracing.ts's recordMissingInfoTraceAnchor (via runMissingInfo, on every
+// missing_info dispatch) — insert() always resolves cleanly here so that
+// best-effort write's own try/catch never has anything to report; the write
+// itself isn't asserted on in this file (see the owner-nudges answer route's
+// own test file for the read side of this same table).
 vi.mock("@/lib/supabase.js", () => ({
-  createAdminClient: vi.fn(() => ({})),
+  createAdminClient: vi.fn(() => ({
+    from: () => ({ insert: () => Promise.resolve({ error: null }) }),
+  })),
   // property-question.ts calls createClient() at module load time, so this
   // must be present even though no test here calls that tool.
   createClient: vi.fn(() => ({})),
@@ -70,6 +79,24 @@ const updateSpanIOMock = vi.fn();
 vi.mock("@/lib/tracing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
   return { ...actual, updateSpanIO: updateSpanIOMock };
+});
+
+// approval-gate.ts's requestApprovalGate stays real (it's what actually
+// sends the nudge and drives step.waitForEvent) — spied, not replaced, so
+// the sendBookingLink reparenting tests below can assert on the real
+// `traceAnchor` param dispatchGatedToolCall actually passed it, since real
+// parent/child span linkage isn't observable in this harness (see the "fans
+// out" test's own comment for why).
+const requestApprovalGateSpy = vi.fn();
+vi.mock("@/agent/tools/approval-gate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/agent/tools/approval-gate.js")>();
+  return {
+    ...actual,
+    requestApprovalGate: (params: Parameters<typeof actual.requestApprovalGate>[0]) => {
+      requestApprovalGateSpy(params);
+      return actual.requestApprovalGate(params);
+    },
+  };
 });
 
 // run-turn.ts's loadPrompt({ slug: SYSTEM_PROMPT_SLUG, ... }) call — mocked
@@ -377,17 +404,63 @@ describe("runAgentTurn", () => {
     });
 
     // sendBookingLink no longer passes through the generic
-    // "tool-${toolName}" wrapper (it's SELF_STEPPED_TOOLS now — see
-    // run-turn.ts's comment), so there's no "gen_ai.tool.sendBookingLink"
-    // span anymore. Its own "owner_nudge.sendBookingLink" span (opened
-    // inside approval-gate.ts's requestApprovalGate, invoked here via
-    // run-turn.ts's APPROVAL_GATES table) carries the "braintrust.tags" tag
-    // instead, preserving the same trace filterability the old wrapper's
-    // tag gave.
+    // dispatchTracedToolCall wrapper (it's SELF_STEPPED_TOOLS, gated through
+    // dispatchGatedToolCall first — see run-turn.ts's comment). Its
+    // "gen_ai.tool.sendBookingLink" execution span is now created FIRST, in
+    // run-turn.ts's dispatchGatedToolCall, BEFORE requestApprovalGate ever
+    // runs — so "owner_nudge.sendBookingLink" (opened inside
+    // approval-gate.ts's requestApprovalGate) nests as this span's real
+    // child, not its sibling. Literal parent/child span linkage
+    // (ReadableSpan.parentSpanContext.spanId) can't actually be asserted in
+    // this vitest environment — no real AsyncLocalStorage-based
+    // ContextManager is registered here (only instrumentation.ts registers
+    // one, for the real Next.js runtime), so context.with() silently no-ops
+    // and every span gets its own independently-generated trace id
+    // regardless of the anchor passed in (documented harness limitation, see
+    // docs/braintrust-online-eval-testing.md section 6k). Asserting the real
+    // `traceAnchor` param requestApprovalGate was actually called with
+    // (below, via requestApprovalGateSpy) is the strongest same-harness
+    // proof of correct reparenting available instead.
+    const bookingExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.sendBookingLink");
+    expect(bookingExecSpan).toBeDefined();
+    expect(requestApprovalGateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "sendBookingLink",
+        traceAnchor: {
+          traceId: TEST_TRACE_ANCHOR.traceId,
+          spanId: bookingExecSpan?.spanContext().spanId,
+        },
+      }),
+    );
+
     const nudgeSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "owner_nudge.sendBookingLink");
     expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["sendBookingLink"]);
+
+    expect(bookingExecSpan?.attributes["gen_ai.tool.name"]).toBe("sendBookingLink");
+    expect(bookingExecSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({
+        guestName: "Ana",
+        room: "room1",
+        checkIn: "2026-09-01",
+        checkOut: "2026-09-05",
+      }),
+    );
+    expect(bookingExecSpan?.attributes["braintrust.input"]).toBe(
+      bookingExecSpan?.attributes["gca.tool.input"],
+    );
+    // Output isn't known until after requestApprovalGate resolves, well
+    // after this span has already closed — same as missing_info's/
+    // wants_human's own execution spans, it's never a span attribute, only
+    // a retroactive updateSpanIO patch (asserted below).
+    expect(bookingExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(bookingExecSpan?.attributes["braintrust.output"]).toBeUndefined();
+    expect(updateSpanIOMock).toHaveBeenCalledWith(bookingExecSpan?.spanContext().spanId, {
+      output: { url: expect.stringContaining("room=room1") },
+    });
 
     // getPricing isn't sendBookingLink — its own span must not pick up the tag.
     const pricingSpan = spanExporter
@@ -395,10 +468,24 @@ describe("runAgentTurn", () => {
       .find((span) => span.name === "gen_ai.tool.getPricing");
     expect(pricingSpan?.attributes["braintrust.tags"]).toBeUndefined();
 
-    // sendBookingLink is SELF_STEPPED_TOOLS now, like wants_human/missing_info
-    // — it must not also be nested inside an outer "tool-sendBookingLink"
-    // step.run.
-    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-sendBookingLink");
+    // sendBookingLink IS a real "tool-sendBookingLink" step now (the
+    // tool-span-creation step, created before the gate) — it's dispatched
+    // via the SELF_STEPPED_TOOLS branch, not the generic
+    // dispatchTracedToolCall path. The approved dispatch itself, and the
+    // retroactive output patch, are each their own separate step too.
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("tool-sendBookingLink");
+    expect(stepIds).toContain("execute-sendBookingLink");
+    expect(stepIds).toContain("update-sendBookingLink-trace-io");
+
+    // The approval decision itself is independently visible too — nested
+    // under the same tool-call span in a real trace (see the
+    // requestApprovalGateSpy assertion above for why that's asserted via the
+    // real traceAnchor param instead of literal span linkage here).
+    const decisionSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.sendBookingLink.decision");
+    expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
   });
 
   it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an owner nudge", async () => {
@@ -482,15 +569,55 @@ describe("runAgentTurn", () => {
     });
 
     // missing_info manages its own step checkpointing internally (it calls
-    // context.step directly) — it must NOT also be wrapped in an outer
-    // "tool-missing_info" step.run, since Inngest doesn't support nesting
-    // step calls inside another step.run()'s callback.
-    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-missing_info");
+    // context.step directly), so the outer loop must NOT also wrap it in a
+    // "tool-missing_info" step.run (Inngest doesn't support nesting step
+    // calls inside another step.run()'s callback) — but runMissingInfo's own
+    // internal steppedSpan DOES create a step of that exact id, now called
+    // FIRST (before the nudge, not after the wait) since it's what creates
+    // the gen_ai.tool.missing_info span the nudge/no_reply spans nest under
+    // — see this function's own top comment.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("tool-missing_info");
+    // The retroactive output-patch step also ran, once the wait resolved.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("update-missing-info-trace-io");
 
-    // wants_human/missing_info never get a span of their own (see
-    // SELF_STEPPED_TOOLS's comment in run-turn.ts), so firedTags is the
-    // deferred route runGuestTurn uses to still tag this turn's trace — see
-    // RunAgentTurnResult.firedTags.
+    const missingInfoExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.missing_info");
+    expect(missingInfoExecSpan).toBeDefined();
+    expect(missingInfoExecSpan?.attributes["gen_ai.tool.name"]).toBe("missing_info");
+    // Only `input` is set as a span attribute at creation time — `output`
+    // isn't known until after step.waitForEvent resolves, well after this
+    // span has already closed, so it's never a span attribute at all; it's
+    // patched in retroactively via updateSpanIO instead (asserted below).
+    expect(missingInfoExecSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Guest asked about the sauna" }),
+    );
+    expect(missingInfoExecSpan?.attributes["braintrust.input"]).toBe(
+      missingInfoExecSpan?.attributes["gca.tool.input"],
+    );
+    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(missingInfoExecSpan?.attributes["braintrust.output"]).toBeUndefined();
+
+    // The retroactive patch — same mechanism (and the same best-effort
+    // reliability caveat) runAgentTurn's own "braintrust.guest_turn" root
+    // marker span already uses for its output.
+    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
+      output: { escalated: true, answer: "The sauna is on the ground floor." },
+    });
+
+    // owner_nudge.missing_info now nests under the tool-call span
+    // (toolAnchor) instead of the turn's own anchor — the outer loop's
+    // firedTags/message-shape behavior is otherwise unchanged by this
+    // reparenting.
+    const nudgeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.missing_info");
+    expect(nudgeSpan).toBeDefined();
+
+    // missing_info's owner-nudge span DOES still carry braintrust.tags
+    // directly (unchanged by this fix — see run-turn.ts's dispatchWantsHuman
+    // comment), so firedTags is a harmless natural side effect here now, not
+    // the only route — see RunAgentTurnResult.firedTags.
     expect(result.firedTags).toEqual(["missing_info"]);
   });
 
@@ -541,12 +668,18 @@ describe("runAgentTurn", () => {
       },
     });
 
-    // Both of missing_info's own steps ran: the nudge send and the
-    // no-reply-timeout fallback (which calls missing-info.ts's
-    // handleMissingInfoNoReply — a pure, unmocked, log-only function here).
+    // All of missing_info's own steps ran: the tool-span-creation step
+    // (now FIRST, before the nudge — see runMissingInfo's own comment), the
+    // record-trace-anchor write, the nudge send, the no-reply-timeout
+    // fallback (which calls missing-info.ts's handleMissingInfoNoReply — a
+    // pure, unmocked, log-only function here), and the retroactive
+    // output-patch step.
     const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("tool-missing_info");
+    expect(stepIds).toContain("record-missing-info-trace-anchor");
     expect(stepIds).toContain("owner-nudge-missing-info");
     expect(stepIds).toContain("missing-info-no-reply");
+    expect(stepIds).toContain("update-missing-info-trace-io");
 
     const nudgeSpan = spanExporter
       .getFinishedSpans()
@@ -556,6 +689,27 @@ describe("runAgentTurn", () => {
       .getFinishedSpans()
       .find((span) => span.name === "missing_info.no_reply");
     expect(timeoutSpan).toBeDefined();
+
+    // The timeout case's own execution span only ever carries `input` as a
+    // span attribute (set at creation, before the nudge/wait) — the
+    // fallback `output` isn't known until after the wait times out, so it's
+    // never a span attribute; it's patched in retroactively via
+    // updateSpanIO instead (asserted below), same as the answered case.
+    const missingInfoExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.missing_info");
+    expect(missingInfoExecSpan).toBeDefined();
+    expect(missingInfoExecSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Guest asked about the sauna" }),
+    );
+    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+
+    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
+      output: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
   });
 
   it("skips the missing_info wait entirely (and still returns the fallback message) when the nudge itself failed to send", async () => {
@@ -592,6 +746,22 @@ describe("runAgentTurn", () => {
     // Nudge failed means nothing to wait on.
     expect(step.waitForEvent).not.toHaveBeenCalled();
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("missing-info-no-reply");
+
+    // The tool-call span itself is still created on this third exit path too
+    // (it's created FIRST, before the nudge is even attempted — see
+    // runMissingInfo's own comment) and its output still gets retroactively
+    // patched to the same fallback message all three exit paths share.
+    const missingInfoExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.missing_info");
+    expect(missingInfoExecSpan).toBeDefined();
+    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
+      output: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
   });
 
   it("escalates a wants_human tool call as its own reason_category", async () => {
@@ -624,12 +794,10 @@ describe("runAgentTurn", () => {
         reasonCategory: "wants_human",
       }),
     );
-    // Same nesting concern as missing_info above.
-    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("tool-wants_human");
-    // wants_human's owner-nudge send — previously wants-human.ts's own
-    // steppedSpan, now run-turn.ts's private dispatchWantsHuman (see that
-    // file's "tool files stay pure" rule) — keeps the exact same step id and
-    // span name.
+    // wants_human's owner-nudge send now nests under the tool-call span
+    // (toolAnchor) instead of the turn's own anchor — same reparenting
+    // runMissingInfo's own owner_nudge.missing_info gets (see
+    // dispatchWantsHuman's own comment) — step id/span name unchanged.
     expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-wants-human");
     expect(
       spanExporter.getFinishedSpans().find((span) => span.name === "owner_nudge.wants_human"),
@@ -639,6 +807,39 @@ describe("runAgentTurn", () => {
       content: "Sure, the owner will reach out shortly.",
     });
     expect(result.firedTags).toEqual(["wants_human"]);
+
+    // wants_human's gen_ai.tool.wants_human execution span is now created
+    // FIRST, before the nudge (dispatchWantsHuman's own steppedSpan) — same
+    // gca.tool.input/braintrust.input shape as missing_info's/sendBookingLink's/
+    // getPricing's, but output is NOT a span attribute (unlike the
+    // non-suspending tools that use dispatchToolExecution): it isn't known
+    // until after the nudge send, well after this span has already closed,
+    // so it's patched in retroactively via updateSpanIO instead (asserted
+    // below) — same reasoning as missing_info's own execution span.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("tool-wants_human");
+    const wantsHumanExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.wants_human");
+    expect(wantsHumanExecSpan).toBeDefined();
+    expect(wantsHumanExecSpan?.attributes["gen_ai.tool.name"]).toBe("wants_human");
+    expect(wantsHumanExecSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Guest wants a human" }),
+    );
+    expect(wantsHumanExecSpan?.attributes["braintrust.input"]).toBe(
+      wantsHumanExecSpan?.attributes["gca.tool.input"],
+    );
+    expect(wantsHumanExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(wantsHumanExecSpan?.attributes["braintrust.output"]).toBeUndefined();
+
+    // The retroactive-patch step ran, and patched the real (constant)
+    // runWantsHuman() result onto the tool-call span's output.
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("update-wants-human-trace-io");
+    expect(updateSpanIOMock).toHaveBeenCalledWith(wantsHumanExecSpan?.spanContext().spanId, {
+      output: {
+        escalated: true,
+        message: "The owner has been notified and will be in touch shortly.",
+      },
+    });
   });
 
   it("dispatches wants_human directly with no approval gate, while sendBookingLink goes through its own real APPROVAL_GATES-driven wait", async () => {
@@ -745,6 +946,181 @@ describe("runAgentTurn", () => {
     // APPROVAL_GATES existed (a gated call that got a real nudge sent and a
     // real decision made is still worth finding in this turn's trace tags).
     expect(result.firedTags).toEqual(["sendBookingLink"]);
+
+    // A rejected call still gets its "gen_ai.tool.sendBookingLink" execution
+    // span — it's created FIRST, before requestApprovalGate ever runs (see
+    // dispatchGatedToolCall's own comment), so the tool-call span exists
+    // regardless of outcome, unlike the pre-fix behavior where only an
+    // approved call ever got one. runSendBookingLink itself is never called
+    // on this path (no "execute-sendBookingLink" step) — only the
+    // not-approved shape gets retroactively patched onto the span's output.
+    const bookingExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.sendBookingLink");
+    expect(bookingExecSpan).toBeDefined();
+    expect(bookingExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(updateSpanIOMock).toHaveBeenCalledWith(bookingExecSpan?.spanContext().spanId, {
+      output: {
+        approved: false,
+        message: "This action was not approved. Do not retry it automatically.",
+      },
+    });
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("tool-sendBookingLink");
+    expect(stepIds).not.toContain("execute-sendBookingLink");
+    expect(stepIds).toContain("update-sendBookingLink-trace-io");
+
+    const decisionSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.sendBookingLink.decision");
+    expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("rejected");
+    expect(requestApprovalGateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "sendBookingLink",
+        traceAnchor: {
+          traceId: TEST_TRACE_ANCHOR.traceId,
+          spanId: bookingExecSpan?.spanContext().spanId,
+        },
+      }),
+    );
+  });
+
+  // The real trace that motivated this fix (see
+  // docs/braintrust-online-eval-testing.md section 6n) had two parallel
+  // sendBookingLink calls in one round — one per room. dispatchGatedToolCall
+  // has no shared/module-level state (toolSpanId/toolAnchor/result are all
+  // local to each call's own async frame), so two concurrent invocations
+  // should never cross-contaminate each other's spans/decisions purely by
+  // construction — this test proves that's actually true at runtime, not
+  // just by code review, with one call approved and the other rejected so a
+  // mix-up (room1 getting room2's decision, or vice versa) would be visible.
+  //
+  // step.waitForEvent's two queued resolutions are consumed in call order,
+  // not matched by argument (both calls share the same toolName/event/
+  // timeout/correlationId — only `reason`'s text differs, and that never
+  // reaches waitForEvent) — relies on Promise.all(calls.map(...)) starting
+  // each call's async body synchronously in array order, so call[0] (room1)
+  // always reaches its first `await` (and every microtask-depth-matched
+  // await after it, including this one) before call[1] (room2) does, since
+  // both dispatches run the exact same code path. Every other assertion
+  // below locates each room's own span by its real gca.tool.input/reason
+  // content instead of by array position, so this ordering assumption is
+  // scoped to just this one mock queue, not load-bearing for the rest of the
+  // test.
+  it("dispatches two sendBookingLink calls in the same round independently, with no cross-contamination between their spans or decisions", async () => {
+    step.waitForEvent
+      .mockResolvedValueOnce({ data: { approved: true } })
+      .mockResolvedValueOnce({ data: { approved: false } });
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "sendBookingLink",
+            input: {
+              guestName: "Ana",
+              room: "room1",
+              checkIn: "2026-09-01",
+              checkOut: "2026-09-05",
+            },
+            toolCallId: "call_room1",
+          },
+          {
+            toolName: "sendBookingLink",
+            input: {
+              guestName: "Ben",
+              room: "room2",
+              checkIn: "2026-09-10",
+              checkOut: "2026-09-12",
+            },
+            toolCallId: "call_room2",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Room 1 is booked. Room 2 needs the owner's OK first."));
+
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-two-bookings",
+        phone: "+351900000060",
+        incomingMessage: "Book room 1 for Ana and room 2 for Ben",
+      },
+      { correlationId: "corr-two-bookings", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    const parts = toolMessage?.content as Array<{ toolCallId: string; output: unknown }>;
+    expect(parts.find((p) => p.toolCallId === "call_room1")?.output).toEqual({
+      type: "json",
+      value: { url: expect.stringContaining("room=room1") },
+    });
+    expect(parts.find((p) => p.toolCallId === "call_room2")?.output).toEqual({
+      type: "json",
+      value: {
+        approved: false,
+        message: "This action was not approved. Do not retry it automatically.",
+      },
+    });
+
+    // Two independent tool-call spans, one per room, each with its own real
+    // span id and its own real input — proves toolAnchor isn't shared.
+    const bookingExecSpans = spanExporter
+      .getFinishedSpans()
+      .filter((span) => span.name === "gen_ai.tool.sendBookingLink");
+    expect(bookingExecSpans).toHaveLength(2);
+    const room1Span = bookingExecSpans.find((s) =>
+      (s.attributes["gca.tool.input"] as string).includes("room1"),
+    );
+    const room2Span = bookingExecSpans.find((s) =>
+      (s.attributes["gca.tool.input"] as string).includes("room2"),
+    );
+    expect(room1Span).toBeDefined();
+    expect(room2Span).toBeDefined();
+    expect(room1Span?.spanContext().spanId).not.toBe(room2Span?.spanContext().spanId);
+
+    // Each room's own output is patched onto its OWN span's id, not the
+    // other room's — the cross-contamination this test exists to rule out.
+    expect(updateSpanIOMock).toHaveBeenCalledWith(room1Span?.spanContext().spanId, {
+      output: { url: expect.stringContaining("room=room1") },
+    });
+    expect(updateSpanIOMock).toHaveBeenCalledWith(room2Span?.spanContext().spanId, {
+      output: {
+        approved: false,
+        message: "This action was not approved. Do not retry it automatically.",
+      },
+    });
+
+    // Each room's requestApprovalGate call carried its OWN toolAnchor
+    // (located by its own real `reason` text, built from that call's own
+    // input — never the other room's).
+    const room1GateCall = requestApprovalGateSpy.mock.calls.find((c) =>
+      (c[0].reason as string).includes("room1"),
+    );
+    const room2GateCall = requestApprovalGateSpy.mock.calls.find((c) =>
+      (c[0].reason as string).includes("room2"),
+    );
+    expect(room1GateCall?.[0].traceAnchor).toEqual({
+      traceId: TEST_TRACE_ANCHOR.traceId,
+      spanId: room1Span?.spanContext().spanId,
+    });
+    expect(room2GateCall?.[0].traceAnchor).toEqual({
+      traceId: TEST_TRACE_ANCHOR.traceId,
+      spanId: room2Span?.spanContext().spanId,
+    });
+
+    // Two independent decision spans — one approved, one rejected, neither
+    // mixed up with the other.
+    const decisionSpans = spanExporter
+      .getFinishedSpans()
+      .filter((span) => span.name === "owner_nudge.sendBookingLink.decision");
+    expect(decisionSpans).toHaveLength(2);
+    expect(decisionSpans.map((s) => s.attributes["gca.approval.decision"]).sort()).toEqual([
+      "approved",
+      "rejected",
+    ]);
+
+    // Both calls fired independently — order-invariant since both entries
+    // are the same literal string.
+    expect(result.firedTags).toEqual(["sendBookingLink", "sendBookingLink"]);
   });
 
   it("does not gate getPricing at all (no APPROVAL_GATES entry, so no nudge and no wait)", async () => {
@@ -791,6 +1167,346 @@ describe("runAgentTurn", () => {
     };
     const output = toolMessage?.content.find((p) => p.toolCallId === "call_bogus")?.output.value;
     expect(output).toMatchObject({ error: expect.stringMatching(/unknown tool name.*bogusTool/i) });
+  });
+
+  // Regression coverage for the bug documented in tracing.ts's Braintrust
+  // attribute-namespace comment block (4th bullet), same class of bug section
+  // 6d of docs/braintrust-online-eval-testing.md fixed for approval-gate.ts's
+  // decision/no_reply spans: dispatchWantsHuman's/runMissingInfo's
+  // owner_nudge.wants_human, owner_nudge.missing_info, and
+  // missing_info.no_reply spans only ever carried gca.*-prefixed attributes,
+  // none matching @braintrust/otel's FILTER_PREFIXES, so they were silently
+  // dropped before export — confirmed absent from real Braintrust data (see
+  // that doc's section 6a Bug 2). The tests above assert what this app's own
+  // InMemorySpanExporter sees; they'd pass identically whether or not the
+  // real @braintrust/otel filter would also let the span through. This block
+  // exercises the real, installed `@braintrust/otel` package's own
+  // BraintrustSpanProcessor (same `_spanProcessor` test-injection option and
+  // `filterAISpans: true` flag approval-gate.test.ts's equivalent block uses,
+  // matching src/instrumentation.ts's real setup) against real ReadableSpan
+  // objects runAgentTurn actually emits.
+  describe("wants_human/missing_info owner-nudge spans pass the real @braintrust/otel export filter", () => {
+    let captured: ReadableSpan[];
+    let braintrustProcessor: BraintrustSpanProcessor;
+
+    beforeEach(() => {
+      captured = [];
+      const capturingProcessor: SpanProcessor = {
+        onStart: () => {},
+        onEnd: (span) => {
+          captured.push(span);
+        },
+        shutdown: async () => {},
+        forceFlush: async () => {},
+      };
+      // filterAISpans: true wires up the real AISpanProcessor(isAISpan) chain
+      // in front of capturingProcessor — onEnd() below is the real, installed
+      // export-filtering decision, not a guess at what it does.
+      braintrustProcessor = new BraintrustSpanProcessor({
+        _spanProcessor: capturingProcessor,
+        filterAISpans: true,
+      });
+    });
+
+    function findSpan(name: string): ReadableSpan {
+      const span = spanExporter.getFinishedSpans().find((s) => s.name === name);
+      if (!span) {
+        throw new Error(`no finished span named "${name}" — check the fixture above`);
+      }
+      return span;
+    }
+
+    it("lets the wants_human nudge span through", async () => {
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "wants_human",
+              input: { reason: "Guest wants a human" },
+              toolCallId: "call_esc",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-wants-human-filter",
+          phone: "+351900000030",
+          incomingMessage: "I want to talk to a person",
+        },
+        { correlationId: "corr-wants-human-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("owner_nudge.wants_human"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    // Confirmed rather than assumed, same as the missing_info execution span
+    // check below: this span's name already starts with "gen_ai." (one of
+    // @braintrust/otel's own FILTER_PREFIXES — see
+    // node_modules/@braintrust/otel/dist/index.js's isAISpan), so it should
+    // clear the real filter on that alone.
+    it("lets the wants_human execution span through, on its own gen_ai. name prefix", async () => {
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "wants_human",
+              input: { reason: "Guest wants a human" },
+              toolCallId: "call_esc",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-wants-human-exec-filter",
+          phone: "+351900000034",
+          incomingMessage: "I want to talk to a person",
+        },
+        { correlationId: "corr-wants-human-exec-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("gen_ai.tool.wants_human"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    it("lets the missing_info nudge span through", async () => {
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "missing_info",
+              input: { reason: "Guest asked about the sauna" },
+              toolCallId: "call_esc",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-missing-info-filter",
+          phone: "+351900000031",
+          incomingMessage: "Sauna?",
+        },
+        { correlationId: "corr-missing-info-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("owner_nudge.missing_info"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    it("lets the missing_info no_reply/timeout span through", async () => {
+      // beforeEach already defaults step.waitForEvent to resolving null (a
+      // timeout), driving runMissingInfo's no-reply fallback.
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "missing_info",
+              input: { reason: "Guest asked about the sauna" },
+              toolCallId: "call_esc",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-missing-info-timeout-filter",
+          phone: "+351900000032",
+          incomingMessage: "Sauna?",
+        },
+        { correlationId: "corr-missing-info-timeout-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("missing_info.no_reply"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    // Confirmed rather than assumed, consistent with this suite's own
+    // standing verification bar: this span's name already starts with
+    // "gen_ai." (one of @braintrust/otel's own FILTER_PREFIXES — see
+    // node_modules/@braintrust/otel/dist/index.js's isAISpan), so it should
+    // clear the real filter on that alone, with no braintrust.*-prefixed
+    // attribute needed the way the sibling nudge/no_reply spans above do.
+    it("lets the missing_info execution span through, on its own gen_ai. name prefix", async () => {
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "missing_info",
+              input: { reason: "Guest asked about the sauna" },
+              toolCallId: "call_esc",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Let me check with the owner and get back to you."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-missing-info-exec-filter",
+          phone: "+351900000033",
+          incomingMessage: "Sauna?",
+        },
+        { correlationId: "corr-missing-info-exec-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("gen_ai.tool.missing_info"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    // sendBookingLink's owner_nudge.sendBookingLink/.decision/.no_reply spans
+    // are now reparented to dispatchGatedToolCall's own toolAnchor instead of
+    // the turn's own anchor (see that function's comment) — reparenting only
+    // changes a span's parent context, not its own name/attributes, which is
+    // all @braintrust/otel's isAISpan check inspects, so these three should
+    // still clear the filter the same way they did before this change (via
+    // their existing braintrust.tags/braintrust.approval_decision
+    // attribute-prefix trick, established in section 6d) — confirmed here
+    // against the real, reparented spans runAgentTurn actually emits now,
+    // not assumed to still hold just because approval-gate.test.ts's own
+    // (unreparented, fixed-anchor) equivalent block still passes.
+    it("lets the sendBookingLink nudge span through, reparented under its own tool-call span", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "sendBookingLink",
+              input: {
+                guestName: "Ana",
+                room: "room1",
+                checkIn: "2026-09-01",
+                checkOut: "2026-09-05",
+              },
+              toolCallId: "call_book",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("All set, here is your link!"));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-booking-filter",
+          phone: "+351900000040",
+          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+        },
+        { correlationId: "corr-booking-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    it("lets the sendBookingLink execution span through, on its own gen_ai. name prefix", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "sendBookingLink",
+              input: {
+                guestName: "Ana",
+                room: "room1",
+                checkIn: "2026-09-01",
+                checkOut: "2026-09-05",
+              },
+              toolCallId: "call_book",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("All set, here is your link!"));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-booking-exec-filter",
+          phone: "+351900000041",
+          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+        },
+        { correlationId: "corr-booking-exec-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("gen_ai.tool.sendBookingLink"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    it("lets the sendBookingLink decision span through, reparented under its own tool-call span", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "sendBookingLink",
+              input: {
+                guestName: "Ana",
+                room: "room1",
+                checkIn: "2026-09-01",
+                checkOut: "2026-09-05",
+              },
+              toolCallId: "call_book",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("No problem, let me know if anything changes."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-booking-decision-filter",
+          phone: "+351900000042",
+          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+        },
+        { correlationId: "corr-booking-decision-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink.decision"));
+
+      expect(captured).toHaveLength(1);
+    });
+
+    it("lets the sendBookingLink no_reply/timeout span through, reparented under its own tool-call span", async () => {
+      // beforeEach already defaults step.waitForEvent to resolving null (a
+      // timeout).
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            {
+              toolName: "sendBookingLink",
+              input: {
+                guestName: "Ana",
+                room: "room1",
+                checkIn: "2026-09-01",
+                checkOut: "2026-09-05",
+              },
+              toolCallId: "call_book",
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("No problem, let me know if anything changes."));
+
+      await runAgentTurn(
+        {
+          conversationId: "convo-booking-timeout-filter",
+          phone: "+351900000043",
+          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+        },
+        { correlationId: "corr-booking-timeout-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+
+      braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink.no_reply"));
+
+      expect(captured).toHaveLength(1);
+    });
   });
 });
 
