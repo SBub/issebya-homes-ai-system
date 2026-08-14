@@ -1,8 +1,11 @@
+import { BraintrustSpanProcessor } from "@braintrust/otel";
 import { trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
+  type ReadableSpan,
   SimpleSpanProcessor,
+  type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import type { GetStepTools } from "inngest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -120,12 +123,34 @@ describe("requestApprovalGate", () => {
     expect(result).toBe(true);
   });
 
+  it('records gca.approval.decision as "approved" on its own decision span when the event resolves with approved: true', async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    const decisionSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.sendBookingLink.decision");
+    expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
+  });
+
   it("returns false when the event resolves with approved: false", async () => {
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
 
     const result = await requestApprovalGate({ ...gateParamsBase, step });
 
     expect(result).toBe(false);
+  });
+
+  it('records gca.approval.decision as "rejected" on its own decision span when the event resolves with approved: false', async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    const decisionSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.sendBookingLink.decision");
+    expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("rejected");
   });
 
   it("returns false and logs a warning when step.waitForEvent times out (resolves null)", async () => {
@@ -137,6 +162,23 @@ describe("requestApprovalGate", () => {
     expect(result).toBe(false);
     expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-abc-123"));
     consoleWarnSpy.mockRestore();
+  });
+
+  it('records gca.approval.decision as "timeout" on the existing timeout span, with no separate decision span, when step.waitForEvent times out', async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    const timeoutSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.sendBookingLink.no_reply");
+    expect(timeoutSpan?.attributes["gca.approval.decision"]).toBe("timeout");
+    expect(
+      spanExporter
+        .getFinishedSpans()
+        .find((span) => span.name === "owner_nudge.sendBookingLink.decision"),
+    ).toBeUndefined();
   });
 
   it("short-circuits to false without calling step.waitForEvent when the nudge itself failed to send", async () => {
@@ -180,5 +222,93 @@ describe("resolveToolApproval", () => {
       name: "gca/booking-link.approval",
       data: { correlationId: "corr-abc-123", approved: false },
     });
+  });
+});
+
+// Regression coverage for the bug documented in tracing.ts's Braintrust
+// attribute-namespace comment block (4th bullet): a span whose name AND
+// every non-system attribute key miss @braintrust/otel's FILTER_PREFIXES is
+// silently dropped before ever reaching Braintrust, independent of whether
+// this app's own InMemorySpanExporter-based tests above see it. Those tests
+// above assert what this file itself does; they'd pass identically whether
+// or not the real @braintrust/otel filter would also let the span through —
+// that's exactly how this bug went unnoticed. This block exercises the real,
+// installed `@braintrust/otel` package's own BraintrustSpanProcessor
+// (constructed with its documented `_spanProcessor` test-injection option
+// and `filterAISpans: true`, the same flag src/instrumentation.ts's real
+// setup uses) against real ReadableSpan objects requestApprovalGate actually
+// emits — not a reimplementation of its filter logic.
+describe("requestApprovalGate spans pass the real @braintrust/otel export filter", () => {
+  let step: ReturnType<typeof makeStepMock>;
+  let captured: ReadableSpan[];
+  let braintrustProcessor: BraintrustSpanProcessor;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spanExporter.reset();
+    step = makeStepMock();
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
+
+    captured = [];
+    const capturingProcessor: SpanProcessor = {
+      onStart: () => {},
+      onEnd: (span) => {
+        captured.push(span);
+      },
+      shutdown: async () => {},
+      forceFlush: async () => {},
+    };
+    // filterAISpans: true wires up the real AISpanProcessor(isAISpan) chain
+    // in front of capturingProcessor — onEnd() below is the real,
+    // installed export-filtering decision, not a guess at what it does.
+    braintrustProcessor = new BraintrustSpanProcessor({
+      _spanProcessor: capturingProcessor,
+      filterAISpans: true,
+    });
+  });
+
+  function findSpan(name: string): ReadableSpan {
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === name);
+    if (!span) {
+      throw new Error(`no finished span named "${name}" — check the fixture above`);
+    }
+    return span;
+  }
+
+  it("lets the decision span through on approval", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink.decision"));
+
+    expect(captured).toHaveLength(1);
+  });
+
+  it("lets the decision span through on rejection", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink.decision"));
+
+    expect(captured).toHaveLength(1);
+  });
+
+  it("lets the no_reply/timeout span through", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink.no_reply"));
+
+    expect(captured).toHaveLength(1);
+  });
+
+  it("still lets the pre-existing nudge span through (braintrust.tags, unchanged mechanism)", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+    await requestApprovalGate({ ...gateParamsBase, step });
+
+    braintrustProcessor.onEnd(findSpan("owner_nudge.sendBookingLink"));
+
+    expect(captured).toHaveLength(1);
   });
 });

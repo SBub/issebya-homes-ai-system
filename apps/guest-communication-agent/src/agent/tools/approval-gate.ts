@@ -137,19 +137,50 @@ export async function requestApprovalGate(params: {
     // Own step — same replay-safety reasoning as the nudge-send step above.
     // In practice a well-chosen `timeout` should make this branch
     // rare-to-never for a tool like sendBookingLink, whose caller picks an
-    // effectively-unbounded timeout.
+    // effectively-unbounded timeout. gca.approval.decision here is the same
+    // attribute (and one of the same three string values — "approved",
+    // "rejected", "timeout") the decision-recording span below sets on the
+    // approved/rejected paths, so a scorer can check "was this gate's
+    // decision ever recorded" with one attribute name regardless of outcome.
+    // braintrust.approval_decision duplicates that same value under a
+    // braintrust.*-prefixed key — needed for this span to clear
+    // @braintrust/otel's export filter at all (see tracing.ts's
+    // updateSpanIO-adjacent comment block for why), not to change what
+    // Braintrust's UI does with it.
     await steppedSpan(
       step,
       `${toolName}-approval-timeout`,
       traceAnchor,
       `owner_nudge.${toolName}.no_reply`,
-      { "gca.timeout": timeout },
+      {
+        "gca.timeout": timeout,
+        "gca.approval.decision": "timeout",
+        "braintrust.approval_decision": "timeout",
+      },
       async () => {},
     );
     return false;
   }
 
-  return Boolean(result.data.approved);
+  // No existing span covers this moment — the nudge span above already
+  // closed before step.waitForEvent resolved. Own marker span so the actual
+  // approve/reject decision (not just that a decision was eventually made)
+  // is independently visible in the trace, with the same gca.approval.decision
+  // attribute name/type (a string, matching "timeout" above) the timeout
+  // branch sets, so all three real outcomes are checkable via one code path.
+  // braintrust.approval_decision here is the same export-filter necessity as
+  // the timeout branch above — see that branch's comment.
+  const approved = Boolean(result.data.approved);
+  const decision = approved ? "approved" : "rejected";
+  await steppedSpan(
+    step,
+    `${toolName}-approval-decision`,
+    traceAnchor,
+    `owner_nudge.${toolName}.decision`,
+    { "gca.approval.decision": decision, "braintrust.approval_decision": decision },
+    async () => {},
+  );
+  return approved;
 }
 
 /**
