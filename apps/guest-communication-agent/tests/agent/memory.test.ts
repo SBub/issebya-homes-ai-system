@@ -53,13 +53,13 @@ function messageRow(
   return { id, role, content, created_at: createdAt };
 }
 
-// 8 rows of 2000 chars (~500 tokens) each, oldest-first — same shape as
-// context.test.ts's over-budget fixture: ~4000 tokens total, over
-// MAX_CONTEXT_TOKENS (3000), trims down to the newest 3 (~1500 tokens,
+// 8 rows of 300 chars (~75 tokens) each, oldest-first — same shape as
+// context.test.ts's over-budget fixture: ~600 tokens total, over
+// MAX_CONTEXT_TOKENS (500), trims down to the newest 3 (~225 tokens,
 // under KEEP_CONTEXT_TOKENS), dropping the oldest 5.
 function overflowingRows() {
   return Array.from({ length: 8 }, (_, i) =>
-    messageRow(`msg-${i}`, i % 2 === 0 ? "user" : "assistant", 2000, `2026-08-0${i + 1}T00:00:00Z`),
+    messageRow(`msg-${i}`, i % 2 === 0 ? "user" : "assistant", 300, `2026-08-0${i + 1}T00:00:00Z`),
   );
 }
 
