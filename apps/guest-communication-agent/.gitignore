@@ -11,3 +11,6 @@
 # silently never gets read by the running app, which is what let Sandbox.create()
 # fall back to an ambient default project instead of this one. Never commit it.
 .env*.local
+# Local working log for the braintrust-online-eval session's own dev process —
+# not a versioned artifact. Keep on disk, don't re-track.
+docs/braintrust-online-eval-testing.md
