@@ -1,11 +1,16 @@
 /**
  * Registers "Correct Tool Calling" as a real Braintrust Scorer Function.
  * Fully self-contained — the judge logic below (live tool-description
- * rubric, chain-of-thought parsing, 3-trial averaging, span/tag
- * correlation) has no dependency outside this file, node_modules, and the
- * real tool definitions under src/agent/tools/ (imported below so the
- * rubric always reflects each tool's actual live description, not a
- * hand-copied snapshot).
+ * rubric, chain-of-thought parsing, span/tag correlation) has no dependency
+ * outside this file, node_modules, and the real tool definitions under
+ * src/agent/tools/ (imported below so the rubric always reflects each
+ * tool's actual live description, not a hand-copied snapshot).
+ *
+ * Single temperature-0 judge call per turn — the earlier 3-trial-averaging
+ * design was removed because this scorer runs online on every real
+ * production guest turn (not just in offline evals), so the extra 2 LLM
+ * calls per trial were real, ongoing cost/latency overhead. See
+ * docs/braintrust-online-eval-testing.md section 33.
  *
  * A Braintrust scorer function gets its sibling spans from
  * `trace.getSpans()` (the ScorerArgs.trace object — see braintrust's Trace
@@ -39,12 +44,6 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 const CHOICE_SCORES: Record<string, number> = { A: 1.0, B: 0.5, C: 0.0 };
-
-// Same finding that motivates this: an earlier single-trial dry run scored
-// the same turn 0.5 in one run and 0.0 in another. temperature: 0 alone
-// doesn't fully eliminate provider-side non-determinism, so every turn is
-// scored TRIAL_COUNT times and averaged instead of trusting one sample.
-const TRIAL_COUNT = 3;
 
 // Fails loudly rather than silently building a rubric with a blank
 // description — the entire point of reading these live instead of a
@@ -123,7 +122,7 @@ Respond in exactly this format, nothing else:
 Reasoning: <step-by-step reasoning about the rubric above, written BEFORE you decide — walk through what tool(s), if any, the guest message called for and whether what actually fired matches, then commit to a choice>
 Choice: <A, B, or C>`;
 
-interface ClassifierTrial {
+interface ClassifierResult {
   choice: string;
   score: number;
   reasoning: string;
@@ -137,7 +136,7 @@ interface ClassifierTrial {
 // preceding newline) before giving up and returning a mid-scale score with
 // the raw text as reasoning — keeps a malformed response visible instead of
 // throwing and losing the rest of the sample.
-function parseClassifierResponse(text: string): ClassifierTrial {
+function parseClassifierResponse(text: string): ClassifierResult {
   const strict = text.match(/Reasoning:\s*([\s\S]*?)\n\s*Choice:\s*([ABC])/i);
   if (strict) {
     const [, reasoning, choice] = strict;
@@ -164,35 +163,10 @@ function parseClassifierResponse(text: string): ClassifierTrial {
   };
 }
 
-// Picks which of the TRIAL_COUNT trials' reasoning gets persisted as the
-// single `tool_calling_rationale` metadata value: the reasoning from the
-// majority-choice trial (ties broken by whichever trial's own score is
-// closest to the final averaged score). One coherent explanation reads
-// better in the Braintrust UI than 3 concatenated ones; the full per-trial
-// detail is still kept in metadata.trials for anyone who wants to dig
-// deeper into a run-to-run disagreement.
-function pickRationale(trials: ClassifierTrial[], finalScore: number): string {
-  const counts = new Map<string, number>();
-  for (const t of trials) counts.set(t.choice, (counts.get(t.choice) ?? 0) + 1);
-  let majorityChoice = trials[0].choice;
-  let majorityCount = 0;
-  for (const [choice, count] of counts) {
-    if (count > majorityCount) {
-      majorityCount = count;
-      majorityChoice = choice;
-    }
-  }
-  const candidates = trials.filter((t) => t.choice === majorityChoice);
-  const representative = candidates.reduce((best, t) =>
-    Math.abs(t.score - finalScore) < Math.abs(best.score - finalScore) ? t : best,
-  );
-  return representative.reasoning;
-}
-
 interface ToolCallingResult {
   score: number;
   rationale: string;
-  trials: ClassifierTrial[];
+  choice: string;
 }
 
 interface ToolCallInfo {
@@ -219,11 +193,14 @@ function formatToolsCalled(tools: ToolCallInfo[]): string {
 }
 
 // Scores one guest turn's tool selection against the tool-description
-// rubric above, across TRIAL_COUNT independent temperature-0 trials, and
-// averages the per-trial scores into the final score. `input`/`output` are
+// rubric above with a single temperature-0 judge call. `input`/`output` are
 // the guest's raw message and the concierge's raw reply text; `toolsCalled`
 // is this turn's combined span-derived + tag-derived tool list (see
-// gatherToolsCalled below).
+// gatherToolsCalled below). temperature: 0 doesn't fully eliminate
+// provider-side non-determinism (an earlier dry run scored the same turn
+// 0.5 in one run and 0.0 in another) — a single-pass score can still vary
+// run-to-run; accepted as the cost/latency tradeoff for online scoring, see
+// this file's header comment.
 async function scoreToolCalling(turn: {
   input: string;
   output: string;
@@ -232,13 +209,9 @@ async function scoreToolCalling(turn: {
   const prompt = RUBRIC_PROMPT.replace("{{input}}", turn.input)
     .replace("{{toolsCalled}}", formatToolsCalled(turn.toolsCalled))
     .replace("{{output}}", turn.output);
-  const trials: ClassifierTrial[] = [];
-  for (let i = 0; i < TRIAL_COUNT; i++) {
-    const result = await generateText({ model, prompt, temperature: 0 });
-    trials.push(parseClassifierResponse(result.text));
-  }
-  const score = trials.reduce((sum, t) => sum + t.score, 0) / trials.length;
-  return { score, rationale: pickRationale(trials, score), trials };
+  const result = await generateText({ model, prompt, temperature: 0 });
+  const { choice, score, reasoning } = parseClassifierResponse(result.text);
+  return { score, rationale: reasoning, choice };
 }
 
 interface BraintrustSpanEvent {
@@ -310,15 +283,15 @@ async function scoreOneTurn(input: string, output: string, trace: Trace | undefi
   };
 
   const toolsCalled = gatherToolsCalled(turnSpan, allEvents);
-  const { score, rationale, trials } = await judge({ input, output, toolsCalled });
-  return { score, rationale, trials, toolsCalled: toolsCalled.map((t) => t.name) };
+  const { score, rationale, choice } = await judge({ input, output, toolsCalled });
+  return { score, rationale, choice, toolsCalled: toolsCalled.map((t) => t.name) };
 }
 
 project.scorers.create({
   name: "Correct Tool Calling",
   slug: "gca-correct-tool-calling",
   description:
-    "LLM-judge scorer: did GCA call the right tool(s), if any, for the guest's message? Correlates sibling gen_ai.tool.* spans and tag-only tools (wants_human/missing_info/send_booking_link) via trace.getSpans(). 3 temperature-0 trials averaged, real chain-of-thought.",
+    "LLM-judge scorer: did GCA call the right tool(s), if any, for the guest's message? Correlates sibling gen_ai.tool.* spans and tag-only tools (wants_human/missing_info/send_booking_link) via trace.getSpans(). Single temperature-0 judge call, real chain-of-thought.",
   ifExists: "replace",
   handler: async ({ input, output, trace }) => {
     // Braintrust's online-scoring rule fires on both the near-empty
@@ -340,7 +313,7 @@ project.scorers.create({
     ) {
       return null;
     }
-    const { score, rationale, trials, toolsCalled } = await scoreOneTurn(
+    const { score, rationale, choice, toolsCalled } = await scoreOneTurn(
       rawInput,
       rawOutput,
       trace,
@@ -357,7 +330,7 @@ project.scorers.create({
     return {
       name: "Correct Tool Calling",
       score,
-      metadata: { rationale, trials, toolsCalled },
+      metadata: { rationale, choice, toolsCalled },
     };
   },
 });

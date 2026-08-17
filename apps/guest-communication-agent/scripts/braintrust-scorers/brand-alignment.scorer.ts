@@ -1,8 +1,8 @@
 /**
  * Registers "Brand Alignment" as a real Braintrust Scorer Function (not a
  * script that POSTs a finished score). Fully self-contained — the judge
- * logic below (rubric, chain-of-thought parsing, 3-trial averaging) has no
- * dependency outside this file and node_modules.
+ * logic below (rubric, chain-of-thought parsing) has no dependency outside
+ * this file and node_modules.
  *
  * Once wired into an online-scoring Automation (see
  * docs/braintrust-online-eval-testing.md section 6), Braintrust's own
@@ -20,9 +20,11 @@
  * The classifier prompt asks for real chain-of-thought — reasoning written
  * BEFORE the choice, so the reasoning can actually influence the answer —
  * matching what autoevals' LLMClassifier(use_cot=True) does under the hood.
- * Each turn is scored across TRIAL_COUNT independent trials at temperature 0
- * and the final score is the average of the per-trial scores; see
- * pickRationale for which trial's reasoning gets persisted.
+ * Single temperature-0 judge call per turn — the earlier 3-trial-averaging
+ * design was removed because this scorer runs online on every real
+ * production guest turn (not just in offline evals), so the extra 2 LLM
+ * calls per trial were real, ongoing cost/latency overhead, not just an
+ * eval-time nicety. See docs/braintrust-online-eval-testing.md section 33.
  *
  * Push with: yarn bt functions push --env-file=.env scripts/braintrust-scorers
  * (requires the OPENROUTER_API_KEY project env var registered via
@@ -38,12 +40,6 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 const CHOICE_SCORES: Record<string, number> = { A: 1.0, B: 0.5, C: 0.0 };
-
-// Same finding that motivates this: an earlier single-trial dry run scored
-// the same turn 0.5 in one run and 0.0 in another. temperature: 0 alone
-// doesn't fully eliminate provider-side non-determinism, so every turn is
-// scored TRIAL_COUNT times and averaged instead of trusting one sample.
-const TRIAL_COUNT = 3;
 
 // Rubric is grounded in the live "gca-system" prompt (loaded from Braintrust
 // at runtime by src/agent/run-turn.ts, not stored in this repo) rather than
@@ -86,7 +82,7 @@ Respond in exactly this format, nothing else:
 Reasoning: <step-by-step reasoning about the rubric above, written BEFORE you decide — walk through what the reply does well or poorly against the specific rules that apply, then commit to a choice>
 Choice: <A, B, or C>`;
 
-interface ClassifierTrial {
+interface ClassifierResult {
   choice: string;
   score: number;
   reasoning: string;
@@ -100,7 +96,7 @@ interface ClassifierTrial {
 // preceding newline) before giving up and returning a mid-scale score with
 // the raw text as reasoning — keeps a malformed response visible instead of
 // throwing and losing the rest of the sample.
-function parseClassifierResponse(text: string): ClassifierTrial {
+function parseClassifierResponse(text: string): ClassifierResult {
   const strict = text.match(/Reasoning:\s*([\s\S]*?)\n\s*Choice:\s*([ABC])/i);
   if (strict) {
     const [, reasoning, choice] = strict;
@@ -127,54 +123,28 @@ function parseClassifierResponse(text: string): ClassifierTrial {
   };
 }
 
-// Picks which of the TRIAL_COUNT trials' reasoning gets persisted as the
-// single `brand_alignment_rationale` metadata value: the reasoning from the
-// majority-choice trial (ties broken by whichever trial's own score is
-// closest to the final averaged score). One coherent explanation reads
-// better in the Braintrust UI than 3 concatenated ones; the full per-trial
-// detail is still kept in metadata.trials for anyone who wants to dig
-// deeper into a run-to-run disagreement.
-function pickRationale(trials: ClassifierTrial[], finalScore: number): string {
-  const counts = new Map<string, number>();
-  for (const t of trials) counts.set(t.choice, (counts.get(t.choice) ?? 0) + 1);
-  let majorityChoice = trials[0].choice;
-  let majorityCount = 0;
-  for (const [choice, count] of counts) {
-    if (count > majorityCount) {
-      majorityCount = count;
-      majorityChoice = choice;
-    }
-  }
-  const candidates = trials.filter((t) => t.choice === majorityChoice);
-  const representative = candidates.reduce((best, t) =>
-    Math.abs(t.score - finalScore) < Math.abs(best.score - finalScore) ? t : best,
-  );
-  return representative.reasoning;
-}
-
 interface BrandAlignmentResult {
   score: number;
   rationale: string;
-  trials: ClassifierTrial[];
+  choice: string;
 }
 
 // Scores one guest turn's (input, output) pair against the brand-voice
-// rubric above, across TRIAL_COUNT independent temperature-0 trials, and
-// averages the per-trial scores into the final score. `input`/`output` are a
-// guest's raw message and the concierge's raw reply text, matching
-// braintrust.guest_turn span shape.
+// rubric above with a single temperature-0 judge call. `input`/`output` are
+// a guest's raw message and the concierge's raw reply text, matching
+// braintrust.guest_turn span shape. temperature: 0 doesn't fully eliminate
+// provider-side non-determinism (an earlier dry run scored the same turn
+// 0.5 in one run and 0.0 in another) — a single-pass score can still vary
+// run-to-run; accepted as the cost/latency tradeoff for online scoring, see
+// this file's header comment.
 async function scoreBrandAlignment(turn: {
   input: string;
   output: string;
 }): Promise<BrandAlignmentResult> {
   const prompt = RUBRIC_PROMPT.replace("{{input}}", turn.input).replace("{{output}}", turn.output);
-  const trials: ClassifierTrial[] = [];
-  for (let i = 0; i < TRIAL_COUNT; i++) {
-    const result = await generateText({ model, prompt, temperature: 0 });
-    trials.push(parseClassifierResponse(result.text));
-  }
-  const score = trials.reduce((sum, t) => sum + t.score, 0) / trials.length;
-  return { score, rationale: pickRationale(trials, score), trials };
+  const result = await generateText({ model, prompt, temperature: 0 });
+  const { choice, score, reasoning } = parseClassifierResponse(result.text);
+  return { score, rationale: reasoning, choice };
 }
 
 const judge = wrapTraced(scoreBrandAlignment, { name: "brand-alignment-judge" });
@@ -183,7 +153,7 @@ project.scorers.create({
   name: "Brand Alignment",
   slug: "gca-brand-alignment",
   description:
-    "LLM-judge scorer: does a GCA WhatsApp reply match the concierge's brand voice (warmth, booking pace, complaint handling, staying in character, no emojis)? 3 temperature-0 trials averaged, real chain-of-thought.",
+    "LLM-judge scorer: does a GCA WhatsApp reply match the concierge's brand voice (warmth, booking pace, complaint handling, staying in character, no emojis)? Single temperature-0 judge call, real chain-of-thought.",
   ifExists: "replace",
   handler: async ({ input, output }) => {
     // Braintrust's online-scoring rule fires on both the near-empty
@@ -205,14 +175,14 @@ project.scorers.create({
     ) {
       return null;
     }
-    const { score, rationale, trials } = await judge({ input: rawInput, output: rawOutput });
+    const { score, rationale, choice } = await judge({ input: rawInput, output: rawOutput });
     // `name` is required by braintrust's own `Score` shape — see
     // tool-calling.scorer.ts's handler comment for the confirmed failure
     // mode.
     return {
       name: "Brand Alignment",
       score,
-      metadata: { rationale, trials },
+      metadata: { rationale, choice },
     };
   },
 });
