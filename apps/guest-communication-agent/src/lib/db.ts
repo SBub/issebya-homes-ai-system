@@ -2,7 +2,7 @@ import { createAdminClient } from "./supabase";
 import { withSpan } from "./tracing";
 
 // Pure Postgres queries via createAdminClient(). Context assembly itself
-// lives in ../agent/memory.ts's loadMemory, which calls these.
+// lives in ../agent/memory.ts's loadMemory/foldMemory (both call these).
 
 // Safety ceiling on the raw DB fetch only — not the real context-size
 // limiter (that's trimToTokenBudget in ../agent/context.ts, applied
@@ -20,9 +20,10 @@ export interface MessageRow {
 // `created_at DESC` + `limit` then reverse — querying ascending+limit gives
 // the OLDEST messages instead once a conversation exceeds the limit.
 //
-// Includes id/created_at (not just role/content) so loadMemory can
-// correlate rows trimToTokenBudget drops back to their message ids, for
-// guest_memory's summarized_through_message_id watermark.
+// Includes id/created_at (not just role/content) so memory.ts's
+// loadMemoryState can correlate rows trimToTokenBudget drops back to their
+// message ids, for guest_memory's summarized_through_message_id watermark
+// (only foldMemory acts on that correlation; loadMemory ignores it).
 export async function loadRecentMessages(
   conversationId: string,
   limit = RECENT_MESSAGE_SAFETY_LIMIT,

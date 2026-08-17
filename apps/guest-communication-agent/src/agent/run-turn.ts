@@ -2,7 +2,7 @@ import type { Span } from "@opentelemetry/api";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
-import { type AgentMemory, loadMemory } from "@/agent/memory";
+import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
 import { requestApprovalGate } from "@/agent/tools/approval-gate";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import {
@@ -763,7 +763,7 @@ export async function runAgentTurn(
   input: RunAgentTurnInput,
   config: RunAgentTurnConfig,
 ): Promise<RunAgentTurnResult> {
-  const { conversationId, phone, incomingMessage } = input;
+  const { conversationId, phone } = input;
   const { triggerMessageId, correlationId, traceAnchor, step } = config;
 
   // Lightweight marker span, once per turn, memoized in its own step — gives
@@ -823,9 +823,15 @@ export async function runAgentTurn(
     turnAnchor,
     "load-memory",
     { "gca.conversation_id": conversationId },
-    () => loadMemory({ conversationId, phone, traceAnchor: turnAnchor }),
+    () => loadMemory({ conversationId, phone }),
   )) as AgentMemory;
-  let messages: ModelMessage[] = [...historyMessages, { role: "user", content: incomingMessage }];
+  // historyMessages already ends with this turn's incoming guest message:
+  // the webhook route (route.ts) records it to whatsapp_messages BEFORE
+  // enqueuing the turn, so loadRecentMessages (oldest-first) always returns
+  // it as the last row by the time this runs. Appending incomingMessage
+  // again here used to duplicate it as two consecutive identical user
+  // messages in every gen_ai.input.messages payload.
+  let messages: ModelMessage[] = historyMessages;
 
   // Hoisted out of the loop and fetched exactly once per turn, not once per
   // round: contextBlock (loaded above, once, from load-memory) doesn't
@@ -1081,6 +1087,49 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     "send-whatsapp-reply",
     { "gca.phone": phone },
     sendGuestWhatsAppReply,
+  );
+
+  // Folds whatever this turn dropped out of the trimmed history window
+  // (including, now, this turn's own just-recorded assistant reply) into
+  // guest_memory's rolling summary — the same summarize-and-persist side
+  // effect loadMemory used to do inline before the model call, moved here so
+  // its LLM round-trip (24-43s in real traces) no longer sits on the guest's
+  // reply-latency critical path. Parented to traceAnchor (webhook root),
+  // like its record-reply/send-whatsapp-reply siblings above, not to
+  // turnAnchor/"braintrust.guest_turn" — that span has already closed by the
+  // time this runs (see runAgentTurn's own turnAnchor comment for why those
+  // three are siblings, not children, of the guest turn's own reasoning
+  // span). foldMemory's own summarizeConversation call opens its
+  // "gen_ai.chat" span under whatever anchor it's given, so passing this
+  // step's own real span id (not traceAnchor itself) below is what nests
+  // that call under "fold-memory-summary" instead of directly under the
+  // webhook root.
+  async function foldGuestMemory(span: Span): Promise<void> {
+    try {
+      await foldMemory({
+        conversationId,
+        phone,
+        traceAnchor: { traceId: traceAnchor.traceId, spanId: span.spanContext().spanId },
+      });
+    } catch (err) {
+      // Same soft-fail spirit as sendGuestWhatsAppReply above: the guest
+      // already has their reply by this point, so a summarization failure
+      // must never crash an otherwise-successful turn. Safe to just log +
+      // mark the span failed — the existing watermark mechanism (see
+      // memory.ts's loadMemoryState) makes a lost fold harmless regardless,
+      // the next turn's fold just sees a bigger backlog.
+      console.error(`[run-turn] foldMemory failed for conversation ${conversationId}:`, err);
+      markSpanFailed(span, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  await steppedSpan(
+    step,
+    "fold-memory-summary",
+    traceAnchor,
+    "fold-memory-summary",
+    { "gca.conversation_id": conversationId },
+    foldGuestMemory,
   );
 }
 

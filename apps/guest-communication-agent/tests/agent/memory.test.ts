@@ -33,7 +33,7 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { loadMemory, buildContextBlock } = await import("@/agent/memory.js");
+const { loadMemory, foldMemory, buildContextBlock } = await import("@/agent/memory.js");
 
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
 
@@ -88,16 +88,71 @@ describe("loadMemory", () => {
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
 
-    const result = await loadMemory({
-      conversationId: "convo-1",
-      phone: "+351900000001",
-      traceAnchor: TEST_TRACE_ANCHOR,
-    });
+    const result = await loadMemory({ conversationId: "convo-1", phone: "+351900000001" });
 
     expect(result.historyMessages).toHaveLength(3);
     expect(result.contextBlock).toBe("No prior guest information available.");
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+  });
+
+  // The fast path never summarizes or writes, even when this turn's trim
+  // drops rows past the existing watermark — that's foldMemory's job now
+  // (see the "foldMemory" describe block below), called later by
+  // run-turn.ts, off this turn's own critical path.
+  it("returns the trimmed history without summarizing or writing, even when overflow drops rows past the watermark", async () => {
+    const rows = overflowingRows();
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null); // no prior guest_memory row at all
+
+    const result = await loadMemory({
+      conversationId: "convo-2",
+      // Already-normalized (bare) form — the webhook route normalizes
+      // once, at the ingress boundary, before loadMemory ever sees `phone`.
+      phone: "+351900000002",
+    });
+
+    // Trimmed to the newest 3 rows (msg-5, msg-6, msg-7) exactly as before —
+    // the trim logic itself is unchanged by the loadMemory/foldMemory split.
+    expect(result.historyMessages).toHaveLength(3);
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+    expect(result.contextBlock).toBe("No prior guest information available.");
+  });
+
+  it("reads whatever summary guest_memory already has as-is, without recomputing it — up to one turn stale by design", async () => {
+    const rows = overflowingRows();
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue({
+      summary: "Earlier: guest asked about rooms 1-3.",
+      summarizedThroughMessageId: "msg-4",
+    });
+
+    const result = await loadMemory({ conversationId: "convo-3", phone: "+351900000003" });
+
+    expect(result.historyMessages).toHaveLength(3);
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+    expect(result.contextBlock).toBe(
+      "Summary of earlier conversation:\nEarlier: guest asked about rooms 1-3.",
+    );
+  });
+});
+
+describe("foldMemory", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadPromptMock.mockResolvedValue({
+      build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
+        messages: [
+          { role: "system", content: "You compress an older stretch..." },
+          {
+            role: "user",
+            content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
+          },
+        ],
+      }),
+    });
   });
 
   it("summarizes and upserts when overflow drops rows newer than the existing watermark (or with no watermark at all)", async () => {
@@ -108,35 +163,29 @@ describe("loadMemory", () => {
       text: "Guest asked about rooms 1-3, no booking yet.",
     });
 
-    const result = await loadMemory({
+    await foldMemory({
       conversationId: "convo-2",
       // Already-normalized (bare) form — the webhook route normalizes
-      // once, at the ingress boundary, before loadMemory ever sees `phone`.
+      // once, at the ingress boundary, before foldMemory ever sees `phone`.
       phone: "+351900000002",
       traceAnchor: TEST_TRACE_ANCHOR,
     });
 
-    // Trimmed to the newest 3 rows (msg-5, msg-6, msg-7); the oldest 5
-    // (msg-0..msg-4) were dropped and, with no watermark at all, are all
-    // "new" and get folded into the summary.
-    expect(result.historyMessages).toHaveLength(3);
+    // The oldest 5 rows (msg-0..msg-4) were dropped by the trim and, with no
+    // watermark at all, are all "new" and get folded into the summary.
     expect(generateTextMock).toHaveBeenCalledTimes(1);
     const [call] = generateTextMock.mock.calls[0] as [{ messages: Array<{ content: string }> }];
     expect(call.messages[1].content).toContain("msg-0");
     expect(call.messages[1].content).toContain("msg-4");
     expect(call.messages[1].content).not.toContain("msg-5:");
 
-    // Upserted under exactly the phone value loadMemory was given — it does
-    // no normalization of its own anymore, with the watermark set to the
-    // newest of the newly-folded-in dropped rows (msg-4 — the last of
-    // msg-0..msg-4).
+    // Upserted under exactly the phone value foldMemory was given — it does
+    // no normalization of its own, with the watermark set to the newest of
+    // the newly-folded-in dropped rows (msg-4 — the last of msg-0..msg-4).
     expect(upsertGuestMemoryMock).toHaveBeenCalledWith(
       "+351900000002",
       "Guest asked about rooms 1-3, no booking yet.",
       "msg-4",
-    );
-    expect(result.contextBlock).toBe(
-      "Summary of earlier conversation:\nGuest asked about rooms 1-3, no booking yet.",
     );
   });
 
@@ -150,18 +199,32 @@ describe("loadMemory", () => {
       summarizedThroughMessageId: "msg-4",
     });
 
-    const result = await loadMemory({
+    await foldMemory({
       conversationId: "convo-3",
       phone: "+351900000003",
       traceAnchor: TEST_TRACE_ANCHOR,
     });
 
-    expect(result.historyMessages).toHaveLength(3);
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
-    expect(result.contextBlock).toBe(
-      "Summary of earlier conversation:\nEarlier: guest asked about rooms 1-3.",
-    );
+  });
+
+  it("is a cheap no-op — no model call, no write — when nothing overflows at all", async () => {
+    const rows = [
+      messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
+      messageRow("msg-2", "assistant", 50, "2026-08-01T00:01:00Z"),
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    await foldMemory({
+      conversationId: "convo-1",
+      phone: "+351900000001",
+      traceAnchor: TEST_TRACE_ANCHOR,
+    });
+
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
   });
 });
 

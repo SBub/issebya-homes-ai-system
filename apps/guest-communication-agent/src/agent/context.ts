@@ -2,8 +2,8 @@ import type { ModelMessage } from "ai";
 
 // Token-budget-aware trimming of recent conversation history. Pure
 // hydration mechanics over plain ModelMessage[] — summary orchestration
-// lives in ../agent/memory.ts (loadMemory), which calls trimToTokenBudget
-// below unchanged.
+// lives in ../agent/memory.ts (loadMemory/foldMemory, via their shared
+// loadMemoryState), which calls trimToTokenBudget below unchanged.
 
 // KEEP_CONTEXT_TOKENS must stay below MAX_CONTEXT_TOKENS: trimToTokenBudget
 // only trims once total tokens exceed MAX, down to KEEP — if KEEP were ever
@@ -25,8 +25,8 @@ export function estimateTokens(messages: ModelMessage[]): number {
 
 // If over MAX_CONTEXT_TOKENS, peels oldest messages off until back under
 // KEEP_CONTEXT_TOKENS. Operates on a single freshly-fetched message list —
-// every guest turn calls loadMemory fresh, re-fetching and re-trimming from
-// Postgres each time.
+// every guest turn calls loadMemory fresh (and, later, foldMemory again),
+// re-fetching and re-trimming from Postgres each time.
 export function trimToTokenBudget(messages: ModelMessage[]): ModelMessage[] {
   if (estimateTokens(messages) <= MAX_CONTEXT_TOKENS) return messages;
 

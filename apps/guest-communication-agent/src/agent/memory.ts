@@ -11,9 +11,18 @@ import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
 // message ids here) + a persistent rolling conversation summary backed by
 // guest_memory.
 //
+// Split into two entry points on purpose: loadMemory (the fast path, called
+// at the start of every turn to build that turn's own system prompt) never
+// calls the summarizer LLM or writes to guest_memory — it only reads
+// whatever summary is already stored, up to one turn stale by design.
+// foldMemory (the fold path, called by run-turn.ts's runGuestTurn AFTER the
+// guest already has their reply) does the actual summarize-and-persist side
+// effect. This keeps the summarizer's own LLM round-trip (24-43s in real
+// traces) off the guest's reply-latency critical path.
+//
 // `.chat(MODEL)` and MODEL are duplicated locally rather than imported from
-// run-turn.ts, since run-turn.ts imports loadMemory from here — importing
-// back would create a circular import.
+// run-turn.ts, since run-turn.ts imports from here — importing back would
+// create a circular import.
 const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
@@ -101,11 +110,11 @@ async function summarizeConversation(
   }
 
   // Not inside any step.run() of its own — but it's only ever called from
-  // loadMemory, which itself runs inside run-turn.ts's outer
-  // step.run("load-memory", ...), so (like the model-call/tool-call
+  // foldMemory, which itself runs inside run-turn.ts's outer
+  // step.run("fold-memory-summary", ...), so (like the model-call/tool-call
   // step.run wrapping in run-turn.ts) it only actually executes once per
-  // real run; a replay returns the memoized load-memory result without
-  // re-running this. Safe to wrap in a span for the same reason.
+  // real run; a replay returns the memoized fold-memory-summary result
+  // without re-running this. Safe to wrap in a span for the same reason.
   return withTurnSpan(
     turnAnchor,
     "gen_ai.chat",
@@ -122,13 +131,21 @@ export function buildContextBlock(summary: string | null): string {
   return `Summary of earlier conversation:\n${summary}`;
 }
 
-export async function loadMemory(params: {
-  conversationId: string;
-  phone: string;
-  traceAnchor: TraceAnchor;
-}): Promise<AgentMemory> {
-  const { conversationId, phone, traceAnchor } = params;
-
+// Shared by loadMemory and foldMemory below: fetches recent messages + the
+// existing guest_memory row, trims to the token budget, and correlates the
+// trimmed-off rows against the existing summary's watermark. Each caller
+// re-runs this fresh against Postgres rather than sharing one read — by the
+// time foldMemory runs, run-turn.ts's record-reply step has already written
+// this turn's own assistant reply, so re-reading here is what lets the
+// watermark computation see it too.
+async function loadMemoryState(
+  conversationId: string,
+  phone: string,
+): Promise<{
+  historyMessages: ModelMessage[];
+  existingMemory: Awaited<ReturnType<typeof getGuestMemory>>;
+  newlyDroppedRows: MessageRow[];
+}> {
   const [rows, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
     getGuestMemory(phone),
@@ -151,22 +168,50 @@ export async function loadMemory(params: {
   const newlyDroppedRows =
     watermarkIndex === -1 ? droppedRows : droppedRows.slice(watermarkIndex + 1);
 
-  let summary = existingMemory?.summary ?? null;
+  return { historyMessages, existingMemory, newlyDroppedRows };
+}
 
-  if (newlyDroppedRows.length > 0) {
-    const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
-    summary = await summarizeConversation(
-      newlyDroppedMessages,
-      existingMemory?.summary ?? "",
-      traceAnchor,
-    );
-
-    const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
-    await upsertGuestMemory(phone, summary, newWatermark);
-  }
+// The fast path — called at the start of every turn. No LLM call, no DB
+// write: contextBlock reads whatever summary guest_memory already has, which
+// is up to one turn stale since a same-turn fold (see foldMemory below)
+// hasn't run yet when this is called. That staleness is spec'd, not a bug —
+// see this file's top comment.
+export async function loadMemory(params: {
+  conversationId: string;
+  phone: string;
+}): Promise<AgentMemory> {
+  const { conversationId, phone } = params;
+  const { historyMessages, existingMemory } = await loadMemoryState(conversationId, phone);
 
   return {
     historyMessages,
-    contextBlock: buildContextBlock(summary),
+    contextBlock: buildContextBlock(existingMemory?.summary ?? null),
   };
+}
+
+// The fold path — today's actual summarize-and-persist side effect,
+// unchanged in its own logic (see loadMemoryState above), just no longer
+// inline on the turn's critical path. Called from run-turn.ts's
+// "fold-memory-summary" step, after the guest already has their reply. A
+// cheap no-op (no LLM call, no write) when nothing new has dropped out of
+// the trimmed window since the last fold — same self-throttling the inline
+// version always had.
+export async function foldMemory(params: {
+  conversationId: string;
+  phone: string;
+  traceAnchor: TraceAnchor;
+}): Promise<void> {
+  const { conversationId, phone, traceAnchor } = params;
+  const { existingMemory, newlyDroppedRows } = await loadMemoryState(conversationId, phone);
+  if (newlyDroppedRows.length === 0) return;
+
+  const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
+  const summary = await summarizeConversation(
+    newlyDroppedMessages,
+    existingMemory?.summary ?? "",
+    traceAnchor,
+  );
+
+  const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
+  await upsertGuestMemory(phone, summary, newWatermark);
 }
