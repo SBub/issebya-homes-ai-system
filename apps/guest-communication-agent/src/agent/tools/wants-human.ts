@@ -15,7 +15,7 @@ const wantsHumanSchema = z.object({
 // getPricing/checkAvailability.
 export const wantsHuman = tool({
   description:
-    "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person.",
+    "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person, or when they've made a request only the owner can act on or approve (e.g. early check-in, a special accommodation) that you can't resolve yourself.",
   inputSchema: wantsHumanSchema,
 });
 
