@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { estimateTokens } from "@/agent/context.js";
 
 // memory.ts's own orchestration (trim -> id correlation -> watermark filter
 // -> summarize-and-upsert) is under test here, so db.ts's queries are mocked
@@ -229,6 +230,127 @@ describe("foldMemory", () => {
 
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+  });
+});
+
+// URLs (booking links, Google Maps links, etc.) are redacted by
+// toModelMessage before DB rows become ModelMessage[] — see memory.ts's
+// URL_PATTERN/URL_PLACEHOLDER comment for why. These tests exercise that
+// redaction indirectly through loadMemory (historyMessages, the fast path)
+// and foldMemory (the summarizer's transcript input), since toModelMessage
+// itself isn't exported.
+describe("URL redaction in toModelMessage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadPromptMock.mockResolvedValue({
+      build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
+        messages: [
+          { role: "system", content: "You compress an older stretch..." },
+          {
+            role: "user",
+            content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
+          },
+        ],
+      }),
+    });
+  });
+
+  const BOOKING_LINK_TEXT =
+    "Here's your booking link for Room 1, September 18-20, 2026:\n\nhttps://issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20";
+  const MAPS_LINK_TEXT = "Here's how to find us: https://maps.app.goo.gl/abc123XYZ, see you soon!";
+  const PLAIN_TEXT =
+    "Sure thing! Check-in is at 3pm, and there's a $50 deposit (refundable) — see you then :)";
+
+  it("redacts a booking-link-shaped URL in historyMessages (loadMemory's fast path)", async () => {
+    const rows = [
+      messageRow("msg-1", "user", 10, "2026-08-01T00:00:00Z"),
+      {
+        ...messageRow("msg-2", "assistant", 10, "2026-08-01T00:01:00Z"),
+        content: BOOKING_LINK_TEXT,
+      },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({ conversationId: "convo-url-1", phone: "+351900000010" });
+
+    const assistantMessage = result.historyMessages.find((m) => m.role === "assistant");
+    expect(assistantMessage?.content).toBe(
+      "Here's your booking link for Room 1, September 18-20, 2026:\n\n[link]",
+    );
+    expect(assistantMessage?.content).not.toContain("https://");
+  });
+
+  it("redacts a Google Maps-style URL too, proving the regex isn't issebya.com-specific", async () => {
+    const rows = [
+      { ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"), content: MAPS_LINK_TEXT },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({ conversationId: "convo-url-2", phone: "+351900000011" });
+
+    expect(result.historyMessages[0].content).toBe("Here's how to find us: [link], see you soon!");
+    expect(result.historyMessages[0].content).not.toContain("https://");
+  });
+
+  it("leaves non-URL content — including punctuation and special characters — completely unchanged", async () => {
+    const rows = [
+      { ...messageRow("msg-1", "user", 10, "2026-08-01T00:00:00Z"), content: PLAIN_TEXT },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({ conversationId: "convo-url-3", phone: "+351900000012" });
+
+    expect(result.historyMessages[0].content).toBe(PLAIN_TEXT);
+  });
+
+  it("redacts URLs in the transcript passed to the summarizer (foldMemory's generateText call)", async () => {
+    // 8 rows so the trim overflows and something actually gets dropped/folded
+    // (same overflow shape as overflowingRows()), with msg-2 replaced by a
+    // booking-link-bearing row.
+    const rows = overflowingRows();
+    rows[2] = { ...rows[2], content: `${rows[2].content} ${BOOKING_LINK_TEXT}` };
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+    generateTextMock.mockResolvedValueOnce({ text: "Guest asked about booking Room 1." });
+
+    await foldMemory({
+      conversationId: "convo-url-4",
+      phone: "+351900000013",
+      traceAnchor: TEST_TRACE_ANCHOR,
+    });
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const [call] = generateTextMock.mock.calls[0] as [{ messages: Array<{ content: string }> }];
+    expect(call.messages[1].content).toContain("[link]");
+    expect(call.messages[1].content).not.toContain("https://");
+  });
+
+  it("measurably shrinks token count on a URL-heavy message using the real tokenizer", async () => {
+    // Two-URL message (booking link + Google Maps link), shaped like the
+    // real message measured at 231 tokens under the real tokenizer against
+    // a 250-token KEEP_CONTEXT_TOKENS budget.
+    const twoLinkText =
+      "Here's your booking link for Room 1, September 18-20, 2026:\n\n" +
+      "https://issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20\n\n" +
+      "And here's how to find the property: https://maps.app.goo.gl/8gk3nQeD2rHFujeK7";
+
+    const rows = [
+      { ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"), content: twoLinkText },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({ conversationId: "convo-url-5", phone: "+351900000014" });
+    const redactedText = result.historyMessages[0].content as string;
+
+    const beforeTokens = estimateTokens([{ role: "assistant", content: twoLinkText }]);
+    const afterTokens = estimateTokens([{ role: "assistant", content: redactedText }]);
+
+    expect(afterTokens).toBeLessThan(beforeTokens);
+    expect(beforeTokens - afterTokens).toBeGreaterThan(20);
   });
 });
 

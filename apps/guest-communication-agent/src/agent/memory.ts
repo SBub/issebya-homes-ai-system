@@ -45,10 +45,29 @@ export interface AgentMemory {
   contextBlock: string;
 }
 
+// Matches any http(s) URL, not just this app's own booking-link shape or
+// Google Maps — real messages have measured a 2-URL message alone costing
+// 231 tokens (real tokenizer) against a 250-token KEEP_CONTEXT_TOKENS
+// budget. The surrounding natural-language text (e.g. "Here's your booking
+// link for Room 1, September 18-20:") already carries the useful signal —
+// the model needs to know a link was sent, not its bytes — so URLs are
+// replaced with this placeholder rather than dropped, keeping the rest of
+// the sentence intact. Storage (recordMessage) and the guest's own
+// WhatsApp replies never go through this function, so real links still
+// reach Postgres and the guest untouched.
+// Trailing-punctuation-excluding tail (`[^\s.,!?;:)\]}'"]`) so a URL
+// embedded in a sentence — "...see you soon: https://maps.app.goo.gl/xyz."
+// — doesn't swallow the sentence's own closing punctuation into the match.
+const URL_PATTERN = /https?:\/\/\S*[^\s.,!?;:)\]}'"]/g;
+const URL_PLACEHOLDER = "[link]";
+
+function redactUrls(content: string): string {
+  return content.replace(URL_PATTERN, URL_PLACEHOLDER);
+}
+
 function toModelMessage(row: MessageRow): ModelMessage {
-  return row.role === "user"
-    ? { role: "user", content: row.content }
-    : { role: "assistant", content: row.content };
+  const content = redactUrls(row.content);
+  return row.role === "user" ? { role: "user", content } : { role: "assistant", content };
 }
 
 // guest_memory.phone_number is keyed on the bare (non-"whatsapp:"-prefixed)
