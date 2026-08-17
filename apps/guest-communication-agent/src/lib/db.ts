@@ -105,3 +105,27 @@ export async function upsertGuestMemory(
     if (error) throw error;
   });
 }
+
+// Pure insert (not upsert, unlike upsertGuestMemory above) — one row per
+// fold event, not keyed/deduped by phone_number. Backs guest_memory_folds,
+// the discrete-fold-row table (see 20260817120000_create_guest_memory_folds.sql
+// and ../agent/memory.ts's foldMemory). No read/list function for this table
+// lives here yet — that belongs to whichever later task owns the read side.
+export async function insertGuestMemoryFold(params: {
+  phoneNumber: string;
+  summaryText: string;
+  messageIdFrom: string | null;
+  messageIdTo: string | null;
+}): Promise<void> {
+  return withSpan("db.insertGuestMemoryFold", { "db.table": "guest_memory_folds" }, async () => {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("guest_memory_folds").insert({
+      phone_number: params.phoneNumber,
+      summary_text: params.summaryText,
+      message_id_from: params.messageIdFrom,
+      message_id_to: params.messageIdTo,
+    });
+
+    if (error) throw error;
+  });
+}

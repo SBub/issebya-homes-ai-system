@@ -2,7 +2,13 @@ import type { Span } from "@opentelemetry/api";
 import { generateText, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
-import { getGuestMemory, loadRecentMessages, type MessageRow, upsertGuestMemory } from "@/lib/db";
+import {
+  getGuestMemory,
+  insertGuestMemoryFold,
+  loadRecentMessages,
+  type MessageRow,
+  upsertGuestMemory,
+} from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
 import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
 
@@ -225,12 +231,49 @@ export async function foldMemory(params: {
   if (newlyDroppedRows.length === 0) return;
 
   const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
-  const summary = await summarizeConversation(
-    newlyDroppedMessages,
-    existingMemory?.summary ?? "",
-    traceAnchor,
-  );
-
+  const oldestDroppedId = newlyDroppedRows[0].id;
   const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
-  await upsertGuestMemory(phone, summary, newWatermark);
+
+  // The existing accumulated-blob write: unchanged from before this
+  // function grew a second write below.
+  async function writeAccumulatedSummary(): Promise<void> {
+    const summary = await summarizeConversation(
+      newlyDroppedMessages,
+      existingMemory?.summary ?? "",
+      traceAnchor,
+    );
+    await upsertGuestMemory(phone, summary, newWatermark);
+  }
+
+  // The new discrete-fold-row write (guest_memory_folds — first piece of the
+  // tiered-memory redesign, see 20260817120000_create_guest_memory_folds.sql).
+  // prior_summary is passed as "" here, deliberately unlike
+  // writeAccumulatedSummary's call above: this row must only ever reflect
+  // newlyDroppedMessages standing alone, never blended with prior
+  // accumulated summary text, or it reproduces the same re-compression/
+  // fidelity-loss problem this table exists to move away from. That means
+  // two summarizer LLM calls happen per real fold event during this
+  // transitional period — an accepted cost, not an oversight, since
+  // foldMemory already runs off the turn's critical path (see this file's
+  // top comment) and building genuinely discrete fold data now avoids
+  // regenerating it later once writeAccumulatedSummary above is eventually
+  // retired. A failure here must not affect writeAccumulatedSummary's write,
+  // since that's the one real behavior depends on today — it's caught below
+  // rather than left to reject the surrounding Promise.all, and is no worse
+  // than a fold not having happened for this table (recoverable next fold).
+  async function writeDiscreteFold(): Promise<void> {
+    try {
+      const summaryText = await summarizeConversation(newlyDroppedMessages, "", traceAnchor);
+      await insertGuestMemoryFold({
+        phoneNumber: phone,
+        summaryText,
+        messageIdFrom: oldestDroppedId,
+        messageIdTo: newWatermark,
+      });
+    } catch (err) {
+      console.error(`[memory] guest_memory_folds write failed for phone ${phone}:`, err);
+    }
+  }
+
+  await Promise.all([writeAccumulatedSummary(), writeDiscreteFold()]);
 }

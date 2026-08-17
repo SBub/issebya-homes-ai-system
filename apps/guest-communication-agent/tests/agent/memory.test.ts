@@ -7,10 +7,12 @@ import { estimateTokens } from "@/agent/context.js";
 const loadRecentMessagesMock = vi.fn();
 const getGuestMemoryMock = vi.fn();
 const upsertGuestMemoryMock = vi.fn();
+const insertGuestMemoryFoldMock = vi.fn();
 vi.mock("@/lib/db.js", () => ({
   loadRecentMessages: loadRecentMessagesMock,
   getGuestMemory: getGuestMemoryMock,
   upsertGuestMemory: upsertGuestMemoryMock,
+  insertGuestMemoryFold: insertGuestMemoryFoldMock,
 }));
 
 // summarizeConversation's two external calls — generateText mocked the same
@@ -163,10 +165,25 @@ describe("foldMemory", () => {
   it("summarizes and upserts when overflow drops rows newer than the existing watermark (or with no watermark at all)", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
-    getGuestMemoryMock.mockResolvedValue(null); // no prior guest_memory row at all
-    generateTextMock.mockResolvedValueOnce({
-      text: "Guest asked about rooms 1-3, no booking yet.",
+    // No watermark, but a non-empty existing summary — lets this test tell
+    // the accumulated-blob call (which should fold this summary in) apart
+    // from the discrete-fold-row call (which must not, per below).
+    getGuestMemoryMock.mockResolvedValue({
+      summary: "Earlier: guest asked about rooms 1-3.",
+      summarizedThroughMessageId: null,
     });
+    // foldMemory issues its two summarizer calls concurrently (Promise.all),
+    // so which one actually reaches the mocked generateText first isn't
+    // guaranteed — respond based on which prompt was rendered (distinguished
+    // by prior_summary) rather than call order, to keep this deterministic.
+    generateTextMock.mockImplementation(
+      async ({ messages }: { messages: Array<{ content: string }> }) => {
+        if (messages[1].content.includes("Prior summary:\n(none)")) {
+          return { text: "Standalone: guest asked about rooms 1-3." };
+        }
+        return { text: "Guest asked about rooms 1-3, no booking yet." };
+      },
+    );
 
     await foldMemory({
       conversationId: "convo-2",
@@ -176,13 +193,32 @@ describe("foldMemory", () => {
       traceAnchor: TEST_TRACE_ANCHOR,
     });
 
-    // The oldest 5 rows (msg-0..msg-4) were dropped by the trim and, with no
-    // watermark at all, are all "new" and get folded into the summary.
-    expect(generateTextMock).toHaveBeenCalledTimes(1);
-    const [call] = generateTextMock.mock.calls[0] as [{ messages: Array<{ content: string }> }];
-    expect(call.messages[1].content).toContain("msg-0");
-    expect(call.messages[1].content).toContain("msg-4");
-    expect(call.messages[1].content).not.toContain("msg-5:");
+    // Two summarizer calls per fold now: the existing accumulated-blob call
+    // (prior_summary from existingMemory) plus the new discrete-fold-row
+    // call (prior_summary forced to "" — see memory.ts's foldMemory
+    // writeDiscreteFold comment for why). Both see the same newly-dropped
+    // rows (msg-0..msg-4); neither sees msg-5, which stayed in the trimmed
+    // window. foldMemory runs the two writes via Promise.all, so call order
+    // isn't guaranteed — distinguish them by their rendered prompt content
+    // instead of by array index.
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    const calls = generateTextMock.mock.calls as [{ messages: Array<{ content: string }> }][];
+    for (const [call] of calls) {
+      expect(call.messages[1].content).toContain("msg-0");
+      expect(call.messages[1].content).toContain("msg-4");
+      expect(call.messages[1].content).not.toContain("msg-5:");
+    }
+    expect(
+      calls.filter(([call]) =>
+        call.messages[1].content.includes("Prior summary:\nEarlier: guest asked about rooms 1-3."),
+      ),
+    ).toHaveLength(1);
+    // The discrete-fold-row call's prior_summary was forced to "" (renders
+    // as the template's "(none)" fallback) — it must NOT see the existing
+    // accumulated summary at all.
+    expect(
+      calls.filter(([call]) => call.messages[1].content.includes("Prior summary:\n(none)")),
+    ).toHaveLength(1);
 
     // Upserted under exactly the phone value foldMemory was given — it does
     // no normalization of its own, with the watermark set to the newest of
@@ -192,6 +228,15 @@ describe("foldMemory", () => {
       "Guest asked about rooms 1-3, no booking yet.",
       "msg-4",
     );
+
+    // The new discrete-fold-row write: standalone summary text, spanning
+    // exactly the newly-dropped rows (msg-0 oldest .. msg-4 newest).
+    expect(insertGuestMemoryFoldMock).toHaveBeenCalledWith({
+      phoneNumber: "+351900000002",
+      summaryText: "Standalone: guest asked about rooms 1-3.",
+      messageIdFrom: "msg-0",
+      messageIdTo: "msg-4",
+    });
   });
 
   it("skips the model call and the write when every dropped row is already covered by the existing watermark", async () => {
@@ -212,6 +257,7 @@ describe("foldMemory", () => {
 
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+    expect(insertGuestMemoryFoldMock).not.toHaveBeenCalled();
   });
 
   it("is a cheap no-op — no model call, no write — when nothing overflows at all", async () => {
@@ -230,6 +276,35 @@ describe("foldMemory", () => {
 
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(upsertGuestMemoryMock).not.toHaveBeenCalled();
+    expect(insertGuestMemoryFoldMock).not.toHaveBeenCalled();
+  });
+
+  it("still writes the accumulated-blob summary when the new discrete-fold-row write fails", async () => {
+    const rows = overflowingRows();
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+    generateTextMock.mockResolvedValue({ text: "Guest asked about rooms 1-3, no booking yet." });
+    insertGuestMemoryFoldMock.mockRejectedValue(new Error("insert failed"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      foldMemory({
+        conversationId: "convo-2",
+        phone: "+351900000002",
+        traceAnchor: TEST_TRACE_ANCHOR,
+      }),
+    ).resolves.toBeUndefined();
+
+    // The real behavior (upsertGuestMemory) must complete even though the
+    // new table's write rejected — a guest_memory_folds failure is no worse
+    // than a fold not having happened for that table, recoverable next fold.
+    expect(upsertGuestMemoryMock).toHaveBeenCalledWith(
+      "+351900000002",
+      "Guest asked about rooms 1-3, no booking yet.",
+      "msg-4",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 });
 
@@ -314,7 +389,10 @@ describe("URL redaction in toModelMessage", () => {
     rows[2] = { ...rows[2], content: `${rows[2].content} ${BOOKING_LINK_TEXT}` };
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
-    generateTextMock.mockResolvedValueOnce({ text: "Guest asked about booking Room 1." });
+    // foldMemory now makes two summarizer calls per fold (see the
+    // "foldMemory" describe block above) — both must see the same
+    // URL-redacted transcript.
+    generateTextMock.mockResolvedValue({ text: "Guest asked about booking Room 1." });
 
     await foldMemory({
       conversationId: "convo-url-4",
@@ -322,10 +400,12 @@ describe("URL redaction in toModelMessage", () => {
       traceAnchor: TEST_TRACE_ANCHOR,
     });
 
-    expect(generateTextMock).toHaveBeenCalledTimes(1);
-    const [call] = generateTextMock.mock.calls[0] as [{ messages: Array<{ content: string }> }];
-    expect(call.messages[1].content).toContain("[link]");
-    expect(call.messages[1].content).not.toContain("https://");
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    const calls = generateTextMock.mock.calls as [{ messages: Array<{ content: string }> }][];
+    for (const [call] of calls) {
+      expect(call.messages[1].content).toContain("[link]");
+      expect(call.messages[1].content).not.toContain("https://");
+    }
   });
 
   it("measurably shrinks token count on a URL-heavy message using the real tokenizer", async () => {
