@@ -35,7 +35,7 @@ const model = openrouter.chat(MODEL);
 // testing against a draft version.
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 const SUMMARIZER_PROMPT_VERSION =
-  process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197636062690373";
+  process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197705120199208";
 
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
