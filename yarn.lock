@@ -5634,6 +5634,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"gpt-tokenizer@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "gpt-tokenizer@npm:4.0.0"
+  checksum: 10c0/2a58a17237f6e4b1f65d28920c975d17e7e7faf0bf3e3f97abe59fcfa9b8362462a9587d4eb45d68227b945726e0efbdf81f2c3e1d5b2927afe22fc0b67cc469
+  languageName: node
+  linkType: hard
+
 "graceful-fs@npm:^4.2.6":
   version: 4.2.11
   resolution: "graceful-fs@npm:4.2.11"
@@ -5661,6 +5668,7 @@ __metadata:
     "@vercel/sandbox": "npm:^3.0.0"
     ai: "npm:^6.0.138"
     braintrust: "npm:^3.27.0"
+    gpt-tokenizer: "npm:^4.0.0"
     inngest: "npm:^4.15.0"
     inngest-cli: "npm:^1.41.1"
     next: "npm:^16.2.1"

@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { encode } from "gpt-tokenizer";
 
 // Token-budget-aware trimming of recent conversation history. Pure
 // hydration mechanics over plain ModelMessage[] — summary orchestration
@@ -12,15 +13,16 @@ import type { ModelMessage } from "ai";
 export const MAX_CONTEXT_TOKENS = 500;
 export const KEEP_CONTEXT_TOKENS = 250;
 
-// Rough chars/4 estimate — cheap and good enough to drive a trim decision,
-// not an exact tokenizer match.
+// DeepSeek (this app's model, see memory.ts/run-turn.ts's MODEL) has no
+// maintained JS/TS tokenizer binding, so this counts via gpt-tokenizer's
+// default o200k_base BPE encoding (OpenAI's, not DeepSeek's) as the
+// closest well-maintained approximation — real subword counts, not an
+// exact match to DeepSeek's own vocabulary.
 export function estimateTokens(messages: ModelMessage[]): number {
-  const chars = messages.reduce(
-    (n, m) =>
-      n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length),
-    0,
-  );
-  return Math.ceil(chars / 4);
+  return messages.reduce((n, m) => {
+    const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    return n + encode(text).length;
+  }, 0);
 }
 
 // If over MAX_CONTEXT_TOKENS, peels oldest messages off until back under

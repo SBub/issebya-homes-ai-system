@@ -7,29 +7,47 @@ import {
   trimToTokenBudget,
 } from "@/agent/context.js";
 
-// Builds a ModelMessage with `content` repeated/padded to exactly `chars`
-// characters, so token counts in these tests are exact and easy to reason
-// about (estimateTokens is chars/4, rounded up).
+// Builds a ModelMessage with `content` padded with repeated natural-English
+// filler to (at least) `chars` characters, tagged with `tag` for
+// containment/ordering assertions. Real BPE tokenizers merge long runs of a
+// single repeated character far more aggressively than ordinary prose (e.g.
+// "x".repeat(300) is ~38 tokens, vs ~63 for 300 chars of real words), so
+// this uses word-shaped filler to keep the fixture's token count
+// representative of actual guest/assistant messages instead of a
+// pathological outlier.
 function messageOfLength(role: "user" | "assistant", chars: number, tag: string): ModelMessage {
-  const body = `${tag}:`;
-  const content = body + "x".repeat(Math.max(0, chars - body.length));
-  return { role, content } as ModelMessage;
+  const phrase = "the quick brown fox jumps over the lazy dog and then trots back home again ";
+  const body = `${tag}: `;
+  let content = body;
+  while (content.length < chars) content += phrase;
+  return { role, content: content.slice(0, chars) } as ModelMessage;
 }
 
 describe("estimateTokens", () => {
-  it("estimates ~chars/4, rounded up, for string content", () => {
+  // Exact counts below are gpt-tokenizer's real o200k_base BPE token
+  // counts for this exact text (not chars/4) — verified by running the
+  // tokenizer directly, not derived from a formula.
+  it("counts real BPE tokens for string content", () => {
     const messages: ModelMessage[] = [
-      { role: "user", content: "a".repeat(400) } as ModelMessage,
-      { role: "assistant", content: "b".repeat(1) } as ModelMessage,
+      { role: "user", content: "Yes" } as ModelMessage,
+      {
+        role: "assistant",
+        content:
+          "Room 2 is available for those dates. It's €120 per night, with a 2-night minimum stay and free cancellation up to 48 hours before check-in.",
+      } as ModelMessage,
     ];
-    // 400 chars -> 100 tokens, 1 char -> ceil(1/4) = 1 token.
-    expect(estimateTokens(messages)).toBe(101);
+    expect(estimateTokens(messages)).toBe(35); // 1 + 34
   });
 
-  it("falls back to JSON.stringify length for non-string content", () => {
+  it("falls back to JSON.stringify length for non-string content, then tokenizes that", () => {
     const content = [{ type: "text", text: "hi" }];
     const messages: ModelMessage[] = [{ role: "user", content } as unknown as ModelMessage];
-    expect(estimateTokens(messages)).toBe(Math.ceil(JSON.stringify(content).length / 4));
+    // Real tokenizer count of the JSON.stringify'd fallback text, not
+    // chars/4 — this app's ModelMessage[] content is always plain text in
+    // practice (see run-turn.ts's comment on GCA never sending/receiving
+    // file attachments), so this branch only exists to satisfy
+    // ModelMessage's `string | Array<ContentPart>` type.
+    expect(estimateTokens(messages)).toBe(11);
   });
 
   it("returns 0 for an empty message list", () => {
@@ -39,8 +57,8 @@ describe("estimateTokens", () => {
 
 describe("trimToTokenBudget", () => {
   it("leaves a set of many short messages untouched when comfortably under budget", () => {
-    // 20 short messages (~13 tokens each -> ~260 tokens total), nowhere
-    // near MAX_CONTEXT_TOKENS (500).
+    // 20 short messages (~13 tokens each -> 260 tokens total), nowhere near
+    // MAX_CONTEXT_TOKENS (500).
     const messages = Array.from({ length: 20 }, (_, i) => messageOfLength("user", 50, `m${i}`));
 
     expect(estimateTokens(messages)).toBeLessThan(MAX_CONTEXT_TOKENS);
@@ -52,9 +70,10 @@ describe("trimToTokenBudget", () => {
   });
 
   it("trims a set of few very long messages down to under KEEP_CONTEXT_TOKENS, dropping oldest first", () => {
-    // 8 long messages (300 chars -> 75 tokens each -> 600 tokens total),
-    // over MAX_CONTEXT_TOKENS (500). Only the most recent 3 (225 tokens)
-    // fit under KEEP_CONTEXT_TOKENS (250).
+    // 8 long messages (300 chars -> 63 real tokens each -> 504 tokens
+    // total), just over MAX_CONTEXT_TOKENS (500). Only the most recent 3
+    // (189 tokens) fit under KEEP_CONTEXT_TOKENS (250) — the newest 4 would
+    // be 252, over budget.
     const messages = Array.from({ length: 8 }, (_, i) => messageOfLength("user", 300, `m${i}`));
 
     expect(estimateTokens(messages)).toBeGreaterThan(MAX_CONTEXT_TOKENS);

@@ -37,26 +37,30 @@ const { loadMemory, foldMemory, buildContextBlock } = await import("@/agent/memo
 
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
 
-// Builds a MessageRow-shaped object with `content` padded to exactly
-// `chars` characters, same measured-length trick as context.test.ts's
-// messageOfLength, plus the id/created_at fields memory.ts needs for
-// watermark correlation that context.test.ts's plain ModelMessage[] never
-// carries.
+// Builds a MessageRow-shaped object with `content` padded with repeated
+// natural-English filler to (at least) `chars` characters, same
+// word-shaped-filler trick as context.test.ts's messageOfLength (real BPE
+// tokenizers compress a repeated single character far more than ordinary
+// prose, so word filler keeps token counts representative), plus the
+// id/created_at fields memory.ts needs for watermark correlation that
+// context.test.ts's plain ModelMessage[] never carries.
 function messageRow(
   id: string,
   role: "user" | "assistant",
   chars: number,
   createdAt: string,
 ): { id: string; role: "user" | "assistant"; content: string; created_at: string } {
-  const body = `${id}:`;
-  const content = body + "x".repeat(Math.max(0, chars - body.length));
-  return { id, role, content, created_at: createdAt };
+  const phrase = "the quick brown fox jumps over the lazy dog and then trots back home again ";
+  const body = `${id}: `;
+  let content = body;
+  while (content.length < chars) content += phrase;
+  return { id, role, content: content.slice(0, chars), created_at: createdAt };
 }
 
-// 8 rows of 300 chars (~75 tokens) each, oldest-first — same shape as
-// context.test.ts's over-budget fixture: ~600 tokens total, over
-// MAX_CONTEXT_TOKENS (500), trims down to the newest 3 (~225 tokens,
-// under KEEP_CONTEXT_TOKENS), dropping the oldest 5.
+// 8 rows of 300 chars (63 real tokens) each, oldest-first — same shape as
+// context.test.ts's over-budget fixture: 504 tokens total, just over
+// MAX_CONTEXT_TOKENS (500), trims down to the newest 3 (189 tokens, under
+// KEEP_CONTEXT_TOKENS), dropping the oldest 5.
 function overflowingRows() {
   return Array.from({ length: 8 }, (_, i) =>
     messageRow(`msg-${i}`, i % 2 === 0 ? "user" : "assistant", 300, `2026-08-0${i + 1}T00:00:00Z`),
