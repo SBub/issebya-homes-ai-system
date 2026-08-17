@@ -1,4 +1,8 @@
 .vercel
+# `bt functions push`'s local cache of downloaded bundler/runner tooling
+# (versioned by `bt` release, e.g. .bt/functions-runners/0.12.0/) — CLI
+# tooling cache, not project source, safe to redownload.
+.bt/
 # `.env.local` is pulled via `vercel env pull .env.local` (see
 # scripts/verify-vercel-sandbox.ts) — contains VERCEL_OIDC_TOKEN, a real
 # (short-lived) credential. Must be a Next.js-recognized dotenv filename
@@ -7,3 +11,6 @@
 # silently never gets read by the running app, which is what let Sandbox.create()
 # fall back to an ambient default project instead of this one. Never commit it.
 .env*.local
+# Local working log for the braintrust-online-eval session's own dev process —
+# not a versioned artifact. Keep on disk, don't re-track.
+docs/braintrust-online-eval-testing.md

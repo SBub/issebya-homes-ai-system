@@ -1,6 +1,7 @@
 import { type Attributes, context, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
+import { createAdminClient } from "@/lib/supabase";
 
 const tracer = trace.getTracer("guest-communication-agent");
 
@@ -128,7 +129,21 @@ export async function withTurnSpan<T>(
 //     span deep in the tree — see run-turn.ts's firedTags for how this app
 //     uses that. String arrays are a native OTel attribute value — no
 //     JSON.stringify needed.
-// Both are plain span.setAttribute(...) calls made at each call site, not
+//   - A `braintrust.*`-prefixed attribute is also what gets a span past
+//     export filtering at all, unrelated to what Braintrust's UI does with
+//     the value once it arrives. `@braintrust/otel`'s AISpanProcessor (wired
+//     via `filterAISpans: true` in instrumentation.ts) drops any span whose
+//     name AND every non-system attribute key fail to start with one of
+//     `gen_ai.`/`braintrust.`/`llm.`/`ai.`/`traceloop.` (confirmed directly
+//     from `node_modules/@braintrust/otel/dist/index.js`'s `FILTER_PREFIXES`/
+//     `isAISpan`) — a span named e.g. `owner_nudge.sendBookingLink.decision`
+//     with only `gca.*` attributes never reaches Braintrust at all, no
+//     matter how meaningful its data is. See approval-gate.ts's
+//     `requestApprovalGate` and run-turn.ts's `dispatchWantsHuman`/
+//     `runMissingInfo` for real call sites that set a `braintrust.tags`/
+//     `braintrust.approval_decision` attribute only to clear this filter, not
+//     to populate Input/Output/tags.
+// All are plain span.setAttribute(...) calls made at each call site, not
 // something withTurnSpan/withSpan set automatically — there's no single
 // choke point to hang this logic on, which is exactly why the explanation
 // tends to drift when repeated instead of referenced.
@@ -275,5 +290,82 @@ export async function updateSpanIO(
     }
   } catch (err) {
     console.error(`[tracing] updateSpanIO threw for span "${spanId}":`, err);
+  }
+}
+
+// The DB table recordMissingInfoTraceAnchor/consumeMissingInfoTraceAnchor
+// below read/write — see supabase/migrations's
+// create_missing_info_trace_anchors.sql for the schema and the full
+// tradeoff writeup (self-cleans on the happy path, can leak an orphaned row
+// on a timed-out/never-answered missing_info call).
+const MISSING_INFO_TRACE_ANCHOR_TABLE = "missing_info_trace_anchors";
+
+// Cross-HTTP-request trace anchor handoff, for missing_info's owner-reply
+// flow specifically. The Inngest step boundary threads a TraceAnchor through
+// event.data (see startTraceRoot's own comment) because Inngest guarantees
+// event.data replays identically — there's no equivalent guarantee, or even
+// a shared payload at all, across an HTTP-request boundary to a completely
+// separate route (the owner-nudges answer route, triggered by
+// apps/telegram-router's own webhook, sometimes hours later, possibly a
+// different server instance). This small DB-backed lookup fills that gap
+// instead: run-turn.ts's runMissingInfo writes the tool-call span's anchor
+// here right after creating it, keyed by this turn's correlationId; the
+// answer route reads (and deletes) it once the owner's reply arrives.
+//
+// Best-effort like updateSpanIO: a failed write here only degrades tracing
+// (the embedding step's span falls back to its own disconnected trace root
+// instead of nesting under the real gen_ai.tool.missing_info span) — never
+// the actual KB write or guest-facing behavior.
+export async function recordMissingInfoTraceAnchor(
+  correlationId: string,
+  anchor: TraceAnchor,
+): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from(MISSING_INFO_TRACE_ANCHOR_TABLE).insert({
+      correlation_id: correlationId,
+      trace_id: anchor.traceId,
+      span_id: anchor.spanId,
+    });
+    if (error) {
+      console.error(
+        `[tracing] recordMissingInfoTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[tracing] recordMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+  }
+}
+
+// Reads AND deletes in one call — the row's only reader is the one real
+// owner reply for this correlationId, so consuming it here is what makes the
+// table self-clean on the happy path (see the migration's own comment for
+// the orphaned-row case this doesn't cover). Returns null (not a throw) on
+// any failure or a genuine miss — same best-effort posture as
+// recordMissingInfoTraceAnchor above and updateSpanIO.
+export async function consumeMissingInfoTraceAnchor(
+  correlationId: string,
+): Promise<TraceAnchor | null> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from(MISSING_INFO_TRACE_ANCHOR_TABLE)
+      .delete()
+      .eq("correlation_id", correlationId)
+      .select("trace_id, span_id")
+      .maybeSingle();
+    if (error || !data) {
+      return null;
+    }
+    return { traceId: data.trace_id as string, spanId: data.span_id as string };
+  } catch (err) {
+    console.error(
+      `[tracing] consumeMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+    return null;
   }
 }

@@ -18,8 +18,8 @@
     },
     "apps/guest-communication-agent": {
       "next": true,
-      "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "entry": ["tests/**/*.test.ts", "scripts/**/*.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
     },
     "apps/crm": {
       "next": true,

@@ -1,0 +1,46 @@
+name: GCA Eval Gate
+
+# Separate from ci.yml on purpose: this runs real Braintrust experiments
+# against real model calls (real API spend), on a different trigger/cadence
+# than lint/typecheck/test. Deliberately NOT on `pull_request` or
+# `push: [main]` — only `develop`, and only when this app's own files
+# change (see `paths:` below), to avoid spending real API budget on pushes
+# that can't have touched the eval-gated behavior.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "apps/guest-communication-agent/**"
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Node 22 — this app's evals need it (see
+          # apps/guest-communication-agent/docs/braintrust-online-eval-testing.md's
+          # repeated Node-22 upload-slot note), same version ci.yml already
+          # pins.
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run eval gate (golden dataset + prompt injection)
+        working-directory: apps/guest-communication-agent
+        # No --env-file=.env here — there is no local .env file in the
+        # runner. scripts/ci-gate-evals.ts reads these three vars straight
+        # off process.env, populated below from repo secrets.
+        run: yarn tsx scripts/ci-gate-evals.ts
+        env:
+          BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BRAINTRUST_PROJECT_ID: ${{ secrets.BRAINTRUST_PROJECT_ID }}

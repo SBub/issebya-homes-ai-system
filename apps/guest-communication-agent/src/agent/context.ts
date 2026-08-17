@@ -5,10 +5,12 @@ import type { ModelMessage } from "ai";
 // lives in ../agent/memory.ts (loadMemory), which calls trimToTokenBudget
 // below unchanged.
 
-// Placeholder/demo-scale values, not yet tuned for GCA's real usage or
-// MODEL's actual context window. See TASK_FOR_TOMORROW.md.
-export const MAX_CONTEXT_TOKENS = 3000;
-export const KEEP_CONTEXT_TOKENS = 1500;
+// KEEP_CONTEXT_TOKENS must stay below MAX_CONTEXT_TOKENS: trimToTokenBudget
+// only trims once total tokens exceed MAX, down to KEEP — if KEEP were ever
+// >= MAX, the trim loop would no-op and MAX would stop being an effective
+// ceiling.
+export const MAX_CONTEXT_TOKENS = 500;
+export const KEEP_CONTEXT_TOKENS = 250;
 
 // Rough chars/4 estimate — cheap and good enough to drive a trim decision,
 // not an exact tokenizer match.

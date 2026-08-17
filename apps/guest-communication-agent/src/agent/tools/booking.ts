@@ -75,6 +75,18 @@ export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkS
   return `${guestName} wants to book ${room} from ${toEuropeanDate(checkIn)} to ${toEuropeanDate(checkOut)}.`;
 }
 
+// Path+query shape of the URL built below, factored out as a shared
+// constant so braintrust-scorers/hitl-compliance.scorer.ts's
+// bypass-detection logic (a booking-shaped link reaching the guest with no
+// real sendBookingLink execution span behind it) derives from this file's
+// real format instead of a hand-guessed copy elsewhere. Domain-agnostic on
+// purpose — siteUrl varies by env — so it matches on the
+// `/booking?room=...&checkIn=...&checkOut=...` path+query shape only. Keep
+// this in sync with the template literal in runSendBookingLink below if
+// that format ever changes.
+export const BOOKING_LINK_URL_PATTERN =
+  /\/booking\?room=(?:room1|room2)&checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
+
 // Pure URL builder — no nudge, no suspend/wait, no ToolContext. By the time
 // run-turn.ts calls this, its own APPROVAL_GATES check (backed by
 // approval-gate.ts's requestApprovalGate) has already run and approved the
