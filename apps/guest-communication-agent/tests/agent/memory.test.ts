@@ -8,11 +8,17 @@ const loadRecentMessagesMock = vi.fn();
 const getGuestMemoryMock = vi.fn();
 const upsertGuestMemoryMock = vi.fn();
 const insertGuestMemoryFoldMock = vi.fn();
+const loadGuestMemoryFoldsMock = vi.fn();
+const deleteGuestMemoryFoldMock = vi.fn();
+const updateGuestMemoryPreferencesMock = vi.fn();
 vi.mock("@/lib/db.js", () => ({
   loadRecentMessages: loadRecentMessagesMock,
   getGuestMemory: getGuestMemoryMock,
   upsertGuestMemory: upsertGuestMemoryMock,
   insertGuestMemoryFold: insertGuestMemoryFoldMock,
+  loadGuestMemoryFolds: loadGuestMemoryFoldsMock,
+  deleteGuestMemoryFold: deleteGuestMemoryFoldMock,
+  updateGuestMemoryPreferences: updateGuestMemoryPreferencesMock,
 }));
 
 // summarizeConversation's two external calls — generateText mocked the same
@@ -70,10 +76,34 @@ function overflowingRows() {
   );
 }
 
-describe("loadMemory", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    loadPromptMock.mockResolvedValue({
+// Two distinct prompts now live behind loadPrompt: conversation-summarizer
+// (summarizeConversation, {{prior_summary}}/{{transcript}}) and
+// guest-preferences-distiller (distillFoldIntoPreferences,
+// {{prior_preferences}}/{{fold_summary}}) — branches on the requested slug
+// so both foldMemory's own two summarizer calls and maintainFoldWindow's
+// distillation call each get their own real-shaped template rendering.
+function mockLoadPrompt() {
+  loadPromptMock.mockImplementation(async ({ slug }: { slug: string }) => {
+    if (slug === "guest-preferences-distiller") {
+      return {
+        build: ({
+          prior_preferences,
+          fold_summary,
+        }: {
+          prior_preferences: string;
+          fold_summary: string;
+        }) => ({
+          messages: [
+            { role: "system", content: "You maintain a durable preferences profile..." },
+            {
+              role: "user",
+              content: `Known preferences so far:\n${prior_preferences}\n\nRetiring fold summary:\n${fold_summary}\n\nReturn only the updated preferences text.`,
+            },
+          ],
+        }),
+      };
+    }
+    return {
       build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
         messages: [
           { role: "system", content: "You compress an older stretch..." },
@@ -83,7 +113,14 @@ describe("loadMemory", () => {
           },
         ],
       }),
-    });
+    };
+  });
+}
+
+describe("loadMemory", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLoadPrompt();
   });
 
   it("passes through untrimmed history and the fallback contextBlock when nothing overflows and there's no prior summary", async () => {
@@ -149,17 +186,12 @@ describe("loadMemory", () => {
 describe("foldMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadPromptMock.mockResolvedValue({
-      build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
-        messages: [
-          { role: "system", content: "You compress an older stretch..." },
-          {
-            role: "user",
-            content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
-          },
-        ],
-      }),
-    });
+    mockLoadPrompt();
+    // Default: fold count already at/under MAX_RECENT_FOLDS, so
+    // maintainFoldWindow (run unconditionally after every foldMemory call)
+    // is a true no-op unless a test overrides this — see the "maintains the
+    // MAX_RECENT_FOLDS cap" describe block below for the cases that do.
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
   });
 
   it("summarizes and upserts when overflow drops rows newer than the existing watermark (or with no watermark at all)", async () => {
@@ -306,6 +338,163 @@ describe("foldMemory", () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
+
+  // maintainFoldWindow (MAX_RECENT_FOLDS = 2) runs after every real fold
+  // event — these exercise that cap enforcement specifically, independent of
+  // the writeAccumulatedSummary/writeDiscreteFold assertions above.
+  describe("maintains the MAX_RECENT_FOLDS cap", () => {
+    // Minimal fixture that always overflows the trim budget so
+    // writeAccumulatedSummary/writeDiscreteFold both actually run (see
+    // overflowingRows()'s own comment) — the cap-enforcement behavior under
+    // test here is orthogonal to that overflow logic, this fixture is just
+    // what makes foldMemory do real work per call.
+    function setUpBasicFold() {
+      const rows = overflowingRows();
+      loadRecentMessagesMock.mockResolvedValue(rows);
+      getGuestMemoryMock.mockResolvedValue({
+        summary: "Earlier summary.",
+        summarizedThroughMessageId: null,
+        preferencesSummary: "Guest is vegetarian.",
+      });
+      generateTextMock.mockImplementation(
+        async ({ messages }: { messages: Array<{ content: string }> }) => {
+          const userContent = messages[1].content;
+          if (userContent.includes("Retiring fold summary:")) {
+            return { text: "Distilled: vegetarian, prefers a quiet room." };
+          }
+          if (userContent.includes("Prior summary:\n(none)")) {
+            return { text: "Standalone fold summary." };
+          }
+          return { text: "Accumulated summary." };
+        },
+      );
+    }
+
+    it("leaves guest_memory_folds untouched when the count stays at or under the cap", async () => {
+      setUpBasicFold();
+      loadGuestMemoryFoldsMock.mockResolvedValue([
+        {
+          id: "fold-1",
+          summaryText: "Fold 1 text.",
+          messageIdFrom: "msg-a",
+          messageIdTo: "msg-b",
+          createdAt: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "fold-2",
+          summaryText: "Fold 2 text.",
+          messageIdFrom: "msg-c",
+          messageIdTo: "msg-d",
+          createdAt: "2026-08-02T00:00:00Z",
+        },
+      ]);
+
+      await foldMemory({
+        conversationId: "convo-cap-1",
+        phone: "+351900000020",
+        traceAnchor: TEST_TRACE_ANCHOR,
+      });
+
+      // Only the two existing summarizer calls (accumulated + discrete) —
+      // no distillation call on top.
+      expect(generateTextMock).toHaveBeenCalledTimes(2);
+      expect(deleteGuestMemoryFoldMock).not.toHaveBeenCalled();
+      expect(updateGuestMemoryPreferencesMock).not.toHaveBeenCalled();
+    });
+
+    it("distills and deletes exactly the oldest row when a 3rd fold pushes the count over the cap", async () => {
+      setUpBasicFold();
+      loadGuestMemoryFoldsMock.mockResolvedValue([
+        {
+          id: "fold-oldest",
+          summaryText: "Oldest fold summary text.",
+          messageIdFrom: "msg-a",
+          messageIdTo: "msg-b",
+          createdAt: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "fold-middle",
+          summaryText: "Middle fold summary text.",
+          messageIdFrom: "msg-c",
+          messageIdTo: "msg-d",
+          createdAt: "2026-08-02T00:00:00Z",
+        },
+        {
+          id: "fold-newest",
+          summaryText: "Newest fold summary text.",
+          messageIdFrom: "msg-e",
+          messageIdTo: "msg-f",
+          createdAt: "2026-08-03T00:00:00Z",
+        },
+      ]);
+
+      await foldMemory({
+        conversationId: "convo-cap-2",
+        phone: "+351900000021",
+        traceAnchor: TEST_TRACE_ANCHOR,
+      });
+
+      // The 2 existing summarizer calls, plus exactly 1 distillation call —
+      // not one per excess row's worth of possible confusion, just the
+      // single row that's actually over the cap here.
+      expect(generateTextMock).toHaveBeenCalledTimes(3);
+      const distillCall = (
+        generateTextMock.mock.calls as [{ messages: Array<{ content: string }> }][]
+      ).find(([call]) => call.messages[1].content.includes("Retiring fold summary:"));
+      expect(distillCall?.[0].messages[1].content).toContain("Oldest fold summary text.");
+      expect(distillCall?.[0].messages[1].content).toContain("Guest is vegetarian.");
+      expect(distillCall?.[0].messages[1].content).not.toContain("Middle fold summary text.");
+      expect(distillCall?.[0].messages[1].content).not.toContain("Newest fold summary text.");
+
+      // Persisted via .update() (updateGuestMemoryPreferences), never via
+      // upsertGuestMemory — upsertGuestMemory's only call here is the
+      // pre-existing accumulated-blob write, which never carries preferences.
+      expect(updateGuestMemoryPreferencesMock).toHaveBeenCalledExactlyOnceWith(
+        "+351900000021",
+        "Distilled: vegetarian, prefers a quiet room.",
+      );
+      expect(upsertGuestMemoryMock).toHaveBeenCalledExactlyOnceWith(
+        "+351900000021",
+        "Accumulated summary.",
+        "msg-4",
+      );
+
+      // Only the oldest row is deleted — the cap is restored to exactly
+      // MAX_RECENT_FOLDS (2) by removing the single excess row, not by
+      // clearing the table.
+      expect(deleteGuestMemoryFoldMock).toHaveBeenCalledExactlyOnceWith("fold-oldest");
+    });
+
+    it("a distillation failure doesn't affect the existing accumulated-blob/discrete-fold writes", async () => {
+      setUpBasicFold();
+      loadGuestMemoryFoldsMock.mockRejectedValue(new Error("guest_memory_folds read failed"));
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(
+        foldMemory({
+          conversationId: "convo-cap-3",
+          phone: "+351900000022",
+          traceAnchor: TEST_TRACE_ANCHOR,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(upsertGuestMemoryMock).toHaveBeenCalledExactlyOnceWith(
+        "+351900000022",
+        "Accumulated summary.",
+        "msg-4",
+      );
+      expect(insertGuestMemoryFoldMock).toHaveBeenCalledExactlyOnceWith({
+        phoneNumber: "+351900000022",
+        summaryText: "Standalone fold summary.",
+        messageIdFrom: "msg-0",
+        messageIdTo: "msg-4",
+      });
+      expect(updateGuestMemoryPreferencesMock).not.toHaveBeenCalled();
+      expect(deleteGuestMemoryFoldMock).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      consoleErrorSpy.mockRestore();
+    });
+  });
 });
 
 // URLs (booking links, Google Maps links, etc.) are redacted by
@@ -317,17 +506,8 @@ describe("foldMemory", () => {
 describe("URL redaction in toModelMessage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadPromptMock.mockResolvedValue({
-      build: ({ prior_summary, transcript }: { prior_summary: string; transcript: string }) => ({
-        messages: [
-          { role: "system", content: "You compress an older stretch..." },
-          {
-            role: "user",
-            content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
-          },
-        ],
-      }),
-    });
+    mockLoadPrompt();
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
   });
 
   const BOOKING_LINK_TEXT =

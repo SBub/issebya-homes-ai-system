@@ -3,10 +3,13 @@ import { generateText, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import {
+  deleteGuestMemoryFold,
   getGuestMemory,
   insertGuestMemoryFold,
+  loadGuestMemoryFolds,
   loadRecentMessages,
   type MessageRow,
+  updateGuestMemoryPreferences,
   upsertGuestMemory,
 } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
@@ -42,6 +45,24 @@ const model = openrouter.chat(MODEL);
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 const SUMMARIZER_PROMPT_VERSION =
   process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197705120199208";
+
+// Distinct prompt, distinct job from SUMMARIZER_PROMPT above — see
+// distillFoldIntoPreferences below. Newly created directly in Braintrust
+// (no live callers yet at creation time, so unlike SUMMARIZER_PROMPT it
+// never needed a stage-and-wait for human sign-off), same
+// pin-by-default/override convention as SUMMARIZER_PROMPT_VERSION.
+const DISTILLER_PROMPT_SLUG = "guest-preferences-distiller";
+const DISTILLER_PROMPT_VERSION =
+  process.env.DISTILLER_PROMPT_VERSION_OVERRIDE ?? "1000197705362702039";
+
+// Second piece of the tiered-memory redesign (see
+// 20260817120000_create_guest_memory_folds.sql's own comment for the first):
+// once a guest has more than this many discrete guest_memory_folds rows, the
+// oldest excess row(s) get distilled into guest_memory.preferences_summary
+// and deleted — see maintainFoldWindow below. Exactly 2, not "2-3" — a named
+// constant so that exactness survives future edits, same convention as
+// context.ts's MAX_CONTEXT_TOKENS/KEEP_CONTEXT_TOKENS.
+const MAX_RECENT_FOLDS = 2;
 
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
@@ -214,6 +235,93 @@ export async function loadMemory(params: {
   };
 }
 
+// Distills one retiring guest_memory_folds row's summary text, plus
+// whatever durable preferences guest_memory.preferences_summary already
+// holds, into the updated preferences text — the durable, standing facts
+// only (name, stated preferences, recurring requests), never the
+// episodic/time-bound content that's retiring along with the fold row
+// itself. See DISTILLER_PROMPT_SLUG's own comment for why this is a
+// distinct prompt from SUMMARIZER_PROMPT rather than a reuse.
+async function distillFoldIntoPreferences(
+  foldSummaryText: string,
+  priorPreferences: string,
+  traceAnchor: TraceAnchor,
+): Promise<string> {
+  const promptTemplate = await loadPrompt({
+    projectId: process.env.BRAINTRUST_PROJECT_ID,
+    slug: DISTILLER_PROMPT_SLUG,
+    version: DISTILLER_PROMPT_VERSION,
+  });
+  const { messages } = promptTemplate.build({
+    prior_preferences: priorPreferences || "(none)",
+    fold_summary: foldSummaryText,
+  });
+
+  // Same cast rationale as summarizeConversation's generateSummaryText
+  // above: build()'s messages are OpenAI-shaped chat params, generateText
+  // wants ModelMessage, and DISTILLER_PROMPT only ever has plain-string
+  // system/user content so the shapes coincide in practice.
+  async function generateDistilledText(span: Span): Promise<string> {
+    const result = await generateText({ model, messages: messages as ModelMessage[] });
+
+    span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
+    span.setAttribute("braintrust.input", JSON.stringify(messages));
+    if (result.response?.messages !== undefined) {
+      span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
+      span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
+    }
+    if (result.usage?.inputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+    }
+    if (result.usage?.outputTokens !== undefined) {
+      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+    }
+
+    return result.text;
+  }
+
+  // Same safety-to-span reasoning as summarizeConversation's own comment:
+  // only ever called from maintainFoldWindow, which is only ever called
+  // from foldMemory — itself already off the guest reply's critical path
+  // and inside run-turn.ts's outer step.run("fold-memory-summary", ...), so
+  // this only actually executes once per real run.
+  return withTurnSpan(
+    traceAnchor,
+    "gen_ai.chat",
+    { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
+    generateDistilledText,
+  );
+}
+
+// Enforces MAX_RECENT_FOLDS: re-reads every guest_memory_folds row for this
+// phone fresh from Postgres (not passed state from foldMemory — makes this
+// self-correcting regardless of whether this event's own writeDiscreteFold
+// insert actually landed, per foldMemory's call site comment below), and
+// while there are more than MAX_RECENT_FOLDS rows, distills the single
+// oldest one into guest_memory.preferences_summary and deletes it. Loops
+// (rather than handling only the common single-new-fold case) so this stays
+// correct even if more than one row is ever excess at once, e.g. a backfill.
+// Each iteration feeds the freshly-updated preferences text into the next
+// iteration's distillation call, not a stale pre-loop read.
+async function maintainFoldWindow(phone: string, traceAnchor: TraceAnchor): Promise<void> {
+  let folds = await loadGuestMemoryFolds(phone);
+  while (folds.length > MAX_RECENT_FOLDS) {
+    const oldest = folds[0];
+    const existingMemory = await getGuestMemory(phone);
+    const priorPreferences = existingMemory?.preferencesSummary ?? "";
+
+    const updatedPreferences = await distillFoldIntoPreferences(
+      oldest.summaryText,
+      priorPreferences,
+      traceAnchor,
+    );
+    await updateGuestMemoryPreferences(phone, updatedPreferences);
+    await deleteGuestMemoryFold(oldest.id);
+
+    folds = folds.slice(1);
+  }
+}
+
 // The fold path — today's actual summarize-and-persist side effect,
 // unchanged in its own logic (see loadMemoryState above), just no longer
 // inline on the turn's critical path. Called from run-turn.ts's
@@ -276,4 +384,21 @@ export async function foldMemory(params: {
   }
 
   await Promise.all([writeAccumulatedSummary(), writeDiscreteFold()]);
+
+  // Sequenced after, not concurrent with, the two writes above: avoids
+  // racing on guest_memory_folds' current row count, and guarantees
+  // writeAccumulatedSummary's upsert has already created/updated the
+  // guest_memory row before maintainFoldWindow's .update() might need it.
+  // Runs regardless of whether writeDiscreteFold above itself succeeded —
+  // maintainFoldWindow re-reads real current state from the DB each time,
+  // so it's self-correcting either way. Isolated in its own try/catch for
+  // the same reason as writeDiscreteFold's: a distillation failure must
+  // not affect the two writes above, which already succeeded by this
+  // point — no worse than a fold window cleanup not having happened yet
+  // (recoverable next fold).
+  try {
+    await maintainFoldWindow(phone, traceAnchor);
+  } catch (err) {
+    console.error(`[memory] maintainFoldWindow failed for phone ${phone}:`, err);
+  }
 }

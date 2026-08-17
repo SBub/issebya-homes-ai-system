@@ -56,6 +56,7 @@ export async function loadRecentMessages(
 export interface GuestMemoryRow {
   summary: string;
   summarizedThroughMessageId: string | null;
+  preferencesSummary: string | null;
 }
 
 // `phone` must already be normalized by the caller — this function does no
@@ -69,7 +70,7 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
     const supabase = createAdminClient();
     const { data, error } = await supabase
       .from("guest_memory")
-      .select("summary, summarized_through_message_id")
+      .select("summary, summarized_through_message_id, preferences_summary")
       .eq("phone_number", phone)
       .maybeSingle();
 
@@ -79,6 +80,7 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
     return {
       summary: data.summary as string,
       summarizedThroughMessageId: (data.summarized_through_message_id as string | null) ?? null,
+      preferencesSummary: (data.preferences_summary as string | null) ?? null,
     };
   });
 }
@@ -109,8 +111,7 @@ export async function upsertGuestMemory(
 // Pure insert (not upsert, unlike upsertGuestMemory above) — one row per
 // fold event, not keyed/deduped by phone_number. Backs guest_memory_folds,
 // the discrete-fold-row table (see 20260817120000_create_guest_memory_folds.sql
-// and ../agent/memory.ts's foldMemory). No read/list function for this table
-// lives here yet — that belongs to whichever later task owns the read side.
+// and ../agent/memory.ts's foldMemory).
 export async function insertGuestMemoryFold(params: {
   phoneNumber: string;
   summaryText: string;
@@ -125,6 +126,77 @@ export async function insertGuestMemoryFold(params: {
       message_id_from: params.messageIdFrom,
       message_id_to: params.messageIdTo,
     });
+
+    if (error) throw error;
+  });
+}
+
+export interface GuestMemoryFoldRow {
+  id: string;
+  summaryText: string;
+  messageIdFrom: string | null;
+  messageIdTo: string | null;
+  createdAt: string;
+}
+
+// Read side for guest_memory_folds — backs ../agent/memory.ts's
+// maintainFoldWindow (the MAX_RECENT_FOLDS cap enforcement). Ordered
+// oldest-first so the caller can find the row(s) to distill/delete via a
+// plain array index (rows[0]) rather than re-sorting. The MAX_RECENT_FOLDS
+// cap keeps this table at a handful of rows per phone at all times (2, or
+// briefly 3 right after a new insert before maintainFoldWindow's cleanup
+// runs) — no pagination/limit needed, this always fetches every row for the
+// phone.
+export async function loadGuestMemoryFolds(phone: string): Promise<GuestMemoryFoldRow[]> {
+  return withSpan("db.loadGuestMemoryFolds", { "db.table": "guest_memory_folds" }, async () => {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from("guest_memory_folds")
+      .select("id, summary_text, message_id_from, message_id_to, created_at")
+      .eq("phone_number", phone)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    return (data ?? []).map((row) => ({
+      id: row.id as string,
+      summaryText: row.summary_text as string,
+      messageIdFrom: (row.message_id_from as string | null) ?? null,
+      messageIdTo: (row.message_id_to as string | null) ?? null,
+      createdAt: row.created_at as string,
+    }));
+  });
+}
+
+// Deletes a single guest_memory_folds row by id — backs maintainFoldWindow's
+// cleanup once a fold's contents have been distilled into
+// guest_memory.preferences_summary (updateGuestMemoryPreferences below).
+export async function deleteGuestMemoryFold(id: string): Promise<void> {
+  return withSpan("db.deleteGuestMemoryFold", { "db.table": "guest_memory_folds" }, async () => {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("guest_memory_folds").delete().eq("id", id);
+
+    if (error) throw error;
+  });
+}
+
+// Updates only preferences_summary on an existing guest_memory row. Uses
+// .update() rather than .upsert() (unlike upsertGuestMemory above)
+// deliberately — a guest_memory row is guaranteed to already exist by the
+// time this is ever called (only ever called after foldMemory's own
+// upsertGuestMemory call has already created/updated that row in the same
+// fold event), so there's no need to reason about (or test) whether
+// Supabase's upsert-on-conflict would partially or fully replace the
+// unlisted `summary`/`summarized_through_message_id` columns.
+export async function updateGuestMemoryPreferences(
+  phone: string,
+  preferencesSummary: string,
+): Promise<void> {
+  return withSpan("db.updateGuestMemoryPreferences", { "db.table": "guest_memory" }, async () => {
+    const supabase = createAdminClient();
+    const { error } = await supabase
+      .from("guest_memory")
+      .update({ preferences_summary: preferencesSummary })
+      .eq("phone_number", phone);
 
     if (error) throw error;
   });
