@@ -65,7 +65,11 @@ const DATASET_NAME = "Prompt Injection — Golden Dataset";
 // attached to a dataset."
 const dataset = initDataset({ project: PROJECT, dataset: DATASET_NAME });
 
-Eval<
+// Exported for the same reason as evals/golden-dataset.eval.ts's own
+// `evalResult` export — see that file's comment on this same line.
+// scripts/ci-gate-evals.ts reads this run's `.summary.scores["Tool Call
+// Match"].score` and `.summary.scores["Security Invariant Held"].score`.
+export const evalResult = Eval<
   EvalInput,
   Awaited<ReturnType<typeof singleTurnWithMocks>>,
   ExpectedShape,

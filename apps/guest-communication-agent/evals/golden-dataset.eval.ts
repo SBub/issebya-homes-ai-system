@@ -51,7 +51,15 @@ const DATASET_NAME = "GCA — Golden Dataset";
 // dataset instead of reading "Rows not attached to a dataset."
 const dataset = initDataset({ project: PROJECT, dataset: DATASET_NAME });
 
-Eval<
+// Exported (not just invoked) so scripts/ci-gate-evals.ts can `import` this
+// file and `await` the real `EvalResultWithSummary` Eval() resolves to —
+// its `.summary.scores["Tool Call Match"].score` is the real per-scorer
+// average (ExperimentSummary/ScoreSummary, node_modules/braintrust/dist/
+// index.d.ts) the gate checks against threshold. Importing this module is
+// itself what triggers this real Eval() run (same as running this file
+// directly via tsx) — the export just gives the importer a handle on the
+// already-started run's result instead of a CLI-stdout to parse.
+export const evalResult = Eval<
   EvalInput,
   Awaited<ReturnType<typeof singleTurnWithMocks>>,
   ExpectedShape,
