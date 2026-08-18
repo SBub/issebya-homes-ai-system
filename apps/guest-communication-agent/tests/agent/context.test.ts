@@ -58,7 +58,7 @@ describe("estimateTokens", () => {
 describe("trimToTokenBudget", () => {
   it("leaves a set of many short messages untouched when comfortably under budget", () => {
     // 20 short messages (~13 tokens each -> 260 tokens total), nowhere near
-    // MAX_CONTEXT_TOKENS (500).
+    // MAX_CONTEXT_TOKENS (1600).
     const messages = Array.from({ length: 20 }, (_, i) => messageOfLength("user", 50, `m${i}`));
 
     expect(estimateTokens(messages)).toBeLessThan(MAX_CONTEXT_TOKENS);
@@ -70,11 +70,11 @@ describe("trimToTokenBudget", () => {
   });
 
   it("trims a set of few very long messages down to under KEEP_CONTEXT_TOKENS, dropping oldest first", () => {
-    // 8 long messages (300 chars -> 63 real tokens each -> 504 tokens
-    // total), just over MAX_CONTEXT_TOKENS (500). Only the most recent 3
-    // (189 tokens) fit under KEEP_CONTEXT_TOKENS (250) — the newest 4 would
-    // be 252, over budget.
-    const messages = Array.from({ length: 8 }, (_, i) => messageOfLength("user", 300, `m${i}`));
+    // 8 long messages (1100 chars -> 223 real tokens each -> 1784 tokens
+    // total), just over MAX_CONTEXT_TOKENS (1600). Only the most recent 3
+    // (669 tokens) fit under KEEP_CONTEXT_TOKENS (800) — the newest 4 would
+    // be 892, over budget.
+    const messages = Array.from({ length: 8 }, (_, i) => messageOfLength("user", 1100, `m${i}`));
 
     expect(estimateTokens(messages)).toBeGreaterThan(MAX_CONTEXT_TOKENS);
 

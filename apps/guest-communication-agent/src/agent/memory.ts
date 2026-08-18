@@ -3,6 +3,7 @@ import { generateText, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import {
+  advanceGuestMemoryWatermark,
   deleteGuestMemoryFold,
   getGuestMemory,
   insertGuestMemoryFold,
@@ -10,7 +11,6 @@ import {
   loadRecentMessages,
   type MessageRow,
   updateGuestMemoryPreferences,
-  upsertGuestMemory,
 } from "@/lib/db";
 import { openrouter } from "@/lib/openrouter";
 import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
@@ -74,14 +74,13 @@ export interface AgentMemory {
 
 // Matches any http(s) URL, not just this app's own booking-link shape or
 // Google Maps — real messages have measured a 2-URL message alone costing
-// 231 tokens (real tokenizer) against a 250-token KEEP_CONTEXT_TOKENS
-// budget. The surrounding natural-language text (e.g. "Here's your booking
-// link for Room 1, September 18-20:") already carries the useful signal —
-// the model needs to know a link was sent, not its bytes — so URLs are
-// replaced with this placeholder rather than dropped, keeping the rest of
-// the sentence intact. Storage (recordMessage) and the guest's own
-// WhatsApp replies never go through this function, so real links still
-// reach Postgres and the guest untouched.
+// 231 tokens (real tokenizer). The surrounding natural-language text (e.g.
+// "Here's your booking link for Room 1, September 18-20:") already carries
+// the useful signal — the model needs to know a link was sent, not its
+// bytes — so URLs are replaced with this placeholder rather than dropped,
+// keeping the rest of the sentence intact. Storage (recordMessage) and the
+// guest's own WhatsApp replies never go through this function, so real
+// links still reach Postgres and the guest untouched.
 // Trailing-punctuation-excluding tail (`[^\s.,!?;:)\]}'"]`) so a URL
 // embedded in a sentence — "...see you soon: https://maps.app.goo.gl/xyz."
 // — doesn't swallow the sentence's own closing punctuation into the match.
@@ -335,40 +334,23 @@ export async function foldMemory(params: {
   traceAnchor: TraceAnchor;
 }): Promise<void> {
   const { conversationId, phone, traceAnchor } = params;
-  const { existingMemory, newlyDroppedRows } = await loadMemoryState(conversationId, phone);
+  const { newlyDroppedRows } = await loadMemoryState(conversationId, phone);
   if (newlyDroppedRows.length === 0) return;
 
   const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
   const oldestDroppedId = newlyDroppedRows[0].id;
   const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
 
-  // The existing accumulated-blob write: unchanged from before this
-  // function grew a second write below.
-  async function writeAccumulatedSummary(): Promise<void> {
-    const summary = await summarizeConversation(
-      newlyDroppedMessages,
-      existingMemory?.summary ?? "",
-      traceAnchor,
-    );
-    await upsertGuestMemory(phone, summary, newWatermark);
-  }
-
-  // The new discrete-fold-row write (guest_memory_folds — first piece of the
+  // The discrete-fold-row write (guest_memory_folds — first piece of the
   // tiered-memory redesign, see 20260817120000_create_guest_memory_folds.sql).
-  // prior_summary is passed as "" here, deliberately unlike
-  // writeAccumulatedSummary's call above: this row must only ever reflect
+  // prior_summary is always "" here: this row must only ever reflect
   // newlyDroppedMessages standing alone, never blended with prior
   // accumulated summary text, or it reproduces the same re-compression/
-  // fidelity-loss problem this table exists to move away from. That means
-  // two summarizer LLM calls happen per real fold event during this
-  // transitional period — an accepted cost, not an oversight, since
-  // foldMemory already runs off the turn's critical path (see this file's
-  // top comment) and building genuinely discrete fold data now avoids
-  // regenerating it later once writeAccumulatedSummary above is eventually
-  // retired. A failure here must not affect writeAccumulatedSummary's write,
-  // since that's the one real behavior depends on today — it's caught below
-  // rather than left to reject the surrounding Promise.all, and is no worse
-  // than a fold not having happened for this table (recoverable next fold).
+  // fidelity-loss problem this table exists to move away from. A failure
+  // here must not affect advanceGuestMemoryWatermark's write below, since
+  // the watermark must keep advancing regardless — it's caught here rather
+  // than left to reject the surrounding Promise.all, and is no worse than a
+  // fold not having happened for this table (recoverable next fold).
   async function writeDiscreteFold(): Promise<void> {
     try {
       const summaryText = await summarizeConversation(newlyDroppedMessages, "", traceAnchor);
@@ -383,11 +365,11 @@ export async function foldMemory(params: {
     }
   }
 
-  await Promise.all([writeAccumulatedSummary(), writeDiscreteFold()]);
+  await Promise.all([writeDiscreteFold(), advanceGuestMemoryWatermark(phone, newWatermark)]);
 
   // Sequenced after, not concurrent with, the two writes above: avoids
   // racing on guest_memory_folds' current row count, and guarantees
-  // writeAccumulatedSummary's upsert has already created/updated the
+  // advanceGuestMemoryWatermark's upsert has already created/updated the
   // guest_memory row before maintainFoldWindow's .update() might need it.
   // Runs regardless of whether writeDiscreteFold above itself succeeded —
   // maintainFoldWindow re-reads real current state from the DB each time,

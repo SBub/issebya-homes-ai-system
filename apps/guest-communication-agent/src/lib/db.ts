@@ -85,21 +85,24 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
   });
 }
 
-// `updated_at` is set explicitly — no set_updated_at/moddatetime trigger
-// convention exists in this repo's migrations.
-export async function upsertGuestMemory(
+// Advances only guest_memory.summarized_through_message_id — no summary
+// text, no LLM call anywhere near this. A guest's very first-ever fold has
+// no existing guest_memory row yet, so this upserts rather than updates;
+// the payload lists only phone_number/summarized_through_message_id, and a
+// Postgres upsert only overwrites the columns actually present in the
+// payload, so an existing row's preferences_summary survives untouched on
+// conflict — verified empirically against the real local Supabase stack,
+// not assumed.
+export async function advanceGuestMemoryWatermark(
   phone: string,
-  summary: string,
   summarizedThroughMessageId: string,
 ): Promise<void> {
-  return withSpan("db.upsertGuestMemory", { "db.table": "guest_memory" }, async () => {
+  return withSpan("db.advanceGuestMemoryWatermark", { "db.table": "guest_memory" }, async () => {
     const supabase = createAdminClient();
     const { error } = await supabase.from("guest_memory").upsert(
       {
         phone_number: phone,
-        summary,
         summarized_through_message_id: summarizedThroughMessageId,
-        updated_at: new Date().toISOString(),
       },
       { onConflict: "phone_number" },
     );
@@ -108,8 +111,8 @@ export async function upsertGuestMemory(
   });
 }
 
-// Pure insert (not upsert, unlike upsertGuestMemory above) — one row per
-// fold event, not keyed/deduped by phone_number. Backs guest_memory_folds,
+// Pure insert (not upsert, unlike advanceGuestMemoryWatermark above) — one
+// row per fold event, not keyed/deduped by phone_number. Backs guest_memory_folds,
 // the discrete-fold-row table (see 20260817120000_create_guest_memory_folds.sql
 // and ../agent/memory.ts's foldMemory).
 export async function insertGuestMemoryFold(params: {
@@ -180,13 +183,11 @@ export async function deleteGuestMemoryFold(id: string): Promise<void> {
 }
 
 // Updates only preferences_summary on an existing guest_memory row. Uses
-// .update() rather than .upsert() (unlike upsertGuestMemory above)
+// .update() rather than .upsert() (unlike advanceGuestMemoryWatermark above)
 // deliberately — a guest_memory row is guaranteed to already exist by the
 // time this is ever called (only ever called after foldMemory's own
-// upsertGuestMemory call has already created/updated that row in the same
-// fold event), so there's no need to reason about (or test) whether
-// Supabase's upsert-on-conflict would partially or fully replace the
-// unlisted `summary`/`summarized_through_message_id` columns.
+// advanceGuestMemoryWatermark call has already created/updated that row in
+// the same fold event).
 export async function updateGuestMemoryPreferences(
   phone: string,
   preferencesSummary: string,

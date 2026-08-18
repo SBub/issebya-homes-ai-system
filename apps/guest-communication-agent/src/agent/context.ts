@@ -10,8 +10,8 @@ import { encode } from "gpt-tokenizer";
 // only trims once total tokens exceed MAX, down to KEEP — if KEEP were ever
 // >= MAX, the trim loop would no-op and MAX would stop being an effective
 // ceiling.
-export const MAX_CONTEXT_TOKENS = 500;
-export const KEEP_CONTEXT_TOKENS = 250;
+export const MAX_CONTEXT_TOKENS = 1600;
+export const KEEP_CONTEXT_TOKENS = 800;
 
 // DeepSeek (this app's model, see memory.ts/run-turn.ts's MODEL) has no
 // maintained JS/TS tokenizer binding, so this counts via gpt-tokenizer's
