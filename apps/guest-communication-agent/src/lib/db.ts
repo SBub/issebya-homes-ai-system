@@ -54,7 +54,6 @@ export async function loadRecentMessages(
 }
 
 export interface GuestMemoryRow {
-  summary: string;
   summarizedThroughMessageId: string | null;
   preferencesSummary: string | null;
 }
@@ -70,7 +69,7 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
     const supabase = createAdminClient();
     const { data, error } = await supabase
       .from("guest_memory")
-      .select("summary, summarized_through_message_id, preferences_summary")
+      .select("summarized_through_message_id, preferences_summary")
       .eq("phone_number", phone)
       .maybeSingle();
 
@@ -78,7 +77,6 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
     if (!data) return null;
 
     return {
-      summary: data.summary as string,
       summarizedThroughMessageId: (data.summarized_through_message_id as string | null) ?? null,
       preferencesSummary: (data.preferences_summary as string | null) ?? null,
     };
