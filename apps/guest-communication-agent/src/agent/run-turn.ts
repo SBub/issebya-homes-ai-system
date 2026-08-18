@@ -817,7 +817,7 @@ export async function runAgentTurn(
   // historyMessages is a ModelMessage[] built from plain DB rows via
   // toModelMessage() in memory.ts — always user/assistant text content,
   // never a file part — so the narrowing is a false positive here.
-  const { historyMessages, contextBlock } = (await steppedSpan(
+  const { historyMessages, memoryMessage } = (await steppedSpan(
     step,
     "load-memory",
     turnAnchor,
@@ -831,22 +831,37 @@ export async function runAgentTurn(
   // it as the last row by the time this runs. Appending incomingMessage
   // again here used to duplicate it as two consecutive identical user
   // messages in every gen_ai.input.messages payload.
-  let messages: ModelMessage[] = historyMessages;
+  //
+  // memoryMessage (guest preferences + the one recent fold, if either
+  // exists — see memory.ts's buildMemoryMessage) is prepended ahead of
+  // historyMessages as its own message, not substituted into `system`
+  // below — see loadSystemPromptText's own comment. Omitted entirely
+  // (rather than an empty placeholder) when loadMemory found nothing to say.
+  let messages: ModelMessage[] = memoryMessage
+    ? [memoryMessage, ...historyMessages]
+    : historyMessages;
 
   // Hoisted out of the loop and fetched exactly once per turn, not once per
-  // round: contextBlock (loaded above, once, from load-memory) doesn't
-  // change across rounds of the same turn, so neither does the system string
-  // derived from it. Un-stepped code between step.run checkpoints re-runs on
-  // every Inngest replay — left inside the loop, a replay reaching round N
-  // would re-fetch the Braintrust prompt for every round 1..N that already
-  // ran (wasted API calls).
+  // round: the system prompt text doesn't change across rounds of the same
+  // turn. Un-stepped code between step.run checkpoints re-runs on every
+  // Inngest replay — left inside the loop, a replay reaching round N would
+  // re-fetch the Braintrust prompt for every round 1..N that already ran
+  // (wasted API calls).
+  //
+  // No guest-memory template variable passed to build() anymore — guest
+  // memory now reaches the model as memoryMessage, its own entry in
+  // `messages` above, not template-substituted into the system string. The
+  // corresponding {{guest_memory_block}} slot has already been removed from
+  // the live gca-system prompt directly (published outside this repo, not
+  // through a staged-draft review file here) — build({}) is a plain empty
+  // call today, not a shim for a lagging prompt.
   async function loadSystemPromptText(): Promise<string> {
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: SYSTEM_PROMPT_SLUG,
       ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
     });
-    const { messages } = promptTemplate.build({ guest_memory_block: contextBlock });
+    const { messages } = promptTemplate.build({});
     return messages[0].content as string;
   }
 
@@ -862,8 +877,6 @@ export async function runAgentTurn(
     {},
     loadSystemPromptText,
   )) as string;
-
-  console.log("contextBlock", contextBlock);
 
   let stepCount = 0;
 

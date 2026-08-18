@@ -202,7 +202,7 @@ describe("runAgentTurn", () => {
     step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
@@ -226,7 +226,7 @@ describe("runAgentTurn", () => {
     ];
     loadMemoryMock.mockResolvedValue({
       historyMessages: history,
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
@@ -248,12 +248,54 @@ describe("runAgentTurn", () => {
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
     expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    // No guest-memory-derived text substituted into the system string —
+    // loadMemory returned memoryMessage: null here, and `system` is a fixed
+    // stub with nothing memory-shaped in it in the first place.
+    expect(call.system).not.toContain("preferences");
     // Exactly historyMessages, same array reference elements, in order — not
-    // historyMessages plus a fourth, duplicate user message.
+    // historyMessages plus a fourth, duplicate user message, and no
+    // memoryMessage prepended since loadMemory returned null.
     expect(call.messages).toHaveLength(3);
     expect(call.messages[0]).toBe(history[0]);
     expect(call.messages[1]).toBe(history[1]);
     expect(call.messages[2]).toBe(history[2]);
+  });
+
+  it("prepends memoryMessage ahead of historyMessages as its own assistant-role message when loadMemory returns one", async () => {
+    const history: ModelMessage[] = [
+      { role: "user", content: "Hi, room 1 free?" },
+      { role: "assistant", content: "Yes, in August." },
+    ];
+    const memoryMessage: ModelMessage = {
+      role: "assistant",
+      content:
+        "User preferences:\nGuest is vegetarian.\n\n" +
+        "Summary of earlier conversation:\nAsked about check-in time.",
+    };
+    loadMemoryMock.mockResolvedValue({ historyMessages: history, memoryMessage });
+    generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
+
+    await runAgentTurn(
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        incomingMessage: "Also, is breakfast included?",
+      },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
+    // memoryMessage is its own message, first in the array, role
+    // "assistant" (not "system" — see memory.ts's buildMemoryMessage
+    // comment) — followed by historyMessages unchanged.
+    expect(call.messages).toHaveLength(3);
+    expect(call.messages[0]).toBe(memoryMessage);
+    expect(call.messages[0].role).toBe("assistant");
+    expect(call.messages[1]).toBe(history[0]);
+    expect(call.messages[2]).toBe(history[1]);
+    // Never substituted into the system prompt string.
+    expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    expect(call.system).not.toContain("vegetarian");
   });
 
   it("returns a sanitized final text reply when the model calls no tools", async () => {
@@ -1550,7 +1592,7 @@ describe("runGuestTurn", () => {
     step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),

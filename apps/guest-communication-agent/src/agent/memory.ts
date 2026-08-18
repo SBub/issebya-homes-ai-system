@@ -5,6 +5,7 @@ import { trimToTokenBudget } from "@/agent/context";
 import {
   advanceGuestMemoryWatermark,
   deleteGuestMemoryFold,
+  type GuestMemoryFoldRow,
   getGuestMemory,
   insertGuestMemoryFold,
   loadGuestMemoryFolds,
@@ -67,9 +68,13 @@ const MAX_RECENT_FOLDS = 1;
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
   historyMessages: ModelMessage[];
-  // The rolling summary — fills the prompt template's {guest_memory_block}
-  // variable directly.
-  contextBlock: string;
+  // Synthetic assistant-role message carrying guest memory (preferences +
+  // the one recent fold, if either exists) — prepended ahead of
+  // historyMessages in run-turn.ts's `messages` array, not substituted into
+  // the system prompt string. `null` when there's nothing to say (brand new
+  // guest, no preferences, no folds yet) — run-turn.ts must not send a
+  // placeholder message in that case, see buildMemoryMessage's own comment.
+  memoryMessage: ModelMessage | null;
 }
 
 // Matches any http(s) URL, not just this app's own booking-link shape or
@@ -168,12 +173,42 @@ async function summarizeConversation(
   );
 }
 
-// Builds the plain-text content the prompt template wraps in
-// <guest_memory> ({guest_memory_block}). The summary section when it
-// exists, fallback text when it doesn't.
-export function buildContextBlock(summary: string | null): string {
-  if (!summary) return "No prior guest information available.";
-  return `Summary of earlier conversation:\n${summary}`;
+// Builds the synthetic assistant-role message that carries guest memory —
+// guest_memory.preferences_summary (durable, standing facts) and the one
+// recent guest_memory_folds row, MAX_RECENT_FOLDS caps this at 0 or 1
+// (discrete, time-bound episode) — as its own entry in the `messages` array
+// run-turn.ts sends to generateText, prepended ahead of historyMessages
+// rather than template-substituted into the system prompt string (see
+// run-turn.ts's loadSystemPromptText). Kept as two clearly labeled sections
+// rather than flattened into one blob — losing the distinction between
+// durable fact and recent episode is exactly the fidelity problem the
+// tiered-memory redesign exists to fix, so it must survive all the way to
+// what the model actually reads.
+//
+// role: "assistant", not role: "system" — the AI SDK's own runtime warning
+// ("System messages in the prompt or messages fields can be a security
+// risk...") steers away from role: "system" entries inside `messages`,
+// preferring the dedicated `system` parameter for the one true system
+// prompt. Human judgment call; revisit if it turns out wrong.
+//
+// Returns null (never a placeholder message) when there's nothing to say —
+// see AgentMemory.memoryMessage's own comment for why loadMemory must not
+// substitute in an empty/fallback entry for a brand new guest.
+export function buildMemoryMessage(
+  preferencesSummary: string | null,
+  recentFold: GuestMemoryFoldRow | null,
+): ModelMessage | null {
+  const sections: string[] = [];
+
+  if (preferencesSummary) {
+    sections.push(`User preferences:\n${preferencesSummary}`);
+  }
+  if (recentFold) {
+    sections.push(`Summary of earlier conversation:\n${recentFold.summaryText}`);
+  }
+
+  if (sections.length === 0) return null;
+  return { role: "assistant", content: sections.join("\n\n") };
 }
 
 // Shared by loadMemory and foldMemory below: fetches recent messages + the
@@ -227,20 +262,37 @@ async function loadMemoryState(
 }
 
 // The fast path — called at the start of every turn. No LLM call, no DB
-// write: contextBlock reads whatever summary guest_memory already has, which
-// is up to one turn stale since a same-turn fold (see foldMemory below)
-// hasn't run yet when this is called. That staleness is spec'd, not a bug —
-// see this file's top comment.
+// write: memoryMessage is built from whatever preferences_summary/
+// guest_memory_folds rows already exist, which are up to one turn stale
+// since a same-turn fold (see foldMemory below) hasn't run yet when this is
+// called. That staleness is spec'd, not a bug — see this file's top comment.
+//
+// loadGuestMemoryFolds runs concurrently with loadMemoryState's own
+// internal Promise.all (loadRecentMessages + getGuestMemory), not
+// sequentially after it — this is on the guest reply's critical path, so an
+// extra serial round trip here would add real latency. Not folded into
+// loadMemoryState itself: that function is shared with foldMemory, which
+// doesn't need the recent-folds list for its own logic (it reaches
+// loadGuestMemoryFolds itself, internally, via maintainFoldWindow) — adding
+// it there would burden foldMemory's path with a query it never uses.
 export async function loadMemory(params: {
   conversationId: string;
   phone: string;
 }): Promise<AgentMemory> {
   const { conversationId, phone } = params;
-  const { historyMessages, existingMemory } = await loadMemoryState(conversationId, phone);
+  const [{ historyMessages, existingMemory }, recentFolds] = await Promise.all([
+    loadMemoryState(conversationId, phone),
+    loadGuestMemoryFolds(phone),
+  ]);
 
   return {
     historyMessages,
-    contextBlock: buildContextBlock(existingMemory?.summary ?? null),
+    // recentFolds[0]: MAX_RECENT_FOLDS caps this list at 0 or 1 entries —
+    // buildMemoryMessage only ever needs the one.
+    memoryMessage: buildMemoryMessage(
+      existingMemory?.preferencesSummary ?? null,
+      recentFolds[0] ?? null,
+    ),
   };
 }
 

@@ -42,7 +42,7 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { loadMemory, foldMemory, buildContextBlock } = await import("@/agent/memory.js");
+const { loadMemory, foldMemory, buildMemoryMessage } = await import("@/agent/memory.js");
 
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
 
@@ -121,9 +121,12 @@ describe("loadMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadPrompt();
+    // Default: no discrete folds — individual tests override this to cover
+    // the fold-bearing combinations below.
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
   });
 
-  it("passes through untrimmed history and the fallback contextBlock when nothing overflows and there's no prior summary", async () => {
+  it("passes through untrimmed history and a null memoryMessage when nothing overflows, no preferences, no folds", async () => {
     const rows = [
       messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
       messageRow("msg-2", "assistant", 50, "2026-08-01T00:01:00Z"),
@@ -135,7 +138,7 @@ describe("loadMemory", () => {
     const result = await loadMemory({ conversationId: "convo-1", phone: "+351900000001" });
 
     expect(result.historyMessages).toHaveLength(3);
-    expect(result.contextBlock).toBe("No prior guest information available.");
+    expect(result.memoryMessage).toBeNull();
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(advanceGuestMemoryWatermarkMock).not.toHaveBeenCalled();
   });
@@ -161,7 +164,7 @@ describe("loadMemory", () => {
     expect(result.historyMessages).toHaveLength(3);
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(advanceGuestMemoryWatermarkMock).not.toHaveBeenCalled();
-    expect(result.contextBlock).toBe("No prior guest information available.");
+    expect(result.memoryMessage).toBeNull();
   });
 
   // Regression test for the raw-history/fold overlap bug: loadMemoryState
@@ -187,6 +190,7 @@ describe("loadMemory", () => {
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue({
       summarizedThroughMessageId: "msg-2",
+      preferencesSummary: null,
     });
     expect(estimateTokens(rows.map((r) => ({ role: r.role, content: r.content })))).toBeLessThan(
       800,
@@ -206,22 +210,133 @@ describe("loadMemory", () => {
     expect(contents.some((c) => typeof c === "string" && c.includes("msg-2:"))).toBe(false);
   });
 
-  it("reads whatever summary guest_memory already has as-is, without recomputing it — up to one turn stale by design", async () => {
+  it("builds memoryMessage from preferences_summary + the one recent fold (MAX_RECENT_FOLDS caps loadGuestMemoryFolds at one row)", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue({
-      summary: "Earlier: guest asked about rooms 1-3.",
       summarizedThroughMessageId: "msg-4",
+      preferencesSummary: "Guest is vegetarian, prefers a quiet room.",
     });
+    loadGuestMemoryFoldsMock.mockResolvedValue([
+      {
+        id: "fold-1",
+        summaryText: "Confirmed a booking for Room 2, September 18-20.",
+        messageIdFrom: "msg-c",
+        messageIdTo: "msg-d",
+        createdAt: "2026-08-02T00:00:00Z",
+      },
+    ]);
 
     const result = await loadMemory({ conversationId: "convo-3", phone: "+351900000003" });
 
     expect(result.historyMessages).toHaveLength(3);
     expect(generateTextMock).not.toHaveBeenCalled();
     expect(advanceGuestMemoryWatermarkMock).not.toHaveBeenCalled();
-    expect(result.contextBlock).toBe(
-      "Summary of earlier conversation:\nEarlier: guest asked about rooms 1-3.",
-    );
+    expect(result.memoryMessage).toEqual({
+      role: "assistant",
+      content:
+        "User preferences:\nGuest is vegetarian, prefers a quiet room.\n\n" +
+        "Summary of earlier conversation:\n" +
+        "Confirmed a booking for Room 2, September 18-20.",
+    });
+  });
+
+  it("builds memoryMessage from preferences only when there are no recent folds", async () => {
+    const rows = [messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z")];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: null,
+      preferencesSummary: "Guest is vegetarian.",
+    });
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
+
+    const result = await loadMemory({ conversationId: "convo-4", phone: "+351900000004" });
+
+    expect(result.memoryMessage).toEqual({
+      role: "assistant",
+      content: "User preferences:\nGuest is vegetarian.",
+    });
+  });
+
+  it("builds memoryMessage from the one recent fold only, when there are no durable preferences yet", async () => {
+    const rows = [messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z")];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: null,
+      preferencesSummary: null,
+    });
+    loadGuestMemoryFoldsMock.mockResolvedValue([
+      {
+        id: "fold-1",
+        summaryText: "Asked about check-in time.",
+        messageIdFrom: "msg-a",
+        messageIdTo: "msg-b",
+        createdAt: "2026-08-01T00:00:00Z",
+      },
+    ]);
+
+    const result = await loadMemory({ conversationId: "convo-5", phone: "+351900000005" });
+
+    expect(result.memoryMessage).toEqual({
+      role: "assistant",
+      content: "Summary of earlier conversation:\nAsked about check-in time.",
+    });
+  });
+
+  it("returns a null memoryMessage when guest_memory exists but preferences and folds are both empty", async () => {
+    const rows = [messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z")];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: null,
+      preferencesSummary: null,
+    });
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
+
+    const result = await loadMemory({ conversationId: "convo-6", phone: "+351900000006" });
+
+    expect(result.memoryMessage).toBeNull();
+  });
+
+  // loadGuestMemoryFolds must run concurrently with loadMemoryState's own
+  // internal loadRecentMessages/getGuestMemory fetch, not serially after
+  // it — resolves all three mocks off a shared "still pending" flag so a
+  // serial implementation (awaiting loadMemoryState fully before calling
+  // loadGuestMemoryFolds) would deadlock this test via fake timers instead
+  // of silently passing.
+  it("fetches recent folds concurrently with the existing guest_memory state, not serially after it", async () => {
+    vi.useFakeTimers();
+    try {
+      const rows = [messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z")];
+      let recentMessagesStarted = false;
+      let foldsStarted = false;
+
+      loadRecentMessagesMock.mockImplementation(async () => {
+        recentMessagesStarted = true;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return rows;
+      });
+      getGuestMemoryMock.mockResolvedValue(null);
+      loadGuestMemoryFoldsMock.mockImplementation(async () => {
+        foldsStarted = true;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return [];
+      });
+
+      const resultPromise = loadMemory({ conversationId: "convo-7", phone: "+351900000007" });
+
+      // Let microtasks/the initial synchronous portion of both calls run
+      // before either timer fires — if loadGuestMemoryFolds were called only
+      // after loadMemoryState resolves, foldsStarted would still be false
+      // here.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(recentMessagesStarted).toBe(true);
+      expect(foldsStarted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(10);
+      await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -591,14 +706,48 @@ describe("URL redaction in toModelMessage", () => {
   });
 });
 
-describe("buildContextBlock", () => {
-  it("returns the labeled summary section when a summary is present", () => {
-    expect(buildContextBlock("Asked about room 2.")).toBe(
-      "Summary of earlier conversation:\nAsked about room 2.",
-    );
+describe("buildMemoryMessage", () => {
+  function fold(id: string, summaryText: string, createdAt: string) {
+    return {
+      id,
+      summaryText,
+      messageIdFrom: `${id}-from`,
+      messageIdTo: `${id}-to`,
+      createdAt,
+    };
+  }
+
+  it("returns null when both preferences and the fold are absent", () => {
+    expect(buildMemoryMessage(null, null)).toBeNull();
   });
 
-  it("falls back to the existing 'no prior guest information' text when there's no summary", () => {
-    expect(buildContextBlock(null)).toBe("No prior guest information available.");
+  it("returns only the labeled preferences section when there is no recent fold", () => {
+    expect(buildMemoryMessage("Guest is vegetarian.", null)).toEqual({
+      role: "assistant",
+      content: "User preferences:\nGuest is vegetarian.",
+    });
+  });
+
+  it("returns only the labeled recent-conversation section when there are no durable preferences", () => {
+    expect(
+      buildMemoryMessage(null, fold("fold-1", "Asked about room 2.", "2026-08-01T00:00:00Z")),
+    ).toEqual({
+      role: "assistant",
+      content: "Summary of earlier conversation:\nAsked about room 2.",
+    });
+  });
+
+  it("returns both labeled sections, preferences first, when both are present", () => {
+    const result = buildMemoryMessage(
+      "Guest is vegetarian, prefers a quiet room.",
+      fold("fold-1", "Confirmed a booking for Room 2.", "2026-08-01T00:00:00Z"),
+    );
+    expect(result).toEqual({
+      role: "assistant",
+      content:
+        "User preferences:\nGuest is vegetarian, prefers a quiet room.\n\n" +
+        "Summary of earlier conversation:\n" +
+        "Confirmed a booking for Room 2.",
+    });
   });
 });
