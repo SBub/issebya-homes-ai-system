@@ -164,6 +164,48 @@ describe("loadMemory", () => {
     expect(result.contextBlock).toBe("No prior guest information available.");
   });
 
+  // Regression test for the raw-history/fold overlap bug: loadMemoryState
+  // used to trim to the token budget FIRST and only consult the watermark
+  // afterward (purely to decide what's eligible to fold) — so a message
+  // already folded into guest_memory_folds could still sit inside the
+  // trailing token window and get sent to the model verbatim, on top of the
+  // fold-derived summary already covering the same content. Fixed by
+  // filtering to unfolded rows before trimming, so a folded row can never
+  // reappear in historyMessages regardless of how much budget is left.
+  it("excludes rows at/before the watermark from historyMessages even when the whole fetched window would still fit under the token budget", async () => {
+    // 5 short rows — nowhere near MAX_CONTEXT_TOKENS as a whole, so under
+    // the old (trim-first) logic none of them would get trimmed at all and
+    // msg-0..msg-2 would still show up verbatim in historyMessages despite
+    // already being folded (watermark at msg-2).
+    const rows = [
+      messageRow("msg-0", "user", 50, "2026-08-01T00:00:00Z"),
+      messageRow("msg-1", "assistant", 50, "2026-08-01T00:01:00Z"),
+      messageRow("msg-2", "user", 50, "2026-08-01T00:02:00Z"),
+      messageRow("msg-3", "assistant", 50, "2026-08-01T00:03:00Z"),
+      messageRow("msg-4", "user", 50, "2026-08-01T00:04:00Z"),
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: "msg-2",
+    });
+    expect(estimateTokens(rows.map((r) => ({ role: r.role, content: r.content })))).toBeLessThan(
+      800,
+    );
+
+    const result = await loadMemory({ conversationId: "convo-overlap", phone: "+351900000030" });
+
+    // Only the rows strictly after the watermark (msg-3, msg-4) survive —
+    // msg-0..msg-2 are excluded even though the full 5-row set fits
+    // comfortably under KEEP_CONTEXT_TOKENS.
+    expect(result.historyMessages).toHaveLength(2);
+    const contents = result.historyMessages.map((m) => m.content);
+    expect(contents.some((c) => typeof c === "string" && c.includes("msg-3:"))).toBe(true);
+    expect(contents.some((c) => typeof c === "string" && c.includes("msg-4:"))).toBe(true);
+    expect(contents.some((c) => typeof c === "string" && c.includes("msg-0:"))).toBe(false);
+    expect(contents.some((c) => typeof c === "string" && c.includes("msg-1:"))).toBe(false);
+    expect(contents.some((c) => typeof c === "string" && c.includes("msg-2:"))).toBe(false);
+  });
+
   it("reads whatever summary guest_memory already has as-is, without recomputing it — up to one turn stale by design", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
@@ -300,7 +342,7 @@ describe("foldMemory", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  // maintainFoldWindow (MAX_RECENT_FOLDS = 2) runs after every real fold
+  // maintainFoldWindow (MAX_RECENT_FOLDS = 1) runs after every real fold
   // event — these exercise that cap enforcement specifically, independent of
   // the writeDiscreteFold/advanceGuestMemoryWatermark assertions above.
   describe("maintains the MAX_RECENT_FOLDS cap", () => {
@@ -337,13 +379,6 @@ describe("foldMemory", () => {
           messageIdTo: "msg-b",
           createdAt: "2026-08-01T00:00:00Z",
         },
-        {
-          id: "fold-2",
-          summaryText: "Fold 2 text.",
-          messageIdFrom: "msg-c",
-          messageIdTo: "msg-d",
-          createdAt: "2026-08-02T00:00:00Z",
-        },
       ]);
 
       await foldMemory({
@@ -359,7 +394,7 @@ describe("foldMemory", () => {
       expect(updateGuestMemoryPreferencesMock).not.toHaveBeenCalled();
     });
 
-    it("distills and deletes exactly the oldest row when a 3rd fold pushes the count over the cap", async () => {
+    it("distills and deletes exactly the oldest row when a 2nd fold pushes the count over the cap", async () => {
       setUpBasicFold();
       loadGuestMemoryFoldsMock.mockResolvedValue([
         {
@@ -368,13 +403,6 @@ describe("foldMemory", () => {
           messageIdFrom: "msg-a",
           messageIdTo: "msg-b",
           createdAt: "2026-08-01T00:00:00Z",
-        },
-        {
-          id: "fold-middle",
-          summaryText: "Middle fold summary text.",
-          messageIdFrom: "msg-c",
-          messageIdTo: "msg-d",
-          createdAt: "2026-08-02T00:00:00Z",
         },
         {
           id: "fold-newest",
@@ -400,7 +428,6 @@ describe("foldMemory", () => {
       ).find(([call]) => call.messages[1].content.includes("Retiring fold summary:"));
       expect(distillCall?.[0].messages[1].content).toContain("Oldest fold summary text.");
       expect(distillCall?.[0].messages[1].content).toContain("Guest is vegetarian.");
-      expect(distillCall?.[0].messages[1].content).not.toContain("Middle fold summary text.");
       expect(distillCall?.[0].messages[1].content).not.toContain("Newest fold summary text.");
 
       // Persisted via .update() (updateGuestMemoryPreferences), never via
@@ -416,7 +443,7 @@ describe("foldMemory", () => {
       );
 
       // Only the oldest row is deleted — the cap is restored to exactly
-      // MAX_RECENT_FOLDS (2) by removing the single excess row, not by
+      // MAX_RECENT_FOLDS (1) by removing the single excess row, not by
       // clearing the table.
       expect(deleteGuestMemoryFoldMock).toHaveBeenCalledExactlyOnceWith("fold-oldest");
     });

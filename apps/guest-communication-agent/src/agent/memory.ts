@@ -59,10 +59,10 @@ const DISTILLER_PROMPT_VERSION =
 // 20260817120000_create_guest_memory_folds.sql's own comment for the first):
 // once a guest has more than this many discrete guest_memory_folds rows, the
 // oldest excess row(s) get distilled into guest_memory.preferences_summary
-// and deleted — see maintainFoldWindow below. Exactly 2, not "2-3" — a named
-// constant so that exactness survives future edits, same convention as
-// context.ts's MAX_CONTEXT_TOKENS/KEEP_CONTEXT_TOKENS.
-const MAX_RECENT_FOLDS = 2;
+// and deleted — see maintainFoldWindow below. Exactly 1 — a named constant
+// so that exactness survives future edits, same convention as context.ts's
+// MAX_CONTEXT_TOKENS/KEEP_CONTEXT_TOKENS.
+const MAX_RECENT_FOLDS = 1;
 
 export interface AgentMemory {
   // Trimmed recent messages — the actual conversation, verbatim.
@@ -177,12 +177,21 @@ export function buildContextBlock(summary: string | null): string {
 }
 
 // Shared by loadMemory and foldMemory below: fetches recent messages + the
-// existing guest_memory row, trims to the token budget, and correlates the
-// trimmed-off rows against the existing summary's watermark. Each caller
-// re-runs this fresh against Postgres rather than sharing one read — by the
-// time foldMemory runs, run-turn.ts's record-reply step has already written
-// this turn's own assistant reply, so re-reading here is what lets the
-// watermark computation see it too.
+// existing guest_memory row, filters out anything already folded, and trims
+// what's left to the token budget. Each caller re-runs this fresh against
+// Postgres rather than sharing one read — by the time foldMemory runs,
+// run-turn.ts's record-reply step has already written this turn's own
+// assistant reply, so re-reading here is what lets the watermark
+// computation see it too.
+//
+// Watermark filtering must happen BEFORE trimming, not after: a row already
+// folded into guest_memory_folds must never also appear verbatim in
+// historyMessages, even if it would otherwise still fit under
+// KEEP_CONTEXT_TOKENS — otherwise the same conversational content is sent to
+// the model both raw (in historyMessages) and as a summary (in the memory
+// message) simultaneously, for however many turns it takes to age out
+// of the raw window. Filtering first makes unfolded-ness structural rather
+// than a property only checked after the fact when deciding what to fold.
 async function loadMemoryState(
   conversationId: string,
   phone: string,
@@ -196,22 +205,23 @@ async function loadMemoryState(
     getGuestMemory(phone),
   ]);
 
-  const mapped = rows.map(toModelMessage);
+  // Find the existing summary's watermark within this turn's fetched rows.
+  // Not found (no watermark yet, or it's aged out of the fetched window —
+  // both cases mean every fetched row is unfolded) means every row is
+  // unfolded; found at index w means only rows after w are.
+  const watermarkId = existingMemory?.summarizedThroughMessageId ?? null;
+  const watermarkIndex = watermarkId ? rows.findIndex((r) => r.id === watermarkId) : -1;
+  const unfoldedRows = watermarkIndex === -1 ? rows : rows.slice(watermarkIndex + 1);
+
+  const mapped = unfoldedRows.map(toModelMessage);
   const historyMessages = trimToTokenBudget(mapped);
 
   // trimToTokenBudget only ever peels messages off the front (oldest first),
-  // so `rows`/`mapped` stay the same length/order and the dropped rows are
-  // positionally rows.slice(0, droppedCount) — correlated by index, not id.
+  // so `unfoldedRows`/`mapped` stay the same length/order and the dropped
+  // rows are positionally unfoldedRows.slice(0, droppedCount) — correlated
+  // by index, not id.
   const droppedCount = mapped.length - historyMessages.length;
-  const droppedRows = rows.slice(0, droppedCount);
-
-  // Find the existing summary's watermark within this turn's fetched rows.
-  // Not found (no watermark, or it's aged out of the fetched window) means
-  // every dropped row is new; found at index w means only rows after w are.
-  const watermarkId = existingMemory?.summarizedThroughMessageId ?? null;
-  const watermarkIndex = watermarkId ? rows.findIndex((r) => r.id === watermarkId) : -1;
-  const newlyDroppedRows =
-    watermarkIndex === -1 ? droppedRows : droppedRows.slice(watermarkIndex + 1);
+  const newlyDroppedRows = unfoldedRows.slice(0, droppedCount);
 
   return { historyMessages, existingMemory, newlyDroppedRows };
 }
