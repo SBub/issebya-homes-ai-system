@@ -29,6 +29,7 @@
     "@vercel/sandbox": "^3.0.0",
     "ai": "^6.0.138",
     "braintrust": "^3.27.0",
+    "gpt-tokenizer": "^4.0.0",
     "inngest": "^4.15.0",
     "next": "^16.2.1",
     "react": "^19.2.3",

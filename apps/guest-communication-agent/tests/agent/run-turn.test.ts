@@ -32,8 +32,10 @@ trace.setGlobalTracerProvider(
 // Postgres, telegram-router, Braintrust's prompt store, and generateText
 // itself. Real tool implementations still run against the mocks below.
 const loadMemoryMock = vi.fn();
+const foldMemoryMock = vi.fn();
 vi.mock("@/agent/memory.js", () => ({
   loadMemory: loadMemoryMock,
+  foldMemory: foldMemoryMock,
 }));
 
 // check_availability does a real fetch() and answer_property_question a real
@@ -200,7 +202,7 @@ describe("runAgentTurn", () => {
     step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
@@ -210,14 +212,21 @@ describe("runAgentTurn", () => {
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
   });
 
-  it("builds the model call's system prompt string, history, then the new incoming message last", async () => {
+  it("builds the model call's system prompt string, then uses historyMessages as-is with no extra append", async () => {
+    // historyMessages already ends with this turn's incoming guest message —
+    // the webhook route records it to whatsapp_messages before the turn ever
+    // starts, so loadMemory's own DB read (real code, mocked wholesale here)
+    // always returns it as the last row. run-turn.ts must not append
+    // incomingMessage a second time on top of this (that was the duplicate-
+    // message bug this fixes).
     const history: ModelMessage[] = [
       { role: "user", content: "Hi, room 1 free?" },
       { role: "assistant", content: "Yes, in August." },
+      { role: "user", content: "Also, is breakfast included?" },
     ];
     loadMemoryMock.mockResolvedValue({
       historyMessages: history,
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
@@ -230,18 +239,63 @@ describe("runAgentTurn", () => {
       { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
+    // loadMemory no longer takes a traceAnchor — it never opens a span of
+    // its own now (no LLM call, no write), unlike foldMemory.
     expect(loadMemoryMock).toHaveBeenCalledWith({
       conversationId: "convo-1",
       phone: "+3519",
-      traceAnchor: expect.any(Object),
     });
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
     expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    // No guest-memory-derived text substituted into the system string —
+    // loadMemory returned memoryMessage: null here, and `system` is a fixed
+    // stub with nothing memory-shaped in it in the first place.
+    expect(call.system).not.toContain("preferences");
+    // Exactly historyMessages, same array reference elements, in order — not
+    // historyMessages plus a fourth, duplicate user message, and no
+    // memoryMessage prepended since loadMemory returned null.
     expect(call.messages).toHaveLength(3);
     expect(call.messages[0]).toBe(history[0]);
     expect(call.messages[1]).toBe(history[1]);
-    expect(call.messages[2]).toEqual({ role: "user", content: "Also, is breakfast included?" });
+    expect(call.messages[2]).toBe(history[2]);
+  });
+
+  it("prepends memoryMessage ahead of historyMessages as its own assistant-role message when loadMemory returns one", async () => {
+    const history: ModelMessage[] = [
+      { role: "user", content: "Hi, room 1 free?" },
+      { role: "assistant", content: "Yes, in August." },
+    ];
+    const memoryMessage: ModelMessage = {
+      role: "assistant",
+      content:
+        "User preferences:\nGuest is vegetarian.\n\n" +
+        "Summary of earlier conversation:\nAsked about check-in time.",
+    };
+    loadMemoryMock.mockResolvedValue({ historyMessages: history, memoryMessage });
+    generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
+
+    await runAgentTurn(
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        incomingMessage: "Also, is breakfast included?",
+      },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
+    // memoryMessage is its own message, first in the array, role
+    // "assistant" (not "system" — see memory.ts's buildMemoryMessage
+    // comment) — followed by historyMessages unchanged.
+    expect(call.messages).toHaveLength(3);
+    expect(call.messages[0]).toBe(memoryMessage);
+    expect(call.messages[0].role).toBe("assistant");
+    expect(call.messages[1]).toBe(history[0]);
+    expect(call.messages[2]).toBe(history[1]);
+    // Never substituted into the system prompt string.
+    expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    expect(call.system).not.toContain("vegetarian");
   });
 
   it("returns a sanitized final text reply when the model calls no tools", async () => {
@@ -1533,11 +1587,12 @@ describe("runGuestTurn", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    spanExporter.reset();
     step = makeStepMock();
     step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
-      contextBlock: "No prior guest information available.",
+      memoryMessage: null,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
@@ -1545,6 +1600,7 @@ describe("runGuestTurn", () => {
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
     updateSpanIOMock.mockResolvedValue(undefined);
+    foldMemoryMock.mockResolvedValue(undefined);
   });
 
   it("runs the turn, records the assistant reply, and sends it via Twilio, both inside their own step.run", async () => {
@@ -1576,8 +1632,121 @@ describe("runGuestTurn", () => {
     });
     const stepIds = step.run.mock.calls.map((call) => call[0]);
     expect(stepIds).toEqual(
-      expect.arrayContaining(["update-turn-trace-io", "record-reply", "send-whatsapp-reply"]),
+      expect.arrayContaining([
+        "update-turn-trace-io",
+        "record-reply",
+        "send-whatsapp-reply",
+        "fold-memory-summary",
+      ]),
     );
+  });
+
+  // The whole point of this fix: the summarizer's LLM round-trip must not
+  // sit on the guest's reply-latency critical path. Asserting real call
+  // order (not just presence in stepIds) is what actually proves that.
+  it("runs fold-memory-summary strictly after send-whatsapp-reply, and awaits it before returning", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
+
+    // Order of resolution: fold's own promise only settles after this flag
+    // flips, so if the outer runGuestTurn call returned before actually
+    // awaiting it, this assertion would still catch it via the "awaited
+    // before returning" check below (foldMemoryMock is guaranteed called by
+    // then, otherwise the array-order assertion on step.run's calls already
+    // proves ordering independent of timing).
+    let foldStarted = false;
+    foldMemoryMock.mockImplementation(async () => {
+      foldStarted = true;
+    });
+
+    await runGuestTurn({
+      conversationId: "convo-fold-order",
+      phone: "+351920742845",
+      incomingMessage: "Is room 1 free?",
+      correlationId: "corr-fold-order",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    // Real call order through step.run — send-whatsapp-reply (the guest's
+    // actual delivery) strictly precedes fold-memory-summary.
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    const sendIndex = stepIds.indexOf("send-whatsapp-reply");
+    const foldIndex = stepIds.indexOf("fold-memory-summary");
+    expect(sendIndex).toBeGreaterThanOrEqual(0);
+    expect(foldIndex).toBeGreaterThan(sendIndex);
+
+    // runGuestTurn's own returned promise only resolved after foldMemory's
+    // side effect actually ran — not a detached/orphaned promise.
+    expect(foldStarted).toBe(true);
+    expect(foldMemoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "convo-fold-order", phone: "+351920742845" }),
+    );
+  });
+
+  // Verifies foldMemory's anchor is parented under a real span descended
+  // from traceAnchor (the webhook root), NOT under the closed
+  // "braintrust.guest_turn" span — see run-turn.ts's foldGuestMemory comment
+  // for why it can't reuse that turn-scoped anchor anymore.
+  it("passes foldMemory a traceAnchor rooted at traceAnchor, not the closed braintrust.guest_turn span", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
+
+    await runGuestTurn({
+      conversationId: "convo-fold-anchor",
+      phone: "+351920742845",
+      incomingMessage: "Is room 1 free?",
+      correlationId: "corr-fold-anchor",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(foldMemoryMock).toHaveBeenCalledTimes(1);
+    const [foldCall] = foldMemoryMock.mock.calls[0] as [
+      { traceAnchor: { traceId: string; spanId: string } },
+    ];
+    expect(foldCall.traceAnchor.traceId).toBe(TEST_TRACE_ANCHOR.traceId);
+    // A real, distinct span id — the "fold-memory-summary" step's own span,
+    // not TEST_TRACE_ANCHOR.spanId (the webhook root itself) and not
+    // guestTurnSpanId (the closed "braintrust.guest_turn" marker).
+    expect(foldCall.traceAnchor.spanId).not.toBe(TEST_TRACE_ANCHOR.spanId);
+
+    const foldSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "fold-memory-summary");
+    expect(foldSpan).toBeDefined();
+    expect(foldCall.traceAnchor.spanId).toBe(foldSpan?.spanContext().spanId);
+  });
+
+  it("marks the fold-memory-summary span failed but does not throw or block delivery when foldMemory rejects", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
+    foldMemoryMock.mockRejectedValueOnce(new Error("summarizer boom"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // The guest already has their reply by the time fold runs — a fold
+    // failure must never surface as a thrown error out of runGuestTurn.
+    await expect(
+      runGuestTurn({
+        conversationId: "convo-fold-fail",
+        phone: "+351920742845",
+        incomingMessage: "Is room 1 free?",
+        correlationId: "corr-fold-fail",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
+      "+351920742845",
+      "Yes, room 1 is available!",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("foldMemory failed"),
+      expect.any(Error),
+    );
+    const foldSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "fold-memory-summary");
+    expect(foldSpan?.status.code).toBe(SpanStatusCode.ERROR);
+    consoleErrorSpy.mockRestore();
   });
 
   it("passes firedTags through to updateSpanIO's tags when the turn escalated via wants_human", async () => {
