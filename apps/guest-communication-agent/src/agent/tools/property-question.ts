@@ -19,8 +19,6 @@ type DocumentMatch = {
   created_at: string;
 };
 
-const supabaseAnon = createClient();
-
 const answerPropertyQuestionSchema = z.object({
   query: z.string().describe("The search query based on what the guest is asking"),
 });
@@ -56,6 +54,10 @@ export async function runAnswerPropertyQuestion(
     model: openrouter.embedding("openai/text-embedding-3-small"),
     value: args.query,
   });
+
+  // Constructed lazily (not at module scope) so importing this file — e.g.
+  // for its tool schema — doesn't require Supabase env vars to be set.
+  const supabaseAnon = createClient();
 
   async function matchDocumentsForQuery(span: Span): Promise<string> {
     const { data, error } = await supabaseAnon.rpc("match_documents", {
