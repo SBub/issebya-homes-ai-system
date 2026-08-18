@@ -91,6 +91,10 @@ export async function getGuestMemory(phone: string): Promise<GuestMemoryRow | nu
 // payload, so an existing row's preferences_summary survives untouched on
 // conflict — verified empirically against the real local Supabase stack,
 // not assumed.
+//
+// Does not set updated_at — that's DB-managed via the guest_memory_set_updated_at
+// trigger (20260818100000_guest_memory_updated_at_trigger.sql), which fires
+// on every UPDATE regardless of which code path writes the row.
 export async function advanceGuestMemoryWatermark(
   phone: string,
   summarizedThroughMessageId: string,
@@ -186,6 +190,10 @@ export async function deleteGuestMemoryFold(id: string): Promise<void> {
 // time this is ever called (only ever called after foldMemory's own
 // advanceGuestMemoryWatermark call has already created/updated that row in
 // the same fold event).
+//
+// Does not set updated_at — that's DB-managed via the guest_memory_set_updated_at
+// trigger (20260818100000_guest_memory_updated_at_trigger.sql), which fires
+// on every UPDATE regardless of which code path writes the row.
 export async function updateGuestMemoryPreferences(
   phone: string,
   preferencesSummary: string,
