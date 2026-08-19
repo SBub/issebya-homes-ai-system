@@ -1185,7 +1185,7 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       // memory.ts's loadMemoryState) makes a lost fold harmless regardless,
       // the next turn's fold just sees a bigger backlog.
       console.error(`[run-turn] foldMemory failed for conversation ${conversationId}:`, err);
-      markSpanFailed(span, err instanceof Error ? err.message : String(err));
+      markSpanFailed(span, err);
     }
   }
 

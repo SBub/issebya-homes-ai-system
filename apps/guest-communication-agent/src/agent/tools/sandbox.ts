@@ -159,7 +159,7 @@ export async function runInSandbox(
         await sandbox.stop();
       } catch (stopErr) {
         console.error("[sandbox] failed to stop sandbox after runCode:", stopErr);
-        markSpanFailed(span, stopErr instanceof Error ? stopErr.message : String(stopErr));
+        markSpanFailed(span, stopErr);
       }
     });
   }

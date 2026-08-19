@@ -100,7 +100,7 @@ export async function sendMessage(
       return { ok: true, messageId: body.result?.message_id };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      markSpanFailed(span, message);
+      markSpanFailed(span, err);
       return { ok: false, error: message };
     }
   });
@@ -144,7 +144,7 @@ export async function answerCallbackQuery(
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      markSpanFailed(span, message);
+      markSpanFailed(span, err);
       return { ok: false, error: message };
     }
   });
@@ -174,7 +174,7 @@ export async function editMessageText(messageId: number, text: string): Promise<
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      markSpanFailed(span, message);
+      markSpanFailed(span, err);
       return { ok: false, error: message };
     }
   });
