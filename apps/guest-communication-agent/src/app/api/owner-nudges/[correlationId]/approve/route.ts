@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handleBookingLinkApprovalReceived } from "@/agent/tools/booking";
 import { requireApiKey } from "@/lib/auth";
-import { startTraceRoot } from "@/lib/tracing";
+import { markSpanFailed, startTraceRoot } from "@/lib/tracing";
 
 /**
  * Closes the human-in-the-loop for a send_booking_link owner nudge once the
@@ -43,6 +43,13 @@ export async function POST(
 ) {
   const unauthorized = requireApiKey(request);
   if (unauthorized) {
+    await startTraceRoot(
+      "owner_nudges.approve.rejected",
+      { "http.status_code": 401 },
+      async (span) => {
+        markSpanFailed(span, "Unauthorized — invalid or missing X-API-Key");
+      },
+    );
     return unauthorized;
   }
 

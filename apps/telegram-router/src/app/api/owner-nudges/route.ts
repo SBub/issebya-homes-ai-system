@@ -54,6 +54,9 @@ import { markSpanFailed, withSpan } from "@/lib/tracing";
 export async function POST(request: NextRequest) {
   const unauthorized = requireApiKey(request);
   if (unauthorized) {
+    await withSpan("owner_nudges.send.rejected", { "http.status_code": 401 }, async (span) => {
+      markSpanFailed(span, "Unauthorized — invalid or missing X-API-Key");
+    });
     return unauthorized;
   }
 

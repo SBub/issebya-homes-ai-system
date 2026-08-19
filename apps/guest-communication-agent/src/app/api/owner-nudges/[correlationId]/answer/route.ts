@@ -2,7 +2,12 @@ import type { Span } from "@opentelemetry/api";
 import { type NextRequest, NextResponse } from "next/server";
 import { handleMissingInfoReplyReceived } from "@/agent/tools/missing-info";
 import { requireApiKey } from "@/lib/auth";
-import { consumeMissingInfoTraceAnchor, startTraceRoot, withTurnSpan } from "@/lib/tracing";
+import {
+  consumeMissingInfoTraceAnchor,
+  markSpanFailed,
+  startTraceRoot,
+  withTurnSpan,
+} from "@/lib/tracing";
 
 /**
  * Closes the human-in-the-loop for a missing_info owner nudge once the owner
@@ -61,6 +66,13 @@ export async function POST(
 ) {
   const unauthorized = requireApiKey(request);
   if (unauthorized) {
+    await startTraceRoot(
+      "owner_nudges.answer.rejected",
+      { "http.status_code": 401 },
+      async (span) => {
+        markSpanFailed(span, "Unauthorized — invalid or missing X-API-Key");
+      },
+    );
     return unauthorized;
   }
 

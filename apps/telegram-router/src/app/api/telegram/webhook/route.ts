@@ -11,7 +11,7 @@ import {
   sendMessage,
   sendWithRetry,
 } from "@/lib/telegram/telegram";
-import { withSpan } from "@/lib/tracing";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 const NUDGE_APPROVE_PREFIX = "nudge_approve:";
 const NUDGE_REJECT_PREFIX = "nudge_reject:";
@@ -247,6 +247,13 @@ async function handleCallbackQuery(
 export async function POST(request: NextRequest) {
   const unauthorized = verifyWebhookSecret(request);
   if (unauthorized) {
+    await withSpan(
+      "webhook.telegram_update.rejected",
+      { "http.status_code": 401 },
+      async (span) => {
+        markSpanFailed(span, "Unauthorized — invalid or missing webhook secret");
+      },
+    );
     return unauthorized;
   }
 
