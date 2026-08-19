@@ -101,6 +101,12 @@ export async function register(): Promise<void> {
         (name) => NEXT_INTERNAL_SPAN_NAMES.has(name) || NEXT_ROUTE_SPAN_PATTERN.test(name),
       ),
     );
+  } else if (process.env.NODE_ENV === "production") {
+    // Same reasoning as GCA's instrumentation.ts: booting with zero
+    // observability in production should fail loud, not warn-and-continue.
+    throw new Error(
+      "[instrumentation] Axiom tracing is required in production but AXIOM_TOKEN/AXIOM_DATASET are not set",
+    );
   } else {
     console.warn("[instrumentation] Axiom tracing disabled — AXIOM_TOKEN/AXIOM_DATASET not set");
   }
@@ -129,6 +135,23 @@ export async function register(): Promise<void> {
   });
 
   trace.setGlobalTracerProvider(provider);
+
+  // Heartbeat span for the Axiom dead-man's-switch monitor — same reasoning
+  // as GCA's instrumentation.ts: this app's real traffic is low and sporadic,
+  // so "zero events in N minutes" would false-alarm on an otherwise-healthy
+  // system; see that file's comment for the full why. Only runs when the
+  // Axiom processor above was actually configured.
+  if (axiomToken && axiomDataset) {
+    const heartbeatTracer = trace.getTracer("instrumentation-heartbeat");
+    const heartbeatInterval = setInterval(
+      () => {
+        heartbeatTracer.startSpan("instrumentation.heartbeat").end();
+      },
+      5 * 60 * 1000,
+    );
+    // Never let this timer keep the process alive on its own.
+    heartbeatInterval.unref();
+  }
 
   console.log(
     `[instrumentation] Tracing initialized (${processors.length} processor${processors.length > 1 ? "s" : ""})`,
