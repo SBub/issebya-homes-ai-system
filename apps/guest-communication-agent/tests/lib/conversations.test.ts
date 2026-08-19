@@ -107,6 +107,15 @@ describe("getOrCreateActiveConversation", () => {
       "Failed to create whatsapp_conversation for +351920742845: boom",
     );
   });
+
+  it("throws when the initial active-conversation lookup fails, instead of silently creating a duplicate", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+
+    await expect(getOrCreateActiveConversation("+351920742845")).rejects.toThrow(
+      "Failed to look up active whatsapp_conversation for +351920742845: boom",
+    );
+    expect(insertMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("recordMessage", () => {

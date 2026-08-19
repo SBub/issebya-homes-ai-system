@@ -31,7 +31,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
       const prefixedPhone = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
       const phoneForms = Array.from(new Set([phone, prefixedPhone]));
 
-      const { data: existing } = await supabase
+      const { data: existing, error: lookupError } = await supabase
         .from("whatsapp_conversations")
         .select("id")
         .in("phone_number", phoneForms)
@@ -39,6 +39,11 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
         .order("started_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (lookupError) {
+        throw new Error(
+          `Failed to look up active whatsapp_conversation for ${phone}: ${lookupError.message}`,
+        );
+      }
       if (existing) {
         return { conversationId: existing.id, isNew: false };
       }
