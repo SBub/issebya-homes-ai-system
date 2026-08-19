@@ -369,3 +369,89 @@ export async function consumeMissingInfoTraceAnchor(
     return null;
   }
 }
+
+// The DB table recordApprovalGateTraceAnchor/consumeApprovalGateTraceAnchor
+// below read/write — see supabase/migrations's
+// create_approval_gate_trace_anchors.sql for the schema and the full
+// tradeoff writeup (self-cleans on the happy path, can leak an orphaned row
+// on a timed-out/never-decided gated call). A separate table from
+// MISSING_INFO_TRACE_ANCHOR_TABLE above, on purpose — this pair is generic
+// over every approval-gate.ts's requestApprovalGate caller (any
+// run-turn.ts APPROVAL_GATES entry, send_booking_link today, any future tool
+// tomorrow), not just one tool, and keeping it a fully separate mechanism
+// means it can't ever disturb the already-verified-working missing_info
+// path above.
+const APPROVAL_GATE_TRACE_ANCHOR_TABLE = "approval_gate_trace_anchors";
+
+// Cross-HTTP-request trace anchor handoff, for approval-gate.ts's
+// requestApprovalGate specifically (generic over every APPROVAL_GATES-gated
+// tool, not hardcoded to one). Same gap this fills as
+// recordMissingInfoTraceAnchor above: the HTTP-request boundary to the
+// owner-nudges approve route (triggered by apps/telegram-router's own
+// webhook, possibly hours later, possibly a different server instance) has
+// no shared payload/Inngest event.data to carry a TraceAnchor through. This
+// small DB-backed lookup fills that gap instead: requestApprovalGate writes
+// the gated tool's real gen_ai.tool.<toolName> span's anchor here right when
+// it's called (that anchor arrives as this function's own `anchor` param —
+// requestApprovalGate never touches a live Span object, only the
+// already-extracted {traceId, spanId} its caller, run-turn.ts's
+// dispatchGatedToolCall, passes in as `traceAnchor`), keyed by this turn's
+// correlationId; the approve route reads (and deletes) it once the owner's
+// decision arrives.
+//
+// Best-effort like recordMissingInfoTraceAnchor: a failed write here only
+// degrades tracing (the approve route's decision span falls back to its own
+// disconnected trace root instead of nesting under the real
+// gen_ai.tool.<toolName> span) — never the actual approval/rejection
+// handling or guest-facing behavior.
+export async function recordApprovalGateTraceAnchor(
+  correlationId: string,
+  anchor: TraceAnchor,
+): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from(APPROVAL_GATE_TRACE_ANCHOR_TABLE).insert({
+      correlation_id: correlationId,
+      trace_id: anchor.traceId,
+      span_id: anchor.spanId,
+    });
+    if (error) {
+      console.error(
+        `[tracing] recordApprovalGateTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[tracing] recordApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+  }
+}
+
+// Reads AND deletes in one call — same self-cleaning-on-the-happy-path
+// reasoning as consumeMissingInfoTraceAnchor above. Returns null (not a
+// throw) on any failure or a genuine miss — same best-effort posture as
+// recordApprovalGateTraceAnchor above.
+export async function consumeApprovalGateTraceAnchor(
+  correlationId: string,
+): Promise<TraceAnchor | null> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from(APPROVAL_GATE_TRACE_ANCHOR_TABLE)
+      .delete()
+      .eq("correlation_id", correlationId)
+      .select("trace_id, span_id")
+      .maybeSingle();
+    if (error || !data) {
+      return null;
+    }
+    return { traceId: data.trace_id as string, spanId: data.span_id as string };
+  } catch (err) {
+    console.error(
+      `[tracing] consumeApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+    return null;
+  }
+}

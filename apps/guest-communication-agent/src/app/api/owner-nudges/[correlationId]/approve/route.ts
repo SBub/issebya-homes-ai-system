@@ -1,7 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handleBookingLinkApprovalReceived } from "@/agent/tools/booking";
 import { requireApiKey } from "@/lib/auth";
-import { markSpanFailed, startTraceRoot } from "@/lib/tracing";
+import {
+  consumeApprovalGateTraceAnchor,
+  markSpanFailed,
+  startTraceRoot,
+  withTurnSpan,
+} from "@/lib/tracing";
 
 /**
  * Closes the human-in-the-loop for a send_booking_link owner nudge once the
@@ -22,12 +27,24 @@ import { markSpanFailed, startTraceRoot } from "@/lib/tracing";
  * - 400 if `approved` is missing or not a boolean.
  * - 500 if the Inngest send itself errors.
  *
- * Tracing: same reasoning as .../answer/route.ts — this handler can't join
- * the original guest turn's trace (it only ever receives a plain
- * correlationId string, often much later, from a separate process), so it
- * starts its OWN small trace root (startTraceRoot), tagged with
- * gca.correlation_id so it can still be manually cross-referenced against the
- * original turn's trace by that shared id.
+ * Tracing: same shape as .../answer/route.ts, via a separate, parallel
+ * mechanism (tracing.ts's recordApprovalGateTraceAnchor/
+ * consumeApprovalGateTraceAnchor, backed by its own
+ * approval_gate_trace_anchors table — not missing_info_trace_anchors, which
+ * this deliberately never touches). This handler can't join the original
+ * guest turn's trace via Inngest's event.data (it only ever receives a plain
+ * correlationId string, often much later, from a separate process, possibly
+ * a different server instance) — approval-gate.ts's requestApprovalGate
+ * works around this by writing the real gen_ai.tool.<toolName> execution
+ * span's {traceId, spanId} to that table right when the gate is invoked, key
+ * by this same correlationId. consumeApprovalGateTraceAnchor below reads
+ * (and deletes) that row. If found, the approval-decision handling nests as
+ * a real child of the original gen_ai.tool.<toolName> span via withTurnSpan.
+ * If not found (write failed, row already consumed by a duplicate call, or
+ * the anchor's best-effort write simply never landed), this falls back to
+ * its own small disconnected trace root (startTraceRoot) instead, tagged
+ * with gca.correlation_id so it can still be found and manually
+ * cross-referenced against the original turn's trace by that shared id.
  * - A duplicate/late POST for the same correlation id is safe to retry:
  *   sending an event nobody's waiting on isn't an error to Inngest, it's
  *   simply never consumed by anything — there's no way to honestly tell a
@@ -65,11 +82,21 @@ export async function POST(
   }
 
   try {
-    await startTraceRoot(
-      "owner_nudges.handle_approval",
-      { "gca.correlation_id": correlationId },
-      () => handleBookingLinkApprovalReceived({ correlationId, approved }),
-    );
+    const toolAnchor = await consumeApprovalGateTraceAnchor(correlationId);
+    if (toolAnchor) {
+      await withTurnSpan(
+        toolAnchor,
+        "owner_nudges.handle_approval",
+        { "gca.correlation_id": correlationId },
+        () => handleBookingLinkApprovalReceived({ correlationId, approved }),
+      );
+    } else {
+      await startTraceRoot(
+        "owner_nudges.handle_approval",
+        { "gca.correlation_id": correlationId },
+        () => handleBookingLinkApprovalReceived({ correlationId, approved }),
+      );
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(
