@@ -113,4 +113,16 @@ describe("POST /api/webhook/whatsapp", () => {
     expect(res.status).toBe(401);
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
+
+  it("rejects requests when TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL are unset", async () => {
+    delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_WEBHOOK_URL;
+
+    const res = await POST(
+      makeRequest({ From: "whatsapp:+351920742845", Body: "Is room 1 free?" }),
+    );
+
+    expect(res.status).toBe(401);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
 });
