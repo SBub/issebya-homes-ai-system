@@ -25,6 +25,29 @@ function stampTraceId(span: Span): void {
   span.setAttribute("gca.trace_id", span.spanContext().traceId);
 }
 
+// Records a marker event on whatever span is ambient in context, if any —
+// used by every "best-effort, never throw" helper below (updateSpanIO,
+// {record,consume}{MissingInfo,ApprovalGate}TraceAnchor) so a permanent,
+// silent failure of one of these Braintrust/anchor niceties is at least
+// visible on the trace, instead of only a console.error nobody's tailing.
+// Deliberately an event, not markSpanFailed/an ERROR status — these helpers'
+// own doc comments are explicit that they must never be allowed to make a
+// guest's actual turn look like it failed just because a trace-linking
+// nicety silently failed in the background. Same non-fatal-but-noteworthy
+// pattern as run-turn.ts's modelTurn "gen_ai.retry" event.
+// No-ops if there's no active span in context at the call site — that's a
+// legitimate outcome (e.g. called from code with no ambient turn span), not
+// something worth forcing a span into existence for.
+function recordBestEffortFailure(helper: string, message: string): void {
+  const span = trace.getActiveSpan();
+  if (span) {
+    span.addEvent("tracing.best_effort_failed", {
+      "tracing.helper": helper,
+      "error.message": message,
+    });
+  }
+}
+
 // Starts a genuine trace root: an unparented real span, letting the OTel SDK
 // generate both trace_id and span_id for real (unlike withTurnSpan below,
 // which always parents to an already-known anchor). Call this exactly once
@@ -284,12 +307,13 @@ export async function updateSpanIO(
       }),
     });
     if (!response.ok) {
-      console.error(
-        `[tracing] updateSpanIO failed for span "${spanId}": ${response.status} ${await response.text()}`,
-      );
+      const message = `${response.status} ${await response.text()}`;
+      console.error(`[tracing] updateSpanIO failed for span "${spanId}": ${message}`);
+      recordBestEffortFailure("updateSpanIO", message);
     }
   } catch (err) {
     console.error(`[tracing] updateSpanIO threw for span "${spanId}":`, err);
+    recordBestEffortFailure("updateSpanIO", (err as Error).message);
   }
 }
 
@@ -331,12 +355,14 @@ export async function recordMissingInfoTraceAnchor(
       console.error(
         `[tracing] recordMissingInfoTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
       );
+      recordBestEffortFailure("recordMissingInfoTraceAnchor", error.message);
     }
   } catch (err) {
     console.error(
       `[tracing] recordMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("recordMissingInfoTraceAnchor", (err as Error).message);
   }
 }
 
@@ -366,6 +392,7 @@ export async function consumeMissingInfoTraceAnchor(
       `[tracing] consumeMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("consumeMissingInfoTraceAnchor", (err as Error).message);
     return null;
   }
 }
@@ -419,12 +446,14 @@ export async function recordApprovalGateTraceAnchor(
       console.error(
         `[tracing] recordApprovalGateTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
       );
+      recordBestEffortFailure("recordApprovalGateTraceAnchor", error.message);
     }
   } catch (err) {
     console.error(
       `[tracing] recordApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("recordApprovalGateTraceAnchor", (err as Error).message);
   }
 }
 
@@ -452,6 +481,7 @@ export async function consumeApprovalGateTraceAnchor(
       `[tracing] consumeApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("consumeApprovalGateTraceAnchor", (err as Error).message);
     return null;
   }
 }
