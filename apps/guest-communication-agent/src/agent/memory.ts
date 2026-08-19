@@ -118,16 +118,13 @@ async function summarizeConversation(
     )
     .join("\n");
 
-  const promptTemplate = await loadPrompt({
-    projectId: process.env.BRAINTRUST_PROJECT_ID,
-    slug: SUMMARIZER_PROMPT_SLUG,
-    version: SUMMARIZER_PROMPT_VERSION,
-  });
-  const { messages } = promptTemplate.build({
-    prior_summary: priorSummary || "(none)",
-    transcript,
-  });
-
+  // loadPrompt() is called inside this span callback, not before
+  // withTurnSpan is opened below — matches run-turn.ts's
+  // loadSystemPromptText pattern: a Braintrust fetch failure (unreachable,
+  // slug/version not found) must land inside an already-open span so
+  // withTurnSpan's own catch (see tracing.ts) can record it and mark the
+  // span ERROR, instead of throwing before any span exists to record it on.
+  //
   // Cast needed: build()'s messages are typed as OpenAI-shaped chat
   // params (content can be a content-part array, for image/tool
   // messages), while generateText wants ModelMessage. SUMMARIZER_PROMPT
@@ -135,6 +132,16 @@ async function summarizeConversation(
   // content, so the two shapes coincide here even though their types
   // don't structurally align.
   async function generateSummaryText(span: Span): Promise<string> {
+    const promptTemplate = await loadPrompt({
+      projectId: process.env.BRAINTRUST_PROJECT_ID,
+      slug: SUMMARIZER_PROMPT_SLUG,
+      version: SUMMARIZER_PROMPT_VERSION,
+    });
+    const { messages } = promptTemplate.build({
+      prior_summary: priorSummary || "(none)",
+      transcript,
+    });
+
     const result = await generateText({ model, messages: messages as ModelMessage[] });
 
     span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
@@ -308,21 +315,26 @@ async function distillFoldIntoPreferences(
   priorPreferences: string,
   traceAnchor: TraceAnchor,
 ): Promise<string> {
-  const promptTemplate = await loadPrompt({
-    projectId: process.env.BRAINTRUST_PROJECT_ID,
-    slug: DISTILLER_PROMPT_SLUG,
-    version: DISTILLER_PROMPT_VERSION,
-  });
-  const { messages } = promptTemplate.build({
-    prior_preferences: priorPreferences || "(none)",
-    fold_summary: foldSummaryText,
-  });
-
+  // Same "loadPrompt() inside the span callback" reasoning as
+  // summarizeConversation above — see that function's comment for why, and
+  // run-turn.ts's loadSystemPromptText for the established pattern this
+  // matches.
+  //
   // Same cast rationale as summarizeConversation's generateSummaryText
   // above: build()'s messages are OpenAI-shaped chat params, generateText
   // wants ModelMessage, and DISTILLER_PROMPT only ever has plain-string
   // system/user content so the shapes coincide in practice.
   async function generateDistilledText(span: Span): Promise<string> {
+    const promptTemplate = await loadPrompt({
+      projectId: process.env.BRAINTRUST_PROJECT_ID,
+      slug: DISTILLER_PROMPT_SLUG,
+      version: DISTILLER_PROMPT_VERSION,
+    });
+    const { messages } = promptTemplate.build({
+      prior_preferences: priorPreferences || "(none)",
+      fold_summary: foldSummaryText,
+    });
+
     const result = await generateText({ model, messages: messages as ModelMessage[] });
 
     span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
