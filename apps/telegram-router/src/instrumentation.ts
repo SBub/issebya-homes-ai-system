@@ -3,11 +3,25 @@
 // Next.js boots. Lives in src/ (not the project root), matching this app's
 // existing src/app, src/lib placement convention.
 //
-// Axiom-only, unlike guest-communication-agent's instrumentation.ts (which
-// also wires a Braintrust processor for AI-call observability) — this app
-// makes no gen_ai calls, so there's nothing for Braintrust to show. Same
+// Axiom-only for tracing, unlike guest-communication-agent's instrumentation.ts
+// (which also wires a Braintrust processor for AI-call observability) — this
+// app makes no gen_ai calls, so there's nothing for Braintrust to show. Same
 // OTel wiring otherwise: a BasicTracerProvider with Axiom's OTLP exporter as
 // its SpanProcessor, filtered to drop Next.js's own framework-internal spans.
+//
+// A SECOND, independent thing lives here too: Sentry (error tracking, see the
+// "Sentry" block in register() below) — deliberately NOT a SpanProcessor in
+// the array above. Same coexistence hazard and fix as GCA's
+// instrumentation.ts: @sentry/nextjs's Sentry.init() bootstraps its own
+// OpenTelemetry TracerProvider/ContextManager/Propagator by default, which
+// would silently call trace.setGlobalTracerProvider() a second time and
+// clobber the BasicTracerProvider constructed below — breaking Axiom export
+// entirely. This file passes `skipOpenTelemetrySetup: true` to Sentry.init()
+// specifically to prevent that (see the Sentry block for the full citation
+// trail through the installed package's source — identical to GCA's, this
+// app resolves the same @sentry/nextjs version via the workspace's hoisted
+// node_modules). This file remains the only code that ever calls
+// trace.setGlobalTracerProvider().
 
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -109,6 +123,52 @@ export async function register(): Promise<void> {
     );
   } else {
     console.warn("[instrumentation] Axiom tracing disabled — AXIOM_TOKEN/AXIOM_DATASET not set");
+  }
+
+  // Sentry — error tracking only, deliberately NOT a SpanProcessor entry in
+  // `processors` above. Best-effort like Axiom: unset SENTRY_DSN just skips
+  // it.
+  //
+  // The one thing that matters here: @sentry/node's `init()` (which
+  // @sentry/nextjs's `init()` delegates straight to — see
+  // node_modules/@sentry/nextjs/build/esm/server/index.js's `init()`, calling
+  // `init$1(opts)` from '@sentry/node') calls `initOpenTelemetry(client, ...)`
+  // by default, which does its own `trace.setGlobalTracerProvider(...)`,
+  // `context.setGlobalContextManager(...)`, and
+  // `propagation.setGlobalPropagator(...)` — see
+  // node_modules/@sentry/node/build/esm/sdk/index.js:
+  //   if (client && !options.skipOpenTelemetrySetup) { initOpenTelemetry(client, ...) }
+  // Calling Sentry.init() naively would therefore silently replace this
+  // file's BasicTracerProvider/AsyncHooksContextManager with Sentry's own
+  // minimal SentryTracerProvider (see @sentry/opentelemetry's README, "Sentry
+  // Tracer Provider" section) the instant it runs — breaking Axiom export
+  // entirely, since nothing would ever reach the `processors` array above
+  // again.
+  //
+  // `skipOpenTelemetrySetup: true` is the documented way to prevent this —
+  // see node_modules/@sentry/node/node_modules/@sentry/node-core/build/types/types.d.ts,
+  // `OpenTelemetryServerRuntimeOptions.skipOpenTelemetrySetup`: "If this is
+  // set to true, the SDK will not set up OpenTelemetry automatically." With
+  // it set, Sentry.init() only ever creates a Sentry client — it never
+  // touches trace.setGlobalTracerProvider/context.setGlobalContextManager/
+  // propagation.setGlobalPropagator, so this file's own calls to those
+  // (above) remain the only ones that ever run. Sentry.captureException/
+  // captureMessage work fully off this client alone — they don't depend on
+  // OpenTelemetry at all.
+  //
+  // Uses its OWN Sentry project/DSN, separate from GCA's — same one-project-
+  // per-app convention as the AXIOM_DATASET split above (one Axiom dataset
+  // per app, one Sentry project per app), so errors from different apps
+  // don't mix in one Sentry project.
+  const sentryDsn = process.env.SENTRY_DSN;
+  if (sentryDsn) {
+    const Sentry = await import("@sentry/nextjs");
+    Sentry.init({
+      dsn: sentryDsn,
+      skipOpenTelemetrySetup: true,
+    });
+  } else {
+    console.warn("[instrumentation] Sentry error tracking disabled — SENTRY_DSN not set");
   }
 
   // Dev-only, no-signup-required option: prints every span to stdout as it

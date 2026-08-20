@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -101,6 +102,7 @@ export async function sendMessage(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       markSpanFailed(span, err);
+      Sentry.captureException(err);
       return { ok: false, error: message };
     }
   });
@@ -145,6 +147,7 @@ export async function answerCallbackQuery(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       markSpanFailed(span, err);
+      Sentry.captureException(err);
       return { ok: false, error: message };
     }
   });
@@ -175,6 +178,7 @@ export async function editMessageText(messageId: number, text: string): Promise<
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       markSpanFailed(span, err);
+      Sentry.captureException(err);
       return { ok: false, error: message };
     }
   });
