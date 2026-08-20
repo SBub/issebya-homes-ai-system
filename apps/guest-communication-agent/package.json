@@ -25,6 +25,7 @@
     "@opentelemetry/resources": "^2.0.0",
     "@opentelemetry/sdk-trace-base": "^2.10.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@sentry/nextjs": "^10",
     "@supabase/supabase-js": "^2.49.8",
     "@vercel/sandbox": "^3.0.0",
     "ai": "^6.0.138",

@@ -1,4 +1,5 @@
 import type { Span } from "@opentelemetry/api";
+import * as Sentry from "@sentry/nextjs";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
@@ -1186,6 +1187,7 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       // the next turn's fold just sees a bigger backlog.
       console.error(`[run-turn] foldMemory failed for conversation ${conversationId}:`, err);
       markSpanFailed(span, err);
+      Sentry.captureException(err);
     }
   }
 

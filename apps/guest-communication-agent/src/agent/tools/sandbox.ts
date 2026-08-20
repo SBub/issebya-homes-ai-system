@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import { Sandbox } from "@vercel/sandbox";
 import { markSpanFailed, withSpan } from "@/lib/tracing";
 
@@ -160,6 +161,7 @@ export async function runInSandbox(
       } catch (stopErr) {
         console.error("[sandbox] failed to stop sandbox after runCode:", stopErr);
         markSpanFailed(span, stopErr);
+        Sentry.captureException(stopErr);
       }
     });
   }

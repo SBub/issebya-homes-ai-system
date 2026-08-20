@@ -29,6 +29,17 @@
 // BasicTracerProvider — NOT any vendor's proprietary logging API — so adding
 // a third processor later is just another entry in the array below, zero
 // changes to any instrumentation call site in application code.
+//
+// A THIRD, independent thing lives here too: Sentry (error tracking, see the
+// "Sentry" block in register() below) — deliberately NOT a SpanProcessor in
+// the array above. @sentry/nextjs's Sentry.init() bootstraps its own
+// OpenTelemetry TracerProvider/ContextManager/Propagator by default, which
+// would silently call trace.setGlobalTracerProvider() a second time and
+// clobber the BasicTracerProvider constructed below — breaking Axiom/
+// Braintrust export entirely. This file passes `skipOpenTelemetrySetup: true`
+// to Sentry.init() specifically to prevent that (see the Sentry block for the
+// full citation trail through the installed package's source). This file
+// remains the only code that ever calls trace.setGlobalTracerProvider().
 
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -195,6 +206,68 @@ export async function register(): Promise<void> {
     );
   } else {
     console.warn("[instrumentation] Axiom tracing disabled — AXIOM_TOKEN/AXIOM_DATASET not set");
+  }
+
+  // Sentry — error tracking only, deliberately NOT a SpanProcessor entry in
+  // `processors` above. Best-effort like Braintrust/Axiom: unset SENTRY_DSN
+  // just skips it.
+  //
+  // The one thing that matters here: @sentry/node's `init()` (which
+  // @sentry/nextjs's `init()` delegates straight to — see
+  // node_modules/@sentry/nextjs/build/esm/server/index.js's `init()`, calling
+  // `init$1(opts)` from '@sentry/node') calls `initOpenTelemetry(client, ...)`
+  // by default, which does its own `trace.setGlobalTracerProvider(...)`,
+  // `context.setGlobalContextManager(...)`, and
+  // `propagation.setGlobalPropagator(...)` — see
+  // node_modules/@sentry/node/build/esm/sdk/index.js:
+  //   if (client && !options.skipOpenTelemetrySetup) { initOpenTelemetry(client, ...) }
+  // Calling Sentry.init() naively would therefore silently replace this
+  // file's BasicTracerProvider/AsyncHooksContextManager with Sentry's own
+  // minimal SentryTracerProvider (see @sentry/opentelemetry's README, "Sentry
+  // Tracer Provider" section) the instant it runs — breaking Axiom/Braintrust
+  // export entirely, since nothing would ever reach the `processors` array
+  // above again.
+  //
+  // `skipOpenTelemetrySetup: true` is the documented way to prevent this —
+  // see node_modules/@sentry/node/node_modules/@sentry/node-core/build/types/types.d.ts,
+  // `OpenTelemetryServerRuntimeOptions.skipOpenTelemetrySetup`: "If this is
+  // set to true, the SDK will not set up OpenTelemetry automatically." With
+  // it set, Sentry.init() only ever creates a Sentry client — it never
+  // touches trace.setGlobalTracerProvider/context.setGlobalContextManager/
+  // propagation.setGlobalPropagator, so this file's own calls to those
+  // (below, and in the context-manager setup above) remain the only ones
+  // that ever run. Sentry.captureException/captureMessage work fully off
+  // this client alone — they don't depend on OpenTelemetry at all.
+  //
+  // Deliberately NOT wiring @sentry/opentelemetry's `SentrySpanProcessor`
+  // into the `processors` array above either, even though that's the
+  // documented way to additionally feed this app's spans into Sentry's APM
+  // product (same pattern as the Braintrust/Axiom processors — see
+  // @sentry/opentelemetry's README "Usage" section). Doing so would mean
+  // *every* span this app creates — including full gen_ai.input.messages/
+  // gen_ai.output.messages guest-conversation content on every AI span (see
+  // the DEBUG_TRACING PII note above) — starts flowing into Sentry too,
+  // uncapped by Sentry's tracesSampleRate (that option only gates spans
+  // created *through Sentry's own start-span API*; spans created via the
+  // plain @opentelemetry/api calls this app's withSpan/withTurnSpan use are
+  // governed entirely by the provider's sampler, which this file leaves at
+  // its OTel default and does not repurpose as Sentry's SentrySampler — doing
+  // that would also apply Sentry's sampling decision to the Braintrust/Axiom
+  // processors, since it's the same provider/sampler for all of them). This
+  // block is scoped to error capture only, per this session's task. If/when
+  // Sentry APM tracing is actually wanted, add
+  // `new SentrySpanProcessor()` (from "@sentry/opentelemetry") to the
+  // `processors` array above — no other change needed, `skipOpenTelemetrySetup`
+  // is unaffected by that.
+  const sentryDsn = process.env.SENTRY_DSN;
+  if (sentryDsn) {
+    const Sentry = await import("@sentry/nextjs");
+    Sentry.init({
+      dsn: sentryDsn,
+      skipOpenTelemetrySetup: true,
+    });
+  } else {
+    console.warn("[instrumentation] Sentry error tracking disabled — SENTRY_DSN not set");
   }
 
   // Dev-only, no-signup-required option: prints every span to stdout as it
