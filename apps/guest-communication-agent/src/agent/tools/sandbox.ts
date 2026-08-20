@@ -1,4 +1,6 @@
+import * as Sentry from "@sentry/nextjs";
 import { Sandbox } from "@vercel/sandbox";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 // Vercel-Sandbox-backed implementation of the runCode tool's execution
 // engine. Ported from a reference harness's node:vm-based sandbox.ts (see
@@ -144,12 +146,24 @@ export async function runInSandbox(
   } finally {
     // Always tear the sandbox down so runs don't leak — an unstopped
     // sandbox keeps consuming a slot until its own timeout eventually fires
-    // on its own.
-    try {
-      await sandbox.stop();
-    } catch (stopErr) {
-      console.error("[sandbox] failed to stop sandbox after runCode:", stopErr);
-    }
+    // on its own. Wrapped in its own span (not a throw) purely for
+    // visibility: by this point the guest already has their real run_code
+    // result, so a stop() failure must stay fire-and-forget from the
+    // caller's perspective, same as before — this only makes a failure
+    // visible on the trace instead of only in logs, matching
+    // property-question.ts's db.matchDocuments / missing-info.ts's
+    // db.insertDocument span pattern. No explicit parent anchor needed: this
+    // runs synchronously, in-process, inside the same run_code tool call
+    // already nested under whatever span is active via ambient OTel context.
+    await withSpan("sandbox.stop", {}, async (span) => {
+      try {
+        await sandbox.stop();
+      } catch (stopErr) {
+        console.error("[sandbox] failed to stop sandbox after runCode:", stopErr);
+        markSpanFailed(span, stopErr);
+        Sentry.captureException(stopErr);
+      }
+    });
   }
 }
 

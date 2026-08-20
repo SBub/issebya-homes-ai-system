@@ -11,6 +11,7 @@ import {
   sendMessage,
   sendWithRetry,
 } from "@/lib/telegram/telegram";
+import { markSpanFailed, withSpan } from "@/lib/tracing";
 
 const NUDGE_APPROVE_PREFIX = "nudge_approve:";
 const NUDGE_REJECT_PREFIX = "nudge_reject:";
@@ -246,37 +247,50 @@ async function handleCallbackQuery(
 export async function POST(request: NextRequest) {
   const unauthorized = verifyWebhookSecret(request);
   if (unauthorized) {
+    await withSpan(
+      "webhook.telegram_update.rejected",
+      { "http.status_code": 401 },
+      async (span) => {
+        markSpanFailed(span, "Unauthorized — invalid or missing webhook secret");
+      },
+    );
     return unauthorized;
   }
 
   const update = (await request.json().catch(() => null)) as TelegramUpdate | null;
 
-  if (update?.callback_query) {
-    await handleCallbackQuery(update.callback_query);
-    return NextResponse.json({ ok: true });
-  }
-
-  if (update?.message?.reply_to_message && update.message.text) {
-    const handled = await handleOwnerNudgeReply(update.message);
-    if (handled) {
+  return withSpan("webhook.telegram_update", {}, async (span) => {
+    if (update?.callback_query) {
+      span.setAttribute("telegram.branch", "callback_query");
+      await handleCallbackQuery(update.callback_query);
       return NextResponse.json({ ok: true });
     }
-  }
 
-  const idea = update ? parseSocialCommand(update) : null;
-  if (!idea) {
+    if (update?.message?.reply_to_message && update.message.text) {
+      const handled = await handleOwnerNudgeReply(update.message);
+      if (handled) {
+        span.setAttribute("telegram.branch", "owner_nudge_reply");
+        return NextResponse.json({ ok: true });
+      }
+    }
+
+    const idea = update ? parseSocialCommand(update) : null;
+    if (!idea) {
+      span.setAttribute("telegram.branch", "noop");
+      return NextResponse.json({ ok: true });
+    }
+
+    span.setAttribute("telegram.branch", "social_command");
+    try {
+      const result = await generateSocialPost(idea);
+      await sendSocialReply(result.altText);
+      await sendSocialReply(result.caption);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[telegram-router] generation failed:", message);
+      await sendSocialReply(`⚠️ Couldn't generate a social post: ${message}`);
+    }
+
     return NextResponse.json({ ok: true });
-  }
-
-  try {
-    const result = await generateSocialPost(idea);
-    await sendSocialReply(result.altText);
-    await sendSocialReply(result.caption);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[telegram-router] generation failed:", message);
-    await sendSocialReply(`⚠️ Couldn't generate a social post: ${message}`);
-  }
-
-  return NextResponse.json({ ok: true });
+  });
 }

@@ -1,7 +1,7 @@
 import type { Span } from "@opentelemetry/api";
 import type { GetStepTools } from "inngest";
 import { inngest } from "@/lib/inngest";
-import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
+import { recordApprovalGateTraceAnchor, steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import type { OwnerNudgeReason } from "./owner-nudge";
 import { requestOwnerNudge } from "./owner-nudge";
 
@@ -81,6 +81,26 @@ export async function requestApprovalGate(params: {
     step,
     traceAnchor,
   } = params;
+
+  // Best-effort write, own step (not a span — this is pure DB bookkeeping,
+  // not something worth showing in Braintrust's UI) — see
+  // recordApprovalGateTraceAnchor's own doc comment in tracing.ts for what
+  // this is for (letting the owner-nudges approve route, a separate HTTP
+  // request that may run hours later on a different server instance, nest
+  // its own decision span under this call's real gen_ai.tool.<toolName>
+  // span) and its known orphaned-row gap when the owner never decides.
+  // `traceAnchor` here already IS that gen_ai.tool.<toolName> span's real
+  // anchor — run-turn.ts's dispatchGatedToolCall creates that span first and
+  // passes its anchor in as this param, the same shape runMissingInfo's own
+  // toolAnchor has relative to gen_ai.tool.missing_info — so no live Span
+  // object is needed here, unlike missing_info's equivalent call this
+  // doesn't need a correlationId truthiness guard either: unlike
+  // ToolContext.correlationId (optional, for hypothetical callers outside a
+  // live run), this function's own `correlationId` param above is a
+  // required string.
+  await step.run(`record-approval-gate-trace-anchor-${toolName}`, () =>
+    recordApprovalGateTraceAnchor(correlationId, traceAnchor),
+  );
 
   // Its own step, distinct from the wait-for-decision step below — sending
   // the nudge and waiting for the decision are two different kinds of

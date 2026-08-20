@@ -71,6 +71,23 @@ vi.mock("@/lib/twilio-send.js", () => ({
   sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
 
+// run_code's real dispatch (runRunCode -> sandbox.ts's runInSandbox) talks to
+// a real Vercel Sandbox (a remote Firecracker VM) — mocked at its one true
+// external boundary, Sandbox.create, so the "run_code soft-fails" test below
+// can drive runInSandbox's real catch-block branch (`{ ok: false, error,
+// logs: [] }`, see sandbox.ts) without any real provisioning.
+//
+// Sandbox.create() itself is awaited OUTSIDE runInSandbox's own try/catch
+// (see sandbox.ts) — rejecting it directly would be a genuine uncaught
+// throw, not the `{ ok: false, error }` soft-fail shape this fix is about.
+// The default mock below instead resolves Sandbox.create with a fake sandbox
+// whose runCommand() rejects, which IS inside the try/catch and so exercises
+// the real soft-fail branch.
+const sandboxCreateMock = vi.fn();
+vi.mock("@vercel/sandbox", () => ({
+  Sandbox: { create: (...args: unknown[]) => sandboxCreateMock(...args) },
+}));
+
 // tracing.ts's real withTurnSpan stays real (it's pure OTel API calls, no
 // network) so run-turn.ts's "start-trace"/model/tool spans still exercise
 // real span-id generation — only updateSpanIO (a real fetch() to
@@ -210,6 +227,17 @@ describe("runAgentTurn", () => {
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
+    // Resolves to a fake sandbox whose runCommand() rejects — runInSandbox's
+    // own catch block (inside its try, unlike Sandbox.create itself) turns
+    // that into a `{ ok: false, error, logs: [] }` soft-fail (see
+    // sandbox.ts), which is exactly the shape the run_code soft-fail test
+    // below exercises. No test here drives run_code's happy path, so there's
+    // no successful case this default would need to override.
+    sandboxCreateMock.mockResolvedValue({
+      writeFiles: vi.fn().mockResolvedValue(undefined),
+      runCommand: vi.fn().mockRejectedValue(new Error("sandbox unavailable in test")),
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
   });
 
   it("builds the model call's system prompt string, then uses historyMessages as-is with no extra append", async () => {
@@ -1201,12 +1229,84 @@ describe("runAgentTurn", () => {
     expect(step.waitForEvent).not.toHaveBeenCalled();
   });
 
+  // dispatchToolExecution (run-turn.ts) is the shared choke point every
+  // non-gated, non-self-stepped tool call — run_code included — dispatches
+  // through. Before this test's fix, a soft-failed tool result (returned,
+  // not thrown — see sandbox.ts's runInSandbox, whose every early-return
+  // failure branch uses this exact `{ ok: false, error, logs }` shape) closed
+  // its execution span as an unmarked success, so a completely broken
+  // sandbox looked healthy in any status.code == "ERROR" trace query.
+  it("marks the tool-call span failed when run_code's sandbox soft-fails (ok: false)", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          { toolName: "run_code", input: { code: "return 1;" }, toolCallId: "call_run_code" },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Sorted, here you go."));
+
+    const result = await runAgentTurn(
+      {
+        conversationId: "convo-run-code-fail",
+        phone: "+351900000006",
+        incomingMessage: "Book the next available weekend",
+      },
+      { correlationId: "corr-run-code-fail", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    // The tool result the model actually sees is untouched by this fix — a
+    // soft-fail still returns its normal { ok: false, error, logs } value,
+    // never a throw, never a different shape.
+    const toolMessage = result.messages.find((m) => m.role === "tool") as ModelMessage & {
+      content: Array<{ toolCallId: string; output: { value: unknown } }>;
+    };
+    const output = toolMessage?.content.find((p) => p.toolCallId === "call_run_code")?.output.value;
+    expect(output).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("sandbox unavailable"),
+    });
+
+    const runCodeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.run_code");
+    expect(runCodeSpan?.status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  // get_pricing's own result ({ room, pricePerNight, currency, note } — see
+  // pricing.ts) has no `ok`/`error` field at all, the ordinary case
+  // detectToolSoftFailure (run-turn.ts) must leave alone. Regression
+  // coverage against a too-broad detector marking every generic tool's
+  // successful span failed.
+  it("does not mark a successful get_pricing call's span failed", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          { toolName: "get_pricing", input: { room: "room1" }, toolCallId: "call_price_ok" },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Got it, here is the price."));
+
+    await runAgentTurn(
+      {
+        conversationId: "convo-pricing-ok",
+        phone: "+351900000007",
+        incomingMessage: "How much is room 1?",
+      },
+      { correlationId: "corr-pricing-ok", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const pricingSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.get_pricing");
+    expect(pricingSpan?.status.code).not.toBe(SpanStatusCode.ERROR);
+  });
+
   // Some models (deepseek included) have been observed hallucinating a
   // close-but-wrong tool name in production despite native function-calling
   // supposedly constraining them to the real `tools` ToolSet. runToolCall()'s
   // default case turns that into a recoverable tool-result instead of
   // crashing the whole turn, so the model can retry with a real name.
-  it("recovers from an unrecognized tool call name instead of crashing the turn", async () => {
+  it("recovers from an unrecognized tool call name instead of crashing the turn, and marks its span failed", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([{ toolName: "bogusTool", input: {}, toolCallId: "call_bogus" }]),
@@ -1223,6 +1323,17 @@ describe("runAgentTurn", () => {
     };
     const output = toolMessage?.content.find((p) => p.toolCallId === "call_bogus")?.output.value;
     expect(output).toMatchObject({ error: expect.stringMatching(/unknown tool name.*bogusTool/i) });
+
+    // The "unknown tool name" fallback isn't a separate dispatch path — it
+    // still reaches dispatchToolExecution the same way any other
+    // non-gated, non-self-stepped tool call would (bogusTool matches none of
+    // SELF_STEPPED_TOOLS/APPROVAL_GATES), so its execution span must get the
+    // same ERROR-status treatment as a real soft-fail like run_code's below,
+    // not silently close as a normal success.
+    const bogusSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.bogusTool");
+    expect(bogusSpan?.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   // Regression coverage for the bug documented in tracing.ts's Braintrust

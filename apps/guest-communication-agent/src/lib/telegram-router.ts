@@ -18,7 +18,11 @@ export interface OwnerNudgeResult {
  *
  * A missing config or delivery failure returns a result object rather than
  * throwing — this is a best-effort notification, not something worth
- * failing the whole tool call over.
+ * failing the whole tool call over. Missing config is reported as `{ ok:
+ * false }`, the same shape a real delivery failure uses — requestOwnerNudge
+ * (owner-nudge.ts) already logs and marks its span failed on `!ok`; this
+ * used to return `{ ok: true }` instead, a false positive that made every
+ * nudge attempt look successful while silently notifying nobody.
  */
 export async function sendOwnerNudge(params: {
   phone: string;
@@ -30,7 +34,10 @@ export async function sendOwnerNudge(params: {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;
   if (!baseUrl || !apiKey) {
-    return { ok: false, error: "TELEGRAM_ROUTER_API_URL/TELEGRAM_ROUTER_API_KEY not configured" };
+    const error =
+      "TELEGRAM_ROUTER_API_URL/TELEGRAM_ROUTER_API_KEY not configured — owner nudge not sent";
+    console.error(`[guest-communication-agent] ${error}`);
+    return { ok: false, error };
   }
 
   try {

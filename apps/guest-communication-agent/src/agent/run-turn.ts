@@ -1,4 +1,5 @@
 import type { Span } from "@opentelemetry/api";
+import * as Sentry from "@sentry/nextjs";
 import { generateText, type JSONValue, type ModelMessage, type ToolSet } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
@@ -283,6 +284,42 @@ async function modelTurn(
   );
 }
 
+// Detects the soft-fail result shapes a tool can hand back to
+// dispatchToolExecution below WITHOUT throwing — a real exception already
+// gets recordException + ERROR status for free from withTurnSpan's own catch
+// block (see tracing.ts), so this is only for the intentional "return an
+// error object instead of throwing" shapes. Two known shapes flow through
+// here today:
+//   - run_code's SandboxResult ({ ok: false, error, logs } — see
+//     sandbox.ts's runInSandbox, every one of its early-return branches uses
+//     this shape).
+//   - runToolCall's own "unknown tool name" fallback (its switch's default
+//     case, below), which returns a bare { error: string } with no `ok`
+//     field at all.
+// Deliberately narrow, not "does this object have an `error` key anywhere":
+// several tools return a plain, successful object that happens to contain an
+// `error`-named field as part of normal (non-exceptional) data — e.g.
+// checkAvailability's { available: false, error: "Invalid date format" } for
+// a malformed date range, which is a valid tool result, not a dispatch
+// failure. Only `ok === false` explicitly, or the fallback's exact
+// single-key `{ error: string }` shape, count as a soft-fail here — anything
+// else (a plain string, a plain object with other fields, `ok: true`, no
+// `ok`/`error` fields at all) is left alone and never marked failed.
+function detectToolSoftFailure(output: unknown): string | null {
+  if (typeof output !== "object" || output === null) {
+    return null;
+  }
+  const record = output as Record<string, unknown>;
+  if (record.ok === false) {
+    return typeof record.error === "string" ? record.error : "tool call failed";
+  }
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === "error" && typeof record.error === "string") {
+    return record.error;
+  }
+  return null;
+}
+
 // Shared by every non-gated, non-self-stepped tool's execution span (the
 // generic dispatch further down in runAgentTurn's loop). Runs `execute`, then
 // records gca.tool.input/gca.tool.output + braintrust.input/braintrust.output
@@ -293,6 +330,19 @@ async function modelTurn(
 // of the three knows its tool call's real output at span-creation time (a
 // gated call's approval hasn't even been decided yet), so each patches output
 // in retroactively via updateSpanIO instead — see each of their own comments.
+//
+// Also marks the span ERROR (via markSpanFailed, same mechanism
+// runGuestTurn's own send-whatsapp-reply call site already uses for
+// sendWhatsAppMessage's own soft-fail shape) when `execute`'s result looks
+// like an intentional soft-fail rather than a real success — see
+// detectToolSoftFailure's own comment for exactly which shapes qualify. This
+// is the one choke point every non-self-stepped tool call (including the
+// "unknown tool name" fallback, which reaches here the same way any other
+// unrecognized-but-not-gated tool name would — see runToolCall's default
+// case below) dispatches through, so putting the check here covers all of
+// them without touching each tool's own file. Purely additive: does not
+// throw, does not change `output`, does not alter the caller's control flow
+// — a soft-failed call still returns its normal (now span-marked) result.
 async function dispatchToolExecution<T>(
   span: Span,
   input: Record<string, unknown>,
@@ -303,6 +353,10 @@ async function dispatchToolExecution<T>(
   span.setAttribute("gca.tool.output", JSON.stringify(output));
   span.setAttribute("braintrust.input", JSON.stringify(input));
   span.setAttribute("braintrust.output", JSON.stringify(output));
+  const failureMessage = detectToolSoftFailure(output);
+  if (failureMessage !== null) {
+    markSpanFailed(span, failureMessage);
+  }
   return output;
 }
 
@@ -1151,7 +1205,8 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       // memory.ts's loadMemoryState) makes a lost fold harmless regardless,
       // the next turn's fold just sees a bigger backlog.
       console.error(`[run-turn] foldMemory failed for conversation ${conversationId}:`, err);
-      markSpanFailed(span, err instanceof Error ? err.message : String(err));
+      markSpanFailed(span, err);
+      Sentry.captureException(err);
     }
   }
 

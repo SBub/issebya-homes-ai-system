@@ -29,6 +29,17 @@
 // BasicTracerProvider — NOT any vendor's proprietary logging API — so adding
 // a third processor later is just another entry in the array below, zero
 // changes to any instrumentation call site in application code.
+//
+// A THIRD, independent thing lives here too: Sentry (error tracking, see the
+// "Sentry" block in register() below) — deliberately NOT a SpanProcessor in
+// the array above. @sentry/nextjs's Sentry.init() bootstraps its own
+// OpenTelemetry TracerProvider/ContextManager/Propagator by default, which
+// would silently call trace.setGlobalTracerProvider() a second time and
+// clobber the BasicTracerProvider constructed below — breaking Axiom/
+// Braintrust export entirely. This file passes `skipOpenTelemetrySetup: true`
+// to Sentry.init() specifically to prevent that (see the Sentry block for the
+// full citation trail through the installed package's source). This file
+// remains the only code that ever calls trace.setGlobalTracerProvider().
 
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -185,8 +196,96 @@ export async function register(): Promise<void> {
         (name) => NEXT_INTERNAL_SPAN_NAMES.has(name) || NEXT_ROUTE_SPAN_PATTERN.test(name),
       ),
     );
+  } else if (process.env.NODE_ENV === "production") {
+    // Silently booting with zero observability in production is worse than
+    // not booting at all — fail loud instead of warn-and-continue. Dev/test
+    // keep the warn-and-continue behavior below; only production is this
+    // strict.
+    throw new Error(
+      "[instrumentation] Axiom tracing is required in production but AXIOM_TOKEN/AXIOM_DATASET are not set",
+    );
   } else {
     console.warn("[instrumentation] Axiom tracing disabled — AXIOM_TOKEN/AXIOM_DATASET not set");
+  }
+
+  // Sentry — error tracking only, deliberately NOT a SpanProcessor entry in
+  // `processors` above. Best-effort like Braintrust/Axiom: unset SENTRY_DSN
+  // just skips it. On top of that, gated to production only regardless of
+  // SENTRY_DSN — see the NODE_ENV check further down for why.
+  //
+  // The one thing that matters here: @sentry/node's `init()` (which
+  // @sentry/nextjs's `init()` delegates straight to — see
+  // node_modules/@sentry/nextjs/build/esm/server/index.js's `init()`, calling
+  // `init$1(opts)` from '@sentry/node') calls `initOpenTelemetry(client, ...)`
+  // by default, which does its own `trace.setGlobalTracerProvider(...)`,
+  // `context.setGlobalContextManager(...)`, and
+  // `propagation.setGlobalPropagator(...)` — see
+  // node_modules/@sentry/node/build/esm/sdk/index.js:
+  //   if (client && !options.skipOpenTelemetrySetup) { initOpenTelemetry(client, ...) }
+  // Calling Sentry.init() naively would therefore silently replace this
+  // file's BasicTracerProvider/AsyncHooksContextManager with Sentry's own
+  // minimal SentryTracerProvider (see @sentry/opentelemetry's README, "Sentry
+  // Tracer Provider" section) the instant it runs — breaking Axiom/Braintrust
+  // export entirely, since nothing would ever reach the `processors` array
+  // above again.
+  //
+  // `skipOpenTelemetrySetup: true` is the documented way to prevent this —
+  // see node_modules/@sentry/node/node_modules/@sentry/node-core/build/types/types.d.ts,
+  // `OpenTelemetryServerRuntimeOptions.skipOpenTelemetrySetup`: "If this is
+  // set to true, the SDK will not set up OpenTelemetry automatically." With
+  // it set, Sentry.init() only ever creates a Sentry client — it never
+  // touches trace.setGlobalTracerProvider/context.setGlobalContextManager/
+  // propagation.setGlobalPropagator, so this file's own calls to those
+  // (below, and in the context-manager setup above) remain the only ones
+  // that ever run. Sentry.captureException/captureMessage work fully off
+  // this client alone — they don't depend on OpenTelemetry at all.
+  //
+  // Deliberately NOT wiring @sentry/opentelemetry's `SentrySpanProcessor`
+  // into the `processors` array above either, even though that's the
+  // documented way to additionally feed this app's spans into Sentry's APM
+  // product (same pattern as the Braintrust/Axiom processors — see
+  // @sentry/opentelemetry's README "Usage" section). Doing so would mean
+  // *every* span this app creates — including full gen_ai.input.messages/
+  // gen_ai.output.messages guest-conversation content on every AI span (see
+  // the DEBUG_TRACING PII note above) — starts flowing into Sentry too,
+  // uncapped by Sentry's tracesSampleRate (that option only gates spans
+  // created *through Sentry's own start-span API*; spans created via the
+  // plain @opentelemetry/api calls this app's withSpan/withTurnSpan use are
+  // governed entirely by the provider's sampler, which this file leaves at
+  // its OTel default and does not repurpose as Sentry's SentrySampler — doing
+  // that would also apply Sentry's sampling decision to the Braintrust/Axiom
+  // processors, since it's the same provider/sampler for all of them). This
+  // block is scoped to error capture only, per this session's task. If/when
+  // Sentry APM tracing is actually wanted, add
+  // `new SentrySpanProcessor()` (from "@sentry/opentelemetry") to the
+  // `processors` array above — no other change needed, `skipOpenTelemetrySetup`
+  // is unaffected by that.
+  //
+  // Sentry only ever runs in production — unlike Axiom above (which fails
+  // loud if misconfigured *in* production, but still runs in dev/test when
+  // configured), Sentry's policy is the opposite: never run outside
+  // production at all, even if SENTRY_DSN happens to be set locally. A real
+  // tsx-script test run with no NODE_ENV set once fired a live event at the
+  // real Sentry project tagged `environment: production` — proof this was
+  // willing to run in non-production contexts, which it must never do again.
+  // No console.warn for the dev/test branch: "Sentry doesn't run outside
+  // production" is the permanent intended behavior, not a degraded/
+  // misconfigured state worth flagging (unlike an unset AXIOM_TOKEN in dev,
+  // which usually is accidental).
+  const sentryDsn = process.env.SENTRY_DSN;
+  if (process.env.NODE_ENV === "production" && sentryDsn) {
+    const Sentry = await import("@sentry/nextjs");
+    Sentry.init({
+      dsn: sentryDsn,
+      skipOpenTelemetrySetup: true,
+      // Explicit, not Sentry's own env-var-sniffing default — same
+      // "explicit over implicit framework defaults" preference this
+      // codebase applies elsewhere (e.g. ATTR_SERVICE_NAME below instead of
+      // relying on OTel's own service-name resolution).
+      environment: "production",
+    });
+  } else if (process.env.NODE_ENV === "production") {
+    console.warn("[instrumentation] Sentry error tracking disabled — SENTRY_DSN not set");
   }
 
   // Dev-only, no-signup-required option: prints every span to stdout as it
@@ -234,6 +333,29 @@ export async function register(): Promise<void> {
   });
 
   trace.setGlobalTracerProvider(provider);
+
+  // Heartbeat span: the Axiom "dead-man's-switch" monitor watching this
+  // dataset needs to tell "the whole pipeline is dark" apart from "nobody
+  // happened to message in the last N minutes" — this app's real traffic is
+  // low and sporadic, so a plain "zero events in N minutes" check would
+  // false-alarm constantly on an otherwise-healthy system. Emitting a
+  // synthetic span on a fixed timer, independent of any guest/business
+  // activity, gives the monitor something to watch that isn't at the mercy of
+  // real traffic. Only runs when the Axiom processor above was actually
+  // configured — no Axiom backend means nothing to heartbeat to, and in
+  // dev/test that branch may not even run, which is fine too (no heartbeat
+  // needed there).
+  if (axiomToken && axiomDataset) {
+    const heartbeatTracer = trace.getTracer("instrumentation-heartbeat");
+    const heartbeatInterval = setInterval(
+      () => {
+        heartbeatTracer.startSpan("instrumentation.heartbeat").end();
+      },
+      5 * 60 * 1000,
+    );
+    // Never let this timer keep the process alive on its own.
+    heartbeatInterval.unref();
+  }
 
   console.log(
     `[instrumentation] Tracing initialized (${processors.length} processor${processors.length > 1 ? "s" : ""})`,

@@ -1,3 +1,5 @@
+import { markSpanFailed, withSpan } from "@/lib/tracing";
+
 export interface SendGuestMessageResult {
   ok: boolean;
   error?: string;
@@ -23,20 +25,21 @@ export async function sendGuestMessage(
     );
   }
 
-  const res = await fetch(`${baseUrl}/api/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-    body: JSON.stringify({ phone, message }),
-  });
+  return withSpan("gca.relay.send_guest_message", { "gca.endpoint": "/api/send" }, async (span) => {
+    const res = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ phone, message }),
+    });
 
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-  if (!res.ok || !body.ok) {
-    return {
-      ok: false,
-      error: body.error ?? `guest-communication-agent /api/send failed (${res.status})`,
-    };
-  }
-  return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!res.ok || !body.ok) {
+      const error = body.error ?? `guest-communication-agent /api/send failed (${res.status})`;
+      markSpanFailed(span, error);
+      return { ok: false, error };
+    }
+    return { ok: true };
+  });
 }
 
 export type AnswerOwnerNudgeResult = { ok: true } | { ok: false; error: string };
@@ -71,22 +74,30 @@ export async function answerOwnerNudge(
     );
   }
 
-  const res = await fetch(
-    `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/answer`,
+  return withSpan(
+    "gca.relay.answer_owner_nudge",
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-      body: JSON.stringify({ answer }),
+      "gca.endpoint": "/api/owner-nudges/:correlationId/answer",
+      "gca.correlation_id": correlationId,
+    },
+    async (span) => {
+      const res = await fetch(
+        `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/answer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+          body: JSON.stringify({ answer }),
+        },
+      );
+
+      if (!res.ok) {
+        const error = `GCA answer for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`;
+        markSpanFailed(span, error);
+        return { ok: false, error };
+      }
+      return { ok: true };
     },
   );
-
-  if (!res.ok) {
-    return {
-      ok: false,
-      error: `GCA answer for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`,
-    };
-  }
-  return { ok: true };
 }
 
 export type AnswerBookingLinkApprovalResult = { ok: true } | { ok: false; error: string };
@@ -121,20 +132,29 @@ export async function answerBookingLinkApproval(
     );
   }
 
-  const res = await fetch(
-    `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/approve`,
+  return withSpan(
+    "gca.relay.answer_booking_link_approval",
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-      body: JSON.stringify({ approved }),
+      "gca.endpoint": "/api/owner-nudges/:correlationId/approve",
+      "gca.correlation_id": correlationId,
+      "gca.approved": approved,
+    },
+    async (span) => {
+      const res = await fetch(
+        `${baseUrl}/api/owner-nudges/${encodeURIComponent(correlationId)}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+          body: JSON.stringify({ approved }),
+        },
+      );
+
+      if (!res.ok) {
+        const error = `GCA approve for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`;
+        markSpanFailed(span, error);
+        return { ok: false, error };
+      }
+      return { ok: true };
     },
   );
-
-  if (!res.ok) {
-    return {
-      ok: false,
-      error: `GCA approve for correlationId ${correlationId} failed (${res.status}): ${await res.text()}`,
-    };
-  }
-  return { ok: true };
 }
