@@ -346,7 +346,7 @@ async function dispatchWantsHuman(
   );
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
-  await steppedSpan(
+  const nudged = await steppedSpan(
     step,
     "owner-nudge-wants-human",
     toolAnchor,
@@ -371,7 +371,7 @@ async function dispatchWantsHuman(
       }),
   );
 
-  const result = runWantsHuman();
+  const result = runWantsHuman(nudged);
 
   // Retroactively patches the tool-call span's output now that it's known —
   // same mechanism (and the same "best-effort, not guaranteed to land"
@@ -484,11 +484,15 @@ async function runMissingInfo(
   // model and retroactively patch onto the tool-call span's output below —
   // starts as the nudge-failed/timeout fallback since that's also the
   // fallback for the "nudge never sent" branch that skips the block below
-  // entirely.
-  let result: { escalated: true; answer: string } | { escalated: true; message: string } = {
-    escalated: true,
-    message: "The owner has been notified and will be in touch shortly.",
-  };
+  // entirely. Branches on `nudged` (already known at this point) so a failed
+  // nudge gets an honest message instead of falsely claiming the owner was
+  // notified.
+  let result: { escalated: true; answer: string } | { escalated: true; message: string } = nudged
+    ? { escalated: true, message: "The owner has been notified and will be in touch shortly." }
+    : {
+        escalated: true,
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+      };
 
   // Nudge failed to send — skip straight to the same fallback a timeout
   // would produce; there's no point suspending if the owner was never told.

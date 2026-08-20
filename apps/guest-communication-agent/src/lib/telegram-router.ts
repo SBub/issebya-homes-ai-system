@@ -30,7 +30,7 @@ export async function sendOwnerNudge(params: {
   const baseUrl = process.env.TELEGRAM_ROUTER_API_URL;
   const apiKey = process.env.TELEGRAM_ROUTER_API_KEY;
   if (!baseUrl || !apiKey) {
-    return { ok: true };
+    return { ok: false, error: "TELEGRAM_ROUTER_API_URL/TELEGRAM_ROUTER_API_KEY not configured" };
   }
 
   try {

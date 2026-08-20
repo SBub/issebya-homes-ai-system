@@ -794,7 +794,7 @@ describe("runAgentTurn", () => {
       type: "json",
       value: {
         escalated: true,
-        message: "The owner has been notified and will be in touch shortly.",
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       },
     });
     // Nudge failed means nothing to wait on.
@@ -804,7 +804,9 @@ describe("runAgentTurn", () => {
     // The tool-call span itself is still created on this third exit path too
     // (it's created FIRST, before the nudge is even attempted — see
     // runMissingInfo's own comment) and its output still gets retroactively
-    // patched to the same fallback message all three exit paths share.
+    // patched to the honest nudge-failed fallback message (distinct from the
+    // "notified" message the other two exit paths share, since here the
+    // owner genuinely was never told).
     const missingInfoExecSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "gen_ai.tool.missing_info");
@@ -813,7 +815,7 @@ describe("runAgentTurn", () => {
     expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
       output: {
         escalated: true,
-        message: "The owner has been notified and will be in touch shortly.",
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       },
     });
   });
