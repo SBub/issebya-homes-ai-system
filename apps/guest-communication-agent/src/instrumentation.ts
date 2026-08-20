@@ -210,7 +210,8 @@ export async function register(): Promise<void> {
 
   // Sentry — error tracking only, deliberately NOT a SpanProcessor entry in
   // `processors` above. Best-effort like Braintrust/Axiom: unset SENTRY_DSN
-  // just skips it.
+  // just skips it. On top of that, gated to production only regardless of
+  // SENTRY_DSN — see the NODE_ENV check further down for why.
   //
   // The one thing that matters here: @sentry/node's `init()` (which
   // @sentry/nextjs's `init()` delegates straight to — see
@@ -259,14 +260,31 @@ export async function register(): Promise<void> {
   // `new SentrySpanProcessor()` (from "@sentry/opentelemetry") to the
   // `processors` array above — no other change needed, `skipOpenTelemetrySetup`
   // is unaffected by that.
+  //
+  // Sentry only ever runs in production — unlike Axiom above (which fails
+  // loud if misconfigured *in* production, but still runs in dev/test when
+  // configured), Sentry's policy is the opposite: never run outside
+  // production at all, even if SENTRY_DSN happens to be set locally. A real
+  // tsx-script test run with no NODE_ENV set once fired a live event at the
+  // real Sentry project tagged `environment: production` — proof this was
+  // willing to run in non-production contexts, which it must never do again.
+  // No console.warn for the dev/test branch: "Sentry doesn't run outside
+  // production" is the permanent intended behavior, not a degraded/
+  // misconfigured state worth flagging (unlike an unset AXIOM_TOKEN in dev,
+  // which usually is accidental).
   const sentryDsn = process.env.SENTRY_DSN;
-  if (sentryDsn) {
+  if (process.env.NODE_ENV === "production" && sentryDsn) {
     const Sentry = await import("@sentry/nextjs");
     Sentry.init({
       dsn: sentryDsn,
       skipOpenTelemetrySetup: true,
+      // Explicit, not Sentry's own env-var-sniffing default — same
+      // "explicit over implicit framework defaults" preference this
+      // codebase applies elsewhere (e.g. ATTR_SERVICE_NAME below instead of
+      // relying on OTel's own service-name resolution).
+      environment: "production",
     });
-  } else {
+  } else if (process.env.NODE_ENV === "production") {
     console.warn("[instrumentation] Sentry error tracking disabled — SENTRY_DSN not set");
   }
 
