@@ -1,5 +1,27 @@
+import { SpanStatusCode, trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "@/agent/context.js";
+
+// Same in-memory OTel wiring as run-turn.test.ts/approval-gate.test.ts: real
+// tracing.ts's withTurnSpan stays real here (only loadPrompt/generateText are
+// mocked below), but with no OTel SDK registered the default global
+// TracerProvider is a no-op — span.setAttribute/recordException/setStatus
+// calls happen but land nowhere observable. Registering a real,
+// in-memory-only BasicTracerProvider lets the loadPrompt-failure tests below
+// inspect the actual "gen_ai.chat" span's status, confirming the span
+// covering summarizeConversation/distillFoldIntoPreferences is marked ERROR
+// even though writeDiscreteFold/maintainFoldWindow's own console.error-only
+// catches (see memory.ts) swallow the exception before it ever reaches a
+// caller.
+const spanExporter = new InMemorySpanExporter();
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
+);
 
 // memory.ts's own orchestration (trim -> id correlation -> watermark filter
 // -> summarize-and-upsert) is under test here, so db.ts's queries are mocked
@@ -343,6 +365,7 @@ describe("loadMemory", () => {
 describe("foldMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    spanExporter.reset();
     mockLoadPrompt();
     // Default: fold count already at/under MAX_RECENT_FOLDS, so
     // maintainFoldWindow (run unconditionally after every foldMemory call)
@@ -457,6 +480,49 @@ describe("foldMemory", () => {
     consoleErrorSpy.mockRestore();
   });
 
+  // Regression test for the bug this fix addresses: summarizeConversation
+  // used to call loadPrompt() BEFORE opening its withTurnSpan, so a
+  // Braintrust failure there threw with no span open yet to record it on.
+  // Now loadPrompt() runs inside the span callback (matching run-turn.ts's
+  // loadSystemPromptText), so withTurnSpan's own catch (tracing.ts) marks
+  // the span ERROR before writeDiscreteFold's console.error-only catch
+  // swallows the exception. The swallow-and-continue behavior itself is
+  // unchanged and intentional (see writeDiscreteFold's own comment) — this
+  // only asserts the span is no longer silently unmarked.
+  it("marks the gen_ai.chat span ERROR when loadPrompt rejects for the discrete-fold summarizer, even though writeDiscreteFold's own catch still swallows the error", async () => {
+    const rows = overflowingRows();
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+    const promptError = new Error("braintrust unreachable");
+    loadPromptMock.mockRejectedValueOnce(promptError);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      foldMemory({
+        conversationId: "convo-2",
+        phone: "+351900000002",
+        traceAnchor: TEST_TRACE_ANCHOR,
+      }),
+    ).resolves.toBeUndefined();
+
+    // loadPrompt threw before generateText was ever reached, and before the
+    // discrete-fold row was ever written — but the watermark still advances
+    // (writeDiscreteFold's failure is isolated from advanceGuestMemoryWatermark
+    // by their shared Promise.all in foldMemory), exactly like the
+    // insertGuestMemoryFold-rejects test above.
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(insertGuestMemoryFoldMock).not.toHaveBeenCalled();
+    expect(advanceGuestMemoryWatermarkMock).toHaveBeenCalledWith("+351900000002", "msg-4");
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan).toBeDefined();
+    expect(chatSpan?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(chatSpan?.status.message).toBe(promptError.message);
+
+    consoleErrorSpy.mockRestore();
+  });
+
   // maintainFoldWindow (MAX_RECENT_FOLDS = 1) runs after every real fold
   // event — these exercise that cap enforcement specifically, independent of
   // the writeDiscreteFold/advanceGuestMemoryWatermark assertions above.
@@ -561,6 +627,87 @@ describe("foldMemory", () => {
       // MAX_RECENT_FOLDS (1) by removing the single excess row, not by
       // clearing the table.
       expect(deleteGuestMemoryFoldMock).toHaveBeenCalledExactlyOnceWith("fold-oldest");
+    });
+
+    // Same regression coverage as the discrete-fold summarizer test above,
+    // but for distillFoldIntoPreferences's own loadPrompt call — moved
+    // inside its withTurnSpan callback by the same fix. Overrides
+    // mockLoadPrompt()'s slug-branching (set in the outer beforeEach) so the
+    // discrete-fold summarizer call still succeeds normally and only the
+    // distillation call's loadPrompt rejects, to prove the two spans are
+    // independent and only the failing one is marked.
+    it("marks the gen_ai.chat span ERROR when loadPrompt rejects for the distillation call, even though maintainFoldWindow's own catch still swallows the error", async () => {
+      setUpBasicFold();
+      loadGuestMemoryFoldsMock.mockResolvedValue([
+        {
+          id: "fold-oldest",
+          summaryText: "Oldest fold summary text.",
+          messageIdFrom: "msg-a",
+          messageIdTo: "msg-b",
+          createdAt: "2026-08-01T00:00:00Z",
+        },
+        {
+          id: "fold-newest",
+          summaryText: "Newest fold summary text.",
+          messageIdFrom: "msg-e",
+          messageIdTo: "msg-f",
+          createdAt: "2026-08-03T00:00:00Z",
+        },
+      ]);
+      const distillError = new Error("braintrust prompt version not found");
+      loadPromptMock.mockImplementation(async ({ slug }: { slug: string }) => {
+        if (slug === "guest-preferences-distiller") {
+          throw distillError;
+        }
+        return {
+          build: ({
+            prior_summary,
+            transcript,
+          }: {
+            prior_summary: string;
+            transcript: string;
+          }) => ({
+            messages: [
+              { role: "system", content: "You compress an older stretch..." },
+              {
+                role: "user",
+                content: `Prior summary:\n${prior_summary}\n\nFold in this older part of the conversation:\n${transcript}\n\nReturn the updated summary.`,
+              },
+            ],
+          }),
+        };
+      });
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(
+        foldMemory({
+          conversationId: "convo-cap-2",
+          phone: "+351900000021",
+          traceAnchor: TEST_TRACE_ANCHOR,
+        }),
+      ).resolves.toBeUndefined();
+
+      // Only the discrete-fold summarizer's own generateText call happened —
+      // the distillation call's loadPrompt threw before its generateText was
+      // ever reached, so preferences are never updated/deleted, but the
+      // watermark (unrelated to maintainFoldWindow) still advances.
+      expect(generateTextMock).toHaveBeenCalledTimes(1);
+      expect(updateGuestMemoryPreferencesMock).not.toHaveBeenCalled();
+      expect(deleteGuestMemoryFoldMock).not.toHaveBeenCalled();
+      expect(advanceGuestMemoryWatermarkMock).toHaveBeenCalledWith("+351900000021", "msg-4");
+      expect(consoleErrorSpy).toHaveBeenCalled();
+
+      const chatSpans = spanExporter
+        .getFinishedSpans()
+        .filter((span) => span.name === "gen_ai.chat");
+      expect(chatSpans).toHaveLength(2);
+      // First span: the discrete-fold summarizer, which succeeded.
+      expect(chatSpans[0]?.status.code).not.toBe(SpanStatusCode.ERROR);
+      // Second span: the distillation call, whose loadPrompt rejected.
+      expect(chatSpans[1]?.status.code).toBe(SpanStatusCode.ERROR);
+      expect(chatSpans[1]?.status.message).toBe(distillError.message);
+
+      consoleErrorSpy.mockRestore();
     });
 
     it("a distillation failure doesn't affect the discrete-fold write or the watermark advance", async () => {

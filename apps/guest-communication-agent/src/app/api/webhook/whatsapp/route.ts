@@ -4,7 +4,7 @@ import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { normalizePhone } from "@/lib/phone";
-import { startTraceRoot, withTurnSpan } from "@/lib/tracing";
+import { markSpanFailed, startTraceRoot, withTurnSpan } from "@/lib/tracing";
 import { verifyTwilioSignature } from "@/lib/twilio";
 
 /**
@@ -52,9 +52,21 @@ export async function POST(request: NextRequest) {
   const correlationId = crypto.randomUUID();
 
   try {
+    const { anchor } = await startTraceRoot("webhook.turn", {}, async () => {});
+
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const webhookUrl = process.env.TWILIO_WEBHOOK_URL;
-    if (!authToken || !webhookUrl) {
+    const configValid = await withTurnSpan(anchor, "webhook.verify_config", {}, async (span) => {
+      if (!authToken || !webhookUrl) {
+        markSpanFailed(
+          span,
+          "TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL not set — all webhook requests will be rejected",
+        );
+        return false;
+      }
+      return true;
+    });
+    if (!configValid) {
       console.error(
         "[guest-communication-agent] TWILIO_AUTH_TOKEN/TWILIO_WEBHOOK_URL not set — all webhook requests will be rejected",
       );
@@ -65,13 +77,19 @@ export async function POST(request: NextRequest) {
     const params = Object.fromEntries(new URLSearchParams(rawBody));
     const signature = request.headers.get("X-Twilio-Signature");
 
-    const { anchor } = await startTraceRoot("webhook.turn", {}, async () => {});
-
     const signatureValid = await withTurnSpan(
       anchor,
       "webhook.verify_signature",
       {},
-      async () => !!signature && verifyTwilioSignature(authToken, webhookUrl, params, signature),
+      async (span) => {
+        const valid =
+          !!signature &&
+          verifyTwilioSignature(authToken as string, webhookUrl as string, params, signature);
+        if (!valid) {
+          markSpanFailed(span, "Twilio signature verification failed");
+        }
+        return valid;
+      },
     );
     if (!signatureValid) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

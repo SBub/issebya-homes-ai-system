@@ -25,6 +25,29 @@ function stampTraceId(span: Span): void {
   span.setAttribute("gca.trace_id", span.spanContext().traceId);
 }
 
+// Records a marker event on whatever span is ambient in context, if any —
+// used by every "best-effort, never throw" helper below (updateSpanIO,
+// {record,consume}{MissingInfo,ApprovalGate}TraceAnchor) so a permanent,
+// silent failure of one of these Braintrust/anchor niceties is at least
+// visible on the trace, instead of only a console.error nobody's tailing.
+// Deliberately an event, not markSpanFailed/an ERROR status — these helpers'
+// own doc comments are explicit that they must never be allowed to make a
+// guest's actual turn look like it failed just because a trace-linking
+// nicety silently failed in the background. Same non-fatal-but-noteworthy
+// pattern as run-turn.ts's modelTurn "gen_ai.retry" event.
+// No-ops if there's no active span in context at the call site — that's a
+// legitimate outcome (e.g. called from code with no ambient turn span), not
+// something worth forcing a span into existence for.
+function recordBestEffortFailure(helper: string, message: string): void {
+  const span = trace.getActiveSpan();
+  if (span) {
+    span.addEvent("tracing.best_effort_failed", {
+      "tracing.helper": helper,
+      "error.message": message,
+    });
+  }
+}
+
 // Starts a genuine trace root: an unparented real span, letting the OTel SDK
 // generate both trace_id and span_id for real (unlike withTurnSpan below,
 // which always parents to an already-known anchor). Call this exactly once
@@ -226,7 +249,21 @@ export async function withSpan<T>(
 // return values exactly as they are; it only makes the failure visible on the
 // trace, where before it was invisible even to a wrapping withSpan/
 // withTurnSpan (their catch blocks only fire on a real throw).
-export function markSpanFailed(span: Span, message: string): void {
+//
+// Accepts either the real caught value from a `catch (err)` block or a plain
+// semantic string — widened to `unknown` so call sites that already have a
+// real Error in scope can hand it straight through instead of pre-extracting
+// `.message` and losing its real stack trace. An already-Error value is
+// recorded as-is (real stack preserved); anything else (a plain string, or
+// any other non-Error value) still gets wrapped in a synthetic `new
+// Error(...)` exactly as before — there's no real stack to preserve for those.
+export function markSpanFailed(span: Span, messageOrError: unknown): void {
+  if (messageOrError instanceof Error) {
+    span.recordException(messageOrError);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: messageOrError.message });
+    return;
+  }
+  const message = String(messageOrError);
   span.recordException(new Error(message));
   span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
@@ -284,12 +321,13 @@ export async function updateSpanIO(
       }),
     });
     if (!response.ok) {
-      console.error(
-        `[tracing] updateSpanIO failed for span "${spanId}": ${response.status} ${await response.text()}`,
-      );
+      const message = `${response.status} ${await response.text()}`;
+      console.error(`[tracing] updateSpanIO failed for span "${spanId}": ${message}`);
+      recordBestEffortFailure("updateSpanIO", message);
     }
   } catch (err) {
     console.error(`[tracing] updateSpanIO threw for span "${spanId}":`, err);
+    recordBestEffortFailure("updateSpanIO", (err as Error).message);
   }
 }
 
@@ -331,12 +369,14 @@ export async function recordMissingInfoTraceAnchor(
       console.error(
         `[tracing] recordMissingInfoTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
       );
+      recordBestEffortFailure("recordMissingInfoTraceAnchor", error.message);
     }
   } catch (err) {
     console.error(
       `[tracing] recordMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("recordMissingInfoTraceAnchor", (err as Error).message);
   }
 }
 
@@ -366,6 +406,96 @@ export async function consumeMissingInfoTraceAnchor(
       `[tracing] consumeMissingInfoTraceAnchor threw for correlationId "${correlationId}":`,
       err,
     );
+    recordBestEffortFailure("consumeMissingInfoTraceAnchor", (err as Error).message);
+    return null;
+  }
+}
+
+// The DB table recordApprovalGateTraceAnchor/consumeApprovalGateTraceAnchor
+// below read/write — see supabase/migrations's
+// create_approval_gate_trace_anchors.sql for the schema and the full
+// tradeoff writeup (self-cleans on the happy path, can leak an orphaned row
+// on a timed-out/never-decided gated call). A separate table from
+// MISSING_INFO_TRACE_ANCHOR_TABLE above, on purpose — this pair is generic
+// over every approval-gate.ts's requestApprovalGate caller (any
+// run-turn.ts APPROVAL_GATES entry, send_booking_link today, any future tool
+// tomorrow), not just one tool, and keeping it a fully separate mechanism
+// means it can't ever disturb the already-verified-working missing_info
+// path above.
+const APPROVAL_GATE_TRACE_ANCHOR_TABLE = "approval_gate_trace_anchors";
+
+// Cross-HTTP-request trace anchor handoff, for approval-gate.ts's
+// requestApprovalGate specifically (generic over every APPROVAL_GATES-gated
+// tool, not hardcoded to one). Same gap this fills as
+// recordMissingInfoTraceAnchor above: the HTTP-request boundary to the
+// owner-nudges approve route (triggered by apps/telegram-router's own
+// webhook, possibly hours later, possibly a different server instance) has
+// no shared payload/Inngest event.data to carry a TraceAnchor through. This
+// small DB-backed lookup fills that gap instead: requestApprovalGate writes
+// the gated tool's real gen_ai.tool.<toolName> span's anchor here right when
+// it's called (that anchor arrives as this function's own `anchor` param —
+// requestApprovalGate never touches a live Span object, only the
+// already-extracted {traceId, spanId} its caller, run-turn.ts's
+// dispatchGatedToolCall, passes in as `traceAnchor`), keyed by this turn's
+// correlationId; the approve route reads (and deletes) it once the owner's
+// decision arrives.
+//
+// Best-effort like recordMissingInfoTraceAnchor: a failed write here only
+// degrades tracing (the approve route's decision span falls back to its own
+// disconnected trace root instead of nesting under the real
+// gen_ai.tool.<toolName> span) — never the actual approval/rejection
+// handling or guest-facing behavior.
+export async function recordApprovalGateTraceAnchor(
+  correlationId: string,
+  anchor: TraceAnchor,
+): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from(APPROVAL_GATE_TRACE_ANCHOR_TABLE).insert({
+      correlation_id: correlationId,
+      trace_id: anchor.traceId,
+      span_id: anchor.spanId,
+    });
+    if (error) {
+      console.error(
+        `[tracing] recordApprovalGateTraceAnchor failed for correlationId "${correlationId}": ${error.message}`,
+      );
+      recordBestEffortFailure("recordApprovalGateTraceAnchor", error.message);
+    }
+  } catch (err) {
+    console.error(
+      `[tracing] recordApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+    recordBestEffortFailure("recordApprovalGateTraceAnchor", (err as Error).message);
+  }
+}
+
+// Reads AND deletes in one call — same self-cleaning-on-the-happy-path
+// reasoning as consumeMissingInfoTraceAnchor above. Returns null (not a
+// throw) on any failure or a genuine miss — same best-effort posture as
+// recordApprovalGateTraceAnchor above.
+export async function consumeApprovalGateTraceAnchor(
+  correlationId: string,
+): Promise<TraceAnchor | null> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from(APPROVAL_GATE_TRACE_ANCHOR_TABLE)
+      .delete()
+      .eq("correlation_id", correlationId)
+      .select("trace_id, span_id")
+      .maybeSingle();
+    if (error || !data) {
+      return null;
+    }
+    return { traceId: data.trace_id as string, spanId: data.span_id as string };
+  } catch (err) {
+    console.error(
+      `[tracing] consumeApprovalGateTraceAnchor threw for correlationId "${correlationId}":`,
+      err,
+    );
+    recordBestEffortFailure("consumeApprovalGateTraceAnchor", (err as Error).message);
     return null;
   }
 }
