@@ -186,30 +186,102 @@ point to as deliberate rather than incidental.
 
 ## 8. Observability: OpenTelemetry + Axiom
 
-This layer is a work in progress and I'm noting it as such rather than overstating it.
-
 The app wires two OpenTelemetry span processors onto one shared tracer provider:
 Braintrust (filtered to AI/LLM-related spans, for trace-level debugging tied to evals
 and prompt versions) and Axiom (unfiltered OTLP export of every span, including
-framework-level HTTP spans, for operational dashboards). Both are best-effort and
-independently optional: a missing env var skips that processor rather than crashing
-the app.
+framework-level HTTP spans, for two live dashboards: `GCA-app health` for error rate
+and latency by pipeline stage, `GCA-business` for the guest-journey funnel). Both are
+best-effort in development, a missing env var skips that processor rather than
+crashing the app; in production, missing Axiom config fails the boot loudly instead
+(see "Production vs. development" below), since booting with zero observability is
+worse than not booting at all.
 
-Because Inngest steps don't preserve a live in-process span across a suspend/resume
-boundary, spans are threaded across those boundaries via an explicit trace-anchor
-value rather than relying on OTel context propagation alone, necessary once you have
-steps that can resume hours later, potentially in a different process.
+### Span strategy
 
-What's built: the instrumentation wiring and export pipeline. What's still in
-progress: the actual Axiom dashboards (error rate by span, daily unique-guest volume,
-etc.); queries for these are drafted but the dashboards themselves aren't live yet.
-I'm calling this out directly because I'd rather be precise about what's shipped
-versus what's designed but not yet built.
+A handful of small primitives in `src/lib/tracing.ts` cover every case in this app:
+
+- **`withSpan`** — the default. Nests under whatever span is already active via
+  OTel's own ambient context; starts a fresh root if nothing is active. Used for
+  anything running synchronously inside an already-open trace (most DB calls,
+  tool-internal work).
+- **`startTraceRoot`** — deliberately starts a brand-new, unparented trace. Used at
+  the very start of a real request (the webhook's own root span), and by handlers
+  that genuinely can't join anything else (see next section).
+- **`withTurnSpan` + `TraceAnchor`** — nests under an explicitly-passed
+  `{traceId, spanId}` rather than ambient context, because Inngest steps don't
+  preserve a live in-process span across a `step.run`/replay boundary. The anchor is
+  threaded through the triggering event's own data, so every stage of a turn (webhook
+  → model → tools → reply) nests correctly even after a replay.
+- **`steppedSpan`** — the Inngest-specific glue, wraps `step.run` and `withTurnSpan`
+  together so the two different jobs they do (replay-safe memoization, span creation)
+  can't accidentally duplicate on replay.
+- **`markSpanFailed`** — marks a span ERROR without throwing, for call sites that
+  already catch a failure and downgrade it to a return value rather than propagate an
+  exception. Most of this app's external calls (Twilio, the Telegram relay, Supabase
+  writes) follow that shape, so a failed call is still visible in Axiom even when it
+  doesn't blow up the guest's turn.
+
+### Continuing a trace across a real pause
+
+Two flows suspend a turn and wait on a human, potentially for hours: `missing_info`
+(§2) and `send_booking_link` (§5). When the owner eventually replies on Telegram, that
+reply lands as a brand-new HTTP request, in a different process, with no live span or
+Inngest execution context to nest under. `withTurnSpan`'s anchor doesn't help here
+either, it rides along in Inngest's own event data, and this later request never goes
+through Inngest at all.
+
+Left alone, every one of these replies would land as its own small, disconnected
+trace, with no link back to the original conversation, the correlation ID isn't even
+searchable on the original side, it exists purely as an Inngest `waitForEvent` key,
+never stamped onto a span there.
+
+The fix is a small DB table, keyed by correlation ID, storing the real
+`{traceId, spanId}` of the original tool-call span at the moment the nudge goes out:
+`missing_info_trace_anchors` for the KB-answer flow, `approval_gate_trace_anchors`
+for booking approvals, two parallel tables rather than one shared one, so a schema
+change to either can't affect the other. When the reply arrives, the route consumes
+the anchor (reads and deletes the row, single-use); if found, the reply's work nests
+via `withTurnSpan` directly under the original `gen_ai.tool.*` span, same trace as the
+rest of the conversation; if not found (the write itself failed, or the row was
+already consumed by a duplicate call), it falls back to `startTraceRoot`, a
+disconnected trace, worse for debugging but never worse for the guest. Recording the
+anchor is itself best-effort, and a guest's real reply must never be blocked on a
+tracing nicety succeeding.
+
+### Heartbeat
+
+Real traffic on a single-property agent is low and sporadic. A naive "alert if zero
+events land in N minutes" dead-man's-switch would false-alarm constantly on a
+perfectly healthy system, simply because nobody happened to message in the last N
+minutes, training you to ignore it.
+
+Instead, `instrumentation.ts` emits a synthetic `instrumentation.heartbeat` span every
+5 minutes, independent of any real guest or business activity, purely proving "this
+process is alive and can still reach Axiom." An Axiom Threshold monitor watches for
+that span specifically dropping below one occurrence over a 15-minute window (three
+missed cycles of buffer), wired to an email notifier. That's the one piece of this
+system that has to live outside the app's own code: if the observability pipeline
+itself goes fully dark, nothing running through that same pipeline can report its own
+silence, the monitor exists to be the thing still watching when everything else stops.
+
+telegram-router (the separate app that owns all Telegram I/O) is wired up the same
+way, minus the Braintrust processor, since it makes no LLM calls of its own.
+
+### Production vs. development
+
+Missing/invalid Axiom config warns and continues in development (a developer without
+an Axiom token should still be able to run the app), but throws at boot in production,
+failing the deploy loudly rather than running with zero observability. Braintrust's
+config stays warn-only in every environment: it's already effectively enforced
+elsewhere (prompt-loading throws on its own if Braintrust is unreachable), and losing
+just the AI-trace layer on top of a working Axiom pipeline is far lower-stakes than
+losing Axiom itself.
 
 ## 9. Known limitations / in progress
 
 - **`missing_info` no-reply timeout**: currently just logs rather than re-nudging the
   owner. Acceptable for a low-volume single-property agent, would need a retry/
   escalation policy at higher volume.
-- **Axiom dashboards**: instrumentation and export pipeline are live (§8), the actual
-  dashboards are still being designed.
+- **telegram-router's Axiom dataset**: instrumented and verified locally (§8), but the
+  dataset it exports to doesn't exist yet in Axiom, and the app's own token can't
+  create one, that's a one-time manual step, not a code gap.
