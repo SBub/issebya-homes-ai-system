@@ -112,7 +112,11 @@ export async function requestApprovalGate(params: {
     `owner-nudge-${toolName}`,
     traceAnchor,
     `owner_nudge.${toolName}`,
-    { "gca.conversation_id": conversationId, "gca.phone": phone },
+    {
+      "gca.conversation_id": conversationId,
+      "gca.phone": phone,
+      "gca.correlation_id": correlationId,
+    },
     sendGatedOwnerNudge,
   );
 
@@ -156,6 +160,7 @@ export async function requestApprovalGate(params: {
         "gca.timeout": timeout,
         "gca.approval.decision": "timeout",
         "braintrust.approval_decision": "timeout",
+        "gca.correlation_id": correlationId,
       },
       async () => {},
     );
@@ -177,7 +182,11 @@ export async function requestApprovalGate(params: {
     `${toolName}-approval-decision`,
     traceAnchor,
     `owner_nudge.${toolName}.decision`,
-    { "gca.approval.decision": decision, "braintrust.approval_decision": decision },
+    {
+      "gca.approval.decision": decision,
+      "braintrust.approval_decision": decision,
+      "gca.correlation_id": correlationId,
+    },
     async () => {},
   );
   return approved;

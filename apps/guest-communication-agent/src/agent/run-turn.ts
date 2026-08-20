@@ -505,6 +505,17 @@ async function runMissingInfo(
       // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
       // re-embed here.
       result = { escalated: true, answer };
+      // Own step — same replay-safety reasoning as the nudge-send step above.
+      // Mirrors missing-info-no-reply's own marker span, for the symmetric
+      // "an answer was received and consumed" case.
+      await steppedSpan(
+        step,
+        "missing-info-answer-received",
+        toolAnchor,
+        "missing_info.answer_received",
+        { "gca.correlation_id": correlationId ?? "unknown", "braintrust.tags": ["missing_info"] },
+        async () => {},
+      );
     } else {
       console.warn(
         `[run-turn] runMissingInfo timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
@@ -521,7 +532,11 @@ async function runMissingInfo(
         "missing-info-no-reply",
         toolAnchor,
         "missing_info.no_reply",
-        { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT, "braintrust.tags": ["missing_info"] },
+        {
+          "gca.timeout": MISSING_INFO_REPLY_TIMEOUT,
+          "braintrust.tags": ["missing_info"],
+          "gca.correlation_id": correlationId ?? "unknown",
+        },
         () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
       );
       // Timed out — handleMissingInfoNoReply already ran above; result keeps
