@@ -23,8 +23,8 @@ import {
   Dialog,
   Flex,
   Heading,
+  Switch,
   Table,
-  Tabs,
   Text,
   TextField,
 } from "@radix-ui/themes";
@@ -135,10 +135,10 @@ export default function ConversationsAdminPage() {
   const [isApiKeyDialogOpen, setIsApiKeyDialogOpen] = useState(true);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
 
-  // "all" | "stuck" — controlled Tabs.Root value. Filtering is purely
-  // client-side over the one `conversations` array already fetched (see
-  // filteredConversations below); switching tabs never triggers a new fetch.
-  const [activeTab, setActiveTab] = useState("all");
+  // Filtering is purely client-side over the one `conversations` array
+  // already fetched (see filteredConversations below); toggling this never
+  // triggers a new fetch.
+  const [stuckOnly, setStuckOnly] = useState(false);
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
@@ -190,13 +190,13 @@ export default function ConversationsAdminPage() {
     pageIndex: 0,
     pageSize: TABLE_PAGE_SIZE,
   });
-  // Resets pagination back to page 0 whenever the active tab changes — same
+  // Resets pagination back to page 0 whenever the filter toggles — same
   // render-time diffing pattern apps/crm/src/app/page.tsx uses for its own
   // columnFilters-change reset, since the filtered row count can shrink
   // enough that the current page no longer exists.
-  const [prevActiveTab, setPrevActiveTab] = useState(activeTab);
-  if (activeTab !== prevActiveTab) {
-    setPrevActiveTab(activeTab);
+  const [prevStuckOnly, setPrevStuckOnly] = useState(stuckOnly);
+  if (stuckOnly !== prevStuckOnly) {
+    setPrevStuckOnly(stuckOnly);
     if (pagination.pageIndex !== 0) {
       setPagination((prev) => ({ ...prev, pageIndex: 0 }));
     }
@@ -452,10 +452,8 @@ export default function ConversationsAdminPage() {
 
   const filteredConversations = useMemo(
     () =>
-      activeTab === "stuck"
-        ? conversations.filter((conversation) => conversation.stuck.any)
-        : conversations,
-    [conversations, activeTab],
+      stuckOnly ? conversations.filter((conversation) => conversation.stuck.any) : conversations,
+    [conversations, stuckOnly],
   );
 
   const table = useReactTable({
@@ -571,12 +569,10 @@ export default function ConversationsAdminPage() {
         </Dialog.Root>
       </Flex>
 
-      <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
-        <Tabs.List mb="4">
-          <Tabs.Trigger value="all">All conversations</Tabs.Trigger>
-          <Tabs.Trigger value="stuck">Stuck only</Tabs.Trigger>
-        </Tabs.List>
-      </Tabs.Root>
+      <Flex align="center" gap="2" mb="4">
+        <Switch checked={stuckOnly} onCheckedChange={setStuckOnly} />
+        <Text size="2">Stuck only</Text>
+      </Flex>
 
       {conversationsError && (
         <Text as="p" color="red" mb="3">
@@ -591,7 +587,7 @@ export default function ConversationsAdminPage() {
       )}
       {hasLoaded && filteredConversations.length === 0 && (
         <Text color="gray">
-          {activeTab === "stuck" ? "No stuck conversations." : "No conversations yet."}
+          {stuckOnly ? "No stuck conversations." : "No conversations yet."}
         </Text>
       )}
       {filteredConversations.length > 0 && (
