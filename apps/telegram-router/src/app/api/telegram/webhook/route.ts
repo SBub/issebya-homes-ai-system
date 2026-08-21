@@ -1,117 +1,24 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSecret } from "@/lib/telegram/auth";
-import { parseSocialCommand } from "@/lib/telegram/command";
-import { getPromoCode, markPromoCodeRejected, markPromoCodeSent } from "@/lib/telegram/crm";
-import { answerBookingLinkApproval, answerOwnerNudge, sendGuestMessage } from "@/lib/telegram/gca";
-import { generateSocialPost } from "@/lib/telegram/social";
+import { answerBookingLinkApproval, answerOwnerNudge } from "@/lib/telegram/gca";
+import { answerCallbackQuery, editMessageText, sendMessage } from "@/lib/telegram/telegram";
 import type { TelegramUpdate } from "@/lib/telegram/telegram";
-import {
-  answerCallbackQuery,
-  editMessageText,
-  sendMessage,
-  sendWithRetry,
-} from "@/lib/telegram/telegram";
 import { markSpanFailed, withSpan } from "@/lib/tracing";
 
-const NUDGE_APPROVE_PREFIX = "nudge_approve:";
-const NUDGE_REJECT_PREFIX = "nudge_reject:";
-// Distinct prefixes from the promo-code nudge_approve/nudge_reject pair
-// above — send_booking_link is a different feature (GCA's real
-// suspend/resume HITL flow, see booking.ts) with different downstream logic
-// (relaying a decision to GCA, not touching promo codes/CRM).
 const BOOKING_APPROVE_PREFIX = "booking_approve:";
 const BOOKING_REJECT_PREFIX = "booking_reject:";
 
 type CallbackMessage = NonNullable<TelegramUpdate["callback_query"]>["message"];
 
-// Owner tapped "✅ Approve" on a drafted campaign nudge (composed in
-// apps/crm/.../check-stalled-guests and campaign-drafts routes). Status check
-// guards against a double-tap or webhook retry sending the message twice.
-async function handleNudgeApprove(
-  callbackQueryId: string,
-  message: CallbackMessage,
-  promoCodeId: string,
-): Promise<void> {
-  try {
-    const promoCode = await getPromoCode(promoCodeId);
-
-    if (promoCode.status !== "issued") {
-      await answerCallbackQuery(callbackQueryId, "Already handled");
-      if (message) {
-        await editMessageText(message.message_id, `${message.text ?? ""}\n\nAlready handled`);
-      }
-      return;
-    }
-
-    if (!promoCode.guest_phone) {
-      throw new Error(`promo code ${promoCodeId} has no guest_phone to send to`);
-    }
-
-    const sendResult = await sendGuestMessage(promoCode.guest_phone, promoCode.message_text);
-    if (!sendResult.ok) {
-      // Row stays 'issued' on failure so tapping Approve again retries it.
-      console.error(
-        `[telegram-router] nudge send failed for promo code ${promoCodeId}:`,
-        sendResult.error,
-      );
-      await answerCallbackQuery(callbackQueryId, "Failed to send — try again");
-      return;
-    }
-
-    await markPromoCodeSent(promoCodeId);
-    await answerCallbackQuery(callbackQueryId, "Sent ✅");
-    if (message) {
-      await editMessageText(message.message_id, `${message.text ?? ""}\n\n✅ Sent`);
-    }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("[telegram-router] nudge approve failed:", errorMessage);
-    await answerCallbackQuery(callbackQueryId, "Failed to send — try again");
-  }
-}
-
-// Owner tapped "❌ Reject" — records the decision in CRM, never sends anything.
-async function handleNudgeReject(
-  callbackQueryId: string,
-  message: CallbackMessage,
-  promoCodeId: string,
-): Promise<void> {
-  try {
-    const result = await markPromoCodeRejected(promoCodeId);
-
-    if (!result.ok && result.alreadyHandled) {
-      await answerCallbackQuery(callbackQueryId, "Already handled");
-      if (message) {
-        await editMessageText(message.message_id, `${message.text ?? ""}\n\nAlready handled`);
-      }
-      return;
-    }
-
-    if (!result.ok) {
-      throw new Error(result.error ?? "mark-rejected failed");
-    }
-
-    await answerCallbackQuery(callbackQueryId, "Rejected");
-    if (message) {
-      await editMessageText(message.message_id, `${message.text ?? ""}\n\n❌ Rejected`);
-    }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("[telegram-router] nudge reject failed:", errorMessage);
-    await answerCallbackQuery(callbackQueryId, "Failed to reject — try again");
-  }
-}
-
 // Owner tapped ✅ Approve / ❌ Reject on a send_booking_link nudge (composed
 // in GCA's booking.ts, relayed through .../api/owner-nudges/route.ts).
-// Unlike handleNudgeApprove/handleNudgeReject above, there's no DB row to
-// check for a double-tap guard — correlationId only ever identifies a
-// (possibly already-resolved, possibly long-gone) suspended run-guest-turn
-// Inngest function on GCA's side. A duplicate tap or webhook retry just
-// resends the approval event to GCA; if nothing is still waiting on it,
-// that's a safe no-op there too (see answerBookingLinkApproval's own
-// comment) — so this handler doesn't attempt to detect "already handled" the
-// way the promo-code flow above does.
+// There's no DB row to check for a double-tap guard — correlationId only
+// ever identifies a (possibly already-resolved, possibly long-gone)
+// suspended run-guest-turn Inngest function on GCA's side. A duplicate tap
+// or webhook retry just resends the approval event to GCA; if nothing is
+// still waiting on it, that's a safe no-op there too (see
+// answerBookingLinkApproval's own comment) — so this handler doesn't
+// attempt to detect "already handled".
 async function handleBookingLinkDecision(
   callbackQueryId: string,
   message: CallbackMessage,
@@ -166,10 +73,9 @@ function extractMissingInfoCorrelationId(replyText: string | undefined): string 
  *
  * Returns false when the reply doesn't carry a ref tag (not a reply, or a
  * reply to something other than a missing_info nudge — e.g. wants_human,
- * which never invites a reply and so never gets one) so the caller falls
- * through to its normal command/social-post dispatch, same as today's
- * "unrelated reply" case. Returns true once a ref tag is matched, regardless
- * of outcome.
+ * which never invites a reply and so never gets one); the caller ignores
+ * the return value either way and always responds 200. Returns true once a
+ * ref tag is matched, regardless of outcome.
  */
 async function handleOwnerNudgeReply(
   message: NonNullable<TelegramUpdate["message"]>,
@@ -198,25 +104,10 @@ async function handleOwnerNudgeReply(
   return true;
 }
 
-/** Sends a social reply with the shared retry-once behavior. */
-async function sendSocialReply(text: string): Promise<void> {
-  await sendWithRetry(() => sendMessage(text));
-}
-
 async function handleCallbackQuery(
   callbackQuery: NonNullable<TelegramUpdate["callback_query"]>,
 ): Promise<void> {
   const { id: callbackQueryId, data, message } = callbackQuery;
-
-  if (data?.startsWith(NUDGE_APPROVE_PREFIX)) {
-    await handleNudgeApprove(callbackQueryId, message, data.slice(NUDGE_APPROVE_PREFIX.length));
-    return;
-  }
-
-  if (data?.startsWith(NUDGE_REJECT_PREFIX)) {
-    await handleNudgeReject(callbackQueryId, message, data.slice(NUDGE_REJECT_PREFIX.length));
-    return;
-  }
 
   if (data?.startsWith(BOOKING_APPROVE_PREFIX)) {
     await handleBookingLinkDecision(
@@ -274,23 +165,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const idea = update ? parseSocialCommand(update) : null;
-    if (!idea) {
-      span.setAttribute("telegram.branch", "noop");
-      return NextResponse.json({ ok: true });
-    }
-
-    span.setAttribute("telegram.branch", "social_command");
-    try {
-      const result = await generateSocialPost(idea);
-      await sendSocialReply(result.altText);
-      await sendSocialReply(result.caption);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[telegram-router] generation failed:", message);
-      await sendSocialReply(`⚠️ Couldn't generate a social post: ${message}`);
-    }
-
+    span.setAttribute("telegram.branch", "noop");
     return NextResponse.json({ ok: true });
   });
 }

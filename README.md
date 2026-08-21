@@ -15,9 +15,9 @@ in other apps, which have zero Telegram awareness of their own:
 Sends every reply itself, retrying once on failure.
 
 > **2026-08-21: crm/finance/social-media extracted to `issebya-homes-internal-tools`.**
-> This app's `/social` command and `POST /api/campaign-drafts` route (promo-code nudge
-> approve/reject) are being trimmed in a follow-up change — until then they're dead
-> code, since `apps/crm` and `apps/social-media` no longer live in this repo.
+> This app's former `/social` command and `POST /api/campaign-drafts` route
+> (promo-code nudge approve/reject) — dead code once `apps/crm`/`apps/social-media`
+> stopped living in this repo — have since been trimmed out entirely.
 
 **2026-08-07: the `telegram_delivery_failures` durable-fallback table removed**, along with `src/lib/telegram/delivery-failures.ts` and `src/lib/telegram/db.ts`
 (the `pg` pool that existed only for this). Delivery-failure monitoring will be

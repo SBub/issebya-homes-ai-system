@@ -12577,7 +12577,6 @@ __metadata:
     react-dom: "npm:^19.2.3"
     typescript: "npm:^5.9.3"
     vitest: "npm:^4.1.10"
-    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 

@@ -69,8 +69,9 @@ async function parseTelegramResponse(res: Response, action: string): Promise<Tel
 
 /**
  * Plain text message, optionally with one row of inline buttons (e.g. the
- * campaign-draft approve/reject prompt's two buttons — pass `[approveButton,
- * rejectButton]`). All buttons render in a single row, in array order.
+ * send_booking_link approve/reject prompt's two buttons — pass
+ * `[approveButton, rejectButton]`). All buttons render in a single row, in
+ * array order.
  */
 export async function sendMessage(
   text: string,
