@@ -41,8 +41,7 @@ describe("POST /api/admin/conversations/[id]/actions/retrigger-turn", () => {
     inngestSendMock.mockResolvedValue({ ids: ["evt-1"] });
     getConversationByIdMock.mockResolvedValue({
       id: "convo-1",
-      // Stored prefixed, as whatsapp_conversations.phone_number always is.
-      phone: "whatsapp:+351920742845",
+      phone: "+351920742845",
       status: "active",
       startedAt: "2026-08-01T00:00:00.000Z",
       closedAt: null,
@@ -76,7 +75,7 @@ describe("POST /api/admin/conversations/[id]/actions/retrigger-turn", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
-  it("re-fires GUEST_TURN_REQUESTED_EVENT with a fresh correlationId, the normalized phone, and the orphaned message's content/id", async () => {
+  it("re-fires GUEST_TURN_REQUESTED_EVENT with a fresh correlationId, the conversation's phone, and the orphaned message's content/id", async () => {
     getLastOrphanedUserMessageMock.mockResolvedValueOnce({
       id: "msg-orphan-1",
       role: "user",
@@ -96,8 +95,6 @@ describe("POST /api/admin/conversations/[id]/actions/retrigger-turn", () => {
       name: GUEST_TURN_REQUESTED_EVENT,
       data: expect.objectContaining({
         conversationId: "convo-1",
-        // Normalized: no "whatsapp:" prefix, even though the conversation's
-        // own stored phone_number is prefixed.
         phone: "+351920742845",
         incomingMessage: "Is room 1 free?",
         triggerMessageId: "msg-orphan-1",

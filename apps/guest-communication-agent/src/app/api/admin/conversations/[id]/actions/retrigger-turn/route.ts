@@ -4,7 +4,6 @@ import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-turn";
 import { getConversationById, getLastOrphanedUserMessage } from "@/lib/admin-conversations";
 import { requireApiKey } from "@/lib/auth";
 import { inngest } from "@/lib/inngest";
-import { normalizePhone } from "@/lib/phone";
 import { startTraceRoot } from "@/lib/tracing";
 
 /**
@@ -56,12 +55,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       name: GUEST_TURN_REQUESTED_EVENT,
       data: {
         conversationId: id,
-        // GuestTurnRequestedEventData.phone must already be normalized (no
-        // "whatsapp:" prefix) — whatsapp_conversations.phone_number is
-        // stored prefixed (see conversations.ts's getOrCreateActiveConversation),
-        // so this route, unlike the real webhook route, has to normalize it
-        // itself rather than inheriting an already-normalized value.
-        phone: normalizePhone(conversation.phone),
+        phone: conversation.phone,
         incomingMessage: orphanedMessage.content,
         triggerMessageId: orphanedMessage.id,
         correlationId,
