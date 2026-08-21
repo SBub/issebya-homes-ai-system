@@ -1,3 +1,4 @@
+import { addDays, format } from "date-fns";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,10 +36,17 @@ vi.mock("@sentry/nextjs", () => ({
 
 // --- Helpers ---
 
+// This route never compares checkIn/checkOut against "now" (it just persists
+// whatever dates the earlier /api/checkout/create call already validated),
+// so a hardcoded date here can't cause a stale-test failure the way
+// checkout/create's did. Kept relative anyway for consistency across the
+// suite, so nothing here reads like a ticking time bomb.
+const REFERENCE_DATE = new Date("2025-06-01T12:00:00Z");
+
 const validMetadata = {
   roomType: "room1",
-  checkIn: "2026-08-01",
-  checkOut: "2026-08-04",
+  checkIn: format(addDays(REFERENCE_DATE, 30), "yyyy-MM-dd"),
+  checkOut: format(addDays(REFERENCE_DATE, 33), "yyyy-MM-dd"),
   personCount: "2",
   email: "guest@example.com",
   nights: "3",

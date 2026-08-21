@@ -1,5 +1,6 @@
+import { addDays, format } from "date-fns";
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks ---
 
@@ -37,10 +38,18 @@ function makeRequest(body: Record<string, unknown>): NextRequest {
   });
 }
 
+// Pinned "now" for these tests, so the "valid" fixture's dates stay valid
+// forever instead of going stale like the hardcoded 2026-08-01 they replace
+// (that date was in the past by the time this test suite was ported here).
+// checkIn/checkOut are computed relative to NOW, and NOW is what the route's
+// own `new Date()` calls resolve to via vi.setSystemTime below, so the
+// relationship between "today" and the fixture dates never drifts.
+const NOW = new Date("2025-06-01T12:00:00Z");
+
 const validBody = {
   roomType: "room1",
-  checkIn: "2026-08-01",
-  checkOut: "2026-08-04",
+  checkIn: format(addDays(NOW, 30), "yyyy-MM-dd"),
+  checkOut: format(addDays(NOW, 33), "yyyy-MM-dd"),
   personCount: 2,
   email: "guest@example.com",
 };
@@ -49,7 +58,13 @@ const validBody = {
 
 describe("POST /api/checkout/create", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("returns 400 for invalid body (validation errors)", async () => {
@@ -142,8 +157,8 @@ describe("POST /api/checkout/create", () => {
     expect(mockStripeSessionCreate).toHaveBeenCalledOnce();
     const stripeArgs = mockStripeSessionCreate.mock.calls[0][0];
     expect(stripeArgs.metadata.roomType).toBe("room1");
-    expect(stripeArgs.metadata.checkIn).toBe("2026-08-01");
-    expect(stripeArgs.metadata.checkOut).toBe("2026-08-04");
+    expect(stripeArgs.metadata.checkIn).toBe(validBody.checkIn);
+    expect(stripeArgs.metadata.checkOut).toBe(validBody.checkOut);
     expect(stripeArgs.metadata.personCount).toBe("2");
     expect(stripeArgs.metadata.email).toBe("guest@example.com");
     expect(stripeArgs.customer_email).toBe("guest@example.com");
