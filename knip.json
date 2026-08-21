@@ -1,16 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
-    "apps/finance": {
-      "next": true,
-      "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
-    },
-    "apps/social-media": {
-      "next": true,
-      "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
-    },
     "apps/telegram-router": {
       "next": true,
       "entry": ["tests/**/*.test.ts"],
@@ -20,15 +10,7 @@
       "next": true,
       "entry": ["tests/**/*.test.ts", "scripts/**/*.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
-    },
-    "apps/crm": {
-      "next": true,
-      "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
     }
   },
-  "ignoreBinaries": ["supabase"],
-  "ignoreIssues": {
-    "apps/crm/src/lib/supabase.ts": ["exports"]
-  }
+  "ignoreBinaries": ["supabase"]
 }

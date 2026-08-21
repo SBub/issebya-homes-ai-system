@@ -8,14 +8,16 @@ Turborepo/yarn-workspaces monorepo for the issebya.homes automation system. See
 Owns all Telegram I/O for the whole system (the one webhook a bot token allows,
 registered once). Parses incoming commands/callbacks and dispatches to plain logic APIs
 in other apps, which have zero Telegram awareness of their own:
-- `/social <idea>` -> `apps/social-media`'s `/api/generate`
 - Inline Approve/Reject button callbacks -> resolves owner-nudge approvals for
   `apps/guest-communication-agent`'s HITL gates (booking-link approval, missing-info
   answers) via `POST /api/owner-nudges`
-- `POST /api/campaign-drafts` -> receives drafted promo-code nudges from
-  `apps/crm`'s stalled-guest cron for owner approve/reject
 
 Sends every reply itself, retrying once on failure.
+
+> **2026-08-21: crm/finance/social-media extracted to `issebya-homes-internal-tools`.**
+> This app's `/social` command and `POST /api/campaign-drafts` route (promo-code nudge
+> approve/reject) are being trimmed in a follow-up change — until then they're dead
+> code, since `apps/crm` and `apps/social-media` no longer live in this repo.
 
 **2026-08-07: the `telegram_delivery_failures` durable-fallback table removed**, along with `src/lib/telegram/delivery-failures.ts` and `src/lib/telegram/db.ts`
 (the `pg` pool that existed only for this). Delivery-failure monitoring will be
@@ -47,17 +49,6 @@ integration (the reminder "✅ Done" button, `POST /api/cron/check-reminders`, a
 `supabase/migrations/20260720120000_create_reminders.sql`) has since been
 dropped entirely: see
 `supabase/migrations/20260807100000_drop_dead_tables.sql`.
-
-## apps/social-media
-
-Social Media Post Generator (`SOC_GEN` in `docs/agent-architecture.mmd`). A single LLM
-call, not an autonomous agent: `POST /api/generate` takes a post idea and generates alt
-text (~100 SEO/AEO keywords) and a caption (continues the idea, ends in 5 hashtags). No
-Telegram knowledge at all: `apps/telegram-router` is the only caller, authenticated via
-`SOCIAL_MEDIA_API_KEY`.
-
-> **Note:** the prompt/model in `src/lib/social/generate.ts` is being iterated against
-> real output, not fully tuned.
 
 ## apps/guest-communication-agent
 
@@ -98,62 +89,31 @@ without holding the request open.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack; always use yarn, not npm, in this repo).
 
-## apps/crm
-
-Owns guest identity and campaign-conversion tracking, split out of
-`apps/guest-communication-agent` on 2026-07-21 so GCA itself stays stateless about
-marketing. Owns `guest_contacts` (auto-populated from `apps/finance`'s uploaded
-bookings via `POST /api/guest-contacts/sync`; phone numbers are still added by a human
-directly in Supabase Studio, with no dedicated UI for that yet) and a forward-only
-`funnel_stage` (`new -> informed -> link_sent -> booked`) bumped every GCA turn via
-`POST /api/guest-contacts/touch`.
-
-`POST /api/cron/check-stalled-guests` finds funnel-stalled guests and drafts a
-promo-code nudge for owner approve/reject via `apps/telegram-router`; `campaigns`/
-`promo_codes` tables back that lifecycle (`GET /api/campaigns/stats` exposes a
-PII-free aggregate view). No real external scheduler triggers this cron yet: it's
-callable, not yet on a live cadence.
-
-> **Known gap:** issued/sent/rejected promo codes are tracked, but there's no real
-> redemption/conversion-to-paid-booking tracking yet: `redeemed` is always reported as
-> 0 since nothing writes it, pending a separate, still-paused website checkout change.
-
 ## Setup
 
 ```bash
 corepack enable   # one-time, if not already done, makes `yarn` resolve to the pinned version
 yarn install
 yarn lefthook install
-cp apps/finance/.env.example apps/finance/.env  # fill in DATABASE_URL, FINANCE_API_KEY;
-                       # TELEGRAM_* optional, see the file's own comments
-cp apps/social-media/.env.example apps/social-media/.env  # fill in SOCIAL_MEDIA_API_KEY,
-                       # OPENROUTER_API_KEY
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
-                       # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET, SOCIAL_MEDIA_API_URL,
-                       # SOCIAL_MEDIA_API_KEY (same value as apps/social-media's)
+                       # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `supabase status`, Publishable/Secret on newer CLI versions),
-                       # OPENROUTER_API_KEY (same key apps/social-media uses),
+                       # OPENROUTER_API_KEY,
                        # BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID (AI observability +
                        # prompt management, see that app's own .env.example comment),
                        # TWILIO_AUTH_TOKEN/TWILIO_ACCOUNT_SID/TWILIO_WEBHOOK_URL/
                        # TWILIO_WHATSAPP_FROM (Sandbox values work for local dev),
                        # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
                        # uses), NEXT_PUBLIC_SITE_URL
-cp apps/crm/.env.example apps/crm/.env  # fill in SUPABASE_URL/SUPABASE_ANON_KEY/
-                       # SUPABASE_SERVICE_ROLE_KEY, CRM_API_KEY, TELEGRAM_ROUTER_API_URL/
-                       # TELEGRAM_ROUTER_API_KEY, GUEST_COMMUNICATION_AGENT_API_URL/
-                       # GUEST_COMMUNICATION_AGENT_API_KEY, OPENROUTER_API_KEY
 ```
 
 ## Run
 
 ```bash
 yarn dev              # starts every app's dev server in parallel (turbo run dev):
-                       # apps/finance :3001, apps/social-media :3002,
-                       # apps/telegram-router :3003,
-                       # apps/guest-communication-agent (tsx watch), apps/crm :3006.
+                       # apps/telegram-router :3003, apps/guest-communication-agent (tsx watch).
                        # Bring up Supabase yourself first (`supabase start`,
                        # applying supabase/migrations); Ctrl+C stops the dev
                        # servers; Supabase's containers keep running in the
