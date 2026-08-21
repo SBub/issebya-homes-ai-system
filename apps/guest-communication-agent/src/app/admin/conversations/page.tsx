@@ -923,21 +923,25 @@ export default function ConversationsAdminPage() {
                                   </Button>
                                 </Box>
                               )}
+                            {message.role === "user" &&
+                              showRetrigger &&
+                              message.id === lastDetailMessage?.id && (
+                                <Box mt="1">
+                                  <Button
+                                    size="1"
+                                    disabled={retriggeringConversationIds.has(
+                                      detailConversation.id,
+                                    )}
+                                    onClick={() => void retriggerTurn(detailConversation.id)}
+                                  >
+                                    {retriggeringConversationIds.has(detailConversation.id)
+                                      ? "Retriggering…"
+                                      : "Retrigger turn"}
+                                  </Button>
+                                </Box>
+                              )}
                           </Box>
                         ))}
-                        {showRetrigger && (
-                          <Flex justify="end" mt="1">
-                            <Button
-                              size="1"
-                              disabled={retriggeringConversationIds.has(detailConversation.id)}
-                              onClick={() => void retriggerTurn(detailConversation.id)}
-                            >
-                              {retriggeringConversationIds.has(detailConversation.id)
-                                ? "Retriggering…"
-                                : "Retrigger turn"}
-                            </Button>
-                          </Flex>
-                        )}
                       </Flex>
                     </Card>
                   </>
