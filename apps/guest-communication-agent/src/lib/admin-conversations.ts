@@ -90,25 +90,39 @@ export async function listConversationsWithStuckSummary(
   }
   const conversationIds = conversationRows.map((c) => c.id);
 
-  // Oldest-first per conversation, same reasoning as db.ts's
-  // loadRecentMessages — lets the reduce below find each conversation's real
-  // last message and delivery_status/orphan state in one pass.
-  const { data: messages, error: messagesError } = await supabase
-    .from("whatsapp_messages")
-    .select("id, conversation_id, role, content, created_at, delivery_status")
-    .in("conversation_id", conversationIds)
-    .order("conversation_id", { ascending: true })
-    .order("created_at", { ascending: true });
-  if (messagesError) {
-    throw new Error(`Failed to list whatsapp_messages for stuck summary: ${messagesError.message}`);
+  // One row per conversation_id (last message + any-failed-delivery, both
+  // computed in Postgres) instead of fetching every whatsapp_messages row —
+  // full `content` included — for every listed conversation just to derive
+  // that same one row per conversation in JS. See this RPC's own migration
+  // (20260821110000_create_admin_conversation_message_summary.sql) for why
+  // this scales with conversation count, not per-conversation message count.
+  const { data: summaries, error: summariesError } = await supabase.rpc(
+    "admin_conversation_message_summary",
+    { conversation_ids: conversationIds },
+  );
+  if (summariesError) {
+    throw new Error(
+      `Failed to compute admin_conversation_message_summary: ${summariesError.message}`,
+    );
   }
 
   const lastMessageByConversation = new Map<string, MessageRow>();
   const failedDeliveryConversations = new Set<string>();
-  for (const row of messages ?? []) {
+  for (const row of (summaries ?? []) as Record<string, unknown>[]) {
     const conversationId = row.conversation_id as string;
-    lastMessageByConversation.set(conversationId, toMessageRow(row));
-    if (row.delivery_status === "failed") {
+    if (row.last_message_id !== null) {
+      lastMessageByConversation.set(
+        conversationId,
+        toMessageRow({
+          id: row.last_message_id,
+          role: row.last_message_role,
+          content: row.last_message_content,
+          created_at: row.last_message_created_at,
+          delivery_status: row.last_message_delivery_status,
+        }),
+      );
+    }
+    if (row.has_failed_delivery) {
       failedDeliveryConversations.add(conversationId);
     }
   }
