@@ -1,4 +1,0 @@
-"Reservation number","Invoice number","Booked on","Arrival","Departure","Booker name","Guest name","Rooms","Persons","Room nights","Commission %","Original amount","Final amount","Commission amount","Payment fee","Status","Guest request","Currency","Hotel id","Property name","City","Country"
-"BKG-3001","INV-3001","2026-07-20","2026-09-15","2026-09-18","Elena Rodrigues","Elena Rodrigues","1","2","3","15","300.00","300.00","45.00","4.20","OK","","EUR","1234","Private Room 2 near Adraga Beach","Sintra","Portugal"
-"BKG-3002","INV-3002","2026-07-22","2026-09-20","2026-09-22","Omar Al-Rashid","Omar Al-Rashid","1","1","2","15","180.00","180.00","27.00","2.50","OK","","EUR","1234","Private Room 1 near Adraga Beach","Sintra","Portugal"
-"BKG-3003","INV-3003","2026-07-23","2026-09-25","2026-09-27","Cancelled Test","Cancelled Test","1","2","2","15","100.00","100.00","15.00","1.50","Cancelled","","EUR","1234","Private Room 2 near Adraga Beach","Sintra","Portugal"
