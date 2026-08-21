@@ -21,11 +21,7 @@ import { createAdminClient } from "./supabase";
 
 export type PendingOwnerDecisionToolName = "missing_info" | "send_booking_link";
 export type PendingOwnerDecisionResolution =
-  | "answered"
-  | "approved"
-  | "rejected"
-  | "timeout"
-  | "manually_resolved";
+  "answered" | "approved" | "rejected" | "timeout" | "manually_resolved";
 
 export interface PendingOwnerDecisionRow {
   id: string;

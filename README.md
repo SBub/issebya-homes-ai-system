@@ -8,6 +8,7 @@ Turborepo/yarn-workspaces monorepo for the issebya.homes automation system. See
 Owns all Telegram I/O for the whole system (the one webhook a bot token allows,
 registered once). Parses incoming commands/callbacks and dispatches to plain logic APIs
 in other apps, which have zero Telegram awareness of their own:
+
 - Inline Approve/Reject button callbacks -> resolves owner-nudge approvals for
   `apps/guest-communication-agent`'s HITL gates (booking-link approval, missing-info
   answers) via `POST /api/owner-nudges`

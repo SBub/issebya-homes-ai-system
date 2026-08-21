@@ -74,12 +74,7 @@ interface ConversationDetail {
 }
 
 type PendingDecisionResolution =
-  | "answered"
-  | "approved"
-  | "rejected"
-  | "timeout"
-  | "manually_resolved"
-  | null;
+  "answered" | "approved" | "rejected" | "timeout" | "manually_resolved" | null;
 
 interface PendingDecision {
   id: string;
@@ -611,7 +606,7 @@ export default function ConversationsAdminPage() {
 
       {!hasLoaded && !conversationsLoading && (
         <Text color="gray" style={{ flexShrink: 0 }}>
-          Click "Sign in" above to enter your API key and load conversations.
+          Click &quot;Sign in&quot; above to enter your API key and load conversations.
         </Text>
       )}
       {hasLoaded && filteredConversations.length === 0 && (
