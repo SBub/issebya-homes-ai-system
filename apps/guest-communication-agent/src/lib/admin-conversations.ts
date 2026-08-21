@@ -184,24 +184,28 @@ export async function getConversationMessages(conversationId: string): Promise<M
   return (data ?? []).map(toMessageRow);
 }
 
-// Backs POST /api/admin/conversations/[id]/actions/retry-send — the most
-// recent assistant reply that failed delivery, if any.
-export async function getLastFailedDeliveryMessage(
+// Backs POST /api/admin/conversations/[id]/actions/retry-send — looks up the
+// one specific message the operator clicked Retry send on (rather than
+// "whichever failed message is most recent"), scoped to this conversation
+// and requiring it still be delivery_status='failed'. Returns null if the
+// id doesn't exist, belongs to a different conversation, or isn't currently
+// failed — the route treats all three the same way (400).
+export async function getFailedDeliveryMessageById(
   conversationId: string,
+  messageId: string,
 ): Promise<MessageRow | null> {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("whatsapp_messages")
     .select("id, role, content, created_at, delivery_status")
+    .eq("id", messageId)
     .eq("conversation_id", conversationId)
     .eq("role", "assistant")
     .eq("delivery_status", "failed")
-    .order("created_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
   if (error) {
     throw new Error(
-      `Failed to look up last failed-delivery message for conversation ${conversationId}: ${error.message}`,
+      `Failed to look up failed-delivery message ${messageId} for conversation ${conversationId}: ${error.message}`,
     );
   }
   return data ? toMessageRow(data) : null;

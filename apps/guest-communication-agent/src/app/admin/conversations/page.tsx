@@ -308,19 +308,21 @@ export default function ConversationsAdminPage() {
     setDetailLoading(false);
   }, []);
 
-  // Retries the conversation's most recent failed-delivery message. The
-  // backend itself always retries "the most recent failed one" for the
-  // conversation regardless of which message's own button was clicked (see
-  // POST .../actions/retry-send) — a conversation with more than one failed
-  // message shows a Retry send button on each, but clicking any of them
-  // does the exact same thing.
+  // Retries the specific message whose own button was clicked — messageId is
+  // sent to POST .../actions/retry-send, which looks up that exact
+  // conversation-scoped, currently-failed message rather than "whichever
+  // failed message is most recent".
   const retrySend = useCallback(
     async (conversationId: string, messageId: string) => {
       setRetryingMessageIds((prev) => new Set(prev).add(messageId));
       try {
         const res = await fetch(
           `/api/admin/conversations/${encodeURIComponent(conversationId)}/actions/retry-send`,
-          { method: "POST", headers: { "X-API-Key": apiKey } },
+          {
+            method: "POST",
+            headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId }),
+          },
         );
         const json = await res.json();
         if (!res.ok) {
