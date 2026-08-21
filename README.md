@@ -89,6 +89,29 @@ without holding the request open.
 
 Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack; always use yarn, not npm, in this repo).
 
+## apps/website
+
+The guest-facing booking site (issebya.homes), brought in from the formerly-separate
+`issebya-homes-website` repo on 2026-08-21 (plain copy, fresh history — its
+`packages/shared` got inlined into `src/lib/shared`, no new root shared-package
+convention added). Runs on its own, still-separate Supabase project
+(`apps/website/supabase/`) — not yet consolidated with this repo's shared project.
+
+Guest flow: a room's booking page (`/booking/[type]`) queries `GET /api/availability`
+(merges Airbnb/VRBO/Booking.com iCal feeds with the site's own `bookings` table) ->
+guest submits -> `POST /api/checkout/create` opens a Stripe Checkout session ->
+`POST /api/webhook/stripe` confirms payment and writes the `bookings` row -> the
+confirmation page looks it up via `GET /api/bookings/direct` -> `GET /api/ical/[room]`
+re-exports issebya's own bookings as an iCal feed for the reverse sync back to
+Airbnb/VRBO/Booking.com. Confirmation/notification emails go out via Resend.
+
+> **Known gap:** GCA's `send_booking_link`/`check_availability` tools call this
+> site's live `issebya.com/api/availability` directly over the network rather than
+> through anything in this repo — a cross-repo runtime dependency the original port
+> never removed (see the `apps/guest-communication-agent` section above). Updating
+> GCA's booking tool to work against this in-repo copy instead is separate, unstarted
+> work.
+
 ## Setup
 
 ```bash
@@ -107,17 +130,24 @@ cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.e
                        # TWILIO_WHATSAPP_FROM (Sandbox values work for local dev),
                        # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
                        # uses), NEXT_PUBLIC_SITE_URL
+cp apps/website/.env.example apps/website/.env  # fill in SUPABASE_URL/SUPABASE_ANON_KEY/
+                       # SUPABASE_SERVICE_ROLE_KEY (its own, separate Supabase project —
+                       # `supabase start` from apps/website/, not the repo root), STRIPE_*,
+                       # RESEND_*, ROOM1_ICAL_*/ROOM2_ICAL_*, see the file's own comments
 ```
 
 ## Run
 
 ```bash
 yarn dev              # starts every app's dev server in parallel (turbo run dev):
-                       # apps/telegram-router :3003, apps/guest-communication-agent (tsx watch).
+                       # apps/telegram-router :3003, apps/guest-communication-agent (tsx watch),
+                       # apps/website :3000.
                        # Bring up Supabase yourself first (`supabase start`,
                        # applying supabase/migrations); Ctrl+C stops the dev
                        # servers; Supabase's containers keep running in the
                        # background (docker ps); `supabase stop` to stop them.
+                       # apps/website runs its own separate Supabase project — bring that
+                       # up separately too (`cd apps/website && supabase start`).
 ```
 
 ## Checks

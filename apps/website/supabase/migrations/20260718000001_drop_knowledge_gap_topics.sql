@@ -1,0 +1,13 @@
+-- Drop knowledge_gap_topics table.
+--
+-- knowledge_gap_topics stored topics the concierge couldn't answer, mined by
+-- issebya-homes-admin-mcp's gap-detection tool (detect_knowledge_gaps /
+-- list_knowledge_gaps) from chat_logs. Both the admin-mcp edge function
+-- (supabase/functions/issebya-homes-admin-mcp/) and its only feeder,
+-- chat_logs (dropped in 20260718000000_drop_chat_logs.sql, not yet
+-- applied), have been removed. Nothing else reads or writes this table.
+--
+-- documents and match_documents are intentionally left untouched — they
+-- remain in active use by apps/guest-communication-agent's
+-- search-property.ts tool.
+drop table if exists public.knowledge_gap_topics;

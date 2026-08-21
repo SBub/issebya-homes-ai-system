@@ -10,7 +10,21 @@
       "next": true,
       "entry": ["tests/**/*.test.ts", "scripts/**/*.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
+    },
+    "apps/website": {
+      "next": true,
+      "entry": ["src/**/*.unit.test.ts", "src/**/*.browser.test.tsx", "e2e/**/*.ts"],
+      "project": ["src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts"],
+      "ignoreDependencies": ["tailwindcss"]
     }
   },
-  "ignoreBinaries": ["supabase"]
+  "ignoreBinaries": ["supabase", "stripe"],
+  "ignoreIssues": {
+    "apps/website/src/lib/ical-parser.ts": ["exports"],
+    "apps/website/src/lib/shared/schemas/booking.ts": ["exports", "types"],
+    "apps/website/src/lib/shared/types/booking.ts": ["types"],
+    "apps/website/src/app/(main)/booking/[type]/ui/Gallery.tsx": ["types"],
+    "apps/website/src/app/ui/TabsDesktop.tsx": ["types"],
+    "apps/website/src/app/ui/TabsMobile.tsx": ["types"]
+  }
 }

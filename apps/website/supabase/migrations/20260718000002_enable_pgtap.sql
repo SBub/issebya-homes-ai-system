@@ -1,0 +1,13 @@
+-- Enable pgtap.
+--
+-- Required by the pgTAP test suite in supabase/tests/ (plan(), has_table(),
+-- col_type_is(), throws_ok(), etc. are all pgtap functions). No migration
+-- previously created this extension, so `yarn test:db` fails on every test
+-- file with "function plan(integer) does not exist" — pgtap is bundled in
+-- Supabase's local Postgres image but was never installed into the
+-- database.
+--
+-- extensions schema matches the convention used for pgcrypto, uuid-ossp,
+-- and vector in 20260409200000_squashed_baseline.sql, and is on the
+-- postgres role's default search_path (see supabase/config.toml).
+create extension if not exists pgtap with schema extensions;

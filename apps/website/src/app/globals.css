@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-work);
+  --font-hand: var(--font-hand);
+}
+
+/*
+ @media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+*/
+
+:root {
+  --background: #f0eeea; /* Light beige */
+  --foreground: #000000; /* Black */
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Booking Engine Styles */
+
+.booking-engine {
+  @apply w-full relative;
+}
+
+.booking-engine-loading,
+.booking-engine-error {
+  @apply p-4 text-center;
+}
+
+/* Collapsed State */
+
+.booking-engine-collapsed {
+  @apply flex flex-col gap-2;
+}
+
+.booking-collapsed-main {
+  @apply flex flex-col gap-2;
+}
+
+.booking-dates-display {
+  @apply flex items-stretch gap-2;
+}
+
+.booking-date-button {
+  @apply px-3 py-2 border border-foreground bg-background hover:bg-foreground hover:text-background transition-colors cursor-pointer;
+}
+
+.booking-date-value {
+  @apply text-sm font-semibold font-sans;
+}
+
+.booking-date-separator {
+  @apply text-lg flex items-center;
+}
+
+.booking-book-button {
+  @apply px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm lowercase tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
+}
+
+/* Pricing info in collapsed state */
+.booking-pricing-info {
+  @apply flex flex-col gap-1 pt-2;
+}
+
+.booking-price-per-night {
+  @apply text-xl font-bold my-4;
+}
+
+.booking-discount-info {
+  @apply text-xs text-gray-600;
+}
+
+/* Expanded State */
+
+.booking-engine-expanded {
+  @apply border border-foreground p-4 bg-background mt-4;
+  animation: expandDown 0.3s ease-out;
+}
+
+@keyframes expandDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Summary row at top of expanded state */
+.booking-summary-row {
+  @apply flex justify-between items-start mb-4 pb-4 border-b border-black;
+}
+
+.booking-summary-left {
+  @apply flex flex-col items-start gap-1;
+}
+
+.booking-summary-separator {
+  @apply text-gray-400;
+}
+
+.booking-summary-item {
+  @apply text-sm font-sans;
+}
+
+.booking-summary-right {
+  @apply flex flex-col items-end gap-1;
+}
+
+.booking-summary-total {
+  @apply text-xl font-bold;
+}
+
+.booking-summary-tax {
+  @apply text-xs text-gray-600;
+}
+
+.booking-summary-persons {
+  @apply flex items-center gap-1;
+}
+
+.booking-person-button {
+  @apply w-6 h-6 flex items-center justify-center border border-black bg-white text-sm font-bold cursor-pointer;
+}
+
+.booking-person-button:hover:not(:disabled) {
+  @apply bg-gray-100;
+}
+
+.booking-person-button:disabled {
+  @apply opacity-30 cursor-not-allowed;
+}
+
+.booking-person-count {
+  @apply w-6 text-center font-sans font-bold;
+}
+
+/* Tourist tax info */
+.booking-tourist-tax-info {
+  @apply text-xs text-gray-500 mt-4;
+}
+
+/* Email input field */
+.booking-email-field {
+  @apply flex flex-col mt-4 mb-4;
+}
+
+.booking-email-label {
+  @apply text-sm mb-1;
+}
+
+.booking-email-input {
+  @apply w-full px-3 py-2 border border-foreground bg-white text-black text-sm;
+}
+
+.booking-email-input::placeholder {
+  @apply text-gray-400;
+}
+
+/* Action buttons */
+.booking-action-buttons {
+  @apply flex gap-3;
+}
+
+.booking-close-button {
+  @apply flex-1 px-4 py-2 border border-foreground bg-background text-foreground font-sans text-sm lowercase tracking-wide hover:bg-foreground hover:text-background transition-colors;
+}
+
+.booking-book-button-expanded {
+  @apply flex-1 px-4 py-2 bg-foreground text-background font-sans text-sm lowercase tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+/* Calendar Styles */
+
+.booking-calendar {
+  @apply w-full;
+}
+
+.booking-calendar-two-months {
+  @apply max-w-full;
+}
+
+.calendar-header {
+  @apply flex items-center justify-between mb-4;
+}
+
+.calendar-header-spacer {
+  @apply flex-1;
+}
+
+.calendar-nav-button {
+  @apply px-3 py-1 hover:bg-foreground hover:text-background transition-colors border border-foreground;
+}
+
+/* Two months container */
+.calendar-months-container {
+  @apply grid grid-cols-1 sm:grid-cols-2 gap-4;
+}
+
+/* Show only one month on mobile */
+.calendar-months-container > .calendar-month:last-child {
+  @apply hidden sm:block;
+}
+
+.calendar-month {
+  @apply w-full;
+}
+
+.calendar-month-title {
+  @apply text-lg font-semibold text-center mb-2;
+}
+
+.calendar-day-names {
+  @apply grid grid-cols-7 gap-1 mb-2;
+}
+
+.calendar-day-name {
+  @apply text-center text-xs uppercase font-sans font-semibold py-1;
+}
+
+.calendar-grid {
+  @apply grid grid-cols-7 gap-1;
+}
+
+/* Calendar Date States */
+
+.calendar-date {
+  @apply aspect-square flex items-center justify-center text-sm font-sans relative;
+}
+
+.calendar-date-outside-month {
+  @apply text-gray-400 cursor-not-allowed;
+}
+
+.calendar-date-available {
+  @apply cursor-pointer border border-transparent hover:border-foreground transition-colors;
+}
+
+.calendar-date-blocked {
+  @apply text-gray-400 cursor-not-allowed line-through bg-gray-100;
+}
+
+.calendar-date-checkout-boundary {
+  @apply text-gray-400 cursor-not-allowed;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    #f3f4f6 3px,
+    #f3f4f6 4px
+  );
+}
+
+.calendar-date-selected {
+  @apply bg-foreground text-background font-semibold;
+}
+
+.calendar-date:disabled {
+  @apply cursor-not-allowed;
+}
+
+.calendar-date:focus-visible {
+  @apply outline outline-2 outline-foreground outline-offset-2;
+}
+
+.calendar-legend {
+  @apply flex flex-wrap gap-x-4 gap-y-1 justify-start sm:justify-center mt-4 pt-3 border-t border-gray-100;
+}
+
+.calendar-legend-item {
+  @apply flex items-center gap-1.5;
+}
+
+.calendar-legend-swatch {
+  @apply w-4 h-4 rounded-none flex-shrink-0 border border-gray-400;
+}
+
+.calendar-legend-label {
+  @apply text-xs text-gray-500 font-sans;
+}
+
+.calendar-legend-swatch.calendar-date-checkout-boundary {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    #d1d5db 3px,
+    #d1d5db 4px
+  );
+}

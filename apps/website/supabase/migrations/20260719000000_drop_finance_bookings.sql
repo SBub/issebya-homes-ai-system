@@ -1,0 +1,27 @@
+-- Drop finance_bookings and finance_platform.
+--
+-- finance_bookings stored per-booking revenue/tax/profit rows, written
+-- exclusively by apps/finance's CSV import route
+-- (apps/finance/src/app/api/finance/import/route.ts) and read by its
+-- bookings/tourist-tax routes. finance_platform (airbnb/booking_com/direct)
+-- was the platform enum on that table (20260629000001_finance_bookings_platform.sql,
+-- 20260705000002_finance_platform_direct.sql). apps/finance has migrated out
+-- of this monorepo to issebya-homes-ai-system, so nothing in this repo
+-- writes or reads either object anymore.
+--
+-- RLS (20260629000002_finance_bookings_rls.sql) and the
+-- acquisition_channel column (20260705000003_finance_bookings_acquisition_channel.sql)
+-- live on this table and are dropped along with it automatically.
+--
+-- CAUTION — checked before writing this migration: finance_room
+-- (room_1/room_2, created alongside finance_bookings in
+-- 20260629000000_finance_bookings.sql) is NOT dropped here — it is also
+-- used live by guest_contacts.last_room and promo_codes.room_scope in the
+-- CRM system (supabase/migrations/20260705000000_crm_tables.sql). Dropping
+-- it would break CRM.
+--
+-- bookings.acquisition_channel, campaigns, guest_contacts, promo_codes, and
+-- crm_messages are intentionally left untouched — they are CRM-owned,
+-- unrelated to finance's removal.
+drop table if exists public.finance_bookings;
+drop type if exists finance_platform;

@@ -1,0 +1,62 @@
+{
+  "name": "website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "webhook": "stripe listen --forward-to localhost:3000/api/webhook/stripe",
+    "test:unit": "vitest --project unit",
+    "test:browser": "vitest --project browser",
+    "test:integration": "playwright test"
+  },
+  "dependencies": {
+    "@plausible-analytics/tracker": "^0.4.4",
+    "@sentry/nextjs": "^10",
+    "@supabase/supabase-js": "^2.49.8",
+    "@tanstack/react-query": "^5.81.2",
+    "date-fns": "^4.1.0",
+    "ical.js": "^2.2.1",
+    "next": "^16.2.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "resend": "^4.6.0",
+    "stripe": "^18.2.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/browser-playwright": "^4.0.18",
+    "eslint": "^9",
+    "eslint-config-next": "^16.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-no-secrets": "^2.3.3",
+    "eslint-plugin-security": "^4.0.0",
+    "msw": "^2.12.14",
+    "playwright": "^1.58.2",
+    "prettier": "^3.8.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^7",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.0.18",
+    "vitest-browser-react": "^2.0.4"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

@@ -1,0 +1,24 @@
+-- Drop chat_logs table.
+--
+-- chat_logs recorded guest concierge chat turns/tool calls, written by
+-- @issebya/agent-concierge's logChatEntry() (packages/agent-concierge/src/logging.ts).
+-- That package (and apps/website's chat widget that was its only in-repo
+-- writer) has been removed from the monorepo, so nothing writes to this
+-- table anymore.
+--
+-- CAUTION — checked before writing this migration: chat_logs still has a
+-- live READER independent of agent-concierge:
+-- supabase/functions/issebya-homes-admin-mcp/tools/gap-detection.ts
+-- (detect_knowledge_gaps / list_knowledge_gaps tools) selects directly from
+-- chat_logs to build transcripts and mine unanswered topics into
+-- knowledge_gap_topics. Dropping this table with no writers left means that
+-- pipeline silently goes empty (no sessions found) rather than erroring, so
+-- there is no hard failure to catch this — but knowledge-gap detection was
+-- effectively powered by the concierge chat's logs and has no other input
+-- source today. Re-scope or intentionally retire that admin-mcp tool before
+-- applying this migration for real.
+--
+-- documents, match_documents, knowledge_gap_topics, and booking_availability
+-- are intentionally left untouched — they remain in active use by the
+-- issebya-homes-admin-mcp edge function.
+drop table if exists public.chat_logs;
