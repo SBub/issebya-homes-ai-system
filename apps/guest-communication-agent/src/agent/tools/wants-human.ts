@@ -23,14 +23,17 @@ export const wantsHuman = tool({
 // stay pure" rule near `tools`). The real work (sending the owner nudge,
 // stepped/spanned for replay-safety) now lives in run-turn.ts's private
 // dispatchWantsHuman, called from the SELF_STEPPED_TOOLS branch; this
-// function is left with only the tool's own result shape, which never
-// depends on the input args — kept as a real function (not inlined at the
-// call site) for consistency with the rest of this app's run<ToolName>
-// dispatch pattern (see current-date.ts's runGetCurrentDate for the same
-// zero-arg shape).
-export function runWantsHuman() {
-  return {
-    escalated: true,
-    message: "The owner has been notified and will be in touch shortly.",
-  };
+// function is left with only the tool's own result shape — kept as a real
+// function (not inlined at the call site) for consistency with the rest of
+// this app's run<ToolName> dispatch pattern. `nudged` is dispatchWantsHuman's
+// already-known result of the owner-nudge send, threaded through so a failed
+// nudge gets an honest message instead of falsely claiming the owner was
+// notified.
+export function runWantsHuman(nudged: boolean) {
+  return nudged
+    ? { escalated: true, message: "The owner has been notified and will be in touch shortly." }
+    : {
+        escalated: true,
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+      };
 }

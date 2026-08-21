@@ -9,15 +9,11 @@ export interface ActiveConversation {
 
 /**
  * Finds the guest's currently-active conversation, or starts a new one.
+ * `phone` is the bare (non-"whatsapp:"-prefixed) form — every caller has
+ * already normalized it — and whatsapp_conversations.phone_number is stored
+ * bare too, so this is a single, unqualified lookup.
  *
- * Checks both phone forms: Twilio's inbound webhook stores phone_number
- * "whatsapp:"-prefixed, but some callers pass a bare (unprefixed) form —
- * an unqualified lookup on only one form would miss the guest's real active
- * conversation and create a fragmented duplicate. A new row is
- * always inserted under the prefixed form so future inbound replies
- * (always prefixed) converge on it.
- *
- * `.order(...).limit(1)` instead of bare `.maybeSingle()`, since this
+ * `.order(...).limit(1)` instead of bare `.maybeSingle()`, since a past
  * fragmentation bug can leave >1 "active" row for the same guest —
  * `.maybeSingle()` would error on that instead of degrading gracefully.
  */
@@ -28,13 +24,10 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
     async () => {
       const supabase = createAdminClient();
 
-      const prefixedPhone = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
-      const phoneForms = Array.from(new Set([phone, prefixedPhone]));
-
       const { data: existing, error: lookupError } = await supabase
         .from("whatsapp_conversations")
         .select("id")
-        .in("phone_number", phoneForms)
+        .eq("phone_number", phone)
         .eq("status", "active")
         .order("started_at", { ascending: false })
         .limit(1)
@@ -50,7 +43,7 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
 
       const { data: created, error } = await supabase
         .from("whatsapp_conversations")
-        .insert({ phone_number: prefixedPhone })
+        .insert({ phone_number: phone })
         .select("id")
         .single();
       if (error || !created) {
@@ -92,6 +85,34 @@ export async function recordMessage(
         );
       }
       return data.id;
+    },
+  );
+}
+
+// Only ever set on a role="assistant" row (see the delivery_status column's
+// own migration comment for why a guest's own inbound row has no delivery
+// status) — called by run-turn.ts's runGuestTurn right after
+// sendGuestWhatsAppReply resolves, using recordMessage's own return value
+// (the row id) as `messageId`, so it's a plain follow-up update rather than
+// a change to recordMessage's insert shape itself.
+export async function updateMessageDeliveryStatus(
+  messageId: string,
+  status: "sent" | "failed",
+): Promise<void> {
+  return withSpan(
+    "db.updateMessageDeliveryStatus",
+    { "db.table": "whatsapp_messages", "gca.message_id": messageId },
+    async () => {
+      const supabase = createAdminClient();
+      const { error } = await supabase
+        .from("whatsapp_messages")
+        .update({ delivery_status: status })
+        .eq("id", messageId);
+      if (error) {
+        throw new Error(
+          `Failed to update delivery_status for whatsapp_messages row ${messageId}: ${error.message}`,
+        );
+      }
     },
   );
 }

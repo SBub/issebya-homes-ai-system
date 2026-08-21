@@ -29,6 +29,17 @@ vi.mock("@/agent/tools/missing-info.js", () => ({
   handleMissingInfoReplyReceived: handleMissingInfoReplyReceivedMock,
 }));
 
+// This route's own best-effort pending_owner_decisions bookkeeping — mocked
+// at this module boundary, same style as handleMissingInfoReplyReceived
+// above. Its own success/failure behavior (never throwing) is covered by
+// pending-owner-decisions.ts's own unit coverage; this file only asserts
+// this route calls it with the right args, after the real work above has
+// already succeeded.
+const markPendingOwnerDecisionRelayedMock = vi.fn();
+vi.mock("@/lib/pending-owner-decisions.js", () => ({
+  markPendingOwnerDecisionRelayed: markPendingOwnerDecisionRelayedMock,
+}));
+
 // consumeMissingInfoTraceAnchor is this route's one real Supabase-backed
 // call (see tracing.ts) — mocked the same "mock the module's exported
 // external-call function directly" way run-turn.test.ts mocks updateSpanIO.
@@ -92,6 +103,8 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
     withTurnSpanSpy.mockClear();
     startTraceRootSpy.mockClear();
     spanExporter.reset();
+    markPendingOwnerDecisionRelayedMock.mockReset();
+    markPendingOwnerDecisionRelayedMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -135,6 +148,20 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
       correlationId: "corr-abc-123",
       answer: "The AC is above the bed",
     });
+    // Best-effort pending_owner_decisions bookkeeping, called after the real
+    // KB-embed/Inngest-send work above already succeeded, with the owner's
+    // actual answer captured as context.
+    expect(markPendingOwnerDecisionRelayedMock).toHaveBeenCalledWith("corr-abc-123", {
+      answer: "The AC is above the bed",
+    });
+  });
+
+  it("does not call markPendingOwnerDecisionRelayed when handleMissingInfoReplyReceived throws", async () => {
+    handleMissingInfoReplyReceivedMock.mockRejectedValueOnce(new Error("insert boom"));
+
+    await POST(makeRequest({ answer: "The AC is above the bed" }), makeParams("corr-abc-123"));
+
+    expect(markPendingOwnerDecisionRelayedMock).not.toHaveBeenCalled();
   });
 
   it("returns a 500 with the error message when handleMissingInfoReplyReceived throws", async () => {

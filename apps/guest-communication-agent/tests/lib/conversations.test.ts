@@ -6,29 +6,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const maybeSingleMock = vi.fn();
 const limitMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
 const orderMock = vi.fn(() => ({ limit: limitMock }));
-const eqMock = vi.fn(() => ({ order: orderMock }));
-const selectInMock = vi.fn(() => ({ eq: eqMock }));
-const selectMock = vi.fn(() => ({ in: selectInMock }));
+const lookupEqStatusMock = vi.fn(() => ({ order: orderMock }));
+const lookupEqPhoneMock = vi.fn(() => ({ eq: lookupEqStatusMock }));
+const selectMock = vi.fn(() => ({ eq: lookupEqPhoneMock }));
 
 const insertSelectSingleMock = vi.fn();
 const insertSelectMock = vi.fn(() => ({ single: insertSelectSingleMock }));
 const insertMock = vi.fn(() => ({ select: insertSelectMock }));
 
-const fromMock = vi.fn(() => ({ select: selectMock, insert: insertMock }));
+// updateMessageDeliveryStatus's own chain: .update(...).eq("id", messageId).
+const updateEqMock = vi.fn();
+const updateMock = vi.fn(() => ({ eq: updateEqMock }));
+
+const fromMock = vi.fn(() => ({ select: selectMock, insert: insertMock, update: updateMock }));
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
 }));
 
-const { getOrCreateActiveConversation, recordMessage } = await import("@/lib/conversations.js");
+const { getOrCreateActiveConversation, recordMessage, updateMessageDeliveryStatus } = await import(
+  "@/lib/conversations.js"
+);
 
 describe("getOrCreateActiveConversation", () => {
   beforeEach(() => {
     maybeSingleMock.mockReset();
     limitMock.mockClear();
     orderMock.mockClear();
-    eqMock.mockClear();
-    selectInMock.mockClear();
+    lookupEqStatusMock.mockClear();
+    lookupEqPhoneMock.mockClear();
     selectMock.mockClear();
     insertSelectSingleMock.mockReset();
     insertSelectMock.mockClear();
@@ -40,32 +46,18 @@ describe("getOrCreateActiveConversation", () => {
     vi.restoreAllMocks();
   });
 
-  it("finds an existing active conversation stored prefixed when queried with the bare form", async () => {
+  it("finds an existing active conversation for the bare phone", async () => {
     maybeSingleMock.mockResolvedValueOnce({ data: { id: "conv-1" }, error: null });
 
     const result = await getOrCreateActiveConversation("+351920742845");
 
-    expect(selectInMock).toHaveBeenCalledWith("phone_number", [
-      "+351920742845",
-      "whatsapp:+351920742845",
-    ]);
-    expect(eqMock).toHaveBeenCalledWith("status", "active");
+    expect(lookupEqPhoneMock).toHaveBeenCalledWith("phone_number", "+351920742845");
+    expect(lookupEqStatusMock).toHaveBeenCalledWith("status", "active");
     expect(result).toEqual({ conversationId: "conv-1", isNew: false });
     expect(insertMock).not.toHaveBeenCalled();
   });
 
-  it("finds an existing active conversation when queried with the already-prefixed form (regression case)", async () => {
-    maybeSingleMock.mockResolvedValueOnce({ data: { id: "conv-1" }, error: null });
-
-    const result = await getOrCreateActiveConversation("whatsapp:+351920742845");
-
-    // Deduped — the already-prefixed input isn't passed twice into `.in(...)`.
-    expect(selectInMock).toHaveBeenCalledWith("phone_number", ["whatsapp:+351920742845"]);
-    expect(result).toEqual({ conversationId: "conv-1", isNew: false });
-    expect(insertMock).not.toHaveBeenCalled();
-  });
-
-  it("picks the most-recently-started active conversation when more than one row matches across phone forms", async () => {
+  it("picks the most-recently-started active conversation when more than one row matches", async () => {
     // Ordered newest-first + limit(1) is exactly how this degrades
     // gracefully instead of erroring on >1 row — the mock only needs to
     // return the one row the query itself would have narrowed down to.
@@ -79,23 +71,13 @@ describe("getOrCreateActiveConversation", () => {
     expect(insertMock).not.toHaveBeenCalled();
   });
 
-  it("creates a new conversation stored under the prefixed form when passed the bare form and none exists", async () => {
+  it("creates a new conversation stored bare when none exists", async () => {
     maybeSingleMock.mockResolvedValueOnce({ data: null, error: null });
     insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "conv-new" }, error: null });
 
     const result = await getOrCreateActiveConversation("+351920742845");
 
-    expect(insertMock).toHaveBeenCalledWith({ phone_number: "whatsapp:+351920742845" });
-    expect(result).toEqual({ conversationId: "conv-new", isNew: true });
-  });
-
-  it("creates a new conversation stored under the prefixed form when passed the already-prefixed form and none exists", async () => {
-    maybeSingleMock.mockResolvedValueOnce({ data: null, error: null });
-    insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "conv-new" }, error: null });
-
-    const result = await getOrCreateActiveConversation("whatsapp:+351920742845");
-
-    expect(insertMock).toHaveBeenCalledWith({ phone_number: "whatsapp:+351920742845" });
+    expect(insertMock).toHaveBeenCalledWith({ phone_number: "+351920742845" });
     expect(result).toEqual({ conversationId: "conv-new", isNew: true });
   });
 
@@ -164,6 +146,36 @@ describe("recordMessage", () => {
 
     await expect(recordMessage("convo-1", "user", "Hi")).rejects.toThrow(
       "Failed to record user message for conversation convo-1: boom",
+    );
+  });
+});
+
+describe("updateMessageDeliveryStatus", () => {
+  beforeEach(() => {
+    updateEqMock.mockReset();
+    updateMock.mockClear();
+    fromMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("updates delivery_status on the given whatsapp_messages row id", async () => {
+    updateEqMock.mockResolvedValueOnce({ error: null });
+
+    await updateMessageDeliveryStatus("msg-1", "sent");
+
+    expect(fromMock).toHaveBeenCalledWith("whatsapp_messages");
+    expect(updateMock).toHaveBeenCalledWith({ delivery_status: "sent" });
+    expect(updateEqMock).toHaveBeenCalledWith("id", "msg-1");
+  });
+
+  it("throws when the update fails", async () => {
+    updateEqMock.mockResolvedValueOnce({ error: { message: "boom" } });
+
+    await expect(updateMessageDeliveryStatus("msg-1", "failed")).rejects.toThrow(
+      "Failed to update delivery_status for whatsapp_messages row msg-1: boom",
     );
   });
 });

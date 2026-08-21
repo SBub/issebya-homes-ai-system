@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { handleBookingLinkApprovalReceived } from "@/agent/tools/booking";
 import { requireApiKey } from "@/lib/auth";
+import { markPendingOwnerDecisionRelayed } from "@/lib/pending-owner-decisions";
 import {
   consumeApprovalGateTraceAnchor,
   markSpanFailed,
@@ -97,6 +98,13 @@ export async function POST(
         () => handleBookingLinkApprovalReceived({ correlationId, approved }),
       );
     }
+    // Best-effort bookkeeping, after the real Inngest-send work above has
+    // already succeeded — never allowed to fail this request (see
+    // markPendingOwnerDecisionRelayed's own doc comment). No matching row is
+    // a real, expected case (e.g. a duplicate/late POST after the row was
+    // already resolved), not something to log as an error here — the helper
+    // itself already logs any actual write failure.
+    await markPendingOwnerDecisionRelayed(correlationId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(

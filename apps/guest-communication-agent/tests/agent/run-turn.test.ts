@@ -62,8 +62,23 @@ vi.mock("@/lib/telegram-router.js", () => ({
 }));
 
 const recordMessageMock = vi.fn();
+const updateMessageDeliveryStatusMock = vi.fn();
 vi.mock("@/lib/conversations.js", () => ({
   recordMessage: recordMessageMock,
+  updateMessageDeliveryStatus: updateMessageDeliveryStatusMock,
+}));
+
+// pending_owner_decisions bookkeeping — real callers are approval-gate.ts's
+// requestApprovalGate (real code in this suite, only spied — see
+// requestApprovalGateSpy below) and this file's own private runMissingInfo.
+// Mocked at this module boundary, same "mock the module's exported
+// external-call function directly" style as recordMessage/
+// updateMessageDeliveryStatus above.
+const insertPendingOwnerDecisionMock = vi.fn();
+const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
+vi.mock("@/lib/pending-owner-decisions.js", () => ({
+  insertPendingOwnerDecision: insertPendingOwnerDecisionMock,
+  resolvePendingOwnerDecisionByCorrelationId: resolvePendingOwnerDecisionByCorrelationIdMock,
 }));
 
 const sendWhatsAppMessageMock = vi.fn();
@@ -568,6 +583,29 @@ describe("runAgentTurn", () => {
       .getFinishedSpans()
       .find((span) => span.name === "owner_nudge.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
+
+    // pending_owner_decisions bookkeeping: recorded once the nudge is
+    // confirmed sent (before the wait), with the model's own real tool-call
+    // args as `context` (so a later manual-resolve action can rebuild this
+    // exact booking link — see approval-gate.ts's requestApprovalGate), then
+    // resolved "approved" once the real decision comes back.
+    expect(insertPendingOwnerDecisionMock).toHaveBeenCalledWith({
+      correlationId: "corr-1",
+      toolName: "send_booking_link",
+      conversationId: "convo-1",
+      phone: "+3519",
+      reason: expect.stringContaining("Ana"),
+      context: {
+        guestName: "Ana",
+        room: "room1",
+        checkIn: "2026-09-01",
+        checkOut: "2026-09-05",
+      },
+    });
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+      "corr-1",
+      "approved",
+    );
   });
 
   it("stops looping once MAX_AGENT_STEPS is hit, without an extra model call or an owner nudge", async () => {
@@ -701,6 +739,21 @@ describe("runAgentTurn", () => {
     // comment), so firedTags is a harmless natural side effect here now, not
     // the only route — see RunAgentTurnResult.firedTags.
     expect(result.firedTags).toEqual(["missing_info"]);
+
+    // pending_owner_decisions bookkeeping: recorded once the nudge is
+    // confirmed sent (before the wait), then resolved "answered" once the
+    // owner's real answer comes back.
+    expect(insertPendingOwnerDecisionMock).toHaveBeenCalledWith({
+      correlationId: "corr-sticky",
+      toolName: "missing_info",
+      conversationId: "convo-sticky",
+      phone: "+351900000002",
+      reason: "Guest asked about the sauna",
+    });
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+      "corr-sticky",
+      "answered",
+    );
   });
 
   // The rest of missing_info's suspend/resume behavior — previously unit
@@ -792,6 +845,18 @@ describe("runAgentTurn", () => {
         message: "The owner has been notified and will be in touch shortly.",
       },
     });
+
+    expect(insertPendingOwnerDecisionMock).toHaveBeenCalledWith({
+      correlationId: "corr-sauna-timeout",
+      toolName: "missing_info",
+      conversationId: "convo-sauna-timeout",
+      phone: "+351900000020",
+      reason: "Guest asked about the sauna",
+    });
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+      "corr-sauna-timeout",
+      "timeout",
+    );
   });
 
   it("skips the missing_info wait entirely (and still returns the fallback message) when the nudge itself failed to send", async () => {
@@ -822,7 +887,7 @@ describe("runAgentTurn", () => {
       type: "json",
       value: {
         escalated: true,
-        message: "The owner has been notified and will be in touch shortly.",
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       },
     });
     // Nudge failed means nothing to wait on.
@@ -832,7 +897,9 @@ describe("runAgentTurn", () => {
     // The tool-call span itself is still created on this third exit path too
     // (it's created FIRST, before the nudge is even attempted — see
     // runMissingInfo's own comment) and its output still gets retroactively
-    // patched to the same fallback message all three exit paths share.
+    // patched to the honest nudge-failed fallback message (distinct from the
+    // "notified" message the other two exit paths share, since here the
+    // owner genuinely was never told).
     const missingInfoExecSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "gen_ai.tool.missing_info");
@@ -841,9 +908,14 @@ describe("runAgentTurn", () => {
     expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
       output: {
         escalated: true,
-        message: "The owner has been notified and will be in touch shortly.",
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       },
     });
+
+    // No pending_owner_decisions row is ever worth recording for a nudge the
+    // owner was never actually told about.
+    expect(insertPendingOwnerDecisionMock).not.toHaveBeenCalled();
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).not.toHaveBeenCalled();
   });
 
   it("escalates a wants_human tool call as its own reason_category", async () => {
@@ -1064,6 +1136,50 @@ describe("runAgentTurn", () => {
           spanId: bookingExecSpan?.spanContext().spanId,
         },
       }),
+    );
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+      "corr-hitl-reject",
+      "rejected",
+    );
+  });
+
+  it("resolves the pending_owner_decisions row as 'timeout' when a send_booking_link approval times out", async () => {
+    // This suite's default: step.waitForEvent resolves null (a timeout).
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          {
+            toolName: "send_booking_link",
+            input: {
+              guestName: "Ana",
+              room: "room1",
+              checkIn: "2026-09-01",
+              checkOut: "2026-09-05",
+            },
+            toolCallId: "call_book",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("No problem, let me know if anything changes."));
+
+    await runAgentTurn(
+      {
+        conversationId: "convo-hitl-timeout",
+        phone: "+351900000044",
+        incomingMessage: "Book it",
+      },
+      { correlationId: "corr-hitl-timeout", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(insertPendingOwnerDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "corr-hitl-timeout",
+        toolName: "send_booking_link",
+      }),
+    );
+    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+      "corr-hitl-timeout",
+      "timeout",
     );
   });
 
@@ -1709,6 +1825,7 @@ describe("runGuestTurn", () => {
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
     });
     recordMessageMock.mockResolvedValue("msg-assistant-1");
+    updateMessageDeliveryStatusMock.mockResolvedValue(undefined);
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
     updateSpanIOMock.mockResolvedValue(undefined);
     foldMemoryMock.mockResolvedValue(undefined);
@@ -1747,9 +1864,14 @@ describe("runGuestTurn", () => {
         "update-turn-trace-io",
         "record-reply",
         "send-whatsapp-reply",
+        "update-message-delivery-status",
         "fold-memory-summary",
       ]),
     );
+    // recordMessage's own return value (the row id) is what gets the
+    // delivery-status follow-up update — see conversations.ts's
+    // updateMessageDeliveryStatus doc comment.
+    expect(updateMessageDeliveryStatusMock).toHaveBeenCalledWith("msg-assistant-1", "sent");
   });
 
   // The whole point of this fix: the summarizer's LLM round-trip must not
@@ -1940,6 +2062,7 @@ describe("runGuestTurn", () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining("Twilio rejected the number"),
     );
+    expect(updateMessageDeliveryStatusMock).toHaveBeenCalledWith("msg-assistant-1", "failed");
     consoleErrorSpy.mockRestore();
   });
 });

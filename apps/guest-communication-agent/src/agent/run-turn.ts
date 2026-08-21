@@ -26,9 +26,13 @@ import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runCode, runRunCode } from "@/agent/tools/run-code";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
-import { recordMessage } from "@/lib/conversations";
+import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { openrouter } from "@/lib/openrouter";
+import {
+  insertPendingOwnerDecision,
+  resolvePendingOwnerDecisionByCorrelationId,
+} from "@/lib/pending-owner-decisions";
 import {
   markSpanFailed,
   recordMissingInfoTraceAnchor,
@@ -400,7 +404,7 @@ async function dispatchWantsHuman(
   );
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
-  await steppedSpan(
+  const nudged = await steppedSpan(
     step,
     "owner-nudge-wants-human",
     toolAnchor,
@@ -425,7 +429,7 @@ async function dispatchWantsHuman(
       }),
   );
 
-  const result = runWantsHuman();
+  const result = runWantsHuman(nudged);
 
   // Retroactively patches the tool-call span's output now that it's known —
   // same mechanism (and the same "best-effort, not guaranteed to land"
@@ -538,15 +542,37 @@ async function runMissingInfo(
   // model and retroactively patch onto the tool-call span's output below —
   // starts as the nudge-failed/timeout fallback since that's also the
   // fallback for the "nudge never sent" branch that skips the block below
-  // entirely.
-  let result: { escalated: true; answer: string } | { escalated: true; message: string } = {
-    escalated: true,
-    message: "The owner has been notified and will be in touch shortly.",
-  };
+  // entirely. Branches on `nudged` (already known at this point) so a failed
+  // nudge gets an honest message instead of falsely claiming the owner was
+  // notified.
+  let result: { escalated: true; answer: string } | { escalated: true; message: string } = nudged
+    ? { escalated: true, message: "The owner has been notified and will be in touch shortly." }
+    : {
+        escalated: true,
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+      };
 
   // Nudge failed to send — skip straight to the same fallback a timeout
   // would produce; there's no point suspending if the owner was never told.
   if (nudged) {
+    // Best-effort bookkeeping (see insertPendingOwnerDecision's own doc
+    // comment) — own step, only reached once the nudge is confirmed sent.
+    // Guarded on correlationId same as recordMissingInfoTraceAnchor's own
+    // call site above: only real runs supply one (see
+    // ToolContext.correlationId's own comment); there's nothing to key a row
+    // on for hypothetical callers outside a live run.
+    if (correlationId) {
+      await step.run("record-pending-decision", () =>
+        insertPendingOwnerDecision({
+          correlationId,
+          toolName: "missing_info",
+          conversationId,
+          phone,
+          reason: args.reason,
+        }),
+      );
+    }
+
     const waitResult = await step.waitForEvent("wait-for-owner-answer", {
       event: OWNER_NUDGE_ANSWERED_EVENT,
       match: "data.correlationId",
@@ -559,6 +585,22 @@ async function runMissingInfo(
       // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
       // re-embed here.
       result = { escalated: true, answer };
+      // Own step — same replay-safety reasoning as the nudge-send step above.
+      // Mirrors missing-info-no-reply's own marker span, for the symmetric
+      // "an answer was received and consumed" case.
+      await steppedSpan(
+        step,
+        "missing-info-answer-received",
+        toolAnchor,
+        "missing_info.answer_received",
+        { "gca.correlation_id": correlationId ?? "unknown", "braintrust.tags": ["missing_info"] },
+        async () => {},
+      );
+      if (correlationId) {
+        await step.run("resolve-pending-decision", () =>
+          resolvePendingOwnerDecisionByCorrelationId(correlationId, "answered"),
+        );
+      }
     } else {
       console.warn(
         `[run-turn] runMissingInfo timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
@@ -575,9 +617,18 @@ async function runMissingInfo(
         "missing-info-no-reply",
         toolAnchor,
         "missing_info.no_reply",
-        { "gca.timeout": MISSING_INFO_REPLY_TIMEOUT, "braintrust.tags": ["missing_info"] },
+        {
+          "gca.timeout": MISSING_INFO_REPLY_TIMEOUT,
+          "braintrust.tags": ["missing_info"],
+          "gca.correlation_id": correlationId ?? "unknown",
+        },
         () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
       );
+      if (correlationId) {
+        await step.run("resolve-pending-decision-timeout", () =>
+          resolvePendingOwnerDecisionByCorrelationId(correlationId, "timeout"),
+        );
+      }
       // Timed out — handleMissingInfoNoReply already ran above; result keeps
       // its default fallback-message value.
     }
@@ -661,6 +712,12 @@ async function dispatchGatedToolCall(
     correlationId,
     step,
     traceAnchor: toolAnchor,
+    // The model's own real tool-call args — captured on this call's
+    // pending_owner_decisions row (see requestApprovalGate's own `context`
+    // param) so a later manual-resolve action can rebuild what this call
+    // would have done (e.g. send_booking_link's room/checkIn/checkOut)
+    // without re-parsing gate.buildReason's human-readable prose.
+    context: call.input,
   });
 
   // requestApprovalGate itself doesn't distinguish a rejection from a
@@ -1124,7 +1181,10 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     }),
   );
 
-  await steppedSpan(
+  // Captured so the delivery-status update below can target this exact row
+  // by id — recordMessage's return value is that row's real id (see its own
+  // doc comment in conversations.ts).
+  const replyMessageId = await steppedSpan(
     step,
     "record-reply",
     traceAnchor,
@@ -1147,13 +1207,22 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     return sendResult;
   }
 
-  await steppedSpan(
+  const sendResult = await steppedSpan(
     step,
     "send-whatsapp-reply",
     traceAnchor,
     "send-whatsapp-reply",
     { "gca.phone": phone },
     sendGuestWhatsAppReply,
+  );
+
+  // Own step, distinct from record-reply above — persists the one thing that
+  // wasn't known yet when that row was inserted (whether the send actually
+  // landed), so an admin recovery UI can later find/retry a reply that was
+  // generated but never delivered (see the delivery_status column's own
+  // migration comment).
+  await step.run("update-message-delivery-status", () =>
+    updateMessageDeliveryStatus(replyMessageId, sendResult.ok ? "sent" : "failed"),
   );
 
   // Folds whatever this turn dropped out of the trimmed history window
