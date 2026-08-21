@@ -588,6 +588,17 @@ export default function ConversationsAdminPage() {
       <Flex align="center" gap="2" mb="4" style={{ flexShrink: 0 }}>
         <Switch checked={stuckOnly} onCheckedChange={setStuckOnly} />
         <Text size="2">Stuck only</Text>
+        {/* Reuses conversationsLoading directly — loadConversations already
+            sets/clears it, so a second boolean here would just duplicate it. */}
+        <Button
+          size="1"
+          variant="soft"
+          color="gray"
+          disabled={conversationsLoading}
+          onClick={() => void loadConversations()}
+        >
+          {conversationsLoading ? "Refreshing…" : "↻ Refresh"}
+        </Button>
       </Flex>
 
       {conversationsError && (
@@ -729,15 +740,32 @@ export default function ConversationsAdminPage() {
             <Card style={{ flexShrink: 0 }}>
               <Flex justify="between" align="center">
                 <Heading size="4">{detailConversation?.phone ?? "Loading…"}</Heading>
-                <Button
-                  size="1"
-                  variant="ghost"
-                  color="gray"
-                  aria-label="Close"
-                  onClick={closeConversationDetail}
-                >
-                  ✕
-                </Button>
+                <Flex align="center" gap="2">
+                  {/* Reuses detailLoading directly — loadDetailFor already
+                      sets/clears it, so a second boolean here would just
+                      duplicate it. It doesn't clear the existing detail data
+                      first (selectConversation does that, this button
+                      doesn't), so a refresh shows "Loading…" alongside the
+                      still-visible previous data rather than blanking it. */}
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color="gray"
+                    disabled={detailLoading}
+                    onClick={() => void loadDetailFor(selectedConversationId)}
+                  >
+                    {detailLoading ? "Refreshing…" : "↻ Refresh"}
+                  </Button>
+                  <Button
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    aria-label="Close"
+                    onClick={closeConversationDetail}
+                  >
+                    ✕
+                  </Button>
+                </Flex>
               </Flex>
             </Card>
 
