@@ -27,6 +27,16 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
+// pending_owner_decisions bookkeeping — mocked at this module boundary, same
+// "mock the module's exported external-call function directly" style as
+// telegram-router/inngest above.
+const insertPendingOwnerDecisionMock = vi.fn();
+const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
+vi.mock("@/lib/pending-owner-decisions.js", () => ({
+  insertPendingOwnerDecision: insertPendingOwnerDecisionMock,
+  resolvePendingOwnerDecisionByCorrelationId: resolvePendingOwnerDecisionByCorrelationIdMock,
+}));
+
 const inngestSendMock = vi.fn();
 vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
@@ -189,6 +199,71 @@ describe("requestApprovalGate", () => {
 
     expect(result).toBe(false);
     expect(step.waitForEvent).not.toHaveBeenCalled();
+    // No pending_owner_decisions row is ever worth recording for a nudge the
+    // owner was never actually told about.
+    expect(insertPendingOwnerDecisionMock).not.toHaveBeenCalled();
+  });
+
+  describe("pending_owner_decisions bookkeeping", () => {
+    it("records a row (with the given tool/correlation/conversation/phone/reason/context) once the nudge is confirmed sent, before waiting on the decision", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+      await requestApprovalGate({
+        ...gateParamsBase,
+        context: { guestName: "Ana", room: "room1", checkIn: "2026-09-01", checkOut: "2026-09-05" },
+        step,
+      });
+
+      expect(insertPendingOwnerDecisionMock).toHaveBeenCalledWith({
+        correlationId: "corr-abc-123",
+        toolName: "send_booking_link",
+        conversationId: "convo-1",
+        phone: "+351920742845",
+        reason: gateParamsBase.reason,
+        context: { guestName: "Ana", room: "room1", checkIn: "2026-09-01", checkOut: "2026-09-05" },
+      });
+      // Recorded before the wait, not just eventually — same replay-safety
+      // spot the nudge-send step itself occupies.
+      const recordOrder = step.run.mock.calls.findIndex(
+        (call) => call[0] === "record-pending-decision",
+      );
+      expect(recordOrder).toBeGreaterThanOrEqual(0);
+      expect(step.waitForEvent).toHaveBeenCalled();
+    });
+
+    it("resolves the row 'approved' when the owner approves", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+      await requestApprovalGate({ ...gateParamsBase, step });
+
+      expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+        "corr-abc-123",
+        "approved",
+      );
+    });
+
+    it("resolves the row 'rejected' when the owner rejects", async () => {
+      step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+
+      await requestApprovalGate({ ...gateParamsBase, step });
+
+      expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+        "corr-abc-123",
+        "rejected",
+      );
+    });
+
+    it("resolves the row 'timeout' when step.waitForEvent times out", async () => {
+      step.waitForEvent.mockResolvedValueOnce(null);
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await requestApprovalGate({ ...gateParamsBase, step });
+
+      expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
+        "corr-abc-123",
+        "timeout",
+      );
+    });
   });
 });
 

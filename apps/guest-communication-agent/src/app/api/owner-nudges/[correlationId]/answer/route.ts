@@ -2,6 +2,7 @@ import type { Span } from "@opentelemetry/api";
 import { type NextRequest, NextResponse } from "next/server";
 import { handleMissingInfoReplyReceived } from "@/agent/tools/missing-info";
 import { requireApiKey } from "@/lib/auth";
+import { markPendingOwnerDecisionRelayed } from "@/lib/pending-owner-decisions";
 import {
   consumeMissingInfoTraceAnchor,
   markSpanFailed,
@@ -117,6 +118,13 @@ export async function POST(
         embedAndRecordAnswer,
       );
     }
+    // Best-effort bookkeeping, after the real KB-embed/Inngest-send work
+    // above has already succeeded — never allowed to fail this request (see
+    // markPendingOwnerDecisionRelayed's own doc comment). No matching row is
+    // a real, expected case (e.g. a duplicate/late POST after the row was
+    // already resolved), not something to log as an error here — the helper
+    // itself already logs any actual write failure.
+    await markPendingOwnerDecisionRelayed(correlationId, { answer });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(

@@ -14,13 +14,19 @@ const insertSelectSingleMock = vi.fn();
 const insertSelectMock = vi.fn(() => ({ single: insertSelectSingleMock }));
 const insertMock = vi.fn(() => ({ select: insertSelectMock }));
 
-const fromMock = vi.fn(() => ({ select: selectMock, insert: insertMock }));
+// updateMessageDeliveryStatus's own chain: .update(...).eq("id", messageId).
+const updateEqMock = vi.fn();
+const updateMock = vi.fn(() => ({ eq: updateEqMock }));
+
+const fromMock = vi.fn(() => ({ select: selectMock, insert: insertMock, update: updateMock }));
 
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
 }));
 
-const { getOrCreateActiveConversation, recordMessage } = await import("@/lib/conversations.js");
+const { getOrCreateActiveConversation, recordMessage, updateMessageDeliveryStatus } = await import(
+  "@/lib/conversations.js"
+);
 
 describe("getOrCreateActiveConversation", () => {
   beforeEach(() => {
@@ -164,6 +170,36 @@ describe("recordMessage", () => {
 
     await expect(recordMessage("convo-1", "user", "Hi")).rejects.toThrow(
       "Failed to record user message for conversation convo-1: boom",
+    );
+  });
+});
+
+describe("updateMessageDeliveryStatus", () => {
+  beforeEach(() => {
+    updateEqMock.mockReset();
+    updateMock.mockClear();
+    fromMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("updates delivery_status on the given whatsapp_messages row id", async () => {
+    updateEqMock.mockResolvedValueOnce({ error: null });
+
+    await updateMessageDeliveryStatus("msg-1", "sent");
+
+    expect(fromMock).toHaveBeenCalledWith("whatsapp_messages");
+    expect(updateMock).toHaveBeenCalledWith({ delivery_status: "sent" });
+    expect(updateEqMock).toHaveBeenCalledWith("id", "msg-1");
+  });
+
+  it("throws when the update fails", async () => {
+    updateEqMock.mockResolvedValueOnce({ error: { message: "boom" } });
+
+    await expect(updateMessageDeliveryStatus("msg-1", "failed")).rejects.toThrow(
+      "Failed to update delivery_status for whatsapp_messages row msg-1: boom",
     );
   });
 });

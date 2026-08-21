@@ -1,6 +1,11 @@
 import type { Span } from "@opentelemetry/api";
 import type { GetStepTools } from "inngest";
 import { inngest } from "@/lib/inngest";
+import {
+  insertPendingOwnerDecision,
+  type PendingOwnerDecisionToolName,
+  resolvePendingOwnerDecisionByCorrelationId,
+} from "@/lib/pending-owner-decisions";
 import { recordApprovalGateTraceAnchor, steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import type { OwnerNudgeReason } from "./owner-nudge";
 import { requestOwnerNudge } from "./owner-nudge";
@@ -68,6 +73,13 @@ export async function requestApprovalGate(params: {
   correlationId: string;
   step: GetStepTools<typeof inngest>;
   traceAnchor: TraceAnchor;
+  // The gated tool call's own real args (e.g. send_booking_link's
+  // guestName/room/checkIn/checkOut) — captured on the pending_owner_decisions
+  // row below so a later manual-resolve action can rebuild what this call
+  // would have done without re-parsing `reason`'s human-readable prose. See
+  // pending-owner-decisions.ts's insertPendingOwnerDecision for the full
+  // reasoning.
+  context?: Record<string, unknown>;
 }): Promise<boolean> {
   const {
     toolName,
@@ -80,6 +92,7 @@ export async function requestApprovalGate(params: {
     correlationId,
     step,
     traceAnchor,
+    context,
   } = params;
 
   // Best-effort write, own step (not a span — this is pure DB bookkeeping,
@@ -148,6 +161,25 @@ export async function requestApprovalGate(params: {
     return false;
   }
 
+  // Best-effort bookkeeping (see insertPendingOwnerDecision's own doc
+  // comment) — own step, only reached once the nudge is confirmed sent, so
+  // an admin recovery UI never lists a row the owner was never actually
+  // told about.
+  await step.run("record-pending-decision", () =>
+    insertPendingOwnerDecision({
+      correlationId,
+      // Every APPROVAL_GATES entry today (send_booking_link) is one of
+      // pending_owner_decisions' two allowed tool_name values — see
+      // run-turn.ts's APPROVAL_GATES table for the (currently) one real
+      // caller of this whole gate.
+      toolName: toolName as PendingOwnerDecisionToolName,
+      conversationId,
+      phone,
+      reason,
+      context,
+    }),
+  );
+
   const result = await step.waitForEvent(`wait-for-${toolName}-approval`, {
     event,
     match: "data.correlationId",
@@ -184,6 +216,11 @@ export async function requestApprovalGate(params: {
       },
       async () => {},
     );
+    // Best-effort bookkeeping, own step — same posture as the
+    // record-pending-decision step above.
+    await step.run("resolve-pending-decision-timeout", () =>
+      resolvePendingOwnerDecisionByCorrelationId(correlationId, "timeout"),
+    );
     return false;
   }
 
@@ -208,6 +245,12 @@ export async function requestApprovalGate(params: {
       "gca.correlation_id": correlationId,
     },
     async () => {},
+  );
+  // Best-effort bookkeeping, own step — same posture as the
+  // record-pending-decision step above. `decision` is already "approved" or
+  // "rejected" here, both real pending_owner_decisions resolution values.
+  await step.run("resolve-pending-decision", () =>
+    resolvePendingOwnerDecisionByCorrelationId(correlationId, decision),
   );
   return approved;
 }

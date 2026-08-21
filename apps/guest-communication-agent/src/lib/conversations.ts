@@ -95,3 +95,31 @@ export async function recordMessage(
     },
   );
 }
+
+// Only ever set on a role="assistant" row (see the delivery_status column's
+// own migration comment for why a guest's own inbound row has no delivery
+// status) — called by run-turn.ts's runGuestTurn right after
+// sendGuestWhatsAppReply resolves, using recordMessage's own return value
+// (the row id) as `messageId`, so it's a plain follow-up update rather than
+// a change to recordMessage's insert shape itself.
+export async function updateMessageDeliveryStatus(
+  messageId: string,
+  status: "sent" | "failed",
+): Promise<void> {
+  return withSpan(
+    "db.updateMessageDeliveryStatus",
+    { "db.table": "whatsapp_messages", "gca.message_id": messageId },
+    async () => {
+      const supabase = createAdminClient();
+      const { error } = await supabase
+        .from("whatsapp_messages")
+        .update({ delivery_status: status })
+        .eq("id", messageId);
+      if (error) {
+        throw new Error(
+          `Failed to update delivery_status for whatsapp_messages row ${messageId}: ${error.message}`,
+        );
+      }
+    },
+  );
+}
