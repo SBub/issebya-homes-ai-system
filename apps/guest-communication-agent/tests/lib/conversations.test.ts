@@ -24,9 +24,8 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: fromMock }),
 }));
 
-const { getOrCreateActiveConversation, recordMessage, updateMessageDeliveryStatus } = await import(
-  "@/lib/conversations.js"
-);
+const { getOrCreateActiveConversation, recordMessage, updateMessageDeliveryStatus } =
+  await import("@/lib/conversations.js");
 
 describe("getOrCreateActiveConversation", () => {
   beforeEach(() => {

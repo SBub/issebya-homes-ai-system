@@ -1,10 +1,13 @@
 pre-commit:
   parallel: true
   commands:
-    biome:
-      glob: "*.{ts,js,json}"
-      run: yarn biome check --write --no-errors-on-unmatched {staged_files}
+    format:
+      glob: "*.{ts,tsx,js,jsx,json,md,css}"
+      run: yarn prettier --write --ignore-unknown {staged_files}
       stage_fixed: true
+    lint:
+      glob: "*.{ts,tsx,js,jsx}"
+      run: yarn turbo run lint
     typecheck:
       glob: "*.ts"
       run: yarn turbo run typecheck

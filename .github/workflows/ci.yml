@@ -23,8 +23,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Biome check
-        run: yarn biome check .
+      - name: Lint (ESLint)
+        run: yarn turbo run lint
+
+      - name: Format check (Prettier)
+        run: yarn prettier --check .
 
       - name: Type check
         run: yarn turbo run typecheck

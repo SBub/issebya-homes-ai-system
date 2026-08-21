@@ -21,15 +21,14 @@ export function verifyWebhookSecret(request: NextRequest): NextResponse | null {
 }
 
 /**
- * Shared X-Api-Key check for POST /api/campaign-drafts, checked against
+ * Shared X-Api-Key check for POST /api/owner-nudges, checked against
  * TELEGRAM_ROUTER_API_KEY — same requireApiKey pattern every other app in
- * this repo already uses (apps/crm's, apps/finance's,
- * apps/guest-communication-agent's own requireApiKey), this app just hasn't
- * needed one before now: it's only ever been a caller of other apps'
- * X-API-Key-guarded routes (verifyWebhookSecret above guards this app's own
- * inbound webhook instead), never a callee itself.
- * apps/crm's POST /api/cron/check-stalled-guests is the first caller,
- * via src/lib/telegram-router-client.ts's postCampaignDraft.
+ * this repo already uses (apps/guest-communication-agent's own
+ * requireApiKey), this app just hasn't needed one before now: it's only ever
+ * been a caller of other apps' X-API-Key-guarded routes (verifyWebhookSecret
+ * above guards this app's own inbound webhook instead), never a callee
+ * itself. apps/guest-communication-agent's own requestOwnerNudge (see
+ * @/agent/tools/owner-nudge.ts) is the caller.
  */
 export function requireApiKey(request: NextRequest): NextResponse | null {
   const expected = process.env.TELEGRAM_ROUTER_API_KEY;

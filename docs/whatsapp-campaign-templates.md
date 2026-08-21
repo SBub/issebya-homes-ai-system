@@ -20,7 +20,7 @@ Concretely:
   (GCA) does today for every reply in an active conversation, and exactly what
   `sendWhatsAppMessage` (`apps/guest-communication-agent/src/lib/twilio-send.ts`) does when
   `POST /api/send` is called.
-- **What happens outside the window**: if we want to message a guest and *we're* the one
+- **What happens outside the window**: if we want to message a guest and _we're_ the one
   initiating — no recent inbound message from them — free-form text is not allowed at
   all. We're required to use a **pre-approved Message Template**: fixed text, submitted to
   and approved by Meta ahead of time, with only designated numbered variable slots
@@ -32,12 +32,12 @@ Concretely:
 **This is the important part the campaign design hadn't fully accounted for**: it applies
 to **all four** of our campaign kinds, not just the two new ones.
 
-| Campaign kind | Who it messages | Inside or outside the 24h window? |
-|---|---|---|
-| `seasonal_nudge` | guests idle 3+ days (no inbound message from them in 3+ days) | **outside** — needs a template |
-| `stalled_link_nudge` | guests idle 5+ days | **outside** — needs a template |
-| `returning_guest_discount` | past guests, many of whom have never messaged GCA at all | **outside** — needs a template |
-| `winter_lockin_program` | anyone with `total_stays >= 1`, same story | **outside** — needs a template |
+| Campaign kind              | Who it messages                                               | Inside or outside the 24h window? |
+| -------------------------- | ------------------------------------------------------------- | --------------------------------- |
+| `seasonal_nudge`           | guests idle 3+ days (no inbound message from them in 3+ days) | **outside** — needs a template    |
+| `stalled_link_nudge`       | guests idle 5+ days                                           | **outside** — needs a template    |
+| `returning_guest_discount` | past guests, many of whom have never messaged GCA at all      | **outside** — needs a template    |
+| `winter_lockin_program`    | anyone with `total_stays >= 1`, same story                    | **outside** — needs a template    |
 
 In other words: **every single campaign dispatch in this system today is, by
 definition, outside the 24-hour window** — "idle 3+/5+ days" and "a past guest who may
@@ -49,7 +49,7 @@ The good news: once a guest **replies** to a template — even a plain "no thank
 fresh 24-hour window opens immediately, and GCA's existing conversational AI can reply
 freely from that point on, exactly as it does for any normal inbound message today. No
 template is needed for that follow-up conversation. The template's only job is to get the
-guest to send *something* back.
+guest to send _something_ back.
 
 ## 2. Current blocker: we're on Twilio's Sandbox, not a real WhatsApp Business number
 
@@ -105,8 +105,8 @@ exist.
   > Hi {{1}}! We loved hosting you and would love to welcome you back. As one of our
   > valued past guests, we'd like to offer you 10% off your next stay with us. Want us to
   > send you the discount code?
-
   - `{{1}}` = guest's name.
+
 - **Buttons** (Quick Reply):
   - "Yes, send it" (affirmative)
   - "No thanks" (graceful decline)
@@ -137,8 +137,8 @@ me details," not "send me a code."
   > retreat, a dedicated stretch of time to unplug and get deep work done. Since you've
   > stayed with us before, we wanted you to be among the first to hear about it. Want us
   > to send you the details?
-
   - `{{1}}` = guest's name.
+
 - **Buttons** (Quick Reply):
   - "Yes, tell me more" (affirmative — deliberately "tell me more," not "yes, send it,"
     since there's no code being sent here, only information)

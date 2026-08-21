@@ -51,8 +51,7 @@ import { markSpanFailed, withSpan } from "@/lib/tracing";
 // asserts its SandboxApi only ever contains a subset of it.
 
 export type SandboxResult =
-  | { ok: true; result: unknown; logs: string[] }
-  | { ok: false; error: string; logs: string[] };
+  { ok: true; result: unknown; logs: string[] } | { ok: false; error: string; logs: string[] };
 
 // Matches the reference harness's SandboxApi shape exactly — a generic
 // "callable tool" bag whose members each have their own real, specific arg

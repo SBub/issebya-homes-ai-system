@@ -680,8 +680,7 @@ describe("runAgentTurn", () => {
 
     const toolMessage = result.messages.find((m) => m.role === "tool");
     const parts = toolMessage?.content as
-      | Array<{ toolCallId: string; output: unknown }>
-      | undefined;
+      Array<{ toolCallId: string; output: unknown }> | undefined;
     const part = parts?.find((p) => p.toolCallId === "call_esc");
     expect(part?.output).toEqual({
       type: "json",
@@ -793,8 +792,7 @@ describe("runAgentTurn", () => {
 
     const toolMessage = result.messages.find((m) => m.role === "tool");
     const parts = toolMessage?.content as
-      | Array<{ toolCallId: string; output: unknown }>
-      | undefined;
+      Array<{ toolCallId: string; output: unknown }> | undefined;
     expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
       type: "json",
       value: {
@@ -881,8 +879,7 @@ describe("runAgentTurn", () => {
 
     const toolMessage = result.messages.find((m) => m.role === "tool");
     const parts = toolMessage?.content as
-      | Array<{ toolCallId: string; output: unknown }>
-      | undefined;
+      Array<{ toolCallId: string; output: unknown }> | undefined;
     expect(parts?.find((p) => p.toolCallId === "call_esc")?.output).toEqual({
       type: "json",
       value: {

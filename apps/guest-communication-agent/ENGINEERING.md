@@ -29,16 +29,16 @@ a graph or state machine.
 
 ### Tools
 
-| Tool | Purpose |
-|---|---|
-| `get_pricing` | Nightly rate lookup |
-| `check_availability` | Checks a room against booked date ranges via a live API |
+| Tool                       | Purpose                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `get_pricing`              | Nightly rate lookup                                                                                                        |
+| `check_availability`       | Checks a room against booked date ranges via a live API                                                                    |
 | `answer_property_question` | Embeds the guest's question and runs a pgvector similarity search over a knowledge base (house rules, amenities, policies) |
-| `send_booking_link` | Builds the booking URL (**requires human approval**, see §5) |
-| `get_current_date` | Grounds the model in today's date/day-of-week |
-| `run_code` | Lets the model write and execute a short script instead of chaining many tool calls (**runs in a remote sandbox**, see §6) |
-| `wants_human` | One-way escalation ping to the owner (no approval loop, informational) |
-| `missing_info` | Suspends the turn and asks the owner a question when the agent doesn't know the answer (see §2) |
+| `send_booking_link`        | Builds the booking URL (**requires human approval**, see §5)                                                               |
+| `get_current_date`         | Grounds the model in today's date/day-of-week                                                                              |
+| `run_code`                 | Lets the model write and execute a short script instead of chaining many tool calls (**runs in a remote sandbox**, see §6) |
+| `wants_human`              | One-way escalation ping to the owner (no approval loop, informational)                                                     |
+| `missing_info`             | Suspends the turn and asks the owner a question when the agent doesn't know the answer (see §2)                            |
 
 Two tools intercept for a human: `send_booking_link` (blocking approval: the model
 cannot proceed without an explicit yes) and `missing_info` (blocking on an answer, not
@@ -55,7 +55,7 @@ calls `missing_info` instead of guessing. That triggers:
 3. When the owner replies (matched back to the correlation ID from the Telegram
    message text), their answer is embedded and written straight into the same
    pgvector `documents` table the knowledge base lives in (tagged with its source)
-   *before* the waiting run is woken up, so the answer is retrievable immediately.
+   _before_ the waiting run is woken up, so the answer is retrievable immediately.
 4. The suspended run resumes and takes one more model turn to produce the final reply
    to the guest.
 
@@ -155,6 +155,7 @@ solves "run untrusted code safely," not "let untrusted code take real-world acti
 Evaluation runs at two layers, both on Braintrust.
 
 **Offline evals**, run against a golden dataset before merging:
+
 - A **golden dataset** (29 hand-built cases) covering the agent's four key
   tool-selection decisions (`send_booking_link`, `get_pricing`, `missing_info`,
   `answer_property_question`), scored with a **Tool Call Match** scorer, run at
@@ -171,6 +172,7 @@ Evaluation runs at two layers, both on Braintrust.
 
 **Online scorers**, registered as real Braintrust scorer functions and run
 server-side against every production conversation:
+
 - **HITL Compliance**: pure code (no LLM), checks the approval trail on every
   `send_booking_link` call for bypasses, importing the same pattern the real tool uses
   as its source of truth so the check can't silently drift from the implementation.

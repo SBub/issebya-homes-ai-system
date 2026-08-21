@@ -81,6 +81,7 @@ is a distinct, later decision, not scoped here.
 
 Per `docs/finance/plan.md` — these are already-identified bugs/gaps in the original,
 being fixed as part of the rewrite rather than ported as-is:
+
 - Airbnb: real guest count (`# of adults + # of children`) instead of hardcoded `2`;
   capture `Booked` date into a new `booked_date` field; derive `gross_room_income` /
   `platform_fee` from the single `Earnings` column via the verified formula, since the

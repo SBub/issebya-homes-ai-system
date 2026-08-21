@@ -12,7 +12,11 @@
     "build": "next build",
     "start": "next start --port 3003",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -24,13 +28,18 @@
     "@sentry/nextjs": "^10",
     "next": "^16.2.1",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "zod": "^4.4.3"
+    "react-dom": "^19.2.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^16.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-no-secrets": "^2.3.3",
+    "eslint-plugin-security": "^4.0.0",
+    "prettier": "^3.8.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   }
