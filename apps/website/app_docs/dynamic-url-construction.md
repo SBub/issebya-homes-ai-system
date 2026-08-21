@@ -8,7 +8,7 @@ Hardcoding base URLs—even in environment variables—creates maintenance burde
 
 ```typescript
 // Avoid this pattern
-const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
 const confirmationUrl = `${baseUrl}/booking/${booking.access_token}`;
 ```
 

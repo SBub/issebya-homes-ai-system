@@ -141,11 +141,11 @@ Use the appropriate client based on the context:
 
 ```typescript
 // For admin operations (service role key)
-import { createAdminClient } from '@/lib/supabase';
+import { createAdminClient } from "@/lib/supabase";
 const supabase = createAdminClient();
 
 // For user/guest operations (anon key)
-import { createClient } from '@/lib/supabase';
+import { createClient } from "@/lib/supabase";
 const supabase = createClient();
 ```
 

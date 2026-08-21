@@ -75,6 +75,7 @@ immediately and a turn can suspend for hours (owner approval, missing-info answe
 without holding the request open.
 
 > **Known gaps, not yet resolved:**
+>
 > - `guest_contacts` has no committed migration anywhere in the source repo's history
 >   despite being referenced as real by its own docs: `supabase/migrations/20260720150002_create_guest_contacts_reconstructed.sql`
 >   here is a hand-reconstructed minimal version (columns the ported code actually reads,

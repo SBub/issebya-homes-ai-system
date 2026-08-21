@@ -2,6 +2,9 @@ import type { TelegramUpdate } from "./telegram.js";
 
 // Optional "@BotName" suffix Telegram appends in group chats; idea text can
 // span multiple lines, hence [\s\S] instead of "." (which doesn't match \n).
+// Flat greedy [\s\S]+ with no nested/overlapping quantifiers, no
+// catastrophic backtracking path; safe-regex's heuristic over-flags it.
+// eslint-disable-next-line security/detect-unsafe-regex
 const COMMAND_PATTERN = /^\/social(?:@\w+)?(?:\s+([\s\S]+))?$/i;
 
 /**

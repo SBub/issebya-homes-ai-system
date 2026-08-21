@@ -18,9 +18,7 @@ This makes the route usable for the calendar UI but unusable for any system that
 
 ```json
 {
-  "blockedDates": [
-    { "start": "2026-07-01T00:00:00.000Z", "end": "2026-07-10T00:00:00.000Z" }
-  ]
+  "blockedDates": [{ "start": "2026-07-01T00:00:00.000Z", "end": "2026-07-10T00:00:00.000Z" }]
 }
 ```
 
@@ -125,7 +123,7 @@ type AvailabilityResponse = {
 };
 
 // and in queryFn:
-import { mergeDateRanges } from '@/lib/date-utils';
+import { mergeDateRanges } from "@/lib/date-utils";
 
 const rawBookings = data.bookings.map((range) => ({
   start: new Date(range.start),

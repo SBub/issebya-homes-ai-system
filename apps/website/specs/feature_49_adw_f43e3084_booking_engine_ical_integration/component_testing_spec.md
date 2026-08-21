@@ -198,25 +198,25 @@
 Mock the `fetch` API to return controlled availability data:
 
 ```typescript
-vi.spyOn(global, 'fetch').mockImplementation((url) => {
-  if (url.includes('/api/availability?room=room1')) {
+vi.spyOn(global, "fetch").mockImplementation((url) => {
+  if (url.includes("/api/availability?room=room1")) {
     return Promise.resolve({
       ok: true,
       json: async () => ({
         blockedDates: [
           {
-            start: '2026-02-20T00:00:00.000Z',
-            end: '2026-02-22T00:00:00.000Z',
+            start: "2026-02-20T00:00:00.000Z",
+            end: "2026-02-22T00:00:00.000Z",
           },
           {
-            start: '2026-02-25T00:00:00.000Z',
-            end: '2026-02-27T00:00:00.000Z',
+            start: "2026-02-25T00:00:00.000Z",
+            end: "2026-02-27T00:00:00.000Z",
           },
         ],
       }),
     } as Response);
   }
-  return Promise.reject(new Error('Not found'));
+  return Promise.reject(new Error("Not found"));
 });
 ```
 

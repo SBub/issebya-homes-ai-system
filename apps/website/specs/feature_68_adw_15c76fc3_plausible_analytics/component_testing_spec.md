@@ -128,7 +128,7 @@ Mock the analytics utility module:
 Example:
 
 ```typescript
-vi.mock('@/lib/analytics', () => ({
+vi.mock("@/lib/analytics", () => ({
   trackScrolled50: vi.fn(),
   trackWhatsAppClicked: vi.fn(),
   trackAirbnbClicked: vi.fn(),

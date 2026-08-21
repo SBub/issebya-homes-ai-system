@@ -52,16 +52,16 @@ Problems with this approach:
 
 ```tsx
 // Do this
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-export function useAvailabilityQuery(roomType: 'room1' | 'room2') {
+export function useAvailabilityQuery(roomType: "room1" | "room2") {
   const queryClient = useQueryClient();
 
   const query = useQuery({
-    queryKey: ['availability', roomType],
+    queryKey: ["availability", roomType],
     queryFn: async () => {
       const response = await fetch(`/api/availability?room=${roomType}`);
-      if (!response.ok) throw new Error('Failed to fetch');
+      if (!response.ok) throw new Error("Failed to fetch");
       return response.json();
     },
   });
@@ -84,10 +84,10 @@ When using React Query, add the provider at the **feature layout level**, not ap
 
 ```tsx
 // src/app/(main)/booking/providers.tsx
-'use client';
+"use client";
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useState, ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, ReactNode } from "react";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -102,9 +102,7 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
 
-  return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 ```
 
@@ -112,13 +110,9 @@ export function Providers({ children }: { children: ReactNode }) {
 
 ```tsx
 // src/app/(main)/booking/layout.tsx
-import { Providers } from './providers';
+import { Providers } from "./providers";
 
-export default function BookingLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function BookingLayout({ children }: { children: React.ReactNode }) {
   return (
     <Providers>
       <div className="booking-wrapper">{children}</div>
@@ -136,7 +130,7 @@ Use `queryClient.setQueryData` to update cached data without refetching:
 ```tsx
 const setCheckIn = useCallback(
   (checkIn: Date | null) => {
-    queryClient.setQueryData(['availability', roomType], (old) =>
+    queryClient.setQueryData(["availability", roomType], (old) =>
       old ? { ...old, checkInDate: checkIn } : old,
     );
   },

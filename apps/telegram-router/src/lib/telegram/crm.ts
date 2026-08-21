@@ -76,8 +76,7 @@ export async function markPromoCodeSent(promoCodeId: string): Promise<void> {
 }
 
 export type MarkPromoCodeRejectedResult =
-  | { ok: true }
-  | { ok: false; alreadyHandled: boolean; error?: string };
+  { ok: true } | { ok: false; alreadyHandled: boolean; error?: string };
 
 /**
  * Calls CRM's POST /api/promo-codes/:id/mark-rejected directly — unlike the

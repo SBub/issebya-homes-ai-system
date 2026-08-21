@@ -194,7 +194,7 @@ Stripe Checkout accepts `images` as an array of absolute HTTPS URLs. In developm
 // room1 first image: /bed.webp → must be absolute
 // Use a hardcoded production URL or skip images in development
 const imageUrl =
-  process.env.NODE_ENV === 'production'
+  process.env.NODE_ENV === "production"
     ? `${origin}/bed.webp` // room1
     : undefined;
 ```
@@ -389,9 +389,9 @@ IMPORTANT: Execute every step in order, top to bottom.
 - Create `src/lib/stripe.ts`
 - Export a singleton Stripe instance:
   ```typescript
-  import Stripe from 'stripe';
+  import Stripe from "stripe";
   export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-04-30.basil', // use the latest version required by stripe@18
+    apiVersion: "2025-04-30.basil", // use the latest version required by stripe@18
   });
   ```
 - This is server-only — no `'use client'` directive
@@ -450,7 +450,7 @@ IMPORTANT: Execute every step in order, top to bottom.
 - **POST handler** accepts JSON body:
   ```typescript
   {
-    roomType: 'room1' | 'room2';
+    roomType: "room1" | "room2";
     checkIn: string; // YYYY-MM-DD
     checkOut: string; // YYYY-MM-DD
     personCount: number;
@@ -465,13 +465,13 @@ IMPORTANT: Execute every step in order, top to bottom.
 - Create Stripe Checkout session:
   ```typescript
   stripe.checkout.sessions.create({
-    payment_method_types: ['card'],
+    payment_method_types: ["card"],
     line_items: [
       {
         price_data: {
-          currency: 'eur',
+          currency: "eur",
           product_data: {
-            name: `${roomLabel} – ${nights} night${nights > 1 ? 's' : ''}`,
+            name: `${roomLabel} – ${nights} night${nights > 1 ? "s" : ""}`,
             images: imageUrl ? [imageUrl] : [],
           },
           unit_amount: Math.round(basePrice * 100),
@@ -480,8 +480,8 @@ IMPORTANT: Execute every step in order, top to bottom.
       },
       {
         price_data: {
-          currency: 'eur',
-          product_data: { name: 'Tourist tax' },
+          currency: "eur",
+          product_data: { name: "Tourist tax" },
           unit_amount: Math.round(touristTax * 100),
         },
         quantity: 1,
@@ -501,7 +501,7 @@ IMPORTANT: Execute every step in order, top to bottom.
     customer_email: email,
     success_url: `${origin}/booking/confirmation/{CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/booking/${roomType}`,
-    mode: 'payment',
+    mode: "payment",
   });
   ```
 - Return `{ url: session.url }` on success
@@ -536,9 +536,9 @@ IMPORTANT: Execute every step in order, top to bottom.
      ```typescript
      new Response(icalString, {
        headers: {
-         'Content-Type': 'text/calendar; charset=utf-8',
-         'Cache-Control': 'public, max-age=300',
-         'Content-Disposition': `attachment; filename="${room}.ics"`,
+         "Content-Type": "text/calendar; charset=utf-8",
+         "Cache-Control": "public, max-age=300",
+         "Content-Disposition": `attachment; filename="${room}.ics"`,
        },
      });
      ```
@@ -561,25 +561,22 @@ IMPORTANT: Execute every step in order, top to bottom.
     setIsBooking(true);
     setBookingError(null);
     try {
-      const res = await fetch('/api/checkout/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/checkout/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roomType,
-          checkIn: format(checkInDate, 'yyyy-MM-dd'),
-          checkOut: format(checkOutDate, 'yyyy-MM-dd'),
+          checkIn: format(checkInDate, "yyyy-MM-dd"),
+          checkOut: format(checkOutDate, "yyyy-MM-dd"),
           personCount,
           email,
         }),
       });
       const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.error || 'Failed to create checkout session');
+      if (!res.ok) throw new Error(data.error || "Failed to create checkout session");
       window.location.href = data.url;
     } catch (err) {
-      setBookingError(
-        err instanceof Error ? err.message : 'Something went wrong',
-      );
+      setBookingError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setIsBooking(false);
     }

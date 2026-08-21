@@ -23,7 +23,7 @@ Use the brand name in page metadata titles:
 
 ```typescript
 export const metadata: Metadata = {
-  title: 'Page Name - issebya.homes',
+  title: "Page Name - issebya.homes",
 };
 ```
 

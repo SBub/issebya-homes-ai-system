@@ -24,13 +24,13 @@ Studio: http://127.0.0.1:54323
 
 ## Tables
 
-| Table                  | Access                          | Used by                          | Purpose                                   |
-| ---------------------- | ------------------------------- | -------------------------------- | ----------------------------------------- |
-| `bookings`             | service role only               | `apps/website` API routes        | Room bookings — created on Stripe payment |
-| `booking_availability` | anon (view)                     | `apps/website` availability API  | Safe read-only view: confirmed dates only |
+| Table                  | Access                          | Used by                                   | Purpose                                   |
+| ---------------------- | ------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `bookings`             | service role only               | `apps/website` API routes                 | Room bookings — created on Stripe payment |
+| `booking_availability` | anon (view)                     | `apps/website` availability API           | Safe read-only view: confirmed dates only |
 | `documents`            | anon SELECT, service role write | `issebya-homes-ai-system` (external repo) | RAG knowledge base (pgvector embeddings)  |
-| `channels`             | service role only               | none — manual                    | Outreach channels (WhatsApp, Instagram)   |
-| `reference_guides`     | service role only               | none — manual                    | Copy + visual memory for outreach         |
+| `channels`             | service role only               | none — manual                             | Outreach channels (WhatsApp, Instagram)   |
+| `reference_guides`     | service role only               | none — manual                             | Copy + visual memory for outreach         |
 
 ## RLS model
 
@@ -47,8 +47,8 @@ service role → bypasses RLS → full access everywhere
 ## Clients
 
 ```ts
-import { createClient } from '@issebya/shared/supabase'; // anon key
-import { createAdminClient } from '@issebya/shared/supabase'; // service role
+import { createClient } from "@issebya/shared/supabase"; // anon key
+import { createAdminClient } from "@issebya/shared/supabase"; // service role
 ```
 
 Use `createAdminClient()` for all server-side writes. `createClient()` only for `booking_availability` and `documents`.

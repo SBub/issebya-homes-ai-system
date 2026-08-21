@@ -17,11 +17,11 @@ Zod has first-class TypeScript support with no additional type packages needed.
 ### Primitives
 
 ```typescript
-import { z } from 'zod';
+import { z } from "zod";
 
-const nameSchema = z.string().min(1, 'Name is required').max(255);
-const priceSchema = z.number().positive('Price must be positive');
-const emailSchema = z.string().email('Invalid email format');
+const nameSchema = z.string().min(1, "Name is required").max(255);
+const priceSchema = z.number().positive("Price must be positive");
+const emailSchema = z.string().email("Invalid email format");
 const isActiveSchema = z.boolean();
 ```
 
@@ -39,7 +39,7 @@ const userSchema = z.object({
 
 ```typescript
 // Enum from literal values
-const roomTypeSchema = z.enum(['Room 1', 'Room 2', 'House']);
+const roomTypeSchema = z.enum(["Room 1", "Room 2", "House"]);
 
 // Array of strings
 const tagsSchema = z.array(z.string());
@@ -70,7 +70,7 @@ For date inputs (which arrive as strings), validate the format:
 ```typescript
 const dateStringSchema = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format');
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be in YYYY-MM-DD format");
 ```
 
 ---
@@ -93,25 +93,23 @@ src/
 
 ```typescript
 // packages/shared/src/schemas/booking.ts
-import { z } from 'zod';
+import { z } from "zod";
 
-const CHECKOUT_ROOM_TYPES = ['room1', 'room2'] as const;
+const CHECKOUT_ROOM_TYPES = ["room1", "room2"] as const;
 
 export const checkoutSchema = z
   .object({
     roomType: z.enum(CHECKOUT_ROOM_TYPES, {
-      message: 'Please select a valid room type',
+      message: "Please select a valid room type",
     }),
-    checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
-    checkOut: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
+    checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD"),
+    checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD"),
     personCount: z.number().int().min(1).max(2),
-    email: z.string().email('Invalid email address'),
+    email: z.string().email("Invalid email address"),
   })
   .refine((data) => new Date(data.checkOut) > new Date(data.checkIn), {
-    message: 'Check-out must be after check-in',
-    path: ['checkOut'],
+    message: "Check-out must be after check-in",
+    path: ["checkOut"],
   });
 
 // Infer TypeScript type from schema
@@ -128,10 +126,10 @@ export type CheckoutFormData = z.infer<typeof checkoutSchema>;
 
 ```typescript
 // src/actions/booking.ts
-'use server';
+"use server";
 
-import { z } from 'zod';
-import { checkoutSchema } from '@issebya/shared/schemas/booking';
+import { z } from "zod";
+import { checkoutSchema } from "@issebya/shared/schemas/booking";
 
 export interface FormState {
   success: boolean;
@@ -139,17 +137,14 @@ export interface FormState {
   data?: unknown;
 }
 
-export async function createCheckout(
-  prevState: FormState,
-  formData: FormData,
-): Promise<FormState> {
+export async function createCheckout(prevState: FormState, formData: FormData): Promise<FormState> {
   // Parse FormData into an object
   const rawData = {
-    roomType: formData.get('roomType'),
-    checkIn: formData.get('checkIn'),
-    checkOut: formData.get('checkOut'),
-    personCount: Number(formData.get('personCount')),
-    email: formData.get('email'),
+    roomType: formData.get("roomType"),
+    checkIn: formData.get("checkIn"),
+    checkOut: formData.get("checkOut"),
+    personCount: Number(formData.get("personCount")),
+    email: formData.get("email"),
   };
 
   // Validate with Zod
@@ -173,9 +168,9 @@ export async function createCheckout(
 
 ```typescript
 // src/app/api/bookings/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { checkoutSchema } from '@issebya/shared/schemas/booking';
-import { formatZodErrors } from '@issebya/shared/validation';
+import { NextRequest, NextResponse } from "next/server";
+import { checkoutSchema } from "@issebya/shared/schemas/booking";
+import { formatZodErrors } from "@issebya/shared/validation";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -186,7 +181,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: 'Validation failed',
+        error: "Validation failed",
         errors: formatZodErrors(result.error),
       },
       { status: 400 },
@@ -210,7 +205,7 @@ Create a utility to convert Zod errors to field-error pairs:
 
 ```typescript
 // src/lib/validation.ts
-import { z } from 'zod';
+import { z } from "zod";
 
 export interface FieldError {
   field: string;
@@ -219,7 +214,7 @@ export interface FieldError {
 
 export function formatZodErrors(error: z.ZodError): FieldError[] {
   return error.errors.map((err) => ({
-    field: err.path.join('.'),
+    field: err.path.join("."),
     message: err.message,
   }));
 }
@@ -227,7 +222,7 @@ export function formatZodErrors(error: z.ZodError): FieldError[] {
 export function zodErrorsToMap(error: z.ZodError): Record<string, string> {
   const errorMap: Record<string, string> = {};
   for (const err of error.errors) {
-    const field = err.path.join('.');
+    const field = err.path.join(".");
     // Keep first error for each field
     if (!errorMap[field]) {
       errorMap[field] = err.message;
@@ -247,57 +242,40 @@ Following the form re-render optimization strategy, use uncontrolled inputs with
 
 ```tsx
 // src/ui/BookingForm.tsx
-'use client';
+"use client";
 
-import { useActionState } from 'react';
-import { createBooking, FormState } from '@/actions/booking';
+import { useActionState } from "react";
+import { createBooking, FormState } from "@/actions/booking";
 
 const initialState: FormState = { success: false, errors: [] };
 
 export function BookingForm() {
-  const [state, formAction, isPending] = useActionState(
-    createBooking,
-    initialState,
-  );
+  const [state, formAction, isPending] = useActionState(createBooking, initialState);
 
-  const getError = (field: string) =>
-    state.errors.find((e) => e.field === field)?.message;
+  const getError = (field: string) => state.errors.find((e) => e.field === field)?.message;
 
   return (
     <form action={formAction}>
       <div>
         <label htmlFor="guestName">Guest Name</label>
         <input name="guestName" id="guestName" required />
-        {getError('guestName') && (
-          <span className="text-red-500">{getError('guestName')}</span>
-        )}
+        {getError("guestName") && <span className="text-red-500">{getError("guestName")}</span>}
       </div>
 
       <div>
         <label htmlFor="startDate">Start Date</label>
         <input name="startDate" id="startDate" type="date" required />
-        {getError('startDate') && (
-          <span className="text-red-500">{getError('startDate')}</span>
-        )}
+        {getError("startDate") && <span className="text-red-500">{getError("startDate")}</span>}
       </div>
 
       <div>
         <label htmlFor="price">Price</label>
-        <input
-          name="price"
-          id="price"
-          type="number"
-          step="0.01"
-          min="0"
-          required
-        />
-        {getError('price') && (
-          <span className="text-red-500">{getError('price')}</span>
-        )}
+        <input name="price" id="price" type="number" step="0.01" min="0" required />
+        {getError("price") && <span className="text-red-500">{getError("price")}</span>}
       </div>
 
       <button type="submit" disabled={isPending}>
-        {isPending ? 'Submitting...' : 'Create Booking'}
+        {isPending ? "Submitting..." : "Create Booking"}
       </button>
     </form>
   );
@@ -309,12 +287,12 @@ export function BookingForm() {
 For immediate feedback before server round-trip:
 
 ```tsx
-'use client';
+"use client";
 
-import { useActionState, useRef } from 'react';
-import { checkoutSchema } from '@issebya/shared/schemas/booking';
-import { zodErrorsToMap } from '@issebya/shared/validation';
-import { createCheckout, FormState } from '@/actions/booking';
+import { useActionState, useRef } from "react";
+import { checkoutSchema } from "@issebya/shared/schemas/booking";
+import { zodErrorsToMap } from "@issebya/shared/validation";
+import { createCheckout, FormState } from "@/actions/booking";
 
 export function CheckoutFormWithClientValidation() {
   const formRef = useRef<HTMLFormElement>(null);
@@ -326,11 +304,11 @@ export function CheckoutFormWithClientValidation() {
   const handleSubmit = (formData: FormData) => {
     // Optional client-side pre-validation
     const rawData = {
-      roomType: formData.get('roomType'),
-      checkIn: formData.get('checkIn'),
-      checkOut: formData.get('checkOut'),
-      personCount: Number(formData.get('personCount')),
-      email: formData.get('email'),
+      roomType: formData.get("roomType"),
+      checkIn: formData.get("checkIn"),
+      checkOut: formData.get("checkOut"),
+      personCount: Number(formData.get("personCount")),
+      email: formData.get("email"),
     };
 
     const result = checkoutSchema.safeParse(rawData);
@@ -338,7 +316,7 @@ export function CheckoutFormWithClientValidation() {
     if (!result.success) {
       // Could set local error state here for instant feedback
       // But server validation will catch it too
-      console.log('Client validation errors:', zodErrorsToMap(result.error));
+      console.log("Client validation errors:", zodErrorsToMap(result.error));
     }
 
     // Always submit to server for authoritative validation
@@ -361,24 +339,21 @@ export function CheckoutFormWithClientValidation() {
 
 ```typescript
 const schema = z.object({
-  email: z
-    .string()
-    .min(1, 'Email is required')
-    .email('Please enter a valid email address'),
+  email: z.string().min(1, "Email is required").email("Please enter a valid email address"),
   password: z
     .string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[A-Z]/, 'Password must contain an uppercase letter')
-    .regex(/[0-9]/, 'Password must contain a number'),
+    .min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain an uppercase letter")
+    .regex(/[0-9]/, "Password must contain a number"),
 });
 ```
 
 ### Using errorMap for Enums
 
 ```typescript
-const statusSchema = z.enum(['pending', 'confirmed', 'cancelled'], {
+const statusSchema = z.enum(["pending", "confirmed", "cancelled"], {
   errorMap: (issue, ctx) => {
-    if (issue.code === 'invalid_enum_value') {
+    if (issue.code === "invalid_enum_value") {
       return {
         message: `Status must be one of: pending, confirmed, cancelled`,
       };
@@ -399,16 +374,16 @@ const bookingSchema = z
   .object({
     startDate: z.string(),
     endDate: z.string(),
-    roomType: z.enum(['Room 1', 'Room 2', 'House']),
+    roomType: z.enum(["Room 1", "Room 2", "House"]),
     numberOfGuests: z.number().int().min(1),
   })
   .refine((data) => new Date(data.endDate) > new Date(data.startDate), {
-    message: 'End date must be after start date',
-    path: ['endDate'], // Attach error to endDate field
+    message: "End date must be after start date",
+    path: ["endDate"], // Attach error to endDate field
   })
   .refine((data) => data.numberOfGuests <= MAX_GUESTS_BY_ROOM[data.roomType], {
-    message: 'Too many guests for selected room',
-    path: ['numberOfGuests'],
+    message: "Too many guests for selected room",
+    path: ["numberOfGuests"],
   });
 ```
 

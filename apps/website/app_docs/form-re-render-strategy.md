@@ -6,7 +6,7 @@ Every `useState` + controlled input pattern causes the entire component tree to 
 
 ```tsx
 // BAD: Component re-renders on EVERY character typed
-const [name, setName] = useState('');
+const [name, setName] = useState("");
 <input value={name} onChange={(e) => setName(e.target.value)} />;
 ```
 
@@ -26,10 +26,10 @@ Apply these solutions in order of preference:
 Use uncontrolled inputs with `useActionState` when no dynamic behavior is needed:
 
 ```tsx
-'use client';
+"use client";
 
-import { useActionState } from 'react';
-import { submitForm } from './actions';
+import { useActionState } from "react";
+import { submitForm } from "./actions";
 
 function ContactForm() {
   const [state, formAction, isPending] = useActionState(submitForm, null);
@@ -68,7 +68,7 @@ When input constraints depend on other field values, isolate the controlled stat
 
 ```tsx
 // EndDateInput.tsx - Only re-renders when startDate changes
-'use client';
+"use client";
 
 interface EndDateInputProps {
   startDate: string;
@@ -76,10 +76,10 @@ interface EndDateInputProps {
 
 export function EndDateInput({ startDate }: EndDateInputProps) {
   const getMinEndDate = () => {
-    if (!startDate) return new Date().toISOString().split('T')[0];
+    if (!startDate) return new Date().toISOString().split("T")[0];
     const date = new Date(startDate);
     date.setDate(date.getDate() + 1);
-    return date.toISOString().split('T')[0];
+    return date.toISOString().split("T")[0];
   };
 
   return <input name="endDate" type="date" min={getMinEndDate()} required />;
@@ -88,9 +88,9 @@ export function EndDateInput({ startDate }: EndDateInputProps) {
 
 ```tsx
 // GuestsInput.tsx - Only re-renders when roomType changes
-'use client';
+"use client";
 
-import { MAX_GUESTS_BY_ROOM, RoomType } from '@/types/booking';
+import { MAX_GUESTS_BY_ROOM, RoomType } from "@/types/booking";
 
 interface GuestsInputProps {
   roomType: RoomType;
@@ -100,31 +100,24 @@ export function GuestsInput({ roomType }: GuestsInputProps) {
   const maxGuests = MAX_GUESTS_BY_ROOM[roomType];
 
   return (
-    <input
-      name="numberOfGuests"
-      type="number"
-      min={1}
-      max={maxGuests}
-      defaultValue={1}
-      required
-    />
+    <input name="numberOfGuests" type="number" min={1} max={maxGuests} defaultValue={1} required />
   );
 }
 ```
 
 ```tsx
 // ParentForm.tsx - Only tracks what's needed for child components
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { useActionState } from 'react';
-import { EndDateInput } from './EndDateInput';
-import { GuestsInput } from './GuestsInput';
+import { useState } from "react";
+import { useActionState } from "react";
+import { EndDateInput } from "./EndDateInput";
+import { GuestsInput } from "./GuestsInput";
 
 function BookingForm() {
   // ONLY track values that affect other inputs
-  const [startDate, setStartDate] = useState('');
-  const [roomType, setRoomType] = useState<RoomType>('Room 1');
+  const [startDate, setStartDate] = useState("");
+  const [roomType, setRoomType] = useState<RoomType>("Room 1");
 
   const [state, formAction, isPending] = useActionState(submitBooking, null);
 
@@ -134,12 +127,7 @@ function BookingForm() {
       <input name="guestName" required />
 
       {/* Semi-controlled - only updates startDate state */}
-      <input
-        name="startDate"
-        type="date"
-        onChange={(e) => setStartDate(e.target.value)}
-        required
-      />
+      <input name="startDate" type="date" onChange={(e) => setStartDate(e.target.value)} required />
 
       {/* Isolated component - only re-renders when startDate changes */}
       <EndDateInput startDate={startDate} />
@@ -184,18 +172,16 @@ For complex forms with multiple interdependent field groups:
 
 ```tsx
 // DateRangeFields.tsx - Encapsulates all date logic
-'use client';
+"use client";
 
-import { useState } from 'react';
+import { useState } from "react";
 
 export function DateRangeFields() {
-  const [startDate, setStartDate] = useState('');
+  const [startDate, setStartDate] = useState("");
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split("T")[0];
   const minEndDate = startDate
-    ? new Date(new Date(startDate).getTime() + 86400000)
-        .toISOString()
-        .split('T')[0]
+    ? new Date(new Date(startDate).getTime() + 86400000).toISOString().split("T")[0]
     : today;
 
   return (
@@ -245,12 +231,12 @@ export function DateRangeFields() {
 ```tsx
 // BAD: Every keystroke re-renders everything
 const [formData, setFormData] = useState({
-  name: '',
-  email: '',
-  phone: '',
-  address: '',
-  city: '',
-  zip: '',
+  name: "",
+  email: "",
+  phone: "",
+  address: "",
+  city: "",
+  zip: "",
 });
 ```
 
@@ -259,12 +245,8 @@ const [formData, setFormData] = useState({
 ```tsx
 // BAD: Refs don't help with controlled inputs
 const inputRef = useRef<HTMLInputElement>(null);
-const [value, setValue] = useState('');
-<input
-  ref={inputRef}
-  value={value}
-  onChange={(e) => setValue(e.target.value)}
-/>;
+const [value, setValue] = useState("");
+<input ref={inputRef} value={value} onChange={(e) => setValue(e.target.value)} />;
 ```
 
 ### 3. Debouncing onChange handlers
@@ -292,9 +274,9 @@ Always pair with server-side validation:
 
 ```tsx
 // actions.ts
-'use server';
+"use server";
 
-import { validateBooking } from '@/lib/validation';
+import { validateBooking } from "@/lib/validation";
 
 export interface FormState {
   success: boolean;
@@ -302,17 +284,14 @@ export interface FormState {
   data?: BookingData;
 }
 
-export async function submitBooking(
-  prevState: FormState,
-  formData: FormData,
-): Promise<FormState> {
+export async function submitBooking(prevState: FormState, formData: FormData): Promise<FormState> {
   const rawData = {
-    guestName: formData.get('guestName') as string,
-    startDate: formData.get('startDate') as string,
-    endDate: formData.get('endDate') as string,
-    roomType: formData.get('roomType') as string,
-    numberOfGuests: Number(formData.get('numberOfGuests')),
-    price: Number(formData.get('price')),
+    guestName: formData.get("guestName") as string,
+    startDate: formData.get("startDate") as string,
+    endDate: formData.get("endDate") as string,
+    roomType: formData.get("roomType") as string,
+    numberOfGuests: Number(formData.get("numberOfGuests")),
+    price: Number(formData.get("price")),
   };
 
   const validation = validateBooking(rawData);
@@ -340,15 +319,12 @@ function BookingForm() {
     errors: [],
   });
 
-  const getError = (field: string) =>
-    state.errors.find((e) => e.field === field)?.message;
+  const getError = (field: string) => state.errors.find((e) => e.field === field)?.message;
 
   return (
     <form action={formAction}>
       <input name="guestName" required />
-      {getError('guestName') && (
-        <span className="error">{getError('guestName')}</span>
-      )}
+      {getError("guestName") && <span className="error">{getError("guestName")}</span>}
 
       {/* ... other fields ... */}
     </form>

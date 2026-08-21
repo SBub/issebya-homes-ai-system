@@ -339,97 +339,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@biomejs/biome@npm:^2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/biome@npm:2.5.4"
-  dependencies:
-    "@biomejs/cli-darwin-arm64": "npm:2.5.4"
-    "@biomejs/cli-darwin-x64": "npm:2.5.4"
-    "@biomejs/cli-linux-arm64": "npm:2.5.4"
-    "@biomejs/cli-linux-arm64-musl": "npm:2.5.4"
-    "@biomejs/cli-linux-x64": "npm:2.5.4"
-    "@biomejs/cli-linux-x64-musl": "npm:2.5.4"
-    "@biomejs/cli-win32-arm64": "npm:2.5.4"
-    "@biomejs/cli-win32-x64": "npm:2.5.4"
-  dependenciesMeta:
-    "@biomejs/cli-darwin-arm64":
-      optional: true
-    "@biomejs/cli-darwin-x64":
-      optional: true
-    "@biomejs/cli-linux-arm64":
-      optional: true
-    "@biomejs/cli-linux-arm64-musl":
-      optional: true
-    "@biomejs/cli-linux-x64":
-      optional: true
-    "@biomejs/cli-linux-x64-musl":
-      optional: true
-    "@biomejs/cli-win32-arm64":
-      optional: true
-    "@biomejs/cli-win32-x64":
-      optional: true
-  bin:
-    biome: bin/biome
-  checksum: 10c0/a46639cba046fb6c19ab2e02257ddda696bdda7bb12e0ad696286074540ed0d6b395258f8711babb439b04d0659ce52b05716a8da1914cb7512a9d43c02118d8
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-darwin-arm64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-darwin-arm64@npm:2.5.4"
-  conditions: os=darwin & cpu=arm64
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-darwin-x64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-darwin-x64@npm:2.5.4"
-  conditions: os=darwin & cpu=x64
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-linux-arm64-musl@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-linux-arm64-musl@npm:2.5.4"
-  conditions: os=linux & cpu=arm64 & libc=musl
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-linux-arm64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-linux-arm64@npm:2.5.4"
-  conditions: os=linux & cpu=arm64 & libc=glibc
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-linux-x64-musl@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-linux-x64-musl@npm:2.5.4"
-  conditions: os=linux & cpu=x64 & libc=musl
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-linux-x64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-linux-x64@npm:2.5.4"
-  conditions: os=linux & cpu=x64 & libc=glibc
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-win32-arm64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-win32-arm64@npm:2.5.4"
-  conditions: os=win32 & cpu=arm64
-  languageName: node
-  linkType: hard
-
-"@biomejs/cli-win32-x64@npm:2.5.4":
-  version: 2.5.4
-  resolution: "@biomejs/cli-win32-x64@npm:2.5.4"
-  conditions: os=win32 & cpu=x64
-  languageName: node
-  linkType: hard
-
 "@blazediff/core@npm:1.9.1":
   version: 1.9.1
   resolution: "@blazediff/core@npm:1.9.1"
@@ -9066,10 +8975,16 @@ __metadata:
     "@vercel/sandbox": "npm:^3.0.0"
     ai: "npm:^6.0.138"
     braintrust: "npm:^3.27.0"
+    eslint: "npm:^9"
+    eslint-config-next: "npm:^16.2.1"
+    eslint-config-prettier: "npm:^10.1.8"
+    eslint-plugin-no-secrets: "npm:^2.3.3"
+    eslint-plugin-security: "npm:^4.0.0"
     gpt-tokenizer: "npm:^4.0.0"
     inngest: "npm:^4.15.0"
     inngest-cli: "npm:^1.41.1"
     next: "npm:^16.2.1"
+    prettier: "npm:^3.8.1"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
     tsx: "npm:^4.23.1"
@@ -9721,11 +9636,16 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "issebya-homes-ai-system@workspace:."
   dependencies:
-    "@biomejs/biome": "npm:^2.5.4"
+    eslint: "npm:^9"
+    eslint-config-prettier: "npm:^10.1.8"
+    eslint-plugin-no-secrets: "npm:^2.3.3"
+    eslint-plugin-security: "npm:^4.0.0"
     knip: "npm:^6.27.0"
     lefthook: "npm:^2.1.10"
+    prettier: "npm:^3.8.1"
     tsx: "npm:^4.23.1"
     turbo: "npm:^2.10.5"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -12646,7 +12566,13 @@ __metadata:
     "@types/node": "npm:^26.1.1"
     "@types/react": "npm:^19"
     "@types/react-dom": "npm:^19"
+    eslint: "npm:^9"
+    eslint-config-next: "npm:^16.2.1"
+    eslint-config-prettier: "npm:^10.1.8"
+    eslint-plugin-no-secrets: "npm:^2.3.3"
+    eslint-plugin-security: "npm:^4.0.0"
     next: "npm:^16.2.1"
+    prettier: "npm:^3.8.1"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
     typescript: "npm:^5.9.3"

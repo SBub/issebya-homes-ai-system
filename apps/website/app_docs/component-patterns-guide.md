@@ -51,7 +51,7 @@ export function WhatsAppLink() {
 }
 
 // Usage
-import { WhatsAppLink } from '@/app/ui/WhatsAppLink';
+import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 
 <p>
   Contact us on <WhatsAppLink />
@@ -71,9 +71,7 @@ After:
 ```tsx
 // src/app/ui/Callout.tsx
 export function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="border border-dashed p-4 text-sm bg-white">{children}</div>
-  );
+  return <div className="border border-dashed p-4 text-sm bg-white">{children}</div>;
 }
 
 // Usage
@@ -91,16 +89,10 @@ Before (duplicated per-feature):
 export function BookingTabsDesktop({ type }) {
   return (
     <div className="flex border-b">
-      <TabButton
-        isActive={type === 'room1'}
-        onClick={() => router.push('/booking/room1')}
-      >
+      <TabButton isActive={type === "room1"} onClick={() => router.push("/booking/room1")}>
         room 1
       </TabButton>
-      <TabButton
-        isActive={type === 'room2'}
-        onClick={() => router.push('/booking/room2')}
-      >
+      <TabButton isActive={type === "room2"} onClick={() => router.push("/booking/room2")}>
         room 2
       </TabButton>
       {/* ... */}
@@ -138,7 +130,7 @@ export function TabsDesktop({ tabs, activeTabId, page }: TabsDesktopProps) {
             href={tab.href}
             isActive={activeTabId === tab.id}
             onClick={() => trackTabClicked(page, tab.id)}
-            className={`px-6 py-2 ${index < tabs.length - 1 ? 'border-r border-black' : ''}`}
+            className={`px-6 py-2 ${index < tabs.length - 1 ? "border-r border-black" : ""}`}
           >
             {tab.label}
           </TabLink>
@@ -156,17 +148,17 @@ Usage (tab configuration defined in page):
 const bookingTabs = [
   {
     id: BookingType.room1,
-    label: 'room 1',
+    label: "room 1",
     href: `/booking/${BookingType.room1}`,
   },
   {
     id: BookingType.room2,
-    label: 'room 2',
+    label: "room 2",
     href: `/booking/${BookingType.room2}`,
   },
   {
     id: BookingType.event,
-    label: 'event space',
+    label: "event space",
     href: `/booking/${BookingType.event}`,
   },
 ];
@@ -219,13 +211,13 @@ Add an optional prop to the existing shared component:
 
 ```tsx
 // src/app/ui/WhatsAppLink.tsx
-'use client';
+"use client";
 
-import { trackWhatsAppClicked } from '@/lib/analytics';
-import type { PageEventProps } from '@/lib/analytics';
+import { trackWhatsAppClicked } from "@/lib/analytics";
+import type { PageEventProps } from "@/lib/analytics";
 
 interface WhatsAppLinkProps {
-  source?: PageEventProps['page']; // Optional - only tracks when provided
+  source?: PageEventProps["page"]; // Optional - only tracks when provided
 }
 
 export function WhatsAppLink({ source }: WhatsAppLinkProps) {
@@ -271,11 +263,11 @@ When extracting components, also generalize their associated tracking functions.
 ```tsx
 // src/lib/analytics.ts
 export function trackRoomTabClicked(room: string) {
-  trackEvent('RoomTabClicked', { room });
+  trackEvent("RoomTabClicked", { room });
 }
 
 export function trackBookingTabClicked(tab: string) {
-  trackEvent('BookingTabClicked', { tab });
+  trackEvent("BookingTabClicked", { tab });
 }
 ```
 
@@ -286,7 +278,7 @@ This leads to duplicate tracking functions for each feature using the same compo
 ```tsx
 // src/lib/analytics.ts
 export function trackTabClicked(page: string, tab: string) {
-  trackEvent('TabClicked', { page, tab });
+  trackEvent("TabClicked", { page, tab });
 }
 ```
 
@@ -319,7 +311,7 @@ After (client component - has onClick):
 
 ```tsx
 // src/app/ui/WhatsAppLink.tsx - client component
-'use client';
+"use client";
 
 export function WhatsAppLink({ source }) {
   const handleClick = source ? () => track(source) : undefined;
@@ -366,14 +358,14 @@ All UI-related code (React components, TSX files) must be inside the `app/` fold
 
 ```tsx
 // src/ui/ScrollTracker.tsx - WRONG location
-import { ScrollTracker } from '@/ui/ScrollTracker';
+import { ScrollTracker } from "@/ui/ScrollTracker";
 ```
 
 #### Good: Component in app/ui
 
 ```tsx
 // src/app/ui/ScrollTracker.tsx - CORRECT location
-import { ScrollTracker } from '@/app/ui/ScrollTracker';
+import { ScrollTracker } from "@/app/ui/ScrollTracker";
 ```
 
 ---
@@ -519,14 +511,14 @@ When importing components from other feature folders, use the `@/` path alias in
 
 ```tsx
 // In src/app/(main)/guest-info/page.tsx
-import { Callout } from '../../ui/Callout'; // Fragile, unclear
+import { Callout } from "../../ui/Callout"; // Fragile, unclear
 ```
 
 ### Good: Alias for cross-feature import
 
 ```tsx
 // In src/app/(main)/guest-info/page.tsx
-import { Callout } from '@/app/ui/Callout'; // Clear and stable
+import { Callout } from "@/app/ui/Callout"; // Clear and stable
 ```
 
 ---

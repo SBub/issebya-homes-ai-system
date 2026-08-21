@@ -68,19 +68,19 @@ createAdminClient(); // service role — everything else
 
 ## Tables
 
-| Table                  | RLS                     | anon        | updated_at trigger | Used by                                            |
-| ---------------------- | ----------------------- | ----------- | ------------------ | -------------------------------------------------- |
-| `bookings`             | on, 0 policies + REVOKE | blocked     | yes                | `apps/website` API routes                          |
-| `booking_availability` | view, GRANT SELECT      | SELECT only | —                  | `apps/website`                                     |
-| `documents`            | on, SELECT policy       | SELECT only | yes                | `issebya-homes-ai-system` (external repo)          |
-| `channels`             | on, 0 policies + REVOKE | blocked     | yes                | none — manual                                      |
-| `reference_guides`     | on, 0 policies + REVOKE | blocked     | yes                | none — manual                                      |
+| Table                  | RLS                     | anon        | updated_at trigger | Used by                                   |
+| ---------------------- | ----------------------- | ----------- | ------------------ | ----------------------------------------- |
+| `bookings`             | on, 0 policies + REVOKE | blocked     | yes                | `apps/website` API routes                 |
+| `booking_availability` | view, GRANT SELECT      | SELECT only | —                  | `apps/website`                            |
+| `documents`            | on, SELECT policy       | SELECT only | yes                | `issebya-homes-ai-system` (external repo) |
+| `channels`             | on, 0 policies + REVOKE | blocked     | yes                | none — manual                             |
+| `reference_guides`     | on, 0 policies + REVOKE | blocked     | yes                | none — manual                             |
 
 ## Edge functions
 
-| Function              | Path                                      | What it does                                                                                                                                                                                                                                                          |
-| --------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_shared`             | `supabase/functions/_shared/`             | Shared helpers, not a deployable function — `openrouter.ts` (embeddings + chat completions).                                                        |
+| Function  | Path                          | What it does                                                                                 |
+| --------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `_shared` | `supabase/functions/_shared/` | Shared helpers, not a deployable function — `openrouter.ts` (embeddings + chat completions). |
 
 ## updated_at triggers
 

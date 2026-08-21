@@ -4,18 +4,33 @@
     "apps/telegram-router": {
       "next": true,
       "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "ignoreDependencies": [
+        "eslint-config-prettier",
+        "eslint-plugin-no-secrets",
+        "eslint-plugin-security"
+      ]
     },
     "apps/guest-communication-agent": {
       "next": true,
       "entry": ["tests/**/*.test.ts", "scripts/**/*.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
+      "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+      "ignoreDependencies": [
+        "eslint-config-prettier",
+        "eslint-plugin-no-secrets",
+        "eslint-plugin-security"
+      ]
     },
     "apps/website": {
       "next": true,
       "entry": ["src/**/*.unit.test.ts", "src/**/*.browser.test.tsx", "e2e/**/*.ts"],
       "project": ["src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts"],
-      "ignoreDependencies": ["tailwindcss"]
+      "ignoreDependencies": [
+        "tailwindcss",
+        "eslint-config-prettier",
+        "eslint-plugin-no-secrets",
+        "eslint-plugin-security"
+      ]
     }
   },
   "ignoreBinaries": ["supabase", "stripe"],

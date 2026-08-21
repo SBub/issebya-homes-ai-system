@@ -66,19 +66,19 @@ NEXT_PUBLIC_PLAUSIBLE_DOMAIN=issebya.com
 Import and call tracking functions from `src/lib/analytics.ts`:
 
 ```typescript
-import { trackWhatsAppClicked, trackTabClicked } from '@/lib/analytics';
+import { trackWhatsAppClicked, trackTabClicked } from "@/lib/analytics";
 
 // Track a WhatsApp click with page context
-trackWhatsAppClicked('Booking');
+trackWhatsAppClicked("Booking");
 
 // Track a tab click with page and tab identifier
-trackTabClicked('Booking', 'room1');
+trackTabClicked("Booking", "room1");
 ```
 
 ### 3. Add Scroll Tracking to a Page
 
 ```tsx
-import { ScrollTracker } from '@/app/ui/ScrollTracker';
+import { ScrollTracker } from "@/app/ui/ScrollTracker";
 
 export default function Page() {
   return (
@@ -174,15 +174,15 @@ If the environment variable is not set:
 
 ```typescript
 export function trackNewEvent(property: string) {
-  trackEvent('NewEvent', { property });
+  trackEvent("NewEvent", { property });
 }
 ```
 
 2. Import and call from your component:
 
 ```typescript
-import { trackNewEvent } from '@/lib/analytics';
-trackNewEvent('value');
+import { trackNewEvent } from "@/lib/analytics";
+trackNewEvent("value");
 ```
 
 ### SSR Compatibility

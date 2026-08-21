@@ -21,9 +21,9 @@ Prefer `useActionState` over manual `useState` + `onSubmit` handlers for form ma
 ## Basic Pattern
 
 ```tsx
-'use client';
+"use client";
 
-import { useActionState } from 'react';
+import { useActionState } from "react";
 
 interface FormState {
   errors: Record<string, string>;
@@ -32,22 +32,19 @@ interface FormState {
 
 const initialState: FormState = {
   errors: {},
-  generalError: '',
+  generalError: "",
 };
 
-async function submitAction(
-  prevState: FormState,
-  formData: FormData,
-): Promise<FormState> {
+async function submitAction(prevState: FormState, formData: FormData): Promise<FormState> {
   const data = {
-    name: formData.get('name') as string,
-    email: formData.get('email') as string,
+    name: formData.get("name") as string,
+    email: formData.get("email") as string,
   };
 
   try {
-    const response = await fetch('/api/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await fetch("/api/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
 
@@ -55,39 +52,32 @@ async function submitAction(
 
     if (!response.ok) {
       if (result.errors) {
-        return { errors: result.errors, generalError: '' };
+        return { errors: result.errors, generalError: "" };
       }
-      return { errors: {}, generalError: result.error || 'Submission failed' };
+      return { errors: {}, generalError: result.error || "Submission failed" };
     }
 
-    return { errors: {}, generalError: '' };
+    return { errors: {}, generalError: "" };
   } catch (error) {
-    return { errors: {}, generalError: 'Network error. Please try again.' };
+    return { errors: {}, generalError: "Network error. Please try again." };
   }
 }
 
 export function MyForm() {
-  const [state, formAction, isPending] = useActionState(
-    submitAction,
-    initialState,
-  );
+  const [state, formAction, isPending] = useActionState(submitAction, initialState);
 
   return (
     <form action={formAction}>
-      {state.generalError && (
-        <div className="text-red-600">{state.generalError}</div>
-      )}
+      {state.generalError && <div className="text-red-600">{state.generalError}</div>}
 
       <div>
         <label htmlFor="name">Name</label>
         <input name="name" id="name" required />
-        {state.errors.name && (
-          <span className="text-red-600">{state.errors.name}</span>
-        )}
+        {state.errors.name && <span className="text-red-600">{state.errors.name}</span>}
       </div>
 
       <button type="submit" disabled={isPending}>
-        {isPending ? 'Submitting...' : 'Submit'}
+        {isPending ? "Submitting..." : "Submit"}
       </button>
     </form>
   );
@@ -110,22 +100,15 @@ async function submitOfferAction(
 
   if (response.ok) {
     onSuccess({ id: result.id });
-    return { errors: {}, generalError: '' };
+    return { errors: {}, generalError: "" };
   }
 
-  return { errors: {}, generalError: 'Failed' };
+  return { errors: {}, generalError: "Failed" };
 }
 
-export function CreateOfferForm({
-  onSuccess,
-}: {
-  onSuccess: (data: { id: string }) => void;
-}) {
+export function CreateOfferForm({ onSuccess }: { onSuccess: (data: { id: string }) => void }) {
   const boundAction = submitOfferAction.bind(null, onSuccess);
-  const [state, formAction, isPending] = useActionState(
-    boundAction,
-    initialState,
-  );
+  const [state, formAction, isPending] = useActionState(boundAction, initialState);
 
   return <form action={formAction}>...</form>;
 }
@@ -153,7 +136,7 @@ const [roomType, setRoomType] = useState('');
 Only use `useState` for UI that depends on other field values (e.g., date range validation, conditional fields):
 
 ```tsx
-const [startDate, setStartDate] = useState('');
+const [startDate, setStartDate] = useState("");
 
 <input
   name="startDate"

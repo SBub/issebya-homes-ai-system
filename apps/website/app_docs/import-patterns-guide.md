@@ -9,19 +9,19 @@ Use destructured imports instead of namespace imports for better tree-shaking an
 **Don't** use namespace imports:
 
 ```typescript
-import * as Sentry from '@sentry/nextjs';
+import * as Sentry from "@sentry/nextjs";
 
 Sentry.captureException(error);
-Sentry.setTag('key', 'value');
+Sentry.setTag("key", "value");
 ```
 
 **Do** use destructured imports:
 
 ```typescript
-import { captureException, setTag } from '@sentry/nextjs';
+import { captureException, setTag } from "@sentry/nextjs";
 
 captureException(error);
-setTag('key', 'value');
+setTag("key", "value");
 ```
 
 ---
@@ -53,13 +53,13 @@ setTag('key', 'value');
 
 ```typescript
 // Before
-import * as Sentry from '@sentry/nextjs';
-Sentry.init({ dsn: '...' });
+import * as Sentry from "@sentry/nextjs";
+Sentry.init({ dsn: "..." });
 Sentry.captureException(error);
 
 // After
-import { init, captureException } from '@sentry/nextjs';
-init({ dsn: '...' });
+import { init, captureException } from "@sentry/nextjs";
+init({ dsn: "..." });
 captureException(error);
 ```
 
@@ -67,12 +67,12 @@ captureException(error);
 
 ```typescript
 // Before
-import * as utils from '@/lib/utils';
+import * as utils from "@/lib/utils";
 utils.formatDate(date);
 utils.parseJSON(str);
 
 // After
-import { formatDate, parseJSON } from '@/lib/utils';
+import { formatDate, parseJSON } from "@/lib/utils";
 formatDate(date);
 parseJSON(str);
 ```

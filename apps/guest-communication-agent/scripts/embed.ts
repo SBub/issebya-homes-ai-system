@@ -193,6 +193,9 @@ async function main() {
   // Chunk all files (cheap, local, no API calls).
   const desiredChunks: Chunk[] = [];
   for (const file of files) {
+    // `file` comes from readdirSync(KNOWLEDGE_BASE_DIR) above, a fixed
+    // local directory this offline CLI script controls, not user input.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     const content = readFileSync(join(KNOWLEDGE_BASE_DIR, file), "utf-8");
     const chunks = chunkByHeaders(content, file);
     console.log(`  ${file}: ${chunks.length} chunks`);
@@ -243,6 +246,9 @@ async function main() {
 
     if (!existing) {
       toInsert.push({ chunk, hash });
+      // content_hash is a non-secret content-diffing checksum used to skip
+      // unchanged chunks, not a credential comparison; no timing channel.
+      // eslint-disable-next-line security/detect-possible-timing-attacks
     } else if (existing.metadata.content_hash === hash) {
       skipped += 1;
     } else {
