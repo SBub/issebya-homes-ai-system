@@ -443,7 +443,13 @@ export default function ConversationsAdminPage() {
         enableSorting: false,
         cell: (info) => {
           const conversation = info.row.original;
-          return conversation.stuck.any ? <Badge color="red">Stuck</Badge> : "—";
+          return conversation.stuck.any ? (
+            <Badge color="red" variant="outline">
+              Stuck
+            </Badge>
+          ) : (
+            "—"
+          );
         },
       },
     ],
@@ -483,7 +489,17 @@ export default function ConversationsAdminPage() {
   const showRetrigger = lastDetailMessage?.role === "user";
 
   return (
-    <Box p="5">
+    // Fixed-height column shell: everything above the table/detail-panel row
+    // is a normal (shrink-to-content) flex item, and that row is the sole
+    // `flex: 1` item, so the row — not the page — is what's constrained to
+    // the remaining viewport height. Root `overflow: hidden` plus the row's
+    // own `minHeight: 0` are both required here: a flex item's default
+    // min-height is `auto` (its content size), which lets it grow past its
+    // flex-basis and defeats any `overflow: auto` on its descendants.
+    <Box
+      p="5"
+      style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}
+    >
       <Box
         style={{
           position: "fixed",
@@ -521,7 +537,7 @@ export default function ConversationsAdminPage() {
         ))}
       </Box>
 
-      <Flex justify="between" align="center" mb="5">
+      <Flex justify="between" align="center" mb="5" style={{ flexShrink: 0 }}>
         <Heading size="6">Conversations</Heading>
         <Dialog.Root open={isApiKeyDialogOpen} onOpenChange={handleApiKeyDialogOpenChange}>
           <Dialog.Trigger>
@@ -569,83 +585,106 @@ export default function ConversationsAdminPage() {
         </Dialog.Root>
       </Flex>
 
-      <Flex align="center" gap="2" mb="4">
+      <Flex align="center" gap="2" mb="4" style={{ flexShrink: 0 }}>
         <Switch checked={stuckOnly} onCheckedChange={setStuckOnly} />
         <Text size="2">Stuck only</Text>
       </Flex>
 
       {conversationsError && (
-        <Text as="p" color="red" mb="3">
+        <Text as="p" color="red" mb="3" style={{ flexShrink: 0 }}>
           {conversationsError}
         </Text>
       )}
 
       {!hasLoaded && !conversationsLoading && (
-        <Text color="gray">
+        <Text color="gray" style={{ flexShrink: 0 }}>
           Click "Sign in" above to enter your API key and load conversations.
         </Text>
       )}
       {hasLoaded && filteredConversations.length === 0 && (
-        <Text color="gray">
+        <Text color="gray" style={{ flexShrink: 0 }}>
           {stuckOnly ? "No stuck conversations." : "No conversations yet."}
         </Text>
       )}
       {filteredConversations.length > 0 && (
-        <Text as="p" size="2" color="gray" mb="2">
+        <Text as="p" size="2" color="gray" mb="2" style={{ flexShrink: 0 }}>
           Showing {rangeStart}–{rangeEnd} of {filteredCount} conversations
         </Text>
       )}
 
-      <Flex gap="5" align="start">
-        <Box flexGrow="1" style={{ minWidth: 0 }}>
+      {/* The one `flex: 1` item in the column — occupies exactly the
+          viewport space left over after the header/toggle/status text
+          above. `minHeight: 0` overrides the flex default of `auto` so this
+          row can't grow past that space; `align="stretch"` (Flex's own
+          default) makes both children full-height so each one's own
+          `overflow: auto` container below is what scrolls, not this row. */}
+      <Flex gap="5" style={{ flex: 1, minHeight: 0 }}>
+        <Box
+          flexGrow="1"
+          style={{
+            minWidth: 0,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
           {filteredConversations.length > 0 && (
-            <Table.Root variant="surface">
-              <Table.Header>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <Table.Row key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => {
-                      const sortState = header.column.getIsSorted();
-                      return (
-                        <Table.ColumnHeaderCell
-                          key={header.id}
-                          onClick={header.column.getToggleSortingHandler()}
-                          style={{ cursor: "pointer", userSelect: "none" }}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span
-                            style={{ display: "inline-block", width: "1em", textAlign: "center" }}
+            <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              <Table.Root variant="surface">
+                <Table.Header>
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <Table.Row key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => {
+                        const sortState = header.column.getIsSorted();
+                        return (
+                          <Table.ColumnHeaderCell
+                            key={header.id}
+                            onClick={header.column.getToggleSortingHandler()}
+                            style={{ cursor: "pointer", userSelect: "none" }}
                           >
-                            {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
-                          </span>
-                        </Table.ColumnHeaderCell>
-                      );
-                    })}
-                  </Table.Row>
-                ))}
-              </Table.Header>
-              <Table.Body>
-                {table.getRowModel().rows.map((row) => (
-                  <Table.Row
-                    key={row.id}
-                    onClick={() => void selectConversation(row.original)}
-                    style={{
-                      cursor: "pointer",
-                      backgroundColor:
-                        row.original.id === selectedConversationId ? "var(--accent-a3)" : undefined,
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <Table.Cell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </Table.Cell>
-                    ))}
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            <span
+                              style={{
+                                display: "inline-block",
+                                width: "1em",
+                                textAlign: "center",
+                              }}
+                            >
+                              {sortState === "asc" ? "▲" : sortState === "desc" ? "▼" : ""}
+                            </span>
+                          </Table.ColumnHeaderCell>
+                        );
+                      })}
+                    </Table.Row>
+                  ))}
+                </Table.Header>
+                <Table.Body>
+                  {table.getRowModel().rows.map((row) => (
+                    <Table.Row
+                      key={row.id}
+                      onClick={() => void selectConversation(row.original)}
+                      style={{
+                        cursor: "pointer",
+                        backgroundColor:
+                          row.original.id === selectedConversationId
+                            ? "var(--accent-a3)"
+                            : undefined,
+                      }}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      ))}
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            </Box>
           )}
           {filteredConversations.length > 0 && (
-            <Flex align="center" gap="3" mt="3">
+            <Flex align="center" gap="3" mt="3" style={{ flexShrink: 0 }}>
               <Button
                 size="1"
                 variant="soft"
@@ -673,150 +712,210 @@ export default function ConversationsAdminPage() {
         </Box>
 
         {selectedConversationId && (
-          <Box style={{ flexShrink: 0, width: 420, position: "sticky", top: 24 }}>
-            <Flex direction="column" gap="3">
-              <Card>
-                <Flex justify="between" align="center">
-                  <Heading size="4">{detailConversation?.phone ?? "Loading…"}</Heading>
-                  <Button
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Close"
-                    onClick={closeConversationDetail}
-                  >
-                    ✕
-                  </Button>
-                </Flex>
-              </Card>
+          // Same flex-column + `minHeight: 0` + `overflow: auto` pattern as
+          // the table column, one level deeper: the phone-number header is
+          // a fixed-size flex item so it stays pinned, and everything below
+          // it (messages, pending decisions) is the sole scrollable region.
+          <Box
+            style={{
+              flexShrink: 0,
+              width: 420,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            <Card style={{ flexShrink: 0 }}>
+              <Flex justify="between" align="center">
+                <Heading size="4">{detailConversation?.phone ?? "Loading…"}</Heading>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  aria-label="Close"
+                  onClick={closeConversationDetail}
+                >
+                  ✕
+                </Button>
+              </Flex>
+            </Card>
 
-              {detailLoading && <Text color="gray">Loading…</Text>}
-              {detailError && <Text color="red">{detailError}</Text>}
+            <Box style={{ flex: 1, minHeight: 0, overflow: "auto", marginTop: "var(--space-3)" }}>
+              <Flex direction="column" gap="3">
+                {detailLoading && <Text color="gray">Loading…</Text>}
+                {detailError && <Text color="red">{detailError}</Text>}
 
-              {detailConversation && (
-                <>
-                  <Card>
-                    <Heading size="3" mb="2">
-                      Messages
-                    </Heading>
-                    <Flex direction="column" gap="2">
-                      {detailMessages.length === 0 && (
-                        <Text color="gray" size="2">
-                          No messages yet.
-                        </Text>
-                      )}
-                      {detailMessages.map((message) => (
-                        <Box
-                          key={message.id}
-                          style={{
-                            alignSelf: message.role === "user" ? "flex-start" : "flex-end",
-                            backgroundColor:
-                              message.role === "user" ? "var(--gray-a3)" : "var(--accent-a4)",
-                            borderRadius: "var(--radius-3)",
-                            padding: "6px 10px",
-                            maxWidth: "90%",
-                          }}
-                        >
-                          <Text as="div" size="1" color="gray">
-                            {message.role === "user" ? "Guest" : "Agent"} ·{" "}
-                            {formatDate(message.createdAt)}
-                          </Text>
-                          <Text as="div" size="2">
-                            {message.content}
-                          </Text>
-                          {message.role === "assistant" && message.deliveryStatus === "failed" && (
-                            <Flex align="center" gap="2" mt="1">
-                              <Badge color="red">Not delivered</Badge>
-                              <Button
-                                size="1"
-                                disabled={retryingMessageIds.has(message.id)}
-                                onClick={() => void retrySend(detailConversation.id, message.id)}
-                              >
-                                {retryingMessageIds.has(message.id) ? "Retrying…" : "Retry send"}
-                              </Button>
-                            </Flex>
-                          )}
-                        </Box>
-                      ))}
-                      {showRetrigger && (
-                        <Flex align="center" gap="2" mt="1">
-                          <Badge color="red">No reply sent</Badge>
-                          <Button
-                            size="1"
-                            disabled={retriggeringConversationIds.has(detailConversation.id)}
-                            onClick={() => void retriggerTurn(detailConversation.id)}
-                          >
-                            {retriggeringConversationIds.has(detailConversation.id)
-                              ? "Retriggering…"
-                              : "Retrigger turn"}
-                          </Button>
-                        </Flex>
-                      )}
-                    </Flex>
-                  </Card>
-
-                  <Card>
-                    <Heading size="3" mb="2">
-                      Pending owner decisions
-                    </Heading>
-                    {/* Once resolved — by any means: the owner actually
+                {detailConversation && (
+                  <>
+                    <Card>
+                      <Heading size="3" mb="2">
+                        Pending owner decisions
+                      </Heading>
+                      {/* Once resolved — by any means: the owner actually
                         answered/approved/rejected, the wait timed out, or an
                         operator manually resolved it — this stops being a
                         "pending" decision at all, so it drops out of this
                         list entirely rather than lingering unresolved-looking. */}
-                    {detailPendingDecisions.filter((decision) => decision.resolvedAt === null)
-                      .length === 0 && (
-                      <Text color="gray" size="2">
-                        None.
-                      </Text>
-                    )}
-                    <Flex direction="column" gap="2">
-                      {detailPendingDecisions
-                        .filter((decision) => decision.resolvedAt === null)
-                        .map((decision) => (
-                        <Box
-                          key={decision.id}
-                          style={{
-                            border: "1px solid var(--gray-a5)",
-                            borderRadius: "var(--radius-3)",
-                            padding: "8px 10px",
-                          }}
-                        >
-                          <Flex justify="between" align="center" mb="1">
-                            <Text as="div" size="2" weight="medium">
-                              {TOOL_NAME_LABEL[decision.toolName]}
-                            </Text>
-                            {decision.stuck && <Badge color="red">Stuck</Badge>}
-                          </Flex>
-                          {decision.reason && (
-                            <Text as="div" size="2" color="gray" mb="1">
-                              {decision.reason}
-                            </Text>
-                          )}
-                          <Text as="div" size="1" color="gray">
-                            Sent {formatDate(decision.sentAt)}
-                            {decision.relayedAt && ` · Relayed ${formatDate(decision.relayedAt)}`}
-                          </Text>
-                          {decision.stuck && (
-                            <Box mt="2">
-                              <Button
-                                size="1"
-                                disabled={resolvingDecisionIds.has(decision.id)}
-                                onClick={() =>
-                                  void resolveDecision(decision.id, detailConversation.id)
-                                }
-                              >
-                                {resolvingDecisionIds.has(decision.id) ? "Sending…" : "Send now"}
-                              </Button>
+                      {detailPendingDecisions.filter((decision) => decision.resolvedAt === null)
+                        .length === 0 && (
+                        <Text color="gray" size="2">
+                          None.
+                        </Text>
+                      )}
+                      <Flex direction="column" gap="2">
+                        {detailPendingDecisions
+                          .filter((decision) => decision.resolvedAt === null)
+                          .map((decision) => (
+                            <Box
+                              key={decision.id}
+                              style={{
+                                border: "1px solid var(--gray-a5)",
+                                borderRadius: "var(--radius-3)",
+                                padding: "8px 10px",
+                              }}
+                            >
+                              <Text as="div" size="2" weight="medium" mb="1">
+                                {TOOL_NAME_LABEL[decision.toolName]}
+                              </Text>
+                              {decision.reason && (
+                                <Text as="div" size="2" color="gray" mb="1">
+                                  {decision.reason}
+                                </Text>
+                              )}
+                              {/* Status badge lives in this metadata line —
+                                  describing the decision itself — rather than
+                                  beside the Send now button below, so the two
+                                  don't read as a matched pair of controls. */}
+                              <Text as="div" size="1" color="gray">
+                                Sent {formatDate(decision.sentAt)}
+                                {decision.relayedAt &&
+                                  ` · Relayed ${formatDate(decision.relayedAt)}`}
+                                {decision.stuck && (
+                                  <>
+                                    {" · "}
+                                    <Badge color="red" variant="outline">
+                                      Stuck
+                                    </Badge>
+                                  </>
+                                )}
+                              </Text>
+                              {decision.stuck && (
+                                <Box mt="2">
+                                  <Button
+                                    size="1"
+                                    disabled={resolvingDecisionIds.has(decision.id)}
+                                    onClick={() =>
+                                      void resolveDecision(decision.id, detailConversation.id)
+                                    }
+                                  >
+                                    {resolvingDecisionIds.has(decision.id)
+                                      ? "Sending…"
+                                      : "Send now"}
+                                  </Button>
+                                </Box>
+                              )}
                             </Box>
-                          )}
-                        </Box>
-                      ))}
-                    </Flex>
-                  </Card>
-                </>
-              )}
-            </Flex>
+                          ))}
+                      </Flex>
+                    </Card>
+
+                    <Card>
+                      <Flex align="baseline" gap="2" mb="2">
+                        <Heading size="3">Messages</Heading>
+                        <Text size="1" color="gray">
+                          (newest first)
+                        </Text>
+                      </Flex>
+                      <Flex direction="column" gap="2">
+                        {detailMessages.length === 0 && (
+                          <Text color="gray" size="2">
+                            No messages yet.
+                          </Text>
+                        )}
+                        {/* Rendered newest-first — detailMessages itself
+                            stays chronological (oldest-first) since
+                            lastDetailMessage above relies on that order. */}
+                        {[...detailMessages].reverse().map((message) => (
+                          <Box
+                            key={message.id}
+                            style={{
+                              alignSelf: message.role === "user" ? "flex-start" : "flex-end",
+                              backgroundColor:
+                                message.role === "user" ? "var(--gray-a3)" : "var(--accent-a4)",
+                              borderRadius: "var(--radius-3)",
+                              padding: "6px 10px",
+                              maxWidth: "90%",
+                            }}
+                          >
+                            {/* Status badges (Not delivered / No reply sent)
+                                sit in this metadata line — describing the
+                                message itself — rather than beside their
+                                action button below, so the two don't read as
+                                a matched pair of controls. */}
+                            <Text as="div" size="1" color="gray">
+                              {message.role === "user" ? "Guest" : "Agent"} ·{" "}
+                              {formatDate(message.createdAt)}
+                              {message.role === "assistant" &&
+                                message.deliveryStatus === "failed" && (
+                                  <>
+                                    {" · "}
+                                    <Badge color="red" variant="outline">
+                                      Not delivered
+                                    </Badge>
+                                  </>
+                                )}
+                              {message.role === "user" &&
+                                showRetrigger &&
+                                message.id === lastDetailMessage?.id && (
+                                  <>
+                                    {" · "}
+                                    <Badge color="red" variant="outline">
+                                      No reply sent
+                                    </Badge>
+                                  </>
+                                )}
+                            </Text>
+                            <Text as="div" size="2">
+                              {message.content}
+                            </Text>
+                            {message.role === "assistant" &&
+                              message.deliveryStatus === "failed" && (
+                                <Box mt="1">
+                                  <Button
+                                    size="1"
+                                    disabled={retryingMessageIds.has(message.id)}
+                                    onClick={() =>
+                                      void retrySend(detailConversation.id, message.id)
+                                    }
+                                  >
+                                    {retryingMessageIds.has(message.id)
+                                      ? "Retrying…"
+                                      : "Retry send"}
+                                  </Button>
+                                </Box>
+                              )}
+                          </Box>
+                        ))}
+                        {showRetrigger && (
+                          <Flex justify="end" mt="1">
+                            <Button
+                              size="1"
+                              disabled={retriggeringConversationIds.has(detailConversation.id)}
+                              onClick={() => void retriggerTurn(detailConversation.id)}
+                            >
+                              {retriggeringConversationIds.has(detailConversation.id)
+                                ? "Retriggering…"
+                                : "Retrigger turn"}
+                            </Button>
+                          </Flex>
+                        )}
+                      </Flex>
+                    </Card>
+                  </>
+                )}
+              </Flex>
+            </Box>
           </Box>
         )}
       </Flex>

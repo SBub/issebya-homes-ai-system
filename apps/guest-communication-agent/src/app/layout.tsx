@@ -14,7 +14,11 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
+      {/* Radix Themes' own stylesheet doesn't reset the browser's default
+          8px `body` margin. The admin page sizes itself to `100dvh`; left
+          alone, that default margin pushes the whole document 8px taller
+          than the viewport and reintroduces page-level vertical scroll. */}
+      <body style={{ margin: 0 }}>
         <Theme>{children}</Theme>
       </body>
     </html>
