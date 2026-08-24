@@ -45,7 +45,13 @@ const bookingRow = {
   conversationId: "convo-1",
   phone: "+351920742845",
   reason: "Ana wants to book room1 from 01-09-2026 to 05-09-2026.",
-  context: { guestName: "Ana", room: "room1", checkIn: "2026-09-01", checkOut: "2026-09-05" },
+  context: {
+    guestName: "Ana",
+    email: "ana@example.com",
+    room: "room1",
+    checkIn: "2026-09-01",
+    checkOut: "2026-09-05",
+  },
   sentAt: "2026-08-01T00:00:00.000Z",
   relayedAt: "2026-08-01T00:10:00.000Z",
   resolvedAt: null,
@@ -123,12 +129,16 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
       const res = await POST(makeRequest(), makeParams("decision-1"));
       const json = await res.json();
 
-      expect(runSendBookingLinkMock).toHaveBeenCalledWith({
-        guestName: "Ana",
-        room: "room1",
-        checkIn: "2026-09-01",
-        checkOut: "2026-09-05",
-      });
+      expect(runSendBookingLinkMock).toHaveBeenCalledWith(
+        {
+          guestName: "Ana",
+          email: "ana@example.com",
+          room: "room1",
+          checkIn: "2026-09-01",
+          checkOut: "2026-09-05",
+        },
+        { phone: "+351920742845" },
+      );
       expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
         "+351920742845",
         "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",

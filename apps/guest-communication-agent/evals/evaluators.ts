@@ -114,6 +114,32 @@ export function toolCallMatch({
 
   const match = calls.find((call) => call.toolName === expectedCall.name);
   if (!match) {
+    // A row can name a specific expected tool AND a specific
+    // expectedAlternative (e.g. get_current_date as a legitimate first step
+    // toward resolving a relative date before check_availability/run_code
+    // is reachable) — same acceptance mechanism as the expectedCall === null
+    // branch above, just applied here too instead of being null-only.
+    const expectedAlternative = expected?.expectedAlternative ?? null;
+    if (expectedAlternative !== null && expectedAlternative !== "text-only") {
+      const altMatch = calls.some((call) => call.toolName === expectedAlternative);
+      return {
+        name: "Tool Call Match",
+        score: altMatch ? 1 : 0,
+        metadata: {
+          rationale: altMatch
+            ? `Expected alternative tool "${expectedAlternative}" was called.`
+            : `Expected tool "${expectedCall.name}" (or alternative "${expectedAlternative}") but got: ${
+                calls.length > 0
+                  ? calls.map((c) => c.toolName).join(", ")
+                  : "no tool call (text-only reply)"
+              }.`,
+          expected: expectedCall,
+          expectedAlternative,
+          actual: calls,
+        },
+      };
+    }
+
     return {
       name: "Tool Call Match",
       score: 0,

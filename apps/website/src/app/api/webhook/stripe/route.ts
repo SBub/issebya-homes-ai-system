@@ -2,6 +2,7 @@ import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { sendBookingConfirmationEmail, sendBookingNotificationEmail } from "@/lib/resend";
+import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { stripe } from "@/lib/stripe";
 
@@ -74,9 +75,13 @@ export async function POST(request: NextRequest) {
           basePrice,
           touristTax,
           total,
+          guestName,
+          phone,
+          whatsappOptIn,
+          source,
         } = metadata;
 
-        if (!roomType || !checkIn || !checkOut || !personCount || !email) {
+        if (!roomType || !checkIn || !checkOut || !personCount || !email || !phone || !guestName) {
           addBreadcrumb({
             category: "webhook",
             message: "Incomplete metadata on session",
@@ -93,6 +98,26 @@ export async function POST(request: NextRequest) {
           personCount,
           email,
           stripeSessionId: session.id,
+        });
+
+        // Upsert guest_contacts and refresh it to reflect this confirmed
+        // stay (funnel_stage/stay dates) — same call covers both the
+        // already-linked pending-booking-confirm path (this just refreshes
+        // the existing row) and the fallback-insert path below (which
+        // needs a fresh guest_contact_id, since no pending row exists to
+        // have one already). Not wrapped in try/catch: a failure here means
+        // bookings.guest_contact_id (NOT NULL) can't be satisfied either
+        // way, so let it throw and surface as a 500 — Stripe retries on
+        // non-2xx, same as the existing insertError.throw below.
+        const guestContactId = await upsertGuestContact({
+          phone,
+          email,
+          guestName,
+          whatsappOptIn: whatsappOptIn === "true",
+          roomType,
+          checkIn,
+          checkOut,
+          funnelStage: "booked",
         });
 
         // Update booking status with child span
@@ -140,7 +165,8 @@ export async function POST(request: NextRequest) {
                 base_price: parseFloat(basePrice),
                 tourist_tax: parseFloat(touristTax),
                 total_amount: parseFloat(total),
-                email,
+                guest_contact_id: guestContactId,
+                source: source || "direct",
                 stripe_session_id: session.id,
                 payment_intent: paymentIntentId,
                 status: "confirmed",
@@ -224,6 +250,9 @@ export async function POST(request: NextRequest) {
               }
             },
           );
+
+          // guest_contacts was already upserted earlier in this handler
+          // (guestContactId) — no separate best-effort write needed here.
         }
       }
 

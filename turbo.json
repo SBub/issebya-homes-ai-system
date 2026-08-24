@@ -3,6 +3,23 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["SENTRY_AUTH_TOKEN", "NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
+      "passThroughEnv": [
+        "SUPABASE_URL",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "RESEND_API_KEY",
+        "RESEND_FROM_EMAIL",
+        "ADMIN_NOTIFICATION_EMAIL",
+        "ROOM1_ICAL_AIRBNB",
+        "ROOM1_ICAL_VRBO",
+        "ROOM1_ICAL_BOOKING",
+        "ROOM2_ICAL_AIRBNB",
+        "ROOM2_ICAL_VRBO",
+        "ROOM2_ICAL_BOOKING"
+      ],
       "outputs": ["dist/**", ".mastra/**"]
     },
     "dev": {

@@ -22,6 +22,7 @@ import { resolveToolApproval } from "./approval-gate";
 
 const sendBookingLinkSchema = z.object({
   guestName: z.string().describe("Guest full name"),
+  email: z.string().email().describe("Guest email address"),
   room: z.enum(["room1", "room2"]).describe("Room they want to book"),
   checkIn: z.string().describe("Check-in date in YYYY-MM-DD format"),
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
@@ -32,7 +33,7 @@ const sendBookingLinkSchema = z.object({
 // approved the call.
 export const sendBookingLink = tool({
   description:
-    "Send a booking link to the guest. Call this when the guest has confirmed they want to book a specific room and dates. Collect their name first if not known.",
+    "Send a booking link to the guest. Call this when the guest has confirmed they want to book a specific room and dates. Collect their name and email first if not known.",
   inputSchema: sendBookingLinkSchema,
 });
 
@@ -81,20 +82,26 @@ export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkS
 // real sendBookingLink execution span behind it) derives from this file's
 // real format instead of a hand-guessed copy elsewhere. Domain-agnostic on
 // purpose — siteUrl varies by env — so it matches on the
-// `/booking?room=...&checkIn=...&checkOut=...` path+query shape only. Keep
-// this in sync with the template literal in runSendBookingLink below if
-// that format ever changes.
+// `/booking/{room}?checkIn=...&checkOut=...` path+query shape only. Room is
+// a path segment (the site's real route is `/booking/[type]`, not a `room=`
+// query param) — keep this in sync with the template literal in
+// runSendBookingLink below if that format ever changes.
 export const BOOKING_LINK_URL_PATTERN =
-  /\/booking\?room=(?:room1|room2)&checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
+  /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
-// Pure URL builder — no nudge, no suspend/wait, no ToolContext. By the time
-// run-turn.ts calls this, its own APPROVAL_GATES check (backed by
-// approval-gate.ts's requestApprovalGate) has already run and approved the
-// call.
-export async function runSendBookingLink(args: z.infer<typeof sendBookingLinkSchema>) {
-  const { room, checkIn, checkOut } = args;
+// Pure URL builder — no nudge, no suspend/wait. By the time run-turn.ts calls
+// this, its own APPROVAL_GATES check (backed by approval-gate.ts's
+// requestApprovalGate) has already run and approved the call. Takes the
+// guest's phone from ToolContext (already known — it's the WhatsApp
+// conversation's own number) so the website booking form can prefill it
+// instead of asking the guest to type it again.
+export async function runSendBookingLink(
+  args: z.infer<typeof sendBookingLinkSchema>,
+  context: { phone: string },
+) {
+  const { guestName, email, room, checkIn, checkOut } = args;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
-  const url = `${siteUrl}/booking?room=${room}&checkIn=${checkIn}&checkOut=${checkOut}`;
+  const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(context.phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
   return { url };
 }
 

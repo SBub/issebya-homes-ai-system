@@ -1,6 +1,7 @@
 "use client";
 
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trackCalendarOpened, trackDateSelected } from "@/lib/analytics";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
@@ -14,8 +15,33 @@ type BookingEngineProps = {
 };
 
 export function BookingEngine({ roomType }: BookingEngineProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  // Prefills the guest's phone when they arrive via the GCA WhatsApp
+  // sendBookingLink (which already knows their number) — never asked twice.
+  // Direct website visitors have no ?phone= param and get an empty field.
+  const initialPhone = searchParams.get("phone") ?? "";
+  // Prefills the guest's name too when known (from a GCA link or any future
+  // source) — asking for a name is normal on any booking, not agent-only,
+  // so this has no source-gating unlike phone/whatsappOptIn.
+  const initialGuestName = searchParams.get("guestName") ?? "";
+  // Prefills email the same way as name — no source-gating, useful for any
+  // booking regardless of how the guest arrived.
+  const initialEmail = searchParams.get("email") ?? "";
+  const source = searchParams.get("source") === "gca" ? "gca" : "direct";
+  const urlCheckIn = searchParams.get("checkIn");
+  const urlCheckOut = searchParams.get("checkOut");
+  // Applies the sendBookingLink's checkIn/checkOut once (guards against
+  // re-applying after the guest manually picks different dates).
+  const appliedUrlDatesRef = useRef(false);
+  // Auto-expands the calendar when arriving via the GCA link (phone or
+  // source=gca present) so the guest sees their prefilled phone immediately,
+  // without an extra click — independent of whether dates were also passed.
+  // Search params are stable for the component's lifetime, so the initial
+  // value is computed via a lazy initializer (no Effect needed to sync it),
+  // but it stays real state so a direct visitor can still manually
+  // expand/collapse via handleExpand/handleClose below.
+  const [isExpanded, setIsExpanded] = useState(() => Boolean(initialPhone) || source === "gca");
 
   // Set initial Sentry booking context
   useEffect(() => {
@@ -42,6 +68,26 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
     setCheckOut,
     validateRange,
   } = useAvailabilityQuery(roomType);
+
+  // Applies the sendBookingLink's ?checkIn=&checkOut= once availability has
+  // loaded, if the range is actually available — otherwise leaves the
+  // default first-available-nights selection alone.
+  useEffect(() => {
+    if (appliedUrlDatesRef.current || isLoading || !urlCheckIn || !urlCheckOut) return;
+    appliedUrlDatesRef.current = true;
+
+    const parsedCheckIn = parseISO(urlCheckIn);
+    const parsedCheckOut = parseISO(urlCheckOut);
+    if (
+      !Number.isNaN(parsedCheckIn.getTime()) &&
+      !Number.isNaN(parsedCheckOut.getTime()) &&
+      parsedCheckOut > parsedCheckIn &&
+      validateRange(parsedCheckIn, parsedCheckOut)
+    ) {
+      setCheckIn(parsedCheckIn);
+      setCheckOut(parsedCheckOut);
+    }
+  }, [isLoading, urlCheckIn, urlCheckOut, validateRange, setCheckIn, setCheckOut]);
 
   // Handle date selection logic
   const handleDateSelect = useCallback(
@@ -74,8 +120,8 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
 
   // Handle expand
   const handleExpand = useCallback(() => {
-    addBookingBreadcrumb("User expanded booking calendar", { roomType });
     setIsExpanded(true);
+    addBookingBreadcrumb("User expanded booking calendar", { roomType });
     trackCalendarOpened();
   }, [roomType]);
 
@@ -117,6 +163,10 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
           onClose={handleClose}
           roomType={roomType}
           error={error}
+          initialPhone={initialPhone}
+          initialGuestName={initialGuestName}
+          initialEmail={initialEmail}
+          source={source}
         />
       )}
     </div>

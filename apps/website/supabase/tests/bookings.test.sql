@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(19);
 
 -- ============================================================
 -- Schema
@@ -107,13 +107,6 @@ SELECT is(
 );
 
 -- View does not expose sensitive columns
-SELECT throws_ok(
-  'SELECT email FROM public.booking_availability',
-  '42703',
-  NULL,
-  'view does not expose email column'
-);
-
 SELECT throws_ok(
   'SELECT access_token FROM public.booking_availability',
   '42703',

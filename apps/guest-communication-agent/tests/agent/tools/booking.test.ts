@@ -21,6 +21,7 @@ const {
 
 const bookingArgs = {
   guestName: "Ana",
+  email: "ana@example.com",
   room: "room1" as const,
   checkIn: "2026-09-01",
   checkOut: "2026-09-05",
@@ -42,18 +43,37 @@ describe("buildBookingApprovalReason", () => {
 
 describe("runSendBookingLink", () => {
   it("returns { url } built from room/checkIn/checkOut, with no nudge/approval logic of its own", async () => {
-    const result = await runSendBookingLink(bookingArgs);
+    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
 
-    expect(result).toEqual({ url: expect.stringContaining("room=room1") });
+    expect(result).toEqual({ url: expect.stringContaining("/booking/room1?") });
     expect(result.url).toContain("checkIn=2026-09-01");
     expect(result.url).toContain("checkOut=2026-09-05");
+  });
+
+  it("threads the guest's phone and source=gca so the website can prefill/attribute the booking", async () => {
+    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+
+    expect(result.url).toContain(`phone=${encodeURIComponent("+15551234567")}`);
+    expect(result.url).toContain("source=gca");
+  });
+
+  it("threads the guest's name so the website can prefill it too", async () => {
+    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+
+    expect(result.url).toContain(`guestName=${encodeURIComponent("Ana")}`);
+  });
+
+  it("threads the guest's email so the website can prefill it too", async () => {
+    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+
+    expect(result.url).toContain(`email=${encodeURIComponent("ana@example.com")}`);
   });
 
   it("defaults the site origin when NEXT_PUBLIC_SITE_URL isn't set", async () => {
     const original = process.env.NEXT_PUBLIC_SITE_URL;
     delete process.env.NEXT_PUBLIC_SITE_URL;
 
-    const result = await runSendBookingLink(bookingArgs);
+    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
     expect(result.url).toContain("https://issebya.com/booking");
 
     if (original !== undefined) {

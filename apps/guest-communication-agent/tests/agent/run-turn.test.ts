@@ -459,6 +459,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ana",
+              email: "ana@example.com",
               room: "room1",
               checkIn: "2026-09-01",
               checkOut: "2026-09-05",
@@ -492,7 +493,7 @@ describe("runAgentTurn", () => {
     expect(parts.find((p) => p.toolCallId === "call_book")?.toolName).toBe("send_booking_link");
     expect(parts.find((p) => p.toolCallId === "call_book")?.output).toEqual({
       type: "json",
-      value: { url: expect.stringContaining("room=room1") },
+      value: { url: expect.stringContaining("/booking/room1?") },
     });
 
     expect(result.messages.at(-1)).toEqual({
@@ -541,6 +542,7 @@ describe("runAgentTurn", () => {
     expect(bookingExecSpan?.attributes["gca.tool.input"]).toBe(
       JSON.stringify({
         guestName: "Ana",
+        email: "ana@example.com",
         room: "room1",
         checkIn: "2026-09-01",
         checkOut: "2026-09-05",
@@ -556,7 +558,7 @@ describe("runAgentTurn", () => {
     expect(bookingExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
     expect(bookingExecSpan?.attributes["braintrust.output"]).toBeUndefined();
     expect(updateSpanIOMock).toHaveBeenCalledWith(bookingExecSpan?.spanContext().spanId, {
-      output: { url: expect.stringContaining("room=room1") },
+      output: { url: expect.stringContaining("/booking/room1?") },
     });
 
     // get_pricing isn't send_booking_link — its own span must not pick up the tag.
@@ -597,6 +599,7 @@ describe("runAgentTurn", () => {
       reason: expect.stringContaining("Ana"),
       context: {
         guestName: "Ana",
+        email: "ana@example.com",
         room: "room1",
         checkIn: "2026-09-01",
         checkOut: "2026-09-05",
@@ -1004,6 +1007,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ana",
+              email: "ana@example.com",
               room: "room1",
               checkIn: "2026-09-01",
               checkOut: "2026-09-05",
@@ -1063,6 +1067,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ana",
+              email: "ana@example.com",
               room: "room1",
               checkIn: "2026-09-01",
               checkOut: "2026-09-05",
@@ -1149,6 +1154,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ana",
+              email: "ana@example.com",
               room: "room1",
               checkIn: "2026-09-01",
               checkOut: "2026-09-05",
@@ -1213,6 +1219,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ana",
+              email: "ana@example.com",
               room: "room1",
               checkIn: "2026-09-01",
               checkOut: "2026-09-05",
@@ -1223,6 +1230,7 @@ describe("runAgentTurn", () => {
             toolName: "send_booking_link",
             input: {
               guestName: "Ben",
+              email: "ben@example.com",
               room: "room2",
               checkIn: "2026-09-10",
               checkOut: "2026-09-12",
@@ -1246,7 +1254,7 @@ describe("runAgentTurn", () => {
     const parts = toolMessage?.content as Array<{ toolCallId: string; output: unknown }>;
     expect(parts.find((p) => p.toolCallId === "call_room1")?.output).toEqual({
       type: "json",
-      value: { url: expect.stringContaining("room=room1") },
+      value: { url: expect.stringContaining("/booking/room1?") },
     });
     expect(parts.find((p) => p.toolCallId === "call_room2")?.output).toEqual({
       type: "json",
@@ -1275,7 +1283,7 @@ describe("runAgentTurn", () => {
     // Each room's own output is patched onto its OWN span's id, not the
     // other room's — the cross-contamination this test exists to rule out.
     expect(updateSpanIOMock).toHaveBeenCalledWith(room1Span?.spanContext().spanId, {
-      output: { url: expect.stringContaining("room=room1") },
+      output: { url: expect.stringContaining("/booking/room1?") },
     });
     expect(updateSpanIOMock).toHaveBeenCalledWith(room2Span?.spanContext().spanId, {
       output: {
@@ -1662,6 +1670,7 @@ describe("runAgentTurn", () => {
               toolName: "send_booking_link",
               input: {
                 guestName: "Ana",
+                email: "ana@example.com",
                 room: "room1",
                 checkIn: "2026-09-01",
                 checkOut: "2026-09-05",
@@ -1695,6 +1704,7 @@ describe("runAgentTurn", () => {
               toolName: "send_booking_link",
               input: {
                 guestName: "Ana",
+                email: "ana@example.com",
                 room: "room1",
                 checkIn: "2026-09-01",
                 checkOut: "2026-09-05",
@@ -1728,6 +1738,7 @@ describe("runAgentTurn", () => {
               toolName: "send_booking_link",
               input: {
                 guestName: "Ana",
+                email: "ana@example.com",
                 room: "room1",
                 checkIn: "2026-09-01",
                 checkOut: "2026-09-05",
@@ -1762,6 +1773,7 @@ describe("runAgentTurn", () => {
               toolName: "send_booking_link",
               input: {
                 guestName: "Ana",
+                email: "ana@example.com",
                 room: "room1",
                 checkIn: "2026-09-01",
                 checkOut: "2026-09-05",

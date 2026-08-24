@@ -1,7 +1,24 @@
 import { addBreadcrumb, setTag, startSpan } from "@sentry/nextjs";
 import { type NextRequest, NextResponse } from "next/server";
+import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { stripe } from "@/lib/stripe";
+
+// bookings no longer stores email directly (see
+// 20260821160000_link_bookings_to_guest_contacts.sql) — it's joined through
+// guest_contact_id and flattened back onto a top-level `email` key so
+// BookingConfirmationDetails.tsx's existing `booking.email` usage keeps
+// working unchanged.
+type EmbeddedGuestContact =
+  { email: string | null } | { email: string | null }[] | null | undefined;
+
+function flattenGuestEmail<T extends { guest_contacts?: EmbeddedGuestContact }>(
+  booking: T,
+): Omit<T, "guest_contacts"> & { email: string | null } {
+  const { guest_contacts, ...rest } = booking;
+  const contact = Array.isArray(guest_contacts) ? guest_contacts[0] : guest_contacts;
+  return { ...rest, email: contact?.email ?? null };
+}
 
 export async function GET(request: NextRequest) {
   const sessionId = request.nextUrl.searchParams.get("session");
@@ -38,7 +55,7 @@ export async function GET(request: NextRequest) {
           const { data, error: queryError } = await supabase
             .from("bookings")
             .select(
-              "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, email, status, created_at",
+              "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, status, created_at, guest_contacts(email)",
             )
             .eq("stripe_session_id", sessionId)
             .in("status", ["pending", "confirmed"])
@@ -114,7 +131,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        return NextResponse.json({ booking });
+        return NextResponse.json({ booking: flattenGuestEmail(booking) });
       }
 
       // Fallback to Stripe
@@ -143,7 +160,21 @@ export async function GET(request: NextRequest) {
 
             stripeSpan?.setAttribute("booking.roomType", metadata.roomType);
 
-            // Payment confirmed but no booking in DB - create confirmed booking
+            // Payment confirmed but no booking in DB - resolve the guest's
+            // contact row first (guest_contact_id is NOT NULL on bookings,
+            // see 20260821160000_link_bookings_to_guest_contacts.sql) then
+            // create the confirmed booking.
+            const guestContactId = await upsertGuestContact({
+              phone: metadata.phone,
+              email: metadata.email,
+              guestName: metadata.guestName ?? "Guest",
+              whatsappOptIn: metadata.whatsappOptIn === "true",
+              roomType: metadata.roomType,
+              checkIn: metadata.checkIn,
+              checkOut: metadata.checkOut,
+              funnelStage: "booked",
+            });
+
             const bookingData = {
               room_type: metadata.roomType,
               check_in: metadata.checkIn,
@@ -153,7 +184,7 @@ export async function GET(request: NextRequest) {
               base_price: parseFloat(metadata.basePrice),
               tourist_tax: parseFloat(metadata.touristTax),
               total_amount: parseFloat(metadata.total),
-              email: metadata.email,
+              guest_contact_id: guestContactId,
               stripe_session_id: sessionId,
               status: "confirmed",
             };
@@ -163,18 +194,24 @@ export async function GET(request: NextRequest) {
               .from("bookings")
               .insert(bookingData)
               .select(
-                "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, email, status, created_at",
+                "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, status, created_at, guest_contacts(email)",
               )
               .single();
 
             if (insertError) {
               // Insert failed - return data from Stripe anyway
+              const { guest_contact_id: _guestContactId, ...bookingDataWithoutContactId } =
+                bookingData;
               return NextResponse.json({
-                booking: { ...bookingData, status: "confirmed" },
+                booking: {
+                  ...bookingDataWithoutContactId,
+                  email: metadata.email,
+                  status: "confirmed",
+                },
               });
             }
 
-            return NextResponse.json({ booking: newBooking });
+            return NextResponse.json({ booking: flattenGuestEmail(newBooking) });
           } catch {
             stripeSpan?.setStatus({ code: 2, message: "Not found" });
             return NextResponse.json({ error: "Booking not found" }, { status: 404 });

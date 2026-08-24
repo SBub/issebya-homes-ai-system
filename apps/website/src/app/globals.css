@@ -162,6 +162,23 @@ body {
   @apply text-xs text-gray-500 mt-4;
 }
 
+/* Name input field — same shape as the email field below */
+.booking-name-field {
+  @apply flex flex-col mt-4 mb-4;
+}
+
+.booking-name-label {
+  @apply text-sm mb-1;
+}
+
+.booking-name-input {
+  @apply w-full px-3 py-2 border border-foreground bg-white text-black text-sm;
+}
+
+.booking-name-input::placeholder {
+  @apply text-gray-400;
+}
+
 /* Email input field */
 .booking-email-field {
   @apply flex flex-col mt-4 mb-4;
@@ -177,6 +194,36 @@ body {
 
 .booking-email-input::placeholder {
   @apply text-gray-400;
+}
+
+/* WhatsApp phone input field — same shape as the email field above */
+.booking-phone-field {
+  @apply flex flex-col mt-4 mb-4;
+}
+
+.booking-phone-label {
+  @apply text-sm mb-1;
+}
+
+/* Country-code select + local-number input, combined into E.164 on submit */
+.booking-phone-input-group {
+  @apply flex gap-2;
+}
+
+.booking-phone-country-select {
+  @apply pl-2 pr-6 py-2 border border-foreground bg-white text-black text-sm max-w-[40%];
+}
+
+.booking-phone-input {
+  @apply flex-1 min-w-0 px-3 py-2 border border-foreground bg-white text-black text-sm;
+}
+
+.booking-phone-input::placeholder {
+  @apply text-gray-400;
+}
+
+.booking-whatsapp-optin-label {
+  @apply flex items-center gap-2 text-sm mt-2 cursor-pointer;
 }
 
 /* Action buttons */

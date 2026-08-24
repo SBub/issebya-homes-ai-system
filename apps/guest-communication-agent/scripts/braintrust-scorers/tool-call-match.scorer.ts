@@ -98,7 +98,7 @@ project.scorers.create({
   name: "Tool Call Match",
   slug: "gca-tool-call-match",
   description:
-    "Offline-eval scorer: does this row's actual tool call match expected.toolCall (exact name match; deep-equal args when expected.toolCall.name is send_booking_link)? expected.toolCall: null means a text-only reply was expected, UNLESS expected.expectedAlternative names a specific tool, in which case a call to that tool scores 1. Requires a dataset row with an expected.toolCall/expected.expectedAlternative shape — not meaningful against arbitrary production logs.",
+    "Offline-eval scorer: does this row's actual tool call match expected.toolCall (exact name match; deep-equal args when expected.toolCall.name is send_booking_link)? Either expected.toolCall: null (text-only expected) or a named expected.toolCall can be paired with expected.expectedAlternative naming a second acceptable tool (e.g. get_current_date as a legitimate precursor step) — a call to that alternative also scores 1. Requires a dataset row with an expected.toolCall/expected.expectedAlternative shape — not meaningful against arbitrary production logs.",
   ifExists: "replace",
   handler: async ({ output, expected }) => {
     const expectedShape = expected as ExpectedShape | undefined;
@@ -149,6 +149,33 @@ project.scorers.create({
 
     const match = calls.find((call) => call.toolName === expectedCall.name);
     if (!match) {
+      // A row can name a specific expected tool AND a specific
+      // expectedAlternative (e.g. get_current_date as a legitimate first
+      // step toward resolving a relative date before
+      // check_availability/run_code is reachable) — same acceptance
+      // mechanism as the expectedCall === null branch above, just applied
+      // here too instead of being null-only.
+      const expectedAlternative = expectedShape?.expectedAlternative ?? null;
+      if (expectedAlternative !== null && expectedAlternative !== "text-only") {
+        const altMatch = calls.some((call) => call.toolName === expectedAlternative);
+        return {
+          name: "Tool Call Match",
+          score: altMatch ? 1 : 0,
+          metadata: {
+            rationale: altMatch
+              ? `Expected alternative tool "${expectedAlternative}" was called.`
+              : `Expected tool "${expectedCall.name}" (or alternative "${expectedAlternative}") but got: ${
+                  calls.length > 0
+                    ? calls.map((c) => c.toolName).join(", ")
+                    : "no tool call (text-only reply)"
+                }.`,
+            expected: expectedCall,
+            expectedAlternative,
+            actual: calls,
+          },
+        };
+      }
+
       return {
         name: "Tool Call Match",
         score: 0,
