@@ -162,6 +162,18 @@ async function summarizeConversation(
     if (result.usage?.outputTokens !== undefined) {
       span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
     }
+    if (result.usage?.inputTokenDetails?.cacheReadTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_read.input_tokens",
+        result.usage.inputTokenDetails.cacheReadTokens,
+      );
+    }
+    if (result.usage?.inputTokenDetails?.cacheWriteTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_creation.input_tokens",
+        result.usage.inputTokenDetails.cacheWriteTokens,
+      );
+    }
 
     return result.text;
   }
@@ -348,6 +360,18 @@ async function distillFoldIntoPreferences(
     }
     if (result.usage?.outputTokens !== undefined) {
       span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+    }
+    if (result.usage?.inputTokenDetails?.cacheReadTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_read.input_tokens",
+        result.usage.inputTokenDetails.cacheReadTokens,
+      );
+    }
+    if (result.usage?.inputTokenDetails?.cacheWriteTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_creation.input_tokens",
+        result.usage.inputTokenDetails.cacheWriteTokens,
+      );
     }
 
     return result.text;
