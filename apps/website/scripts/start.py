@@ -14,12 +14,20 @@ pids = []
 shutting_down = False
 
 
-def ensure_supabase_running(project_root: str) -> None:
-    """Start local Supabase if not already running."""
+def ensure_supabase_running(repo_root: str) -> None:
+    """Start local Supabase if not already running.
+
+    Runs against the repo-root Supabase project, not website's own
+    (apps/website/supabase) — for now this repo runs a single local
+    database, so website's local dev points at the root project. Also uses
+    `npx supabase` rather than `yarn supabase`: the CLI isn't declared as a
+    dependency anywhere in this yarn-berry/node-modules-linker repo, so
+    `yarn supabase ...` fails with "Couldn't find a script named 'supabase'".
+    """
     print("Checking local Supabase status...")
     result = subprocess.run(
-        ["yarn", "supabase", "status"],
-        cwd=project_root,
+        ["npx", "supabase", "status"],
+        cwd=repo_root,
         capture_output=True,
         text=True,
     )
@@ -28,8 +36,8 @@ def ensure_supabase_running(project_root: str) -> None:
     if result.returncode != 0 or "not running" in result.stdout.lower():
         print("Starting local Supabase...")
         start_result = subprocess.run(
-            ["yarn", "supabase", "start"],
-            cwd=project_root,
+            ["npx", "supabase", "start"],
+            cwd=repo_root,
         )
         if start_result.returncode != 0:
             print("ERROR: Failed to start Supabase. Is Docker running?")
@@ -88,6 +96,10 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = os.path.dirname(os.path.dirname(project_root))
+    if not os.path.isfile(os.path.join(repo_root, "supabase", "config.toml")):
+        print(f"ERROR: expected repo root at {repo_root}, but supabase/config.toml is missing there.")
+        sys.exit(1)
 
     # Kill any process already using port 3000
     pids_on_3000 = subprocess.run(["lsof", "-ti", ":3000"], capture_output=True, text=True).stdout.strip()
@@ -96,11 +108,11 @@ def main():
         subprocess.run(["kill", "-9"] + pids_on_3000.split("\n"), capture_output=True)
 
     # Ensure local Supabase is running before starting the app
-    ensure_supabase_running(project_root)
+    ensure_supabase_running(repo_root)
 
     print("Starting Next.js development server...")
     app_proc = subprocess.Popen(
-        ["yarn", "dev"],
+        ["yarn", "dev:next"],
         cwd=project_root,
         preexec_fn=os.setsid,
     )
