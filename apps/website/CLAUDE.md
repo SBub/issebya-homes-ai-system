@@ -80,19 +80,19 @@ yarn test:integration # Playwright E2E
 Local: `apps/website/.env.development` (gitignored) — copy from `.env.example`.
 Production: Vercel dashboard. Build-time vars must be listed in root `turbo.json` under `env`; runtime-only vars under `passThroughEnv`.
 
-| Variable                        | Type       | Description                                         |
-| ------------------------------- | ---------- | --------------------------------------------------- |
-| `NEXT_PUBLIC_PLAUSIBLE_DOMAIN`  | build-time | Analytics domain — production only, not set locally |
-| `SUPABASE_URL`                  | runtime    | Supabase project URL                                |
-| `SUPABASE_ANON_KEY`             | runtime    | Guest-facing DB queries (RLS-scoped)                |
-| `SUPABASE_SERVICE_ROLE_KEY`     | runtime    | Server-side admin DB access                         |
-| `STRIPE_SECRET_KEY`             | runtime    | Checkout session creation                           |
-| `STRIPE_WEBHOOK_SECRET`         | runtime    | Webhook signature verification                      |
-| `RESEND_API_KEY`                | runtime    | Transactional emails                                |
-| `RESEND_FROM_EMAIL`             | runtime    | Sender address                                      |
-| `ADMIN_NOTIFICATION_EMAIL`      | runtime    | Booking alert recipient                             |
-| `ROOM1_ICAL_*` / `ROOM2_ICAL_*` | runtime    | iCal feed URLs (Airbnb, VRBO, Booking.com)          |
-| `SENTRY_AUTH_TOKEN`             | runtime    | Source map upload at build time                     |
+| Variable                        | Type       | Description                                                                |
+| ------------------------------- | ---------- | -------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_PLAUSIBLE_DOMAIN`  | build-time | Analytics domain — production only, not set locally                        |
+| `SUPABASE_URL`                  | runtime    | Supabase project URL                                                       |
+| `SUPABASE_ANON_KEY`             | runtime    | Guest-facing DB queries (RLS-scoped)                                       |
+| `SUPABASE_SERVICE_ROLE_KEY`     | runtime    | Server-side admin DB access                                                |
+| `STRIPE_SECRET_KEY`             | runtime    | Checkout session creation                                                  |
+| `STRIPE_WEBHOOK_SECRET`         | runtime    | Webhook signature verification                                             |
+| `RESEND_API_KEY`                | runtime    | Transactional emails                                                       |
+| `RESEND_FROM_EMAIL`             | runtime    | Sender address                                                             |
+| `ADMIN_NOTIFICATION_EMAIL`      | runtime    | Booking alert recipient                                                    |
+| `ROOM1_ICAL_*` / `ROOM2_ICAL_*` | runtime    | iCal feed URLs (Airbnb, VRBO, Booking.com)                                 |
+| `SENTRY_AUTH_TOKEN`             | build-time | Source map upload at build time (must be in root `turbo.json` build `env`) |
 
 ## Deploy
 
