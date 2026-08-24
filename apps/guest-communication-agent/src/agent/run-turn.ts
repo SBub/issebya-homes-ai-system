@@ -256,7 +256,18 @@ async function modelTurn(
     if (result.usage?.outputTokens !== undefined) {
       span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
     }
-
+    if (result.usage?.inputTokenDetails?.cacheReadTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_read.input_tokens",
+        result.usage.inputTokenDetails.cacheReadTokens,
+      );
+    }
+    if (result.usage?.inputTokenDetails?.cacheWriteTokens !== undefined) {
+      span.setAttribute(
+        "gen_ai.usage.cache_creation.input_tokens",
+        result.usage.inputTokenDetails.cacheWriteTokens,
+      );
+    }
     // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
     // content-filter finish) — flag it so it shows up as an ERROR span
     // instead of blending into every other "OK" span in the trace. See
