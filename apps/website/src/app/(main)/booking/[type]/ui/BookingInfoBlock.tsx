@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { AirbnbReviewSlider } from "@/app/ui/AirbnbReviewSlider";
 import { Callout } from "@/app/ui/Callout";
 import { room1Reviews, room2Reviews } from "@/data/airbnb-reviews";
@@ -36,7 +37,11 @@ export default function BookingInfoBlock({
       </h2>
 
       {/* Show BookingEngine for rooms, AirbnbButton for event space */}
-      {type === "room" && roomType ? <BookingEngine roomType={roomType} /> : null}
+      {type === "room" && roomType ? (
+        <Suspense fallback={null}>
+          <BookingEngine roomType={roomType} />
+        </Suspense>
+      ) : null}
 
       {type === "event" && <p className="text-xl font-hand font-bold mt-4">40€ / hour (min 4h)</p>}
       <p className="font-sans">{capacity}</p>
