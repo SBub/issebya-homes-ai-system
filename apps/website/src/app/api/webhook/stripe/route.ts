@@ -2,6 +2,7 @@ import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { sendBookingConfirmationEmail, sendBookingNotificationEmail } from "@/lib/resend";
+import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { stripe } from "@/lib/stripe";
 
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
           source,
         } = metadata;
 
-        if (!roomType || !checkIn || !checkOut || !personCount || !email) {
+        if (!roomType || !checkIn || !checkOut || !personCount || !email || !phone || !guestName) {
           addBreadcrumb({
             category: "webhook",
             message: "Incomplete metadata on session",
@@ -97,6 +98,26 @@ export async function POST(request: NextRequest) {
           personCount,
           email,
           stripeSessionId: session.id,
+        });
+
+        // Upsert guest_contacts and refresh it to reflect this confirmed
+        // stay (funnel_stage/stay dates) — same call covers both the
+        // already-linked pending-booking-confirm path (this just refreshes
+        // the existing row) and the fallback-insert path below (which
+        // needs a fresh guest_contact_id, since no pending row exists to
+        // have one already). Not wrapped in try/catch: a failure here means
+        // bookings.guest_contact_id (NOT NULL) can't be satisfied either
+        // way, so let it throw and surface as a 500 — Stripe retries on
+        // non-2xx, same as the existing insertError.throw below.
+        const guestContactId = await upsertGuestContact({
+          phone,
+          email,
+          guestName,
+          whatsappOptIn: whatsappOptIn === "true",
+          roomType,
+          checkIn,
+          checkOut,
+          funnelStage: "booked",
         });
 
         // Update booking status with child span
@@ -144,10 +165,7 @@ export async function POST(request: NextRequest) {
                 base_price: parseFloat(basePrice),
                 tourist_tax: parseFloat(touristTax),
                 total_amount: parseFloat(total),
-                email,
-                guest_name: guestName || null,
-                phone: phone || null,
-                whatsapp_opt_in: whatsappOptIn === "true",
+                guest_contact_id: guestContactId,
                 source: source || "direct",
                 stripe_session_id: session.id,
                 payment_intent: paymentIntentId,
@@ -233,52 +251,8 @@ export async function POST(request: NextRequest) {
             },
           );
 
-          // guest_contacts write is a best-effort supplement to the email
-          // confirmation above, never a dependency of it — email already
-          // sent and unconditional by this point. Same DB now (root
-          // project), no cross-service call needed. A failure here must
-          // never surface as a non-2xx response to Stripe. whatsapp_opt_in
-          // (-> guest_contacts.enabled) is pure marketing/campaign consent —
-          // it has no bearing on booking confirmation, which is email-only,
-          // always. No WhatsApp message is ever sent from this webhook.
-          if (phone) {
-            await startSpan(
-              {
-                name: "supabase.upsert_guest_contact",
-                op: "db.query",
-                attributes: { "db.operation": "upsert", "db.table": "guest_contacts" },
-              },
-              async (contactSpan) => {
-                try {
-                  const supabase = createAdminClient();
-                  const { error: upsertError } = await supabase.from("guest_contacts").upsert(
-                    {
-                      phone,
-                      ...(guestName ? { guest_name: guestName } : {}),
-                      last_room: roomType,
-                      last_stay_checkin: checkIn,
-                      last_stay_checkout: checkOut,
-                      funnel_stage: "booked",
-                      stage_updated_at: new Date().toISOString(),
-                      enabled: whatsappOptIn === "true",
-                    },
-                    { onConflict: "phone" },
-                  );
-                  if (upsertError) {
-                    contactSpan?.setStatus({ code: 2, message: "Upsert failed" });
-                    captureException(upsertError, {
-                      tags: { "db.operation": "guest_contacts_upsert" },
-                    });
-                  }
-                } catch (contactError) {
-                  contactSpan?.setStatus({ code: 2, message: "Upsert threw" });
-                  captureException(contactError, {
-                    tags: { "db.operation": "guest_contacts_upsert" },
-                  });
-                }
-              },
-            );
-          }
+          // guest_contacts was already upserted earlier in this handler
+          // (guestContactId) — no separate best-effort write needed here.
         }
       }
 

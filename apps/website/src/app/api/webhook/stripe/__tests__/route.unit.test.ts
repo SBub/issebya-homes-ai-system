@@ -10,6 +10,12 @@ vi.mock("@/lib/shared/supabase", () => ({
   createAdminClient: () => ({ from: mockSupabaseFrom }),
 }));
 
+const mockUpsertGuestContact = vi.fn().mockResolvedValue("guest-contact-id-123");
+
+vi.mock("@/lib/shared/guest-contacts", () => ({
+  upsertGuestContact: mockUpsertGuestContact,
+}));
+
 const mockConstructEvent = vi.fn();
 
 vi.mock("@/lib/stripe", () => ({
@@ -53,6 +59,8 @@ const validMetadata = {
   basePrice: "195",
   touristTax: "12",
   total: "207",
+  guestName: "Guest Example",
+  phone: "+14155552671",
 };
 
 function makeWebhookRequest(body: string, sig?: string): NextRequest {

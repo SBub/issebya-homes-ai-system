@@ -10,6 +10,12 @@ vi.mock("@/lib/shared/supabase", () => ({
   createAdminClient: () => ({ from: mockSupabaseFrom }),
 }));
 
+const mockUpsertGuestContact = vi.fn().mockResolvedValue("guest-contact-id-123");
+
+vi.mock("@/lib/shared/guest-contacts", () => ({
+  upsertGuestContact: mockUpsertGuestContact,
+}));
+
 const mockStripeSessionCreate = vi.fn();
 
 vi.mock("@/lib/stripe", () => ({
@@ -53,6 +59,7 @@ const validBody = {
   personCount: 2,
   email: "guest@example.com",
   guestName: "Guest Example",
+  phone: "+14155552671",
 };
 
 // --- Tests ---
@@ -206,7 +213,7 @@ describe("POST /api/checkout/create", () => {
     expect(insertData.room_type).toBe("room1");
     expect(insertData.status).toBe("pending");
     expect(insertData.stripe_session_id).toBe("cs_test_456");
-    expect(insertData.email).toBe("guest@example.com");
+    expect(insertData.guest_contact_id).toBe("guest-contact-id-123");
   });
 
   it("returns 500 when Stripe throws", async () => {

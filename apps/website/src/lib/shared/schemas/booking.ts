@@ -18,14 +18,15 @@ export const checkoutSchema = z
       .max(2, "Maximum 2 persons allowed"),
     email: z.string().email("Invalid email address"),
     guestName: z.string().trim().min(1, "Name is required").max(100, "Name is too long"),
+    // The checkout form always sends a country-code-select + local-number
+    // pair combined into E.164 (see country-codes.ts's combinePhoneNumber),
+    // so the leading "+" is guaranteed here, not optional.
     phone: z
       .string()
       .regex(
-        /^\+?[1-9]\d{6,14}$/,
+        /^\+[1-9]\d{6,14}$/,
         "Phone number must be in international format, e.g. +14155552671",
-      )
-      .optional()
-      .or(z.literal("")),
+      ),
     whatsappOptIn: z.boolean().default(false),
     source: z.enum(["direct", "gca"]).default("direct"),
   })

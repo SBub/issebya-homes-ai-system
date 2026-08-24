@@ -2,6 +2,7 @@ import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "
 import { type NextRequest, NextResponse } from "next/server";
 import { calculateTotalPrice } from "@/lib/price-utils";
 import { checkoutSchema } from "@/lib/shared/schemas/booking";
+import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { formatZodErrors } from "@/lib/shared/validation";
 import { stripe } from "@/lib/stripe";
@@ -114,6 +115,18 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // guest_contact_id is NOT NULL on bookings, so this must resolve
+        // before the pending row can be written — checked fail-fast, before
+        // the Stripe session is created (no charge has happened yet here).
+        let guestContactId: string;
+        try {
+          guestContactId = await upsertGuestContact({ phone, email, guestName, whatsappOptIn });
+        } catch (contactError) {
+          parentSpan?.setStatus({ code: 2, message: "guest_contacts upsert failed" });
+          captureException(contactError, { tags: { "db.operation": "guest_contacts_upsert" } });
+          return NextResponse.json({ error: "Failed to create checkout session" }, { status: 500 });
+        }
+
         const { nights, basePrice, touristTax, total } = calculateTotalPrice(
           checkInDate,
           checkOutDate,
@@ -221,10 +234,7 @@ export async function POST(request: NextRequest) {
               base_price: basePrice,
               tourist_tax: touristTax,
               total_amount: total,
-              email,
-              guest_name: guestName || null,
-              phone: phone || null,
-              whatsapp_opt_in: whatsappOptIn,
+              guest_contact_id: guestContactId,
               source,
               stripe_session_id: session.id,
               status: "pending",

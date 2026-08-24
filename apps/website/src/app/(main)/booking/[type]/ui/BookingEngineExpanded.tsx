@@ -10,14 +10,16 @@ import { mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
 import { ROOM_PRICING } from "@/lib/pricing";
 import { addBookingBreadcrumb, captureBookingError, setBookingContext } from "@/lib/sentry-booking";
+import { combinePhoneNumber, COUNTRY_CODES, splitPhoneNumber } from "@/lib/shared/country-codes";
 import type { DateRange } from "@/lib/shared/types/booking";
 import { BookingCalendar } from "./BookingCalendar";
 
 const emailSchema = z.string().email("Please enter a valid email address");
 const nameSchema = z.string().trim().min(1, "Please enter your name").max(100, "Name is too long");
-const phoneSchema = z
-  .string()
-  .regex(/^\+?[1-9]\d{6,14}$/, "Please enter a valid phone number, e.g. +14155552671");
+// Local-number-only check — the country code is guaranteed by the selector,
+// so this just guards against an empty/too-short digit string, not a full
+// E.164 shape (that's validated after combining, server-side).
+const localNumberSchema = z.string().regex(/^\d{4,14}$/, "Please enter a valid phone number");
 
 type BookingEngineExpandedProps = {
   blockedDates: DateRange[];
@@ -52,8 +54,15 @@ export function BookingEngineExpanded({
   const [emailError, setEmailError] = useState<string | null>(null);
   const [guestName, setGuestName] = useState(initialGuestName);
   const [guestNameError, setGuestNameError] = useState<string | null>(null);
-  const [phone, setPhone] = useState(initialPhone);
+  // initialPhone arrives already-combined (E.164, from sendBookingLink) —
+  // split it back into a country selection + local digits for the UI, so a
+  // guest who arrived via an agent link still sees the two controls, one of
+  // them pre-filled, rather than one opaque merged string.
+  const [{ countryId, localNumber }, setPhoneParts] = useState(() =>
+    splitPhoneNumber(initialPhone),
+  );
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const phone = combinePhoneNumber(countryId, localNumber);
   // Pre-checked by default for all bookings (direct or via a GCA link) —
   // still fully editable/uncheckable by the guest either way.
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
@@ -88,19 +97,13 @@ export function BookingEngineExpanded({
     return false;
   }, []);
 
-  // Phone is optional — an empty value is always valid, only a non-empty
-  // malformed one blocks booking.
   const validatePhone = useCallback((value: string): boolean => {
-    if (!value) {
-      setPhoneError(null);
-      return true;
-    }
-    const result = phoneSchema.safeParse(value);
+    const result = localNumberSchema.safeParse(value);
     if (result.success) {
       setPhoneError(null);
       return true;
     }
-    setPhoneError(result.error.issues[0].message);
+    setPhoneError(value ? result.error.issues[0].message : "Phone number is required");
     return false;
   }, []);
 
@@ -114,10 +117,10 @@ export function BookingEngineExpanded({
 
   // Handle book action
   const handleBook = useCallback(async () => {
-    if (!checkInDate || !checkOutDate || !email || !guestName) return;
+    if (!checkInDate || !checkOutDate || !email || !guestName || !localNumber) return;
     if (!validateEmail(email)) return;
     if (!validateGuestName(guestName)) return;
-    if (!validatePhone(phone)) return;
+    if (!validatePhone(localNumber)) return;
 
     trackBookButtonClicked();
 
@@ -128,7 +131,7 @@ export function BookingEngineExpanded({
       personCount,
       email,
       guestName,
-      phone: phone || undefined,
+      phone,
       whatsappOptIn,
       source,
     };
@@ -162,7 +165,7 @@ export function BookingEngineExpanded({
               personCount,
               email,
               guestName,
-              phone: phone || undefined,
+              phone,
               whatsappOptIn,
               source,
             }),
@@ -195,7 +198,9 @@ export function BookingEngineExpanded({
               );
             }
 
-            throw new Error(responseData.message || "Failed to create checkout session");
+            throw new Error(
+              responseData.error || responseData.message || "Failed to create checkout session",
+            );
           }
 
           span?.setAttribute("booking.stripeSessionUrl", responseData.url ? "present" : "missing");
@@ -226,6 +231,7 @@ export function BookingEngineExpanded({
     email,
     guestName,
     phone,
+    localNumber,
     whatsappOptIn,
     source,
     roomType,
@@ -355,26 +361,43 @@ export function BookingEngineExpanded({
         )}
       </div>
 
-      {/* Phone input (optional) */}
+      {/* Phone input (required) — country code + local number, combined into E.164 on submit */}
       <div className="booking-phone-field">
-        <label htmlFor="booking-phone" className="booking-phone-label">
-          WhatsApp number <span className="text-gray-500">(optional)</span>
+        <label htmlFor="booking-phone-number" className="booking-phone-label">
+          WhatsApp number<span className="text-red-500">*</span>
         </label>
-        <input
-          id="booking-phone"
-          type="tel"
-          value={phone}
-          onChange={(e) => {
-            setPhone(e.target.value);
-            if (phoneError) setPhoneError(null);
-          }}
-          onBlur={(e) => validatePhone(e.target.value)}
-          placeholder="+351 900 000 000"
-          className={`booking-phone-input ${phoneError ? "border-red-500" : ""}`}
-          aria-invalid={!!phoneError}
-          aria-describedby={phoneError ? "phone-error" : undefined}
-          disabled={isBooking}
-        />
+        <div className="booking-phone-input-group">
+          <select
+            id="booking-phone-country"
+            value={countryId}
+            onChange={(e) => setPhoneParts({ countryId: e.target.value, localNumber })}
+            className="booking-phone-country-select"
+            aria-label="Country code"
+            disabled={isBooking}
+          >
+            {COUNTRY_CODES.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.flag} {c.code} {c.country}
+              </option>
+            ))}
+          </select>
+          <input
+            id="booking-phone-number"
+            type="tel"
+            value={localNumber}
+            onChange={(e) => {
+              setPhoneParts({ countryId, localNumber: e.target.value.replace(/\D/g, "") });
+              if (phoneError) setPhoneError(null);
+            }}
+            onBlur={(e) => validatePhone(e.target.value)}
+            placeholder="920 742 845"
+            className={`booking-phone-input ${phoneError ? "border-red-500" : ""}`}
+            aria-required="true"
+            aria-invalid={!!phoneError}
+            aria-describedby={phoneError ? "phone-error" : undefined}
+            disabled={isBooking}
+          />
+        </div>
         {phoneError && (
           <span id="phone-error" className="text-red-500 text-xs mt-1">
             {phoneError}
@@ -419,6 +442,7 @@ export function BookingEngineExpanded({
             !!emailError ||
             !guestName ||
             !!guestNameError ||
+            !localNumber ||
             !!phoneError ||
             isBooking ||
             !checkInDate ||

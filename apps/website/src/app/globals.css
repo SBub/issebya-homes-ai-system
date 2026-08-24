@@ -205,8 +205,17 @@ body {
   @apply text-sm mb-1;
 }
 
+/* Country-code select + local-number input, combined into E.164 on submit */
+.booking-phone-input-group {
+  @apply flex gap-2;
+}
+
+.booking-phone-country-select {
+  @apply pl-2 pr-6 py-2 border border-foreground bg-white text-black text-sm max-w-[40%];
+}
+
 .booking-phone-input {
-  @apply w-full px-3 py-2 border border-foreground bg-white text-black text-sm;
+  @apply flex-1 min-w-0 px-3 py-2 border border-foreground bg-white text-black text-sm;
 }
 
 .booking-phone-input::placeholder {
