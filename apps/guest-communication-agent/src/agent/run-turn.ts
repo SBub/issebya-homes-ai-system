@@ -762,7 +762,9 @@ async function runToolCall(
     case "answer_property_question":
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
     case "send_booking_link":
-      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0]);
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], {
+        phone: context.phone,
+      });
     case "get_current_date":
       return runGetCurrentDate();
     case "run_code":

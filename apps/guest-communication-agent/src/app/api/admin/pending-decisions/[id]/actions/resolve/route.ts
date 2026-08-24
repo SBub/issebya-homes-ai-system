@@ -14,6 +14,7 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 // shape sendBookingLinkSchema declares (see booking.ts).
 interface BookingContext {
   guestName?: string;
+  email?: string;
   room?: "room1" | "room2";
   checkIn?: string;
   checkOut?: string;
@@ -35,7 +36,7 @@ interface MissingInfoContext {
  * Branches on tool_name:
  * - send_booking_link: rebuilds the same deterministic booking URL
  *   runSendBookingLink would have produced, from the row's own `context`
- *   (guestName/room/checkIn/checkOut, captured at insert time — see
+ *   (guestName/email/room/checkIn/checkOut, captured at insert time — see
  *   BookingContext above).
  * - missing_info: sends a short plain-text message containing the owner's
  *   actual answer, from the row's own `context.answer` (captured once the
@@ -92,12 +93,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           { status: 400 },
         );
       }
-      const { url } = await runSendBookingLink({
-        guestName: context.guestName ?? "Guest",
-        room: context.room,
-        checkIn: context.checkIn,
-        checkOut: context.checkOut,
-      });
+      const { url } = await runSendBookingLink(
+        {
+          guestName: context.guestName ?? "Guest",
+          email: context.email ?? "unknown@example.com",
+          room: context.room,
+          checkIn: context.checkIn,
+          checkOut: context.checkOut,
+        },
+        { phone: decision.phone },
+      );
       messageText = url;
     } else {
       const answer = (decision.context as MissingInfoContext | null)?.answer;

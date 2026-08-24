@@ -21,6 +21,9 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
   // sendBookingLink (which already knows their number) — never asked twice.
   // Direct website visitors have no ?phone= param and get an empty field.
   const initialPhone = searchParams.get("phone") ?? "";
+  // Prefills email the same way as name — no source-gating, useful for any
+  // booking regardless of how the guest arrived.
+  const initialEmail = searchParams.get("email") ?? "";
   const source = searchParams.get("source") === "gca" ? "gca" : "direct";
   const urlCheckIn = searchParams.get("checkIn");
   const urlCheckOut = searchParams.get("checkOut");
@@ -156,6 +159,7 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
           onClose={handleClose}
           roomType={roomType}
           error={error}
+          initialEmail={initialEmail}
         />
       )}
     </div>

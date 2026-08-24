@@ -23,6 +23,7 @@ type BookingEngineExpandedProps = {
   onClose: () => void;
   roomType: "room1" | "room2";
   error: string | null;
+  initialEmail?: string;
 };
 
 export function BookingEngineExpanded({
@@ -33,10 +34,11 @@ export function BookingEngineExpanded({
   onClose,
   roomType,
   error,
+  initialEmail = "",
 }: BookingEngineExpandedProps) {
   const queryClient = useQueryClient();
   const [personCount, setPersonCount] = useState(1);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);

@@ -68,10 +68,10 @@ function executionSpan(): BraintrustSpanEvent {
   };
 }
 
-// Real shape from src/agent/tools/booking.ts's runSendBookingLink:
-// `${siteUrl}/booking?room=${room}&checkIn=${checkIn}&checkOut=${checkOut}`.
+// Real shape from src/agent/tools/booking.ts's runSendBookingLink: room is a
+// path segment, not a query param — `${siteUrl}/booking/${room}?checkIn=...`.
 const REAL_FORMAT_BOOKING_LINK =
-  "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05";
+  "https://issebya.com/booking/room1?checkIn=2026-09-01&checkOut=2026-09-05";
 
 describe("checkHitlCompliance", () => {
   it("scores compliant (1.0) when approved and then executed", () => {
