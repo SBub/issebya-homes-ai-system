@@ -59,7 +59,17 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const { roomType, checkIn, checkOut, personCount, email } = validation.data;
+        const {
+          roomType,
+          checkIn,
+          checkOut,
+          personCount,
+          email,
+          guestName,
+          phone,
+          whatsappOptIn,
+          source,
+        } = validation.data;
 
         // Set booking context on span
         parentSpan?.setAttributes({
@@ -174,6 +184,10 @@ export async function POST(request: NextRequest) {
                 basePrice: String(basePrice),
                 touristTax: String(touristTax),
                 total: String(total),
+                ...(guestName ? { guestName } : {}),
+                ...(phone ? { phone } : {}),
+                whatsappOptIn: String(whatsappOptIn),
+                source,
               },
               customer_email: email,
               // eslint-disable-next-line no-secrets/no-secrets -- Stripe URL template placeholder, not a secret
@@ -208,6 +222,10 @@ export async function POST(request: NextRequest) {
               tourist_tax: touristTax,
               total_amount: total,
               email,
+              guest_name: guestName || null,
+              phone: phone || null,
+              whatsapp_opt_in: whatsappOptIn,
+              source,
               stripe_session_id: session.id,
               status: "pending",
             });

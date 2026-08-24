@@ -52,6 +52,7 @@ const validBody = {
   checkOut: format(addDays(NOW, 33), "yyyy-MM-dd"),
   personCount: 2,
   email: "guest@example.com",
+  guestName: "Guest Example",
 };
 
 // --- Tests ---

@@ -74,6 +74,10 @@ export async function POST(request: NextRequest) {
           basePrice,
           touristTax,
           total,
+          guestName,
+          phone,
+          whatsappOptIn,
+          source,
         } = metadata;
 
         if (!roomType || !checkIn || !checkOut || !personCount || !email) {
@@ -141,6 +145,10 @@ export async function POST(request: NextRequest) {
                 tourist_tax: parseFloat(touristTax),
                 total_amount: parseFloat(total),
                 email,
+                guest_name: guestName || null,
+                phone: phone || null,
+                whatsapp_opt_in: whatsappOptIn === "true",
+                source: source || "direct",
                 stripe_session_id: session.id,
                 payment_intent: paymentIntentId,
                 status: "confirmed",
@@ -224,6 +232,53 @@ export async function POST(request: NextRequest) {
               }
             },
           );
+
+          // guest_contacts write is a best-effort supplement to the email
+          // confirmation above, never a dependency of it — email already
+          // sent and unconditional by this point. Same DB now (root
+          // project), no cross-service call needed. A failure here must
+          // never surface as a non-2xx response to Stripe. whatsapp_opt_in
+          // (-> guest_contacts.enabled) is pure marketing/campaign consent —
+          // it has no bearing on booking confirmation, which is email-only,
+          // always. No WhatsApp message is ever sent from this webhook.
+          if (phone) {
+            await startSpan(
+              {
+                name: "supabase.upsert_guest_contact",
+                op: "db.query",
+                attributes: { "db.operation": "upsert", "db.table": "guest_contacts" },
+              },
+              async (contactSpan) => {
+                try {
+                  const supabase = createAdminClient();
+                  const { error: upsertError } = await supabase.from("guest_contacts").upsert(
+                    {
+                      phone,
+                      ...(guestName ? { guest_name: guestName } : {}),
+                      last_room: roomType,
+                      last_stay_checkin: checkIn,
+                      last_stay_checkout: checkOut,
+                      funnel_stage: "booked",
+                      stage_updated_at: new Date().toISOString(),
+                      enabled: whatsappOptIn === "true",
+                    },
+                    { onConflict: "phone" },
+                  );
+                  if (upsertError) {
+                    contactSpan?.setStatus({ code: 2, message: "Upsert failed" });
+                    captureException(upsertError, {
+                      tags: { "db.operation": "guest_contacts_upsert" },
+                    });
+                  }
+                } catch (contactError) {
+                  contactSpan?.setStatus({ code: 2, message: "Upsert threw" });
+                  captureException(contactError, {
+                    tags: { "db.operation": "guest_contacts_upsert" },
+                  });
+                }
+              },
+            );
+          }
         }
       }
 

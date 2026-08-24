@@ -8,6 +8,7 @@ describe("checkoutSchema", () => {
     checkOut: "2025-07-04",
     personCount: 2,
     email: "guest@example.com",
+    guestName: "Guest Example",
   };
 
   it("accepts valid booking data", () => {
@@ -63,6 +64,20 @@ describe("checkoutSchema", () => {
       ...validData,
       email: "not-an-email",
     });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty guest name", () => {
+    const result = checkoutSchema.safeParse({
+      ...validData,
+      guestName: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a missing guest name", () => {
+    const { guestName: _guestName, ...withoutName } = validData;
+    const result = checkoutSchema.safeParse(withoutName);
     expect(result.success).toBe(false);
   });
 
