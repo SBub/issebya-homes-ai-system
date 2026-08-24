@@ -1,0 +1,38 @@
+-- Drop campaigns, promo_codes, and finance_bookings — all three are now
+-- unused in this repo.
+--
+-- campaigns and promo_codes (created by
+-- 20260721103000_add_funnel_stage_and_campaign_tables.sql, extended by
+-- 20260721120000_promo_codes_rejected_status_and_message_text.sql and
+-- 20260724110000_campaigns_data_driven_targeting.sql) were CRM-owned:
+-- apps/crm/src/lib/campaigns.ts and apps/crm/src/app/api/campaigns/*,
+-- apps/crm/src/app/api/promo-codes/*. apps/crm was extracted out of this
+-- monorepo into issebya-homes-internal-tools on 2026-08-21 (see
+-- 02e7ecafe36194cedeb5a0a2210484bb7dffa205, "chore: extract crm/finance/
+-- social-media to issebya-homes-internal-tools") and no longer lives here
+-- — `ls apps/` today only shows guest-communication-agent, telegram-router,
+-- and website. A repo-wide grep for `campaigns` / `promo_codes` table
+-- usage across apps/ turns up zero real hits (the only string matches are
+-- unrelated comments in apps/telegram-router referencing a sibling
+-- "campaign-drafts" HTTP route, not this table).
+--
+-- finance_bookings (created by 20260718213027_finance_bookings.sql, later
+-- extended by 20260718223000_finance_bookings_add_commission_amount.sql)
+-- was written and read exclusively by apps/finance's CSV-import and
+-- bookings/tourist-tax routes. apps/finance was extracted out in the same
+-- 2026-08-21 commit and no longer lives here either.
+--
+-- Checked before writing this migration:
+--   - No application code anywhere in apps/*/src references any of the
+--     three table names.
+--   - The only foreign keys touching these tables are promo_codes ->
+--     campaigns(id) and promo_codes -> guest_contacts(id); nothing
+--     references campaigns, promo_codes, or finance_bookings from outside
+--     this trio, so cascading the drop only removes promo_codes' own FK
+--     constraints, not anything on guest_contacts or bookings.
+--   - guest_contacts, bookings, and booking_availability are untouched —
+--     none of them are referenced BY campaigns/promo_codes/finance_bookings,
+--     and no view depends on any of the three tables being dropped.
+drop table if exists public.campaigns cascade;
+drop table if exists public.promo_codes cascade;
+drop table if exists public.finance_bookings cascade;
