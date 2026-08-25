@@ -8,7 +8,7 @@ import { z } from "zod";
 import { trackBookButtonClicked } from "@/lib/analytics";
 import { mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
-import { ROOM_PRICING } from "@/lib/pricing";
+import { ROOM_PRICING } from "pricing";
 import { addBookingBreadcrumb, captureBookingError, setBookingContext } from "@/lib/sentry-booking";
 import { combinePhoneNumber, COUNTRY_CODES, splitPhoneNumber } from "@/lib/shared/country-codes";
 import type { DateRange } from "@/lib/shared/types/booking";

@@ -5,7 +5,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   reactStrictMode: true,
-  transpilePackages: ["@/lib/shared"],
+  transpilePackages: ["@/lib/shared", "pricing"],
   turbopack: {
     root: path.resolve(import.meta.dirname, "../.."),
   },

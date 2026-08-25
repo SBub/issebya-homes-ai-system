@@ -1,8 +1,6 @@
 import { tool } from "ai";
+import { ROOM_PRICING } from "pricing";
 import { z } from "zod";
-
-// Hardcoded until pricing is in DB. Flat rate, no seasonal distinction.
-const NIGHTLY_PRICE_EUR = 75;
 
 const getPricingSchema = z.object({
   room: z.enum(["room1", "room2"]).describe("Which room"),
@@ -19,8 +17,8 @@ export async function runGetPricing(args: z.infer<typeof getPricingSchema>) {
   const { room } = args;
   return {
     room,
-    pricePerNight: NIGHTLY_PRICE_EUR,
-    currency: "EUR",
+    pricePerNight: ROOM_PRICING.basePrice,
+    currency: ROOM_PRICING.currency,
     note: "Flat rate per night, does not include the tourist tax.",
   };
 }

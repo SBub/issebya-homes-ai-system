@@ -27,6 +27,7 @@
     "date-fns": "^4.1.0",
     "ical.js": "^2.2.1",
     "next": "^16.2.1",
+    "pricing": "workspace:*",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "resend": "^4.6.0",

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import { ROOM_PRICING } from "../../../../../lib/pricing";
+import { ROOM_PRICING } from "pricing";
 
 // Mock BookingCalendar — child component, not our responsibility
 vi.mock("./BookingCalendar", () => ({

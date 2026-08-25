@@ -8824,6 +8824,7 @@ __metadata:
     inngest-cli: "npm:^1.41.1"
     next: "npm:^16.2.1"
     prettier: "npm:^3.8.1"
+    pricing: "workspace:*"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
     tsx: "npm:^4.23.1"
@@ -10963,6 +10964,14 @@ __metadata:
   checksum: 10c0/9f7ddae234035868f3daab3dc34e6de7e54622185afb017378029f0c09a9c023248ccf6f34def0b17a0538e18c47aa1b3188bab72965d1bf735919baa0747e99
   languageName: node
   linkType: hard
+
+"pricing@workspace:*, pricing@workspace:packages/pricing":
+  version: 0.0.0-use.local
+  resolution: "pricing@workspace:packages/pricing"
+  dependencies:
+    typescript: "npm:^5.9.3"
+  languageName: unknown
+  linkType: soft
 
 "proc-log@npm:^7.0.0":
   version: 7.0.0
@@ -13230,6 +13239,7 @@ __metadata:
     next: "npm:^16.2.1"
     playwright: "npm:^1.58.2"
     prettier: "npm:^3.8.1"
+    pricing: "workspace:*"
     react: "npm:^19.2.3"
     react-dom: "npm:^19.2.3"
     resend: "npm:^4.6.0"
