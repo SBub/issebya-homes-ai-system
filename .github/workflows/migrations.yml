@@ -1,0 +1,64 @@
+name: Supabase Migrations
+
+# Separate from ci.yml on purpose: same convention as eval-golden.yml — a
+# distinct concern with its own trigger shape, not folded into the
+# lint/typecheck/test job.
+#
+# Two jobs, two different jobs entirely:
+#   - dry-run: PRs into develop OR master that touch supabase/migrations/**.
+#     Applies the full migration history to a fresh ephemeral local Postgres
+#     (via `supabase start`) — catches broken SQL early, at both the
+#     feature->develop stage and the develop->master promotion stage. Needs
+#     no secrets, never touches a real hosted project.
+#   - push: only on push to master, only when supabase/migrations/** changed.
+#     Applies pending migrations to the real hosted prod project via
+#     `supabase db push`. Requires SUPABASE_ACCESS_TOKEN and
+#     SUPABASE_PROJECT_REF repo secrets — neither exists yet (no real prod
+#     Supabase project stood up yet), so this job will fail until those are
+#     added. Expected for now, not a bug.
+
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - "supabase/migrations/**"
+  push:
+    branches: [master]
+    paths:
+      - "supabase/migrations/**"
+
+jobs:
+  dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Apply migrations to a fresh local Postgres
+        run: supabase start
+
+      - name: Stop local stack
+        if: always()
+        run: supabase stop
+
+  push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link to prod project
+        run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Push pending migrations to prod
+        run: supabase db push
