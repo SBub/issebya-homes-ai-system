@@ -39,6 +39,7 @@
     "gpt-tokenizer": "^4.0.0",
     "inngest": "^4.15.0",
     "next": "^16.2.1",
+    "pricing": "workspace:*",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "zod": "^4.4.3"

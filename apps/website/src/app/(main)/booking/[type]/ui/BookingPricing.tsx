@@ -1,4 +1,4 @@
-import { ROOM_PRICING } from "@/lib/pricing";
+import { ROOM_PRICING } from "pricing";
 
 export function BookingPricing() {
   return (

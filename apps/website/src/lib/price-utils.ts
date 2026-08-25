@@ -3,7 +3,7 @@
  */
 
 import { differenceInDays } from "date-fns";
-import { ROOM_PRICING } from "./pricing";
+import { ROOM_PRICING } from "pricing";
 
 /**
  * Calculate the number of nights between two dates.

@@ -6,7 +6,7 @@ import {
   calculateTouristTax,
   formatPrice,
 } from "../price-utils";
-import { ROOM_PRICING } from "../pricing";
+import { ROOM_PRICING } from "pricing";
 
 const { basePrice, touristTax, touristTaxNights } = ROOM_PRICING;
 

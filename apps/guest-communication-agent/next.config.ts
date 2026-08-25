@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(__dirname, "..", ".."),
   },
+  transpilePackages: ["pricing"],
   // @dbos-inc/dbos-sdk's telemetry/exporters.js does lazy `require()`s for
   // optional OpenTelemetry exporter packages (e.g.
   // @opentelemetry/exporter-trace-otlp-proto) that are only ever hit if an
