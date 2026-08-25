@@ -279,7 +279,43 @@ elsewhere (prompt-loading throws on its own if Braintrust is unreachable), and l
 just the AI-trace layer on top of a working Axiom pipeline is far lower-stakes than
 losing Axiom itself.
 
-## 9. Known limitations / in progress
+## 9. Database access model
+
+Two Supabase clients exist (`src/lib/supabase.ts`): `createClient()` (anon key,
+subject to RLS) and `createAdminClient()` (service role, bypasses RLS). Which one a
+call site uses isn't a per-developer judgment call — it follows directly from each
+table's RLS/grant state:
+
+- `documents` has RLS enabled with one policy: unrestricted anon `SELECT`. It's the
+  property knowledge base, meant to be publicly readable — `answer_property_question`
+  reads it via the anon client for that reason. Anon has no write grant on it, so the
+  two paths that write to it (`scripts/embed.ts`, and `missing_info`'s owner-reply
+  handler) use the admin client — not a choice, the only way to write it.
+- Every other table this app touches (`whatsapp_conversations`, `whatsapp_messages`,
+  `guest_memory`, `guest_memory_folds`, `pending_owner_decisions`,
+  `missing_info_trace_anchors`, `approval_gate_trace_anchors`) has RLS enabled with
+  **zero** policies and an explicit `revoke all ... from anon, authenticated`. Anon has
+  no access to these at all, by design — the admin client is the only way in, for
+  reads and writes alike.
+
+Why the wide grant to a single key instead of per-table RLS policies: this app is a
+single-tenant backend, not a multi-tenant one. There's no per-guest Supabase Auth
+session to hang a policy on — a "guest" is just a phone number carried through
+server-side application state (`conversationId`/`phone`), never issued its own DB
+credential. GCA's own backend is the sole first-party operator of this database, so
+service role is the natural fit: one trusted process, full access to its own
+operational tables, no anon-facing surface on any of them.
+
+The tradeoff this implies: isolation between guests/conversations (making sure a
+query for one `conversation_id` never touches another's rows) is enforced entirely at
+the application layer — every query's own `.eq("conversation_id", ...)` /
+`.eq("phone", ...)` filter — not backstopped by Postgres. Real per-conversation RLS
+policies would require issuing a scoped identity per request (e.g. a session variable
+set on each turn) and switching these call sites off service role, which is a real
+architecture change, not a config tweak. Not currently planned; noted here so the
+tradeoff is explicit rather than accidental.
+
+## 10. Known limitations / in progress
 
 - **`missing_info` no-reply timeout**: currently just logs rather than re-nudging the
   owner. Acceptable for a low-volume single-property agent, would need a retry/
@@ -287,3 +323,11 @@ losing Axiom itself.
 - **telegram-router's Axiom dataset**: instrumented and verified locally (§8), but the
   dataset it exports to doesn't exist yet in Axiom, and the app's own token can't
   create one, that's a one-time manual step, not a code gap.
+- **No DB-level isolation backstop between guests/conversations**: see §9 — correctness
+  depends on every query's own scoping filter, not enforced by RLS.
+- **`missing_info` KB writes are unvalidated**: an owner's raw Telegram reply is
+  embedded into the public `documents` table verbatim (`missing-info.ts`'s
+  `handleMissingInfoReplyReceived`), with no content review before it becomes readable
+  by anyone with the anon key. Fine for expected use (answering a guest's question);
+  no safeguard against an owner accidentally including something not meant to be
+  public.
