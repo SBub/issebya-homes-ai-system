@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { InfoSection } from "@/app/(main)/guest-info/ui/InfoSection";
+import { InfoSection } from "@/app/ui/InfoSection";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 
 function subscribeHash(callback: () => void) {
