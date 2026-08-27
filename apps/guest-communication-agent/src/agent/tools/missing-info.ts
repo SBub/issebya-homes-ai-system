@@ -80,20 +80,28 @@ export const MISSING_INFO_REPLY_TIMEOUT = "24h";
 export async function handleMissingInfoReplyReceived(params: {
   correlationId: string;
   answer: string;
+  // The guest's original question, when available (see telegram-router's
+  // extractMissingInfoQuestion) — used as this document's heading, same
+  // `## <heading>\n\n- <content>` shape as the knowledge-base .md files
+  // (see embed.ts's chunkByHeaders), so this stays consistent with the rest
+  // of the corpus for vector search. Falls back to the bare answer when
+  // absent (e.g. an older nudge, or extraction failed).
+  question?: string;
 }): Promise<{ documentId: number; embeddingDimensions: number }> {
-  const { correlationId, answer } = params;
+  const { correlationId, answer, question } = params;
   const supabase = createAdminClient();
+  const content = question ? `## ${question}\n\n- ${answer}` : answer;
 
   const { embedding } = await embed({
     model: openrouter.embedding("openai/text-embedding-3-small"),
-    value: answer,
+    value: content,
   });
 
   const inserted = await withSpan("db.insertDocument", { "db.table": "documents" }, async () => {
     const { data, error: insertError } = await supabase
       .from("documents")
       .insert({
-        content: answer,
+        content,
         embedding: JSON.stringify(embedding),
         metadata: { source: "owner_nudge_answer" },
       })

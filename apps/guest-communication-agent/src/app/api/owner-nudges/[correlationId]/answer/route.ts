@@ -85,6 +85,11 @@ export async function POST(
   if (!answer) {
     return NextResponse.json({ error: "Missing answer in request body" }, { status: 400 });
   }
+  // Optional — the guest's original question, when telegram-router managed
+  // to extract it from the nudge's echoed reply text. Absence just means the
+  // answer gets embedded without question context, not a validation error.
+  const rawQuestion = body?.question;
+  const question = typeof rawQuestion === "string" ? rawQuestion.trim() || undefined : undefined;
 
   // Real work + real span attributes, shared by both the nested (anchor
   // found) and disconnected-root (anchor missing) cases below — only how the
@@ -96,6 +101,7 @@ export async function POST(
     const { documentId, embeddingDimensions } = await handleMissingInfoReplyReceived({
       correlationId,
       answer,
+      question,
     });
     const output = JSON.stringify({ documentId, embeddingDimensions });
     span.setAttribute("gca.tool.output", output);

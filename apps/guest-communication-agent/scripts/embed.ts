@@ -126,10 +126,11 @@ function chunkByHeaders(content: string, source: string): Chunk[] {
       if (currentSection && currentContent.length > 0) {
         const text = currentContent.join("\n").trim();
         if (text.length > 0) {
+          const section = currentSection.replace(/^#{1,2} /, "");
           chunks.push({
-            content: `${currentSection}\n\n${text}`,
+            content: `${section}\n\n${text}`,
             source,
-            section: currentSection.replace("## ", ""),
+            section,
           });
         }
       }
@@ -148,10 +149,11 @@ function chunkByHeaders(content: string, source: string): Chunk[] {
   if (currentSection && currentContent.length > 0) {
     const text = currentContent.join("\n").trim();
     if (text.length > 0) {
+      const section = currentSection.replace(/^#{1,2} /, "");
       chunks.push({
-        content: `${currentSection}\n\n${text}`,
+        content: `${section}\n\n${text}`,
         source,
-        section: currentSection.replace(/^#{1,2} /, ""),
+        section,
       });
     }
   }
