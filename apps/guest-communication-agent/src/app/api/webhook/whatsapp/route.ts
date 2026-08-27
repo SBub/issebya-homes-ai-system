@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { type NextRequest, NextResponse } from "next/server";
+import { after, type NextRequest, NextResponse } from "next/server";
 import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
+import { flushTracing } from "@/instrumentation";
 import { inngest } from "@/lib/inngest";
 import { normalizePhone } from "@/lib/phone";
 import { markSpanFailed, startTraceRoot, withTurnSpan } from "@/lib/tracing";
@@ -157,5 +158,11 @@ export async function POST(request: NextRequest) {
       { error: err instanceof Error ? err.message : String(err) },
       { status: 500 },
     );
+  } finally {
+    // This handler emits the webhook.* spans above directly. after()
+    // schedules the flush to run once the response is sent — Vercel keeps
+    // the function alive until it resolves (see flushTracing's own comment
+    // in src/instrumentation.ts) — instead of blocking the response on it.
+    after(() => flushTracing());
   }
 }
