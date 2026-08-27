@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { InfoSection } from "@/app/ui/InfoSection";
 
 export const metadata: Metadata = {
   title: "Terms & Conditions – Issebya Homes",
+  robots: { index: false, follow: false },
 };
 
 export default function TermsAndConditionsPage() {
@@ -106,10 +108,14 @@ export default function TermsAndConditionsPage() {
 
         <InfoSection id="privacy" title="Guest Data & Privacy">
           <p>
-            We collect the personal data needed to process your booking, meet our legal registration
-            obligations (see above), and communicate with you, including your name, contact details,
-            and identity document for foreign guests. A full Privacy Policy covering this in detail
-            will be published separately.
+            We collect the personal data needed to process your booking and communicate with you,
+            including your name, contact details, and WhatsApp messages. Identity documents for
+            foreign-guest registration (see above) are checked in person at check-in and are not
+            stored digitally by us. Full details are in our{" "}
+            <Link href="/privacy-policy" className="underline hover:text-gray-600">
+              Privacy Policy
+            </Link>
+            .
           </p>
         </InfoSection>
 

@@ -7,9 +7,14 @@ export default function Footer() {
   return (
     <footer className="w-full px-6 py-2 text-sm text-gray-600 flex flex-col items-center mt-12">
       <InstagramLink />
-      <Link href="/terms-and-conditions" className="underline hover:text-gray-800">
-        Terms & Conditions
-      </Link>
+      <div className="flex gap-3">
+        <Link href="/terms-and-conditions" className="underline hover:text-gray-800">
+          Terms & Conditions
+        </Link>
+        <Link href="/privacy-policy" className="underline hover:text-gray-800">
+          Privacy Policy
+        </Link>
+      </div>
       <Suspense fallback={<div>Loading cop...</div>}>
         <Copyright />
       </Suspense>
