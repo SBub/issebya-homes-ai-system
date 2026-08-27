@@ -131,6 +131,7 @@ async function summarizeConversation(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: SUMMARIZER_PROMPT_SLUG,
+      defaults: { model: MODEL },
     });
     const { messages } = promptTemplate.build({
       prior_summary: priorSummary || "(none)",
@@ -335,6 +336,7 @@ async function distillFoldIntoPreferences(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: DISTILLER_PROMPT_SLUG,
+      defaults: { model: MODEL },
     });
     const { messages } = promptTemplate.build({
       prior_preferences: priorPreferences || "(none)",

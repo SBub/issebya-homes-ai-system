@@ -982,6 +982,7 @@ export async function runAgentTurn(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: SYSTEM_PROMPT_SLUG,
+      defaults: { model: MODEL },
     });
     const { messages } = promptTemplate.build({});
     return messages[0].content as string;
