@@ -146,7 +146,11 @@ export async function withTurnSpan<T>(
 //     node_modules/@braintrust/otel/dist/index.js). Any call site that wants
 //     its gen_ai.* content to actually show up as Input/Output has to
 //     duplicate it under braintrust.input/braintrust.output too — see
-//     run-turn.ts's modelTurn for a real example.
+//     memory.ts's summarizer call for a real example. (run-turn.ts's
+//     modelTurn instead sets experimental_telemetry on its generateText
+//     call, which gets Braintrust the same Input/Output for free on the
+//     ai.generateText.doGenerate child span — no manual duplication needed
+//     there.)
 //   - `braintrust.tags` aggregates from ANY span in a trace up to the whole
 //     trace level, making the whole trace filterable by a tag set on one
 //     span deep in the tree — see run-turn.ts's firedTags for how this app

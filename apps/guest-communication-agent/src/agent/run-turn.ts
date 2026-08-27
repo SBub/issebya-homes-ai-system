@@ -206,6 +206,13 @@ async function modelTurn(
     // shape — `ReturnType<typeof generateText>` on the generic function
     // itself widens back to a bare ToolSet and loses the specific tool
     // types.
+    // experimental_telemetry (the AI SDK's own OTel instrumentation, via the
+    // same globally-registered tracer instrumentation.ts sets up) auto-emits
+    // ai.generateText/ai.generateText.doGenerate child spans whose Input/
+    // Output/usage Braintrust already renders correctly on its own — unlike
+    // this app's own gen_ai.* attributes below, no braintrust.* duplication
+    // needed for these child spans. metadata.gca.attempt reads `attempt`
+    // live at each call, so it reflects the actual retry attempt per span.
     const callModel = () =>
       generateText({
         model,
@@ -213,6 +220,11 @@ async function modelTurn(
         messages,
         tools,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: "gca.model_turn",
+          metadata: { "gca.attempt": attempt },
+        },
       });
 
     let result: Awaited<ReturnType<typeof callModel>>;
@@ -240,33 +252,6 @@ async function modelTurn(
     span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
     span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
     span.setAttribute("gen_ai.request.attempt_count", attempt);
-    // Duplicated under braintrust.* so it actually shows up as this
-    // span's Input/Output in Braintrust's UI — the gen_ai.* attributes
-    // above alone only ever land in Metadata. See the doc comment above
-    // withTurnSpan in tracing.ts for the full braintrust.* mapping.
-    span.setAttribute("braintrust.input", JSON.stringify(messages));
-    span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
-    // Optional chaining: `usage` is always present on a real AI SDK
-    // generateText() result, but test mocks in this repo return a
-    // trimmed-down shape without it.
-    if (result.usage?.inputTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
-    }
-    if (result.usage?.outputTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
-    }
-    if (result.usage?.inputTokenDetails?.cacheReadTokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.cache_read.input_tokens",
-        result.usage.inputTokenDetails.cacheReadTokens,
-      );
-    }
-    if (result.usage?.inputTokenDetails?.cacheWriteTokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.cache_creation.input_tokens",
-        result.usage.inputTokenDetails.cacheWriteTokens,
-      );
-    }
     // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
     // content-filter finish) — flag it so it shows up as an ERROR span
     // instead of blending into every other "OK" span in the trace. See
