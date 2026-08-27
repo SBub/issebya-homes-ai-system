@@ -2,8 +2,8 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { InfoSection } from "@/app/ui/InfoSection";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
-import { InfoSection } from "./ui/InfoSection";
 
 export default function GuestInfoPage() {
   const [activeSection, setActiveSection] = useState("");
