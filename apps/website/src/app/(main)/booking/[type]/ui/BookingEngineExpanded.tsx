@@ -5,7 +5,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { z } from "zod";
-import { trackBookButtonClicked } from "@/lib/analytics";
 import { mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
 import { ROOM_PRICING } from "pricing";
@@ -121,8 +120,6 @@ export function BookingEngineExpanded({
     if (!validateEmail(email)) return;
     if (!validateGuestName(guestName)) return;
     if (!validatePhone(localNumber)) return;
-
-    trackBookButtonClicked();
 
     const bookingContext = {
       roomType,

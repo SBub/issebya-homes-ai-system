@@ -9,7 +9,7 @@ export default function ContactPage() {
           we&apos;re here to help.
         </p>
         <p>
-          Please reach out to us directly on <WhatsAppLink source="Contact" />.
+          Please reach out to us directly on <WhatsAppLink />.
         </p>
       </div>
     </div>

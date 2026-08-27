@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import type { ReactNode } from "react";
 
 import "./globals.css";
@@ -13,8 +12,6 @@ const nothing = Nothing_You_Could_Do({
   weight: "400",
   variable: "--font-hand",
 });
-
-const plausibleDomain = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN;
 
 export const metadata: Metadata = {
   title: "issebya.homes – a private room or intimate event space",
@@ -51,11 +48,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <head>
-        {plausibleDomain && (
-          <Script defer data-domain={plausibleDomain} src="https://plausible.io/js/script.js" />
-        )}
-      </head>
       <body>
         <div
           className={`${workSans.variable} ${nothing.variable} font-sans bg-[#f0eeea] min-h-screen flex flex-col`}

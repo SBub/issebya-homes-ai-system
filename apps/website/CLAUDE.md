@@ -82,7 +82,6 @@ Production: Vercel dashboard. Build-time vars must be listed in root `turbo.json
 
 | Variable                        | Type       | Description                                                                |
 | ------------------------------- | ---------- | -------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_PLAUSIBLE_DOMAIN`  | build-time | Analytics domain — production only, not set locally                        |
 | `SUPABASE_URL`                  | runtime    | Supabase project URL                                                       |
 | `SUPABASE_ANON_KEY`             | runtime    | Guest-facing DB queries (RLS-scoped)                                       |
 | `SUPABASE_SERVICE_ROLE_KEY`     | runtime    | Server-side admin DB access                                                |

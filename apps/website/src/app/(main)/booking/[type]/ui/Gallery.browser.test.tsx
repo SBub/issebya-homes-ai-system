@@ -10,11 +10,6 @@ vi.mock("next/image", () => {
   return { default: MockImage, __esModule: true };
 });
 
-// Mock analytics
-vi.mock("../../../../../lib/analytics", () => ({
-  trackGalleryThumbnailClicked: vi.fn(),
-}));
-
 import Gallery from "./Gallery";
 
 const images = [
