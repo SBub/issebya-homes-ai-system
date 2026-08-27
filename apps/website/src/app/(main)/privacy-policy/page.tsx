@@ -91,19 +91,21 @@ export default function PrivacyPolicyPage() {
 
         <InfoSection id="who-we-share-with" title="Who We Share Data With">
           <p>
-            We share personal data with the service providers that help us run issebya.homes: Stripe
-            (payment processing), Twilio (WhatsApp delivery), Supabase (database hosting), Resend
-            (booking confirmation emails), Sentry (error monitoring), Telegram (internal
-            notifications to our team), and infrastructure providers that help our AI assistant
-            function and that we use to monitor its performance.
+            <strong>Supabase</strong> (database hosting) stores our data in the EU, in Ireland.
           </p>
           <p>
-            Some of these providers are based outside the European Economic Area, in particular the
-            United States. Where this is the case, we rely on recognised safeguards, such as the
-            European Commission&apos;s Standard Contractual Clauses or a provider&apos;s
-            certification under the EU-U.S. Data Privacy Framework. You can ask us for more
-            information about these safeguards at any time.
+            <strong>Stripe</strong> (payment processing), <strong>Twilio</strong> (WhatsApp
+            delivery), <strong>Resend</strong> (booking confirmation emails), and{" "}
+            <strong>Sentry</strong> (error monitoring) are based in the United States and are
+            certified under the EU-U.S. Data Privacy Framework.
           </p>
+          <p>
+            <strong>Telegram</strong> (internal notifications to our team) and the infrastructure
+            that runs our AI assistant and lets us monitor its performance are based outside the
+            EU/EEA. For these, we rely on the European Commission&apos;s Standard Contractual
+            Clauses or equivalent safeguards.
+          </p>
+          <p>You can ask us for more information about any of these safeguards at any time.</p>
         </InfoSection>
 
         <InfoSection id="retention" title="How Long We Keep Data">
