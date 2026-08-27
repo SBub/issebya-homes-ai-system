@@ -71,11 +71,10 @@ const MODEL = "deepseek/deepseek-v4-pro";
 // explicitly promoted, but Environments is a Pro-plan-only feature,
 // unavailable in this org. Braintrust is still the sole source of version
 // control — nothing in this repo needs to change to ship an edited prompt.
-// SYSTEM_PROMPT_VERSION_OVERRIDE pins an exact version instead, for CI eval
-// jobs that need a fixed prompt regardless of whatever's currently saved —
-// must never be set in a real runtime environment.
+// Deliberately no version-pinning override, including for evals/CI — a
+// pinned eval would validate a prompt that isn't necessarily what's live in
+// prod, defeating the point of the eval gate.
 const SYSTEM_PROMPT_SLUG = "gca-system";
-const SYSTEM_PROMPT_VERSION_OVERRIDE = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE;
 
 // Reasoning rounds, not individual tool calls (one round can dispatch several).
 const MAX_AGENT_STEPS = 8;
@@ -983,7 +982,6 @@ export async function runAgentTurn(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: SYSTEM_PROMPT_SLUG,
-      ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
     });
     const { messages } = promptTemplate.build({});
     return messages[0].content as string;

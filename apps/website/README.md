@@ -10,7 +10,7 @@ Guest-facing website for [issebya.homes](https://issebya.homes) — a guest hous
 - Real-time availability sync from iCal feeds (Airbnb, VRBO, Booking.com)
 - Email confirmations to guests and admin notifications via Resend
 - Guest info page (arrival, parking, house rules, local essentials)
-- Analytics via Plausible, error tracking via Sentry
+- Error tracking via Sentry
 
 ## Routes
 
@@ -45,7 +45,7 @@ cp .env.example .env.development
 
 ## Stack
 
-Next.js 16, React 19, TypeScript, Tailwind CSS 4, Stripe, Supabase (PostgreSQL), Resend, React Query, date-fns, ical.js, Zod, Plausible, Sentry.
+Next.js 16, React 19, TypeScript, Tailwind CSS 4, Stripe, Supabase (PostgreSQL), Resend, React Query, date-fns, ical.js, Zod, Sentry.
 
 ## Project structure
 

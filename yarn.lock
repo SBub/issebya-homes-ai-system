@@ -3068,13 +3068,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@plausible-analytics/tracker@npm:^0.4.4":
-  version: 0.4.6
-  resolution: "@plausible-analytics/tracker@npm:0.4.6"
-  checksum: 10c0/65d07135142921791098c8b0fadc2ff867c06940618a28b64864e00db7cbf0fe72310268ff5372c0ddfead66287b6c5f48a7916a355c1bd76d1d9c997ba03861
-  languageName: node
-  linkType: hard
-
 "@playwright/test@npm:^1.58.2":
   version: 1.62.1
   resolution: "@playwright/test@npm:1.62.1"
@@ -13216,7 +13209,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "website@workspace:apps/website"
   dependencies:
-    "@plausible-analytics/tracker": "npm:^0.4.4"
     "@playwright/test": "npm:^1.58.2"
     "@sentry/nextjs": "npm:^10"
     "@supabase/supabase-js": "npm:^2.49.8"

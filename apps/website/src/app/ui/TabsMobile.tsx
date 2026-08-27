@@ -1,6 +1,5 @@
 "use client";
 
-import { trackTabClicked } from "@/lib/analytics";
 import { TabLink } from "./TabLink";
 
 export interface Tab {
@@ -12,10 +11,9 @@ export interface Tab {
 interface TabsMobileProps {
   tabs: Tab[];
   activeTabId: string;
-  page: string;
 }
 
-export function TabsMobile({ tabs, activeTabId, page }: TabsMobileProps) {
+export function TabsMobile({ tabs, activeTabId }: TabsMobileProps) {
   const widthClass = tabs.length === 2 ? "w-1/2" : tabs.length === 3 ? "w-1/3" : "flex-1";
 
   return (
@@ -28,7 +26,6 @@ export function TabsMobile({ tabs, activeTabId, page }: TabsMobileProps) {
               key={tab.id}
               href={tab.href}
               isActive={activeTabId === tab.id}
-              onClick={() => trackTabClicked(page, tab.id)}
               className={`${widthClass} px-3 py-1.5 text-sm text-center ${!isLast ? "border-r border-black" : ""}`}
             >
               {tab.label}

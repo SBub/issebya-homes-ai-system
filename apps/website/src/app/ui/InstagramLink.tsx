@@ -1,7 +1,4 @@
-"use client";
-
 import Image from "next/image";
-import { trackInstagramClicked } from "@/lib/analytics";
 
 export function InstagramLink() {
   return (
@@ -11,7 +8,6 @@ export function InstagramLink() {
       rel="noopener noreferrer"
       aria-label="Instagram"
       className="mb-4"
-      onClick={trackInstagramClicked}
     >
       <Image
         src="/instagram.webp"

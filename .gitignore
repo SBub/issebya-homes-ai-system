@@ -12,6 +12,7 @@ dist/
 .turbo/
 .env
 .env.development
+.env.production
 *.db
 *.db-*
 *.duckdb

@@ -209,6 +209,7 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
     expect(answerOwnerNudgeMock).toHaveBeenCalledWith(
       "sha-2f9a-not-a-uuid",
       "The AC is above the bed",
+      "x",
     );
   });
 
@@ -218,7 +219,11 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
     await POST(makeReplyRequest("The AC is above the bed", MISSING_INFO_NUDGE_TEXT));
 
     expect(sendGuestMessageMock).not.toHaveBeenCalled();
-    expect(answerOwnerNudgeMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
+    expect(answerOwnerNudgeMock).toHaveBeenCalledWith(
+      "wf-abc-123",
+      "The AC is above the bed",
+      "Guest asked about the AC",
+    );
   });
 
   it("tells the owner the KB write failed when answerOwnerNudge itself fails", async () => {
@@ -243,7 +248,11 @@ describe("POST /api/telegram/webhook — reply-to-owner-nudge", () => {
 
     expect(res.status).toBe(200);
     expect(json).toEqual({ ok: true });
-    expect(answerOwnerNudgeMock).toHaveBeenCalledWith("wf-abc-123", "The AC is above the bed");
+    expect(answerOwnerNudgeMock).toHaveBeenCalledWith(
+      "wf-abc-123",
+      "The AC is above the bed",
+      "Guest asked about the AC",
+    );
     expect(sendMessageMock).toHaveBeenCalledWith(
       expect.stringContaining(
         "Added to the knowledge base — the agent will reply to the guest shortly",

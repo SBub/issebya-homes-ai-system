@@ -61,10 +61,15 @@ export type AnswerOwnerNudgeResult = { ok: true } | { ok: false; error: string }
  * later, inside the resumed run, invisible to this router either way) and
  * NOT whether anything was actually resumed. There's no more 409/
  * already-resolved outcome — no DB row exists to hold that state.
+ *
+ * `question` is the guest's original question, extracted from the nudge's
+ * echoed reply text (best-effort — may be omitted), so GCA can embed the
+ * answer alongside its question instead of storing the bare answer alone.
  */
 export async function answerOwnerNudge(
   correlationId: string,
   answer: string,
+  question?: string,
 ): Promise<AnswerOwnerNudgeResult> {
   const baseUrl = process.env.GUEST_COMMUNICATION_AGENT_API_URL;
   const apiKey = process.env.GUEST_COMMUNICATION_AGENT_API_KEY;
@@ -86,7 +91,7 @@ export async function answerOwnerNudge(
         {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-          body: JSON.stringify({ answer }),
+          body: JSON.stringify({ answer, question }),
         },
       );
 

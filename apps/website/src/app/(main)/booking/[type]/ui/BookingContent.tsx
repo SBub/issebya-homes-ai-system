@@ -24,7 +24,7 @@ export default function BookingContent({ type }: BookingContentProps) {
           note={
             <>
               For special requests or any enquiries, please reach out to us directly on{" "}
-              <WhatsAppLink source="Booking" />.
+              <WhatsAppLink />.
             </>
           }
         />
@@ -43,7 +43,7 @@ export default function BookingContent({ type }: BookingContentProps) {
           note={
             <>
               For special requests or any enquiries, please reach out to us directly on{" "}
-              <WhatsAppLink source="Booking" />.
+              <WhatsAppLink />.
             </>
           }
         />
@@ -62,7 +62,7 @@ export default function BookingContent({ type }: BookingContentProps) {
           note={
             <>
               For special requests or any enquiries, please reach out to us directly on{" "}
-              <WhatsAppLink source="Booking" />.
+              <WhatsAppLink />.
             </>
           }
         />

@@ -63,6 +63,20 @@ function extractMissingInfoCorrelationId(replyText: string | undefined): string 
   return match ? match[1] : null;
 }
 
+// Matches the guest question quoted in a missing_info nudge's body (see
+// owner-nudges/route.ts's `Guest ${phone} asked: "${reason}"` composition).
+// Best-effort: absence just means the answer gets embedded without question
+// context, not a failure.
+const MISSING_INFO_QUESTION_REGEX = /asked: "([^"]*)"/;
+
+function extractMissingInfoQuestion(replyText: string | undefined): string | null {
+  if (!replyText) {
+    return null;
+  }
+  const match = replyText.match(MISSING_INFO_QUESTION_REGEX);
+  return match ? match[1] : null;
+}
+
 /**
  * Owner replied to a previous missing_info nudge. Correlation is entirely
  * text-based now — no DB lookup, no GCA API call needed just to find out
@@ -85,8 +99,9 @@ async function handleOwnerNudgeReply(
   if (!correlationId || !answer) {
     return false;
   }
+  const question = extractMissingInfoQuestion(message.reply_to_message?.text) ?? undefined;
 
-  const answerResult = await answerOwnerNudge(correlationId, answer);
+  const answerResult = await answerOwnerNudge(correlationId, answer, question);
   if (!answerResult.ok) {
     console.error(
       `[telegram-router] owner-nudge answer failed for correlationId ${correlationId}:`,

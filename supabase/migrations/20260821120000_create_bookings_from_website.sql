@@ -13,7 +13,7 @@
 -- Guest-facing reads go through booking_availability only.
 create table public.bookings (
   id                 uuid           primary key default gen_random_uuid(),
-  access_token       text           not null unique default encode(gen_random_bytes(32), 'hex'),
+  access_token       text           not null unique default encode(extensions.gen_random_bytes(32), 'hex'),
   room_type          text           not null check (room_type in ('room1', 'room2')),
   check_in           date           not null,
   check_out          date           not null,
