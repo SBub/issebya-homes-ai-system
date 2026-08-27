@@ -90,6 +90,10 @@ body {
   @apply text-xs text-gray-600;
 }
 
+.booking-cancellation-notice {
+  @apply text-xs text-gray-500;
+}
+
 /* Expanded State */
 
 .booking-engine-expanded {

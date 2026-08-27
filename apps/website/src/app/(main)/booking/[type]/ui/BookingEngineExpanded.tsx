@@ -62,9 +62,10 @@ export function BookingEngineExpanded({
   );
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const phone = combinePhoneNumber(countryId, localNumber);
-  // Pre-checked by default for all bookings (direct or via a GCA link) —
-  // still fully editable/uncheckable by the guest either way.
-  const [whatsappOptIn, setWhatsappOptIn] = useState(true);
+  // Unchecked by default: this is a marketing consent checkbox, and GDPR
+  // (CJEU Planet49) plus Portugal's ePrivacy law (Lei 41/2004) require an
+  // affirmative opt-in, not a pre-ticked box.
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);
 

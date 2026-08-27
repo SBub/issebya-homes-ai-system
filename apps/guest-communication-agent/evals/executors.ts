@@ -58,6 +58,7 @@ async function loadCompiledSystemPrompt(contextBlock: string) {
   const promptTemplate = await loadPrompt({
     projectId: process.env.BRAINTRUST_PROJECT_ID,
     slug: SYSTEM_PROMPT_SLUG,
+    defaults: { model: MODEL },
   });
   return promptTemplate.build({ guest_memory_block: contextBlock });
 }
