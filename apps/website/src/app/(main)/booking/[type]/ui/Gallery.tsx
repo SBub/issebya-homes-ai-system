@@ -2,7 +2,6 @@
 
 import Image from "next/image";
 import { useRef, useState } from "react";
-import { trackGalleryThumbnailClicked } from "@/lib/analytics";
 
 export type GalleryImage = {
   src: string;
@@ -11,20 +10,15 @@ export type GalleryImage = {
 
 type Props = {
   images: GalleryImage[];
-  context?: {
-    room?: string;
-    type?: string;
-  };
 };
 
-export default function Gallery({ images, context }: Props) {
+export default function Gallery({ images }: Props) {
   const [imageIndex, setImageIndex] = useState(0);
 
   const touchStartX = useRef<number | null>(null);
 
   const handleThumbnailClick = (index: number) => {
     setImageIndex(index);
-    trackGalleryThumbnailClicked(index, context);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {

@@ -1,9 +1,8 @@
 "use client";
 
-import { format, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { trackCalendarOpened, trackDateSelected } from "@/lib/analytics";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
 import { useAvailabilityQuery } from "../hooks/useAvailabilityQuery";
 import { BookingEngineCollapsed } from "./BookingEngineCollapsed";
@@ -102,7 +101,6 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
           // Validate the range
           if (validateRange(checkInDate, date)) {
             setCheckOut(date);
-            trackDateSelected(format(checkInDate, "yyyy-MM-dd"), format(date, "yyyy-MM-dd"));
           } else {
             // Invalid range, reset and start over with this date as check-in
             setCheckIn(date);
@@ -122,7 +120,6 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
   const handleExpand = useCallback(() => {
     setIsExpanded(true);
     addBookingBreadcrumb("User expanded booking calendar", { roomType });
-    trackCalendarOpened();
   }, [roomType]);
 
   // Handle close

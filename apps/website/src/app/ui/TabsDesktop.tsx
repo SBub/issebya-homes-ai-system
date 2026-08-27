@@ -1,6 +1,5 @@
 "use client";
 
-import { trackTabClicked } from "@/lib/analytics";
 import { TabLink } from "./TabLink";
 
 export interface Tab {
@@ -12,10 +11,9 @@ export interface Tab {
 interface TabsDesktopProps {
   tabs: Tab[];
   activeTabId: string;
-  page: string;
 }
 
-export function TabsDesktop({ tabs, activeTabId, page }: TabsDesktopProps) {
+export function TabsDesktop({ tabs, activeTabId }: TabsDesktopProps) {
   return (
     <div className="hidden md:block mb-6">
       <div className="flex border-b">
@@ -26,7 +24,6 @@ export function TabsDesktop({ tabs, activeTabId, page }: TabsDesktopProps) {
               key={tab.id}
               href={tab.href}
               isActive={activeTabId === tab.id}
-              onClick={() => trackTabClicked(page, tab.id)}
               className={`px-6 py-2 text-base ${!isLast ? "border-r border-black" : ""}`}
             >
               {tab.label}

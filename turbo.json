@@ -3,7 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["SENTRY_AUTH_TOKEN", "NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
+      "env": ["SENTRY_AUTH_TOKEN"],
       "passThroughEnv": [
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",

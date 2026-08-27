@@ -32,16 +32,16 @@ export function proxy() {
     // Default: only allow resources from our own origin
     "default-src 'self'",
 
-    // Scripts: our code + Stripe checkout + Plausible analytics
+    // Scripts: our code + Stripe checkout
     // 'unsafe-inline' needed for Next.js inline scripts
     // 'unsafe-eval' needed for Next.js development mode (Turbopack)
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://plausible.io",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com",
 
     // CSS: our styles + inline styles (Tailwind injects styles at runtime)
     "style-src 'self' 'unsafe-inline'",
 
-    // Network requests: our API + Stripe + Plausible + Sentry + Supabase
-    "connect-src 'self' https://api.stripe.com https://plausible.io https://*.ingest.de.sentry.io https://*.supabase.co",
+    // Network requests: our API + Stripe + Sentry + Supabase
+    "connect-src 'self' https://api.stripe.com https://*.ingest.de.sentry.io https://*.supabase.co",
 
     // Iframes: only Stripe (for payment form)
     "frame-src https://js.stripe.com",

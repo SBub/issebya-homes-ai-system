@@ -20,7 +20,6 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 const MAX_OUTPUT_TOKENS = 1000;
 const SYSTEM_PROMPT_SLUG = "gca-system";
-const SYSTEM_PROMPT_VERSION_OVERRIDE = process.env.SYSTEM_PROMPT_VERSION_OVERRIDE;
 
 // Every one of these tool() objects (get_pricing.ts, availability.ts, etc.)
 // is schema-only — no `execute` field, same as run-turn.ts's own `tools`
@@ -46,20 +45,19 @@ const tools = {
 } satisfies ToolSet;
 
 // Loads the real Braintrust-hosted system prompt (slug gca-system), same
-// call shape run-turn.ts's own loadSystemPromptText uses, so this eval
-// reflects whatever prompt text is actually live in production (or, with
-// SYSTEM_PROMPT_VERSION_OVERRIDE set, a pinned version — same override
-// run-turn.ts itself respects). Returns the full CompiledPrompt (not just
-// its rendered text) because build()'s `span_info` field — populated
-// whenever the loaded Prompt has a real id, i.e. always here — carries
-// exactly the {id, project_id, version, variables} shape
-// generateTextWithPromptSpan below attaches to this eval's per-row LLM
-// span; discarding it after build() would silently drop that.
+// call shape run-turn.ts's own loadSystemPromptText uses, no version
+// pinning, so this eval always reflects whatever prompt text is actually
+// live in production — a pinned eval would validate a prompt that isn't
+// necessarily what's live, defeating the point of the eval gate. Returns
+// the full CompiledPrompt (not just its rendered text) because build()'s
+// `span_info` field — populated whenever the loaded Prompt has a real id,
+// i.e. always here — carries exactly the {id, project_id, version,
+// variables} shape generateTextWithPromptSpan below attaches to this eval's
+// per-row LLM span; discarding it after build() would silently drop that.
 async function loadCompiledSystemPrompt(contextBlock: string) {
   const promptTemplate = await loadPrompt({
     projectId: process.env.BRAINTRUST_PROJECT_ID,
     slug: SYSTEM_PROMPT_SLUG,
-    ...(SYSTEM_PROMPT_VERSION_OVERRIDE ? { version: SYSTEM_PROMPT_VERSION_OVERRIDE } : {}),
   });
   return promptTemplate.build({ guest_memory_block: contextBlock });
 }

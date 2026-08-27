@@ -30,7 +30,6 @@ export default defineConfig({
             "date-fns",
             "@tanstack/react-query",
             "@sentry/nextjs",
-            "@plausible-analytics/tracker",
             "zod",
             "next/image",
           ],

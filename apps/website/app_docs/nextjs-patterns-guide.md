@@ -309,7 +309,7 @@ Move any value that doesn't depend on component state or props to module scope.
 ### Good - Module scope for static values
 
 ```typescript
-const plausibleDomain = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN;
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
 const DEFAULT_SETTINGS = { theme: 'light', locale: 'en' };
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -323,7 +323,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
 ```typescript
 export default function RootLayout({ children }: { children: ReactNode }) {
-  const plausibleDomain = process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN; // Static - move out
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL; // Static - move out
   const settings = { theme: "light" }; // Static - move out
   // ...
 }

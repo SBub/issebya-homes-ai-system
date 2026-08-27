@@ -12,12 +12,6 @@ vi.mock("../../../../../lib/sentry-booking", () => ({
   addBookingBreadcrumb: vi.fn(),
 }));
 
-// Mock analytics
-vi.mock("../../../../../lib/analytics", () => ({
-  trackCalendarOpened: vi.fn(),
-  trackDateSelected: vi.fn(),
-}));
-
 // Capture the onExpand callback from Collapsed
 let capturedOnExpand: (() => void) | null = null;
 // Capture the onClose callback from Expanded

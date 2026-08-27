@@ -11,11 +11,6 @@ vi.mock("./BookingCalendar", () => ({
   },
 }));
 
-// Mock analytics
-vi.mock("../../../../../lib/analytics", () => ({
-  trackBookButtonClicked: vi.fn(),
-}));
-
 // Mock Sentry
 vi.mock("@sentry/nextjs", () => ({
   startSpan: (_opts: unknown, fn: (span?: undefined) => unknown) => fn(undefined),

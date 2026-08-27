@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { ScrollTracker } from "@/app/ui/ScrollTracker";
 import { TabsDesktop } from "@/app/ui/TabsDesktop";
 import { TabsMobile } from "@/app/ui/TabsMobile";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
@@ -37,22 +36,19 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
 
   return (
     <>
-      <ScrollTracker page={`Booking - ${type}`} />
-
-      <TabsMobile tabs={bookingTabs} activeTabId={type} page="booking" />
+      <TabsMobile tabs={bookingTabs} activeTabId={type} />
 
       {/* Gallery (top on mobile) */}
       <div className="order-1 md:order-2 md:w-1/2 flex flex-col items-center justify-start p-4 relative md:sticky md:top-0 md:h-screen">
         <Gallery
           key={type} // Force remount when type changes
           images={type === "room1" ? room1Images : type === "room2" ? room2Images : eventImages}
-          context={{ type }}
         />
       </div>
 
       {/* Room Content */}
       <div className="order-2 md:order-1 md:w-1/2 p-4 md:p-12 space-y-6">
-        <TabsDesktop tabs={bookingTabs} activeTabId={type} page="booking" />
+        <TabsDesktop tabs={bookingTabs} activeTabId={type} />
         <BookingContent type={type} />
       </div>
     </>
