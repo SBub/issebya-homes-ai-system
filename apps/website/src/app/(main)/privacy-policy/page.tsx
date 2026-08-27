@@ -50,11 +50,6 @@ export default function PrivacyPolicyPage() {
             <strong>Payment:</strong> handled entirely by Stripe. We never see or store your card
             details.
           </p>
-          <p>
-            <strong>Website usage:</strong> we use cookie-less analytics that record page views and
-            interactions (such as which tab or dates you view), without collecting cookies or
-            personal identifiers.
-          </p>
         </InfoSection>
 
         <InfoSection id="why-we-use-it" title="Why We Use It">
@@ -81,11 +76,6 @@ export default function PrivacyPolicyPage() {
               help@issebya.com
             </a>
             .
-          </p>
-          <p>
-            <strong>Website analytics:</strong> to understand how our site is used, based on our
-            legitimate interest in improving it. This does not use cookies or identify you
-            personally.
           </p>
         </InfoSection>
 
