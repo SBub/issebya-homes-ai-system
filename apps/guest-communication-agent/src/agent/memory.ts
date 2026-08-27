@@ -37,24 +37,20 @@ const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
 // This prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID, slug
-// below), like run-turn.ts's system prompt — but pinned to a fixed version
-// id by default here, unlike that one (which defaults to the slug's latest
-// saved version; see run-turn.ts's SYSTEM_PROMPT_SLUG comment for the full
-// loadPrompt() version/environment behavior).
-// SUMMARIZER_PROMPT_VERSION_OVERRIDE can override the pinned id, e.g. for
-// testing against a draft version.
+// below), like run-turn.ts's system prompt — same default-to-latest
+// behavior: loadPrompt() called with neither version nor environment
+// fetches the slug's latest saved version, so a save in Braintrust's UI is
+// immediately live here too. See run-turn.ts's SYSTEM_PROMPT_SLUG comment
+// for the full loadPrompt() version/environment behavior, including why
+// there's deliberately no version-pinning override.
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
-const SUMMARIZER_PROMPT_VERSION =
-  process.env.SUMMARIZER_PROMPT_VERSION_OVERRIDE ?? "1000197705120199208";
 
 // Distinct prompt, distinct job from SUMMARIZER_PROMPT above — see
 // distillFoldIntoPreferences below. Newly created directly in Braintrust
 // (no live callers yet at creation time, so unlike SUMMARIZER_PROMPT it
-// never needed a stage-and-wait for human sign-off), same
-// pin-by-default/override convention as SUMMARIZER_PROMPT_VERSION.
+// never needed a stage-and-wait for human sign-off), same default-to-latest
+// convention as SUMMARIZER_PROMPT_SLUG.
 const DISTILLER_PROMPT_SLUG = "guest-preferences-distiller";
-const DISTILLER_PROMPT_VERSION =
-  process.env.DISTILLER_PROMPT_VERSION_OVERRIDE ?? "1000197705362702039";
 
 // Second piece of the tiered-memory redesign (see
 // 20260817120000_create_guest_memory_folds.sql's own comment for the first):
@@ -135,7 +131,6 @@ async function summarizeConversation(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: SUMMARIZER_PROMPT_SLUG,
-      version: SUMMARIZER_PROMPT_VERSION,
     });
     const { messages } = promptTemplate.build({
       prior_summary: priorSummary || "(none)",
@@ -340,7 +335,6 @@ async function distillFoldIntoPreferences(
     const promptTemplate = await loadPrompt({
       projectId: process.env.BRAINTRUST_PROJECT_ID,
       slug: DISTILLER_PROMPT_SLUG,
-      version: DISTILLER_PROMPT_VERSION,
     });
     const { messages } = promptTemplate.build({
       prior_preferences: priorPreferences || "(none)",
