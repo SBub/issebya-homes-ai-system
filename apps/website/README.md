@@ -82,7 +82,7 @@ way. It's only a possible stale-calendar UX edge case on retry.
 
 ## Environment setup
 
-Copy `.env.example` to `.env.development` and fill in values. See `CLAUDE.md` for the full variable list with descriptions.
+Copy `.env.example` to `.env.development` and fill in values. See `ENGINEERING.md` for the full variable list with descriptions.
 
 ```bash
 cp .env.example .env.development
