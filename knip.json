@@ -33,7 +33,7 @@
       ]
     }
   },
-  "ignoreBinaries": ["supabase", "stripe"],
+  "ignoreBinaries": ["stripe", "pkill", "lsof"],
   "ignoreIssues": {
     "apps/website/src/lib/ical-parser.ts": ["exports"],
     "apps/website/src/lib/shared/schemas/booking.ts": ["exports", "types"],

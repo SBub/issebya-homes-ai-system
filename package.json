@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "lefthook install",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "start": "turbo run start",
@@ -25,6 +26,7 @@
     "knip": "^6.27.0",
     "lefthook": "^2.1.10",
     "prettier": "^3.8.1",
+    "supabase": "^2.116.0",
     "tsx": "^4.23.1",
     "turbo": "^2.10.5",
     "typescript": "^5.9.3"
