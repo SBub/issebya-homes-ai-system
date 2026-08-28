@@ -396,6 +396,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ecies/ciphers@npm:^0.2.6":
+  version: 0.2.6
+  resolution: "@ecies/ciphers@npm:0.2.6"
+  peerDependencies:
+    "@noble/ciphers": ^1.0.0
+  checksum: 10c0/31cbfbaedae690e12344e49eb1b7fd0697f36cf4d03100df52b925e1f19d02a6f445834938ecdd1cd74154496a74fa9147cdda6209255512220e45eb9c693ca0
+  languageName: node
+  linkType: hard
+
 "@emnapi/core@npm:1.10.0":
   version: 1.10.0
   resolution: "@emnapi/core@npm:1.10.0"
@@ -1591,6 +1600,29 @@ __metadata:
   version: 16.2.10
   resolution: "@next/swc-win32-x64-msvc@npm:16.2.10"
   conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@noble/ciphers@npm:^1.3.0":
+  version: 1.3.0
+  resolution: "@noble/ciphers@npm:1.3.0"
+  checksum: 10c0/3ba6da645ce45e2f35e3b2e5c87ceba86b21dfa62b9466ede9edfb397f8116dae284f06652c0cd81d99445a2262b606632e868103d54ecc99fd946ae1af8cd37
+  languageName: node
+  linkType: hard
+
+"@noble/curves@npm:^1.9.7":
+  version: 1.9.7
+  resolution: "@noble/curves@npm:1.9.7"
+  dependencies:
+    "@noble/hashes": "npm:1.8.0"
+  checksum: 10c0/150014751ebe8ca06a8654ca2525108452ea9ee0be23430332769f06808cddabfe84f248b6dbf836916bc869c27c2092957eec62c7506d68a1ed0a624017c2a3
+  languageName: node
+  linkType: hard
+
+"@noble/hashes@npm:1.8.0, @noble/hashes@npm:^1.8.0":
+  version: 1.8.0
+  resolution: "@noble/hashes@npm:1.8.0"
+  checksum: 10c0/06a0b52c81a6fa7f04d67762e08b2c476a00285858150caeaaff4037356dd5e119f45b2a530f638b77a5eeca013168ec1b655db41bae3236cb2e9d511484fc77
   languageName: node
   linkType: hard
 
@@ -5214,6 +5246,62 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@supabase/cli-darwin-arm64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-darwin-arm64@npm:2.116.0"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-darwin-x64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-darwin-x64@npm:2.116.0"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-linux-arm64-musl@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-linux-arm64-musl@npm:2.116.0"
+  conditions: os=linux & cpu=arm64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-linux-arm64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-linux-arm64@npm:2.116.0"
+  conditions: os=linux & cpu=arm64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-linux-x64-musl@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-linux-x64-musl@npm:2.116.0"
+  conditions: os=linux & cpu=x64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-linux-x64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-linux-x64@npm:2.116.0"
+  conditions: os=linux & cpu=x64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-windows-arm64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-windows-arm64@npm:2.116.0"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@supabase/cli-windows-x64@npm:2.116.0":
+  version: 2.116.0
+  resolution: "@supabase/cli-windows-x64@npm:2.116.0"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
 "@supabase/functions-js@npm:2.110.7":
   version: 2.110.7
   resolution: "@supabase/functions-js@npm:2.110.7"
@@ -7404,6 +7492,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"eciesjs@npm:^0.5.0":
+  version: 0.5.0
+  resolution: "eciesjs@npm:0.5.0"
+  dependencies:
+    "@ecies/ciphers": "npm:^0.2.6"
+    "@noble/ciphers": "npm:^1.3.0"
+    "@noble/curves": "npm:^1.9.7"
+    "@noble/hashes": "npm:^1.8.0"
+  checksum: 10c0/a80ee11f20f03df522ddb53d19c8cb36b957b471c5a515315d94dadc2ed00672354c339250ded8fb9bd39f6b66961ab86e4463597cbb03023bfc5a606ac5e242
+  languageName: node
+  linkType: hard
+
 "ee-first@npm:1.1.1":
   version: 1.1.1
   resolution: "ee-first@npm:1.1.1"
@@ -9476,6 +9576,7 @@ __metadata:
     knip: "npm:^6.27.0"
     lefthook: "npm:^2.1.10"
     prettier: "npm:^3.8.1"
+    supabase: "npm:^2.116.0"
     tsx: "npm:^4.23.1"
     turbo: "npm:^2.10.5"
     typescript: "npm:^5.9.3"
@@ -9522,6 +9623,13 @@ __metadata:
   version: 6.2.3
   resolution: "jose@npm:6.2.3"
   checksum: 10c0/aa91bccba22cc84d86308f833749bcb0b00441e35c24e0ac79abeac5f76dc62d47bdef9c1da6a0c609f5da6478595f52b252085888b89dbdb163861e40ea4188
+  languageName: node
+  linkType: hard
+
+"jose@npm:^6.2.9":
+  version: 6.2.10
+  resolution: "jose@npm:6.2.10"
+  checksum: 10c0/799fd8d3d92fe748ebe1f57dbd3dfd917d2e61d9fb39912c72cc674ae61d69414b7cc0ce773df8a0160e849926fc31853aec9caab88c481563d5a8ab6558e107
   languageName: node
   linkType: hard
 
@@ -12228,6 +12336,43 @@ __metadata:
   languageName: node
   linkType: hard
 
+"supabase@npm:^2.116.0":
+  version: 2.116.0
+  resolution: "supabase@npm:2.116.0"
+  dependencies:
+    "@supabase/cli-darwin-arm64": "npm:2.116.0"
+    "@supabase/cli-darwin-x64": "npm:2.116.0"
+    "@supabase/cli-linux-arm64": "npm:2.116.0"
+    "@supabase/cli-linux-arm64-musl": "npm:2.116.0"
+    "@supabase/cli-linux-x64": "npm:2.116.0"
+    "@supabase/cli-linux-x64-musl": "npm:2.116.0"
+    "@supabase/cli-windows-arm64": "npm:2.116.0"
+    "@supabase/cli-windows-x64": "npm:2.116.0"
+    eciesjs: "npm:^0.5.0"
+    jose: "npm:^6.2.9"
+  dependenciesMeta:
+    "@supabase/cli-darwin-arm64":
+      optional: true
+    "@supabase/cli-darwin-x64":
+      optional: true
+    "@supabase/cli-linux-arm64":
+      optional: true
+    "@supabase/cli-linux-arm64-musl":
+      optional: true
+    "@supabase/cli-linux-x64":
+      optional: true
+    "@supabase/cli-linux-x64-musl":
+      optional: true
+    "@supabase/cli-windows-arm64":
+      optional: true
+    "@supabase/cli-windows-x64":
+      optional: true
+  bin:
+    supabase: dist/supabase.js
+  checksum: 10c0/66cc0d1b8bd6c4fc97378f49a80321fe373d2f2e0e2e74f9f486baa470be8dcab293c5c276d3ebb221035be99b1dcbfe7c93be1e6e9f003cc146e53a4192d108
+  languageName: node
+  linkType: hard
+
 "supports-color@npm:^7.1.0":
   version: 7.2.0
   resolution: "supports-color@npm:7.2.0"
@@ -13236,6 +13381,7 @@ __metadata:
     react-dom: "npm:^19.2.3"
     resend: "npm:^4.6.0"
     stripe: "npm:^18.2.0"
+    supabase: "npm:^2.116.0"
     tailwindcss: "npm:^4"
     typescript: "npm:^5"
     vite: "npm:^7"
