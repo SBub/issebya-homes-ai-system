@@ -92,29 +92,4 @@ cp .env.example .env.development
 
 Next.js 16, React 19, TypeScript, Tailwind CSS 4, Stripe, Supabase (PostgreSQL), Resend, React Query, date-fns, ical.js, Zod, Sentry.
 
-## Project structure
-
-```
-src/
-├── app/
-│   ├── (main)/             # Guest-facing pages
-│   │   ├── booking/        # Room booking flow + confirmation
-│   │   ├── contact/        # WhatsApp contact
-│   │   ├── guest-info/     # Arrival, parking, house rules, local tips
-│   ├── api/                # API routes
-│   │   ├── checkout/       # Stripe checkout session creation
-│   │   ├── availability/   # iCal feed aggregation + own bookings
-│   │   ├── bookings/       # Direct booking lookup and creation
-│   │   ├── webhook/        # Stripe webhook handler
-│   │   └── ical/           # iCal feed export
-│   ├── emails/             # React Email templates
-│   └── ui/                 # Shared UI components (Header, Footer, Tabs, ReviewSlider)
-├── lib/                    # Utilities (pricing, dates, ical, stripe, analytics, sentry)
-├── data/                   # Static data (Airbnb reviews)
-└── utils/                  # Helpers (image lists)
-public/                     # Static assets (room images, dev iCal files)
-e2e/                        # Playwright integration tests
-app_docs/                   # Internal guides — patterns, testing, conventions
-specs/                      # Feature implementation specifications
-scripts/                    # Dev utility scripts (start.ts)
-```
+See `ENGINEERING.md` for the project structure (directory layout, what lives where).

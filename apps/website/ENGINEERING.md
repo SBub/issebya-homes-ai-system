@@ -35,7 +35,7 @@ src/
 │   ├── api/                # API routes
 │   │   ├── checkout/       # Stripe checkout session creation
 │   │   ├── availability/   # iCal feed aggregation + own bookings
-│   │   ├── bookings/       # Direct booking lookup
+│   │   ├── bookings/       # Direct booking lookup and creation
 │   │   ├── webhook/        # Stripe webhook handler
 │   │   └── ical/           # iCal feed export
 │   ├── emails/             # React Email templates
@@ -47,15 +47,16 @@ public/                     # Static assets (room images, dev iCal files)
 e2e/                        # Playwright integration tests
 app_docs/                   # Internal guides, read before coding (see below)
 specs/                      # Feature implementation specifications
+scripts/                    # Dev utility scripts (start.py)
 ```
 
 ## Testing
 
-| Type              | Files                       | What to test                                                                                     |
-| ----------------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
-| Unit              | `src/**/*.unit.test.ts`     | Pure functions, API route logic                                                                  |
-| Browser component | `src/**/*.browser.test.tsx` | Client components (`'use client'`) only (mock all children)                                      |
-| Integration (E2E) | `e2e/*.integration.spec.ts` | Full flows via Playwright against real Next.js dev server; mock API responses via `page.route()` |
+| Type              | Files                                                           | What to test                                                                                     |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Unit              | `src/**/*.unit.test.ts`                                         | Pure functions, API route logic                                                                  |
+| Browser component | `src/app/**/*.browser.test.tsx`, `src/ui/**/*.browser.test.tsx` | Client components (`'use client'`) only (mock all children)                                      |
+| Integration (E2E) | `e2e/*.integration.spec.ts`                                     | Full flows via Playwright against real Next.js dev server; mock API responses via `page.route()` |
 
 Config: `vitest.config.ts` (unit + browser projects), `playwright.config.ts` (spins up `yarn dev`).
 
