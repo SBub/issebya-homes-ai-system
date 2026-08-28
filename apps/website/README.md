@@ -1,6 +1,6 @@
 # @issebya/website
 
-Guest-facing website for [issebya.homes](https://issebya.homes) — a guest house in Sintra, Portugal. Guests browse rooms, check availability, and book directly with Stripe payments.
+Guest-facing website for [issebya.homes](https://issebya.homes), a guest house in Sintra, Portugal. Guests browse rooms, check availability, and book directly with Stripe payments.
 
 ## Features
 
@@ -18,7 +18,7 @@ Guest-facing website for [issebya.homes](https://issebya.homes) — a guest hous
 
 | Route                   | What it does                                   |
 | ----------------------- | ---------------------------------------------- |
-| `/`                     | Home — room listing, reviews                   |
+| `/`                     | Home: room listing, reviews                    |
 | `/booking`              | Room selection                                 |
 | `/booking/[type]`       | Room detail + availability calendar + checkout |
 | `/booking/confirmation` | Post-payment confirmation                      |
