@@ -14,7 +14,6 @@ config:
 %% 3. OTA channels entirely outside the system — Airbnb/Booking.com replies + listing/rate management are HumanWork, untouched by any agent.
 %% 4. Feedback loop to learn what fills rooms — now further addressed (2026-07-21): CRM tracks guest funnel_stage (new -> informed -> link_sent -> booked) and a promo_codes lifecycle (issued -> sent/rejected, plus expired/redeemed in schema), and Orch-A's digest now surfaces an aggregate view of that activity via CRM's new GET /api/campaigns/stats (issued/sent/rejected counts per campaign kind, PII-free). Still genuinely open: no real redemption/conversion-to-paid-booking tracking exists (nothing marks a promo code redeemed against an actual booking — redeemed is hardcoded to 0 in every response), so this feedback loop can tell you &quot;activity happened&quot; but still can't tell you &quot;did it fill a room.&quot;
 %% 5. No pricing/yield lever — nothing adjusts price or pushes discounts on low-occupancy dates; Finance Tool is compliance-oriented (tax/invoices), not revenue management.
-%% See docs/agent-architecture-details.md for the full description/history of every node and edge.
 flowchart TB
  subgraph Tools["Tools"]
         AVAIL["Availability Tool (GET /api/availability)"]
@@ -151,7 +150,6 @@ flowchart TB
     %% coloring individual edges by their 0-based declaration order (fan-out
     %% targets like "A --> B & C" count as separate consecutive edges) — if
     %% edges above are added/removed/reordered, recount before editing this.
-    %% Verification narratives for each: docs/agent-architecture-details.md
     %%  0  = AVAIL -.-> ORCH (Analyze step fetches real Availability data)
     %%  17 = UPLOAD -.-> CRON_M30
     %%  18 = UPLOAD -.-> CRON_INV
@@ -184,8 +182,7 @@ flowchart TB
     %% ALL OTHER EDGES (grey) — everything not in the tested list above, so
     %% untested paths read as grey like not-yet-built nodes instead of
     %% defaulting to black. 62 edges total (0-61); this is the complement of
-    %% the tested set. Notable grey edges with design-intent/history context
-    %% (full narratives: docs/agent-architecture-details.md):
+    %% the tested set. Notable grey edges with design-intent/history context:
     %%  42/46 = TG <-> ROUTER ("/social <idea>" + reply) — untested e2e
     %%  43/47 = TG <-> ROUTER ("/cron list" + reply) — new command, untested
     %%  44    = TG -- "/digest" --> ROUTER — trigger itself untested

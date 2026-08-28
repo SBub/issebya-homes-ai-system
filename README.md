@@ -64,8 +64,6 @@ one place with actual logic.
 Every app is left-shift audited with static analysis (lint, typecheck, knip,
 format) as a required CI gate on every merge to `develop`.
 
-See `docs/agent-architecture-details.md` for deeper architecture notes.
-
 ## Setup
 
 ```bash
