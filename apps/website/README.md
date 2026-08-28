@@ -71,5 +71,5 @@ public/                     # Static assets (room images, dev iCal files)
 e2e/                        # Playwright integration tests
 app_docs/                   # Internal guides — patterns, testing, conventions
 specs/                      # Feature implementation specifications
-scripts/                    # Dev utility scripts (start.py)
+scripts/                    # Dev utility scripts (start.ts)
 ```

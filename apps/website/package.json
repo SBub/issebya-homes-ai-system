@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "python3 scripts/start.py",
+    "dev": "tsx scripts/start.ts",
     "dev:next": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
@@ -55,6 +55,7 @@
     "prettier": "^3.8.1",
     "supabase": "^2.116.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5",
     "vite": "^7",
     "vite-tsconfig-paths": "^6.1.1",

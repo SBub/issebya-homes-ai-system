@@ -13383,6 +13383,7 @@ __metadata:
     stripe: "npm:^18.2.0"
     supabase: "npm:^2.116.0"
     tailwindcss: "npm:^4"
+    tsx: "npm:^4.23.1"
     typescript: "npm:^5"
     vite: "npm:^7"
     vite-tsconfig-paths: "npm:^6.1.1"
