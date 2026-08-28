@@ -296,6 +296,17 @@ const BRAINTRUST_API_BASE = process.env.BRAINTRUST_API_URL ?? "https://api-eu.br
 // degrades a feature rather than crashing): no-ops if
 // BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID aren't set, and never throws — a
 // trace-enrichment call failing must never break a guest's actual reply.
+//
+// Races the span's own OTel export: this merge-patch and the span's export
+// are two independent writes to the same Braintrust row, and the export
+// carries no input/output of its own for a span whose fields are only ever
+// set via this function. Whichever write lands last wins — if the export
+// lands after this patch, it silently resets input/output back to null.
+// Callers that need this patch to actually stick must call flushTracing()
+// (src/instrumentation.ts) right after their span's creation resolves,
+// before doing anything else that could race ahead of it — see run-turn.ts's
+// dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall/runAgentTurn for
+// the pattern.
 export async function updateSpanIO(
   spanId: string,
   fields: { input?: unknown; output?: unknown; tags?: string[] },

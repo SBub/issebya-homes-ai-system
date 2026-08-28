@@ -1863,10 +1863,11 @@ describe("runGuestTurn", () => {
       "+351920742845",
       "Yes, room 1 is available!",
     );
-    expect(updateSpanIOMock).toHaveBeenCalledWith(expect.any(String), {
-      input: "Is room 1 free?",
-      output: "Yes, room 1 is available!",
-    });
+    const resultSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "braintrust.guest_turn.result");
+    expect(resultSpan?.attributes["braintrust.input"]).toBe("Is room 1 free?");
+    expect(resultSpan?.attributes["braintrust.output"]).toBe("Yes, room 1 is available!");
     const stepIds = step.run.mock.calls.map((call) => call[0]);
     expect(stepIds).toEqual(
       expect.arrayContaining([
@@ -1991,7 +1992,7 @@ describe("runGuestTurn", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("passes firedTags through to updateSpanIO's tags when the turn escalated via wants_human", async () => {
+  it("passes firedTags through to the result span's tags when the turn escalated via wants_human", async () => {
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
     generateTextMock
       .mockResolvedValueOnce(
@@ -2014,11 +2015,14 @@ describe("runGuestTurn", () => {
       step,
     });
 
-    expect(updateSpanIOMock).toHaveBeenCalledWith(expect.any(String), {
-      input: "I want to talk to a person",
-      output: "Sure, the owner will reach out shortly.",
-      tags: ["wants_human"],
-    });
+    const resultSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "braintrust.guest_turn.result");
+    expect(resultSpan?.attributes["braintrust.input"]).toBe("I want to talk to a person");
+    expect(resultSpan?.attributes["braintrust.output"]).toBe(
+      "Sure, the owner will reach out shortly.",
+    );
+    expect(resultSpan?.attributes["braintrust.tags"]).toEqual(["wants_human"]);
   });
 
   it("falls back to a generic apology reply when the turn's last message isn't a string assistant message", async () => {
