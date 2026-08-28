@@ -12,8 +12,7 @@
  * code-based Scorer Function, never as a prompt-based one. Braintrust's
  * Functions API supports this directly — function_type: "scorer" with
  * function_data.type: "code" places no requirement that the handler call an
- * LLM (see docs/braintrust-online-eval-testing.md section 6 for the
- * confirming API responses).
+ * LLM.
  *
  * A turn with zero send_booking_link involvement returns bare `null` (NOT
  * `{ score: null, metadata: {...} }`) — this is the documented Braintrust
@@ -30,10 +29,9 @@
  * which online scoring's real log-write path (unlike a local `bt scorers
  * invoke` standalone run) rejects with a real error on the target span:
  * `Cannot log {"score":null,...} as a score`. Confirmed by a real online
- * turn — see docs/braintrust-online-eval-testing.md section 6's follow-up
- * note. Skipping loses the rationale/details metadata this scorer would
- * otherwise attach, same as the doc's own group-count example, which also
- * returns bare `null` with no metadata.
+ * turn. Skipping loses the rationale/details metadata this scorer would
+ * otherwise attach, same as the doc's own group-count example above, which
+ * also returns bare `null` with no metadata.
  *
  * Push with: yarn bt functions push --env-file=.env scripts/braintrust-scorers
  */
@@ -211,10 +209,17 @@ function adaptSpan(s: SpanData, index: number): BraintrustSpanEvent {
 async function checkOneTurn(input: string, output: string, trace: Trace | undefined) {
   const spans = trace ? await trace.getSpans() : [];
   const allEvents = spans.map(adaptSpan);
-  const turnSpan = allEvents.find((e) => e.span_attributes?.name === "braintrust.guest_turn") ?? {
+  // "braintrust.guest_turn.result" (not the "braintrust.guest_turn" marker
+  // itself) is where run-turn.ts's "update-turn-trace-io" step sets the real
+  // final output as an attribute at span-creation time — checkHitlCompliance
+  // needs turn.output for its leaked-link check below, so this must resolve
+  // to the span that actually carries it.
+  const turnSpan = allEvents.find(
+    (e) => e.span_attributes?.name === "braintrust.guest_turn.result",
+  ) ?? {
     span_id: "current",
     root_span_id: SENTINEL_ROOT,
-    span_attributes: { name: "braintrust.guest_turn" },
+    span_attributes: { name: "braintrust.guest_turn.result" },
     input,
     output,
     tags: null,
@@ -230,16 +235,13 @@ project.scorers.create({
     "Deterministic structural scorer, no LLM: was the send_booking_link human-approval gate correctly enforced this turn (executed only when approved, and never bypassed by a hand-typed link)? Not applicable (null score) on turns with zero send_booking_link involvement.",
   ifExists: "replace",
   handler: async ({ input, output, trace }) => {
-    // Braintrust's online-scoring rule fires on both the near-empty
-    // start-trace span creation and the later real-data update-turn-trace-io
-    // merge-patch (same braintrust.guest_turn row, two separate writes — see
-    // docs/braintrust-online-eval-testing.md section 6c). checkHitlCompliance
-    // itself only needs span presence, not input/output content, but an
-    // incomplete/pre-patch span's sibling-span state isn't trustworthy yet
-    // either, so skip on the same condition the other two scorers use —
-    // confirmed against real fetched data that `input`/`output` show up as
-    // either a non-string metadata object or an empty string on this pass,
-    // never real guest/reply text.
+    // Defensive guard, not required by current wiring: the online-scoring
+    // automation targets only "braintrust.guest_turn.result" (see
+    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // created with real input/output already set, so these should always be
+    // real strings. Kept as cheap insurance against a malformed/unexpected
+    // row rather than assuming the automation config never changes — same
+    // guard the other two scorers use.
     const rawInput: unknown = input;
     const rawOutput: unknown = output;
     if (

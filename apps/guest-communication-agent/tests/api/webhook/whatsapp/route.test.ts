@@ -1,6 +1,21 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// next/server's after() requires a real Next.js request-handling scope,
+// which this test's direct `POST(request)` call doesn't provide — mocked to
+// just invoke its callback, keeping NextRequest/NextResponse real. Declared
+// via vi.hoisted since vi.mock's factory below is itself hoisted above any
+// plain top-level const.
+const { afterMock } = vi.hoisted(() => ({
+  afterMock: vi.fn((callback: () => void | Promise<void>) => {
+    void callback();
+  }),
+}));
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: afterMock };
+});
+
 // verifyTwilioSignature always passes so these tests can focus on this
 // route's own wiring: recording the inbound message, then triggering the
 // durable run-guest-turn Inngest function via inngest.send WITHOUT awaiting
@@ -55,6 +70,7 @@ describe("POST /api/webhook/whatsapp", () => {
     getOrCreateActiveConversationMock.mockReset();
     recordMessageMock.mockReset();
     inngestSendMock.mockReset();
+    afterMock.mockClear();
 
     getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1" });
     recordMessageMock.mockResolvedValue("msg-user-1");

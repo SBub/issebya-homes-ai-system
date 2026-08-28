@@ -146,7 +146,11 @@ export async function withTurnSpan<T>(
 //     node_modules/@braintrust/otel/dist/index.js). Any call site that wants
 //     its gen_ai.* content to actually show up as Input/Output has to
 //     duplicate it under braintrust.input/braintrust.output too — see
-//     run-turn.ts's modelTurn for a real example.
+//     memory.ts's summarizer call for a real example. (run-turn.ts's
+//     modelTurn instead sets experimental_telemetry on its generateText
+//     call, which gets Braintrust the same Input/Output for free on the
+//     ai.generateText.doGenerate child span — no manual duplication needed
+//     there.)
 //   - `braintrust.tags` aggregates from ANY span in a trace up to the whole
 //     trace level, making the whole trace filterable by a tag set on one
 //     span deep in the tree — see run-turn.ts's firedTags for how this app
@@ -292,6 +296,17 @@ const BRAINTRUST_API_BASE = process.env.BRAINTRUST_API_URL ?? "https://api-eu.br
 // degrades a feature rather than crashing): no-ops if
 // BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID aren't set, and never throws — a
 // trace-enrichment call failing must never break a guest's actual reply.
+//
+// Races the span's own OTel export: this merge-patch and the span's export
+// are two independent writes to the same Braintrust row, and the export
+// carries no input/output of its own for a span whose fields are only ever
+// set via this function. Whichever write lands last wins — if the export
+// lands after this patch, it silently resets input/output back to null.
+// Callers that need this patch to actually stick must call flushTracing()
+// (src/instrumentation.ts) right after their span's creation resolves,
+// before doing anything else that could race ahead of it — see run-turn.ts's
+// dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall/runAgentTurn for
+// the pattern.
 export async function updateSpanIO(
   spanId: string,
   fields: { input?: unknown; output?: unknown; tags?: string[] },

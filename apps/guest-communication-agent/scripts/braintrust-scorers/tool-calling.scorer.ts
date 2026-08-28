@@ -9,8 +9,7 @@
  * Single temperature-0 judge call per turn — the earlier 3-trial-averaging
  * design was removed because this scorer runs online on every real
  * production guest turn (not just in offline evals), so the extra 2 LLM
- * calls per trial were real, ongoing cost/latency overhead. See
- * docs/braintrust-online-eval-testing.md section 33.
+ * calls per trial were real, ongoing cost/latency overhead.
  *
  * A Braintrust scorer function gets its sibling spans from
  * `trace.getSpans()` (the ScorerArgs.trace object — see braintrust's Trace
@@ -23,8 +22,7 @@
  * REST-fetch shape) still matches correctly without modification.
  *
  * Push with: yarn bt functions push --env-file=.env scripts/braintrust-scorers
- * (requires the OPENROUTER_API_KEY project env var — see
- * docs/braintrust-online-eval-testing.md section 6).
+ * (requires the OPENROUTER_API_KEY project env var).
  */
 import { generateText } from "ai";
 import { projects, type SpanData, type Trace, wrapTraced } from "braintrust";
@@ -272,10 +270,17 @@ const judge = wrapTraced(scoreToolCalling, { name: "tool-calling-judge" });
 async function scoreOneTurn(input: string, output: string, trace: Trace | undefined) {
   const spans = trace ? await trace.getSpans() : [];
   const allEvents = spans.map(adaptSpan);
-  const turnSpan = allEvents.find((e) => e.span_attributes?.name === "braintrust.guest_turn") ?? {
+  // "braintrust.guest_turn.result" (not the "braintrust.guest_turn" marker
+  // itself) is where run-turn.ts's "update-turn-trace-io" step sets real
+  // input/output/tags as attributes at span-creation time — see that step's
+  // own comment for why this is a separate sibling span rather than a patch
+  // on the marker.
+  const turnSpan = allEvents.find(
+    (e) => e.span_attributes?.name === "braintrust.guest_turn.result",
+  ) ?? {
     span_id: "current",
     root_span_id: SENTINEL_ROOT,
-    span_attributes: { name: "braintrust.guest_turn" },
+    span_attributes: { name: "braintrust.guest_turn.result" },
     input,
     output,
     tags: null,
@@ -294,15 +299,14 @@ project.scorers.create({
     "LLM-judge scorer: did GCA call the right tool(s), if any, for the guest's message? Correlates sibling gen_ai.tool.* spans and tag-only tools (wants_human/missing_info/send_booking_link) via trace.getSpans(). Single temperature-0 judge call, real chain-of-thought.",
   ifExists: "replace",
   handler: async ({ input, output, trace }) => {
-    // Braintrust's online-scoring rule fires on both the near-empty
-    // start-trace span creation and the later real-data update-turn-trace-io
-    // merge-patch (same braintrust.guest_turn row, two separate writes — see
-    // docs/braintrust-online-eval-testing.md section 6c). The pre-patch pass
-    // has no real turn text: confirmed against real fetched data that
-    // `input`/`output` show up as either a non-string metadata object or an
-    // empty string depending on invocation, never real guest/reply text —
-    // skip it the same way the not-applicable HITL case does (bare `null`,
-    // no judge call) instead of scoring garbage and wasting an LLM call.
+    // Defensive guard, not required by current wiring: the online-scoring
+    // automation targets only "braintrust.guest_turn.result" (see
+    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // created with real input/output already set, so these should always be
+    // real strings. Kept as cheap insurance against a malformed/unexpected
+    // row rather than assuming the automation config never changes — skip
+    // the same way the not-applicable HITL case does (bare `null`, no judge
+    // call) instead of scoring garbage and wasting an LLM call.
     const rawInput: unknown = input;
     const rawOutput: unknown = output;
     if (
@@ -325,8 +329,7 @@ project.scorers.create({
     // literal Score when it carries a `name`; without one it falls back to
     // wrapping the *entire* return value as the raw score, producing a
     // non-numeric score and a real "Cannot log {...} as a score" error on
-    // every write (confirmed on root_span_id 60cb1b38d83934c37b64a9879c9de07f
-    // — see docs/braintrust-online-eval-testing.md section 6b).
+    // every write (confirmed on a real online turn).
     return {
       name: "Correct Tool Calling",
       score,

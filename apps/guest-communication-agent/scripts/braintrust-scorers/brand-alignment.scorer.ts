@@ -4,11 +4,9 @@
  * logic below (rubric, chain-of-thought parsing) has no dependency outside
  * this file and node_modules.
  *
- * Once wired into an online-scoring Automation (see
- * docs/braintrust-online-eval-testing.md section 6), Braintrust's own
- * backend calls this function server-side on every new braintrust.guest_turn
- * log and records the invocation as the scorer's own nested child span in
- * the trace tree.
+ * Once wired into an online-scoring Automation, Braintrust's own backend
+ * calls this function server-side on every new matching log and records the
+ * invocation as the scorer's own nested child span in the trace tree.
  *
  * Handler shape ({input, output, expected, metadata, trace}) is fixed by
  * braintrust's ScorerArgs<Output, Input> type (see ScorerBuilder.create) —
@@ -24,11 +22,11 @@
  * design was removed because this scorer runs online on every real
  * production guest turn (not just in offline evals), so the extra 2 LLM
  * calls per trial were real, ongoing cost/latency overhead, not just an
- * eval-time nicety. See docs/braintrust-online-eval-testing.md section 33.
+ * eval-time nicety.
  *
  * Push with: yarn bt functions push --env-file=.env scripts/braintrust-scorers
  * (requires the OPENROUTER_API_KEY project env var registered via
- * POST /v1/env_var — see docs/braintrust-online-eval-testing.md section 6).
+ * POST /v1/env_var).
  */
 import { generateText } from "ai";
 import { projects, wrapTraced } from "braintrust";
@@ -156,15 +154,14 @@ project.scorers.create({
     "LLM-judge scorer: does a GCA WhatsApp reply match the concierge's brand voice (warmth, booking pace, complaint handling, staying in character, no emojis)? Single temperature-0 judge call, real chain-of-thought.",
   ifExists: "replace",
   handler: async ({ input, output }) => {
-    // Braintrust's online-scoring rule fires on both the near-empty
-    // start-trace span creation and the later real-data update-turn-trace-io
-    // merge-patch (same braintrust.guest_turn row, two separate writes — see
-    // docs/braintrust-online-eval-testing.md section 6c). The pre-patch pass
-    // has no real turn text: confirmed against real fetched data that
-    // `input`/`output` show up as either a non-string metadata object or an
-    // empty string depending on invocation, never real guest/reply text —
-    // skip it the same way the not-applicable HITL case does (bare `null`,
-    // no judge call) instead of scoring garbage.
+    // Defensive guard, not required by current wiring: the online-scoring
+    // automation targets only "braintrust.guest_turn.result" (see
+    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // created with real input/output already set, so these should always be
+    // real strings. Kept as cheap insurance against a malformed/unexpected
+    // row rather than assuming the automation config never changes — skip
+    // the same way the not-applicable HITL case does (bare `null`, no judge
+    // call) instead of scoring garbage.
     const rawInput: unknown = input;
     const rawOutput: unknown = output;
     if (
