@@ -42,7 +42,12 @@
 // remains the only code that ever calls trace.setGlobalTracerProvider().
 
 import type { Context } from "@opentelemetry/api";
-import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import type {
+  BasicTracerProvider,
+  ReadableSpan,
+  Span,
+  SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 
 // Framework-internal spans Next.js's own auto-instrumentation emits the
 // moment any tracer provider is registered (see this file's header comment)
@@ -110,6 +115,39 @@ class FilteringSpanProcessor implements SpanProcessor {
 // once — a second SpanProcessor on the same provider would double-export
 // every span.
 let registered = false;
+
+// Set once register() actually constructs a provider (i.e. at least one
+// SpanProcessor was configured, and this isn't the edge runtime). Stays
+// undefined otherwise, which is exactly when flushTracing() below should
+// no-op.
+let globalProvider: BasicTracerProvider | undefined;
+
+// Every processor here (Braintrust's, Axiom's) wraps a BatchSpanProcessor,
+// which buffers spans and exports on its own internal timer/batch-size —
+// never per-span. On Vercel, the serverless function's process freezes the
+// instant the HTTP response returns, with no guarantee a pending batch timer
+// has fired yet; under this app's low/sporadic guest traffic that timer
+// routinely loses the race, and the buffered spans are silently dropped
+// before ever reaching Braintrust/Axiom. Every route that emits spans
+// (src/app/api/inngest/route.ts's POST, src/app/api/webhook/whatsapp/route.ts)
+// schedules this via next/server's after() so Vercel keeps the process alive
+// until it resolves, without delaying the response — call it any other way
+// (fire-and-forget, or after the response has already gone out) and spans
+// are not guaranteed to actually export. Best-effort like this
+// app's other observability niceties (see src/lib/tracing.ts's
+// recordBestEffortFailure) — a flush failure must never turn an otherwise-
+// successful request into a failed HTTP response, so this swallows and logs
+// rather than throwing.
+export async function flushTracing(): Promise<void> {
+  if (!globalProvider) {
+    return;
+  }
+  try {
+    await globalProvider.forceFlush();
+  } catch (err) {
+    console.error("[instrumentation] flushTracing failed:", err);
+  }
+}
 
 export async function register(): Promise<void> {
   // Edge runtime doesn't support Node's `crypto`/OTel's Node exporters —
@@ -331,6 +369,7 @@ export async function register(): Promise<void> {
     }),
     spanProcessors: processors,
   });
+  globalProvider = provider;
 
   trace.setGlobalTracerProvider(provider);
 

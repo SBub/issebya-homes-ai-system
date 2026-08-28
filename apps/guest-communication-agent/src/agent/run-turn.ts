@@ -5,6 +5,7 @@ import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
 import { requestApprovalGate } from "@/agent/tools/approval-gate";
+import { flushTracing } from "@/instrumentation";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import {
   BOOKING_LINK_APPROVAL_EVENT,
@@ -206,6 +207,13 @@ async function modelTurn(
     // shape — `ReturnType<typeof generateText>` on the generic function
     // itself widens back to a bare ToolSet and loses the specific tool
     // types.
+    // experimental_telemetry (the AI SDK's own OTel instrumentation, via the
+    // same globally-registered tracer instrumentation.ts sets up) auto-emits
+    // ai.generateText/ai.generateText.doGenerate child spans whose Input/
+    // Output/usage Braintrust already renders correctly on its own — unlike
+    // this app's own gen_ai.* attributes below, no braintrust.* duplication
+    // needed for these child spans. metadata.gca.attempt reads `attempt`
+    // live at each call, so it reflects the actual retry attempt per span.
     const callModel = () =>
       generateText({
         model,
@@ -213,6 +221,11 @@ async function modelTurn(
         messages,
         tools,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: "gca.model_turn",
+          metadata: { "gca.attempt": attempt },
+        },
       });
 
     let result: Awaited<ReturnType<typeof callModel>>;
@@ -240,33 +253,6 @@ async function modelTurn(
     span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
     span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
     span.setAttribute("gen_ai.request.attempt_count", attempt);
-    // Duplicated under braintrust.* so it actually shows up as this
-    // span's Input/Output in Braintrust's UI — the gen_ai.* attributes
-    // above alone only ever land in Metadata. See the doc comment above
-    // withTurnSpan in tracing.ts for the full braintrust.* mapping.
-    span.setAttribute("braintrust.input", JSON.stringify(messages));
-    span.setAttribute("braintrust.output", JSON.stringify(result.response.messages));
-    // Optional chaining: `usage` is always present on a real AI SDK
-    // generateText() result, but test mocks in this repo return a
-    // trimmed-down shape without it.
-    if (result.usage?.inputTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
-    }
-    if (result.usage?.outputTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
-    }
-    if (result.usage?.inputTokenDetails?.cacheReadTokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.cache_read.input_tokens",
-        result.usage.inputTokenDetails.cacheReadTokens,
-      );
-    }
-    if (result.usage?.inputTokenDetails?.cacheWriteTokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.cache_creation.input_tokens",
-        result.usage.inputTokenDetails.cacheWriteTokens,
-      );
-    }
     // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
     // content-filter finish) — flag it so it shows up as an ERROR span
     // instead of blending into every other "OK" span in the trace. See
@@ -412,6 +398,13 @@ async function dispatchWantsHuman(
     },
     async (span) => span.spanContext().spanId,
   );
+  // Synchronous, awaited flush (not the routes' non-blocking after()) —
+  // guarantees this span's own OTel export lands at Braintrust before
+  // update-wants-human-trace-io's later updateSpanIO patch can fire.
+  // Without this happens-before, whichever write lands last wins: the OTel
+  // export carries no output of its own, so it can silently wipe the patch
+  // back to null if it lands second (see updateSpanIO's own comment).
+  await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
   const nudged = await steppedSpan(
@@ -442,11 +435,13 @@ async function dispatchWantsHuman(
   const result = runWantsHuman(nudged);
 
   // Retroactively patches the tool-call span's output now that it's known —
-  // same mechanism (and the same "best-effort, not guaranteed to land"
-  // reliability caveat — see updateSpanIO's own doc comment) runMissingInfo
-  // below already uses for its own gen_ai.tool.missing_info span's output.
-  // Own step, not a span — patching a span isn't itself a new event worth
-  // its own trace node.
+  // same mechanism runMissingInfo below already uses for its own
+  // gen_ai.tool.missing_info span's output. The flushTracing() call above
+  // guarantees this patch lands after the span's own OTel export, so it
+  // can't be silently wiped by a later out-of-order write (see
+  // updateSpanIO's own doc comment for that mechanism). Own step, not a
+  // span — patching a span isn't itself a new event worth its own trace
+  // node.
   await step.run("update-wants-human-trace-io", () => updateSpanIO(toolSpanId, { output: result }));
 
   return result;
@@ -499,6 +494,12 @@ async function runMissingInfo(
     },
     async (span) => span.spanContext().spanId,
   );
+  // Synchronous, awaited flush (not the routes' non-blocking after()) —
+  // guarantees this span's own OTel export lands before this function's own
+  // later updateSpanIO patch (on the "escalated" happy path, or the no-reply
+  // timeout path) can fire and race it. See dispatchWantsHuman's identical
+  // flushTracing() call above for the full reasoning.
+  await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
   // Best-effort write, own step (not a span — this is pure DB bookkeeping,
@@ -649,13 +650,13 @@ async function runMissingInfo(
   // the fallback message) isn't knowable until after step.waitForEvent above
   // has already resolved (or was skipped), well after the span itself was
   // created and closed above, so there's no live Span object left to call
-  // span.setAttribute on. Same mechanism (and the same "best-effort, not
-  // guaranteed to land" reliability caveat — see updateSpanIO's own doc
-  // comment, still under separate investigation per
-  // docs/braintrust-online-eval-testing.md) runAgentTurn's own
-  // "braintrust.guest_turn" root marker span already uses for its output.
-  // Own step, not a span — patching a span isn't itself a new event worth
-  // its own trace node.
+  // span.setAttribute on. Same mechanism runAgentTurn's own
+  // "braintrust.guest_turn" root marker span already uses for its output —
+  // both flush synchronously right after span creation (see this function's
+  // own flushTracing() call above), so this patch can't be clobbered by a
+  // later out-of-order OTel export (see updateSpanIO's own doc comment for
+  // that mechanism). Own step, not a span — patching a span isn't itself a
+  // new event worth its own trace node.
   await step.run("update-missing-info-trace-io", () =>
     updateSpanIO(toolSpanId, { output: result }),
   );
@@ -709,6 +710,13 @@ async function dispatchGatedToolCall(
     },
     async (span) => span.spanContext().spanId,
   );
+  // Synchronous, awaited flush (not the routes' non-blocking after()) —
+  // guarantees this span's own OTel export lands before either of this
+  // function's later updateSpanIO patches (the not-approved path or the
+  // executed-result path below) can fire and race it. See
+  // dispatchWantsHuman's identical flushTracing() call for the full
+  // reasoning; one flush here covers both later patch paths.
+  await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
   const approved = await requestApprovalGate({
@@ -851,10 +859,11 @@ export interface RunAgentTurnResult {
   messages: ModelMessage[];
   stepCount: number;
   // The real OTel SDK-generated id of this turn's "braintrust.guest_turn"
-  // root marker span (see the "start-trace" step below) — threaded out so
-  // runGuestTurn can retroactively patch that span's input/output via
-  // updateSpanIO once the final reply text actually exists (see the
-  // "update-turn-trace-io" step there).
+  // root marker span (see the "start-trace" step below) — threaded out for
+  // any caller that needs to identify this turn's root span directly. Final
+  // input/output land on a separate sibling span ("update-turn-trace-io"
+  // below) instead of being patched onto this one — see that step's own
+  // comment.
   guestTurnSpanId: string;
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
   // missing_info, send_booking_link). All three now get their own
@@ -868,10 +877,9 @@ export interface RunAgentTurnResult {
   // this same SELF_STEPPED_TOOLS branch below, which pushes every
   // self-stepped tool name in on dispatch (approved/rejected/timed-out — see
   // the branch's own comment), so they end up here as a harmless natural side
-  // effect rather than something worth special-casing out. Threaded out
-  // instead so runGuestTurn can pass it to updateSpanIO's merge-patch on the
-  // "braintrust.guest_turn" root span, the same deferred route
-  // guestTurnSpanId already uses for output.
+  // effect rather than something worth special-casing out. Threaded out so
+  // runGuestTurn can attach these tags to the "update-turn-trace-io" result
+  // span alongside the final input/output.
   firedTags: string[];
 }
 
@@ -917,6 +925,17 @@ export async function runAgentTurn(
     { "gca.conversation_id": conversationId, "gca.phone": phone },
     async (span) => span.spanContext().spanId,
   );
+  // Synchronous, awaited flush (not the routes' non-blocking after()) —
+  // guarantees this span's own OTel export lands before runGuestTurn's later
+  // "update-turn-trace-io" updateSpanIO patch can fire and race it. Without
+  // this happens-before, whichever write lands last wins: the OTel export
+  // carries neither input nor output for this marker span (only
+  // gca.conversation_id/gca.phone), so it can silently wipe the patch back
+  // to null if it lands second — confirmed happening in practice via this
+  // span's own Braintrust audit_data trail. See dispatchWantsHuman's
+  // identical flushTracing() call for the same reasoning applied to a
+  // tool-call span instead of this turn-level marker.
+  await flushTracing();
 
   // Every span from here on nests under the real "braintrust.guest_turn"
   // span above, instead of parenting to traceAnchor (the webhook's root)
@@ -1173,24 +1192,37 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
       ? lastMessage.content
       : FALLBACK_REPLY_TEXT;
 
-  // Retroactive merge-patch: the "braintrust.guest_turn" root marker span
-  // (started/closed empty in the "start-trace" step, well before replyText
-  // exists) is what the Traces LIST view surfaces Input/Output from. Plain
-  // strings here, not JSON-stringified — unlike the child spans' structured
-  // message arrays (which must fit as OTel span attributes), this goes
-  // through updateSpanIO's REST call directly, and plain strings render most
-  // cleanly in Braintrust's UI.
+  // A real, single-write span instead of a retroactive patch on the
+  // "braintrust.guest_turn" root marker (started/closed empty in the
+  // "start-trace" step): that marker's own OTel export and a later
+  // updateSpanIO patch on it are two independent writers racing on the same
+  // Braintrust row, and Braintrust's OTLP ingestion is asynchronous on their
+  // backend — no client-side await ordering can guarantee which one lands
+  // last (confirmed empirically; see updateSpanIO's own doc comment in
+  // tracing.ts). This span sidesteps the race entirely: input/output are
+  // already known here, so they're set as real attributes at creation time,
+  // one export, nothing else ever touches this row. It's a sibling of
+  // "braintrust.guest_turn" (same reasoning as the comment above), not a
+  // patch on it. Plain strings, not JSON-stringified — unlike the child
+  // spans' structured message arrays (which must fit as OTel span
+  // attributes), plain strings render most cleanly in Braintrust's UI. The
+  // online-scoring automation targets this span's name directly.
   //
   // Deduped: a single turn can plausibly call missing_info more than once
   // across rounds (each dispatch pushes into firedTags), but Braintrust's
   // tags field is a set, not a multiset — duplicate entries add nothing.
   const dedupedTags = [...new Set(result.firedTags)];
-  await steppedSpan(step, "update-turn-trace-io", traceAnchor, "update-turn-trace-io", {}, () =>
-    updateSpanIO(result.guestTurnSpanId, {
-      input: incomingMessage,
-      output: replyText,
-      ...(dedupedTags.length > 0 ? { tags: dedupedTags } : {}),
-    }),
+  await steppedSpan(
+    step,
+    "update-turn-trace-io",
+    traceAnchor,
+    "braintrust.guest_turn.result",
+    {
+      "braintrust.input": incomingMessage,
+      "braintrust.output": replyText,
+      ...(dedupedTags.length > 0 ? { "braintrust.tags": dedupedTags } : {}),
+    },
+    async () => {},
   );
 
   // Captured so the delivery-status update below can target this exact row
