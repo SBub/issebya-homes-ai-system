@@ -1,3 +1,7 @@
+"use client";
+
+import posthog from "posthog-js";
+
 export function WhatsAppLink() {
   return (
     <a
@@ -5,6 +9,9 @@ export function WhatsAppLink() {
       target="_blank"
       rel="noopener noreferrer"
       className="font-bold underline"
+      onClick={() => {
+        posthog.capture("whatsapp_link_clicked");
+      }}
     >
       WhatsApp (+351 920 742 845)
     </a>

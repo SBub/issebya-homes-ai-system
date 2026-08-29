@@ -43,6 +43,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
         <Gallery
           key={type} // Force remount when type changes
           images={type === "room1" ? room1Images : type === "room2" ? room2Images : eventImages}
+          roomType={type}
         />
       </div>
 
