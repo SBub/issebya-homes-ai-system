@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+const posthogAssetsHost = posthogHost?.replace(".i.posthog.com", "-assets.i.posthog.com");
+
 /**
  * Security headers proxy.
  *
@@ -32,16 +35,23 @@ export function proxy() {
     // Default: only allow resources from our own origin
     "default-src 'self'",
 
-    // Scripts: our code + Stripe checkout
+    // Scripts: our code + Stripe checkout + PostHog (analytics)
     // 'unsafe-inline' needed for Next.js inline scripts
     // 'unsafe-eval' needed for Next.js development mode (Turbopack)
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com",
+    [
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com",
+      ...(posthogAssetsHost ? [posthogAssetsHost] : []),
+    ].join(" "),
 
     // CSS: our styles + inline styles (Tailwind injects styles at runtime)
     "style-src 'self' 'unsafe-inline'",
 
-    // Network requests: our API + Stripe + Sentry + Supabase
-    "connect-src 'self' https://api.stripe.com https://*.ingest.de.sentry.io https://*.supabase.co",
+    // Network requests: our API + Stripe + Sentry + Supabase + PostHog (analytics)
+    [
+      "connect-src 'self' https://api.stripe.com https://*.ingest.de.sentry.io https://*.supabase.co",
+      ...(posthogHost ? [posthogHost] : []),
+      ...(posthogAssetsHost ? [posthogAssetsHost] : []),
+    ].join(" "),
 
     // Iframes: only Stripe (for payment form)
     "frame-src https://js.stripe.com",
@@ -51,6 +61,9 @@ export function proxy() {
 
     // Fonts: only from our own origin
     "font-src 'self'",
+
+    // Web workers: PostHog session-recording compression worker (blob URL)
+    "worker-src 'self' blob:",
 
     // Forms: only submit to our own origin
     "form-action 'self'",

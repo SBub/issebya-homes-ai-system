@@ -2,6 +2,7 @@
 
 import { startSpan } from "@sentry/nextjs";
 import { useQueryClient } from "@tanstack/react-query";
+import posthog from "posthog-js";
 import { format } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { z } from "zod";
@@ -202,6 +203,16 @@ export function BookingEngineExpanded({
           }
 
           span?.setAttribute("booking.stripeSessionUrl", responseData.url ? "present" : "missing");
+          posthog.identify(responseData.guestContactId, {
+            email,
+            name: guestName,
+          });
+          posthog.capture("checkout_session_created", {
+            room_type: roomType,
+            person_count: personCount,
+            stay_nights: pricing?.nights ?? 0,
+            booking_source: source,
+          });
           addBookingBreadcrumb("Checkout session created", {
             hasUrl: !!responseData.url,
           });

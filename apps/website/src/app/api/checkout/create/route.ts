@@ -257,7 +257,7 @@ export async function POST(request: NextRequest) {
         setTag("booking.sessionId", session.id);
         parentSpan?.setAttribute("booking.stripeSessionId", session.id);
 
-        return NextResponse.json({ url: session.url });
+        return NextResponse.json({ url: session.url, guestContactId });
       } catch (error) {
         parentSpan?.setStatus({ code: 2, message: "Checkout creation failed" });
         captureException(error);
