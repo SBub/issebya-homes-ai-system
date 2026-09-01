@@ -48,9 +48,9 @@ export function AirbnbReviewSlider({ reviews, collapsedLines = 3 }: Props) {
   const review = reviews[index];
 
   return (
-    <div className="max-w-md">
+    <div className="w-full">
       <div
-        className="border border-dashed border-gray-300 p-4 rounded-lg"
+        className="border border-dashed border-black p-4"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
