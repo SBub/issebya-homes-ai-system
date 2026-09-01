@@ -65,12 +65,12 @@ export default function Gallery({ images }: Props) {
         {images[imageIndex].label}
       </div>
 
-      <div className="flex flex-wrap gap-1.5 md:gap-2 lg:gap-3 lg:px-6 justify-center">
+      <div className="grid grid-cols-7 gap-1.5 md:gap-2 lg:gap-3 lg:px-6 justify-items-center">
         {images.map((image, index) => (
           <button
             key={index}
             onClick={() => handleThumbnailClick(index)}
-            className={`relative w-12 h-12 md:w-16 md:h-16 lg:w-16 lg:h-16 flex-shrink-0 cursor-pointer transition-opacity ${
+            className={`relative w-[33.6px] h-[33.6px] md:w-[44.8px] md:h-[44.8px] lg:w-[44.8px] lg:h-[44.8px] flex-shrink-0 cursor-pointer transition-opacity ${
               index === imageIndex ? "opacity-100" : "opacity-40 hover:opacity-70"
             }`}
           >
