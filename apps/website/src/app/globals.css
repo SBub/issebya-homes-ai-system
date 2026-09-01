@@ -78,7 +78,7 @@ body {
 }
 
 .booking-date-button {
-  @apply px-3 py-2 border border-foreground bg-background hover:bg-foreground hover:text-background transition-colors cursor-pointer;
+  @apply flex-1 px-3 py-2 border border-foreground bg-background hover:bg-foreground hover:text-background transition-colors cursor-pointer;
 }
 
 .booking-date-value {
@@ -90,7 +90,7 @@ body {
 }
 
 .booking-book-button {
-  @apply px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm lowercase tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
+  @apply flex-1 px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
 }
 
 /* Pricing info in collapsed state */
