@@ -12,6 +12,10 @@
   --font-hand: var(--font-hand);
 }
 
+@utility text-secondary {
+  @apply text-sm leading-relaxed text-foreground;
+}
+
 /*
  @media (prefers-color-scheme: dark) {
   :root {
@@ -91,7 +95,7 @@ body {
 }
 
 .booking-cancellation-notice {
-  @apply text-xs text-gray-500;
+  @apply mt-4 text-secondary;
 }
 
 /* Expanded State */

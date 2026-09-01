@@ -12,7 +12,7 @@ export default function PrivacyPolicyPage() {
       <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
         <div>
           <h1 className="text-4xl font-bold font-hand mb-4">Privacy Policy</h1>
-          <p className="text-sm text-black">
+          <p className="text-secondary">
             This policy explains what personal data issebya.homes collects, why, and what rights you
             have over it. It covers our website, booking flow, and WhatsApp assistant.
           </p>

@@ -115,7 +115,7 @@ export function CheckinTemplate({
               </div>
             </nav>
             <h1 className="text-4xl font-bold font-hand mb-6">Hi {guestName},</h1>
-            <p className="text-sm mb-6">
+            <p className="mb-6 text-secondary">
               So sorry I can&apos;t be there to welcome you in person. Everything you need is here.
             </p>
           </div>
@@ -391,7 +391,7 @@ export function CheckinTemplate({
           ))}
         </InfoSection>
 
-        <div className="text-sm">
+        <div className="text-secondary">
           <p>Have a great holiday, and if anything please let me know.</p>
           <p className="text-4xl font-hand mt-6">Sveta</p>
         </div>

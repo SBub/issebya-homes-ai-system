@@ -13,7 +13,7 @@ export default function TermsAndConditionsPage() {
       <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
         <div>
           <h1 className="text-4xl font-bold font-hand mb-4">Terms &amp; Conditions</h1>
-          <p className="text-sm text-black">
+          <p className="text-secondary">
             These terms apply to all bookings and stays at issebya.homes. By booking or staying with
             us, you agree to the terms below.
           </p>

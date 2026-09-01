@@ -44,9 +44,9 @@ export default function BookingInfoBlock({
       ) : null}
 
       {type === "event" && <p className="text-xl font-hand font-bold mt-4">40€ / hour (min 4h)</p>}
-      <p className="font-sans">{capacity}</p>
+      <p className="text-secondary">{capacity}</p>
 
-      <p className="text-sm leading-relaxed">
+      <p className="text-secondary">
         📍{" "}
         <a
           href="https://maps.google.com/?q=Almoçageme,+Sintra,+Portugal"
@@ -59,7 +59,7 @@ export default function BookingInfoBlock({
       </p>
 
       {description.map((text, index) => (
-        <p key={index} className="text-sm leading-relaxed">
+        <p key={index} className="text-secondary">
           {text}
         </p>
       ))}

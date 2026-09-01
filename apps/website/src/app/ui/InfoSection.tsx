@@ -14,7 +14,7 @@ export function InfoSection({
   return (
     <section id={id} className="scroll-mt-48">
       <h2 className={`text-4xl font-bold mb-6 ${titleClassName}`}>{title}</h2>
-      <div className="space-y-4 text-sm text-black">{children}</div>
+      <div className="space-y-4 text-secondary">{children}</div>
     </section>
   );
 }
