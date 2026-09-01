@@ -3,6 +3,7 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import { captureRouterTransitionStart, init, replayIntegration } from "@sentry/nextjs";
+import posthog from "posthog-js";
 
 init({
   // eslint-disable-next-line no-secrets/no-secrets -- Sentry DSN is intentionally public (client-side)
@@ -39,3 +40,18 @@ init({
 });
 
 export const onRouterTransitionStart = captureRouterTransitionStart;
+
+// This file configures the initialization of PostHog on the client.
+// https://posthog.com/docs/libraries/next-js
+if (process.env.NODE_ENV === "production") {
+  const posthogProjectToken = process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN;
+  const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+
+  if (posthogProjectToken && posthogHost) {
+    posthog.init(posthogProjectToken, {
+      api_host: posthogHost,
+      defaults: "2026-01-30",
+      capture_exceptions: true,
+    });
+  }
+}

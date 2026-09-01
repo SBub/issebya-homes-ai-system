@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import posthog from "posthog-js";
 import { useRef, useState } from "react";
 
 export type GalleryImage = {
@@ -10,14 +11,22 @@ export type GalleryImage = {
 
 type Props = {
   images: GalleryImage[];
+  roomType?: string;
 };
 
-export default function Gallery({ images }: Props) {
+export default function Gallery({ images, roomType }: Props) {
   const [imageIndex, setImageIndex] = useState(0);
 
   const touchStartX = useRef<number | null>(null);
 
   const handleThumbnailClick = (index: number) => {
+    if (index !== imageIndex) {
+      posthog.capture("gallery_image_viewed", {
+        room_type: roomType,
+        image_index: index,
+        trigger: "thumbnail",
+      });
+    }
     setImageIndex(index);
   };
 
@@ -34,9 +43,21 @@ export default function Gallery({ images }: Props) {
 
     if (Math.abs(diff) > swipeThreshold) {
       if (diff > 0 && imageIndex < images.length - 1) {
-        setImageIndex(imageIndex + 1);
+        const nextIndex = imageIndex + 1;
+        posthog.capture("gallery_image_viewed", {
+          room_type: roomType,
+          image_index: nextIndex,
+          trigger: "swipe",
+        });
+        setImageIndex(nextIndex);
       } else if (diff < 0 && imageIndex > 0) {
-        setImageIndex(imageIndex - 1);
+        const nextIndex = imageIndex - 1;
+        posthog.capture("gallery_image_viewed", {
+          room_type: roomType,
+          image_index: nextIndex,
+          trigger: "swipe",
+        });
+        setImageIndex(nextIndex);
       }
     }
 

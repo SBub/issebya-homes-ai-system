@@ -2,6 +2,7 @@
 
 import { parseISO } from "date-fns";
 import { useSearchParams } from "next/navigation";
+import posthog from "posthog-js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
 import { useAvailabilityQuery } from "../hooks/useAvailabilityQuery";
@@ -101,6 +102,10 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
           // Validate the range
           if (validateRange(checkInDate, date)) {
             setCheckOut(date);
+            posthog.capture("booking_dates_selected", {
+              room_type: roomType,
+              stay_nights: Math.round((date.getTime() - checkInDate.getTime()) / 86_400_000),
+            });
           } else {
             // Invalid range, reset and start over with this date as check-in
             setCheckIn(date);
@@ -113,12 +118,13 @@ export function BookingEngine({ roomType }: BookingEngineProps) {
         }
       }
     },
-    [checkInDate, checkOutDate, setCheckIn, setCheckOut, validateRange],
+    [checkInDate, checkOutDate, roomType, setCheckIn, setCheckOut, validateRange],
   );
 
   // Handle expand
   const handleExpand = useCallback(() => {
     setIsExpanded(true);
+    posthog.capture("booking_calendar_opened", { room_type: roomType });
     addBookingBreadcrumb("User expanded booking calendar", { roomType });
   }, [roomType]);
 
