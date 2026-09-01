@@ -55,11 +55,11 @@ export function AirbnbReviewSlider({ reviews, collapsedLines = 3 }: Props) {
         onTouchEnd={handleTouchEnd}
       >
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-yellow-500 text-sm">{"★".repeat(5)}</span>
-          <span className="text-xs text-gray-500">Airbnb</span>
+          <span className="text-sm">{"★".repeat(5)}</span>
+          <span className="text-xs">Airbnb</span>
         </div>
         <p className="font-bold text-sm">{review.name}</p>
-        <p className="text-xs text-gray-500 mb-2">{review.date}</p>
+        <p className="text-xs mb-2">{review.date}</p>
         <p
           ref={textRef}
           className="text-sm leading-relaxed transition-[max-height] duration-300 ease-in-out overflow-hidden"
@@ -83,7 +83,7 @@ export function AirbnbReviewSlider({ reviews, collapsedLines = 3 }: Props) {
         <button
           onClick={() => setExpanded((e) => !e)}
           className={`text-xs underline mt-1 cursor-pointer ${
-            isClamped || expanded ? "text-gray-500 hover:text-gray-700" : "invisible"
+            isClamped || expanded ? "" : "invisible"
           }`}
         >
           {expanded ? "Show less" : "Read more"}
@@ -92,21 +92,13 @@ export function AirbnbReviewSlider({ reviews, collapsedLines = 3 }: Props) {
 
       {reviews.length > 1 && (
         <div className="flex items-center gap-3 mt-3">
-          <button
-            onClick={prev}
-            className="text-gray-400 hover:text-gray-700 text-lg cursor-pointer"
-            aria-label="Previous review"
-          >
+          <button onClick={prev} className="text-lg cursor-pointer" aria-label="Previous review">
             &#8592;
           </button>
-          <span className="text-xs text-gray-500">
+          <span className="text-xs">
             {index + 1} / {reviews.length}
           </span>
-          <button
-            onClick={next}
-            className="text-gray-400 hover:text-gray-700 text-lg cursor-pointer"
-            aria-label="Next review"
-          >
+          <button onClick={next} className="text-lg cursor-pointer" aria-label="Next review">
             &#8594;
           </button>
         </div>
