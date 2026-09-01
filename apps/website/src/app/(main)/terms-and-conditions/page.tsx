@@ -12,8 +12,8 @@ export default function TermsAndConditionsPage() {
     <div className="min-h-screen bg-[#f0eeea] font-sans">
       <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
         <div>
-          <h1 className="text-4xl font-bold font-hand mb-4">Terms &amp; Conditions</h1>
-          <p className="text-secondary">
+          <h1 className="text-4xl text-header mb-4">Terms &amp; Conditions</h1>
+          <p className="text-sm leading-relaxed">
             These terms apply to all bookings and stays at issebya.homes. By booking or staying with
             us, you agree to the terms below.
           </p>
@@ -31,7 +31,7 @@ export default function TermsAndConditionsPage() {
           </p>
           <p>
             <strong>Contact:</strong>{" "}
-            <a href="mailto:help@issebya.com" className="underline hover:text-gray-600">
+            <a href="mailto:help@issebya.com" className="text-sm leading-relaxed underline">
               help@issebya.com
             </a>
           </p>
@@ -56,7 +56,7 @@ export default function TermsAndConditionsPage() {
           </p>
           <p>
             If something has gone wrong with your booking, please contact us at{" "}
-            <a href="mailto:help@issebya.com" className="underline hover:text-gray-600">
+            <a href="mailto:help@issebya.com" className="text-sm leading-relaxed underline">
               help@issebya.com
             </a>
             .
@@ -112,7 +112,7 @@ export default function TermsAndConditionsPage() {
             including your name, contact details, and WhatsApp messages. Identity documents for
             foreign-guest registration (see above) are checked in person at check-in and are not
             stored digitally by us. Full details are in our{" "}
-            <Link href="/privacy-policy" className="underline hover:text-gray-600">
+            <Link href="/privacy-policy" className="text-sm leading-relaxed underline">
               Privacy Policy
             </Link>
             .
@@ -126,7 +126,7 @@ export default function TermsAndConditionsPage() {
               href="https://www.livroreclamacoes.pt"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-sm leading-relaxed underline"
             >
               www.livroreclamacoes.pt
             </a>
@@ -149,7 +149,7 @@ export default function TermsAndConditionsPage() {
               href="https://ec.europa.eu/consumers/odr"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-sm leading-relaxed underline"
             >
               ec.europa.eu/consumers/odr
             </a>

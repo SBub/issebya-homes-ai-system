@@ -26,7 +26,7 @@ export default function BookingInfoBlock({
 }: BookingInfoBlockProps) {
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-hand font-bold">
+      <h2 className="text-2xl text-header">
         {title}
         {subtitle && (
           <>
@@ -47,12 +47,11 @@ export default function BookingInfoBlock({
       <p className="text-secondary">{capacity}</p>
 
       <p className="text-secondary">
-        📍{" "}
         <a
           href="https://maps.google.com/?q=Almoçageme,+Sintra,+Portugal"
           target="_blank"
           rel="noopener noreferrer"
-          className="underline hover:text-gray-600"
+          className="text-secondary-link"
         >
           Almoçageme, Sintra
         </a>

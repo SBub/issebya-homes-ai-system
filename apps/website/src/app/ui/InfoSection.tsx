@@ -8,7 +8,7 @@ interface InfoSectionProps {
 export function InfoSection({
   id,
   title,
-  titleClassName = "font-hand",
+  titleClassName = "text-header",
   children,
 }: InfoSectionProps) {
   return (

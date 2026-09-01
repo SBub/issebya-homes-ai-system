@@ -11,8 +11,8 @@ export default function PrivacyPolicyPage() {
     <div className="min-h-screen bg-[#f0eeea] font-sans">
       <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
         <div>
-          <h1 className="text-4xl font-bold font-hand mb-4">Privacy Policy</h1>
-          <p className="text-secondary">
+          <h1 className="text-4xl text-header mb-4">Privacy Policy</h1>
+          <p className="text-sm leading-relaxed">
             This policy explains what personal data issebya.homes collects, why, and what rights you
             have over it. It covers our website, booking flow, and WhatsApp assistant.
           </p>
@@ -23,7 +23,7 @@ export default function PrivacyPolicyPage() {
             issebya.homes is operated by Sviatlana Buben, NIF 330791745, Rua do Lagarto 5, 2705-044,
             Almoçageme, Portugal (Alojamento Local registration 168673/AL). For any question about
             this policy or your data, contact{" "}
-            <a href="mailto:help@issebya.com" className="underline hover:text-gray-600">
+            <a href="mailto:help@issebya.com" className="text-sm leading-relaxed underline">
               help@issebya.com
             </a>
             .
@@ -72,7 +72,7 @@ export default function PrivacyPolicyPage() {
             <strong>Sending you updates or promotions on WhatsApp:</strong> only with your consent,
             given by opting in at booking. You can withdraw this at any time by telling us on
             WhatsApp or emailing{" "}
-            <a href="mailto:help@issebya.com" className="underline hover:text-gray-600">
+            <a href="mailto:help@issebya.com" className="text-sm leading-relaxed underline">
               help@issebya.com
             </a>
             .
@@ -125,7 +125,7 @@ export default function PrivacyPolicyPage() {
             Under the GDPR, you have the right to access, correct, delete, or restrict the personal
             data we hold about you, to receive a copy of it in a portable format, to object to our
             use of it, and to withdraw consent at any time. To exercise any of these, contact{" "}
-            <a href="mailto:help@issebya.com" className="underline hover:text-gray-600">
+            <a href="mailto:help@issebya.com" className="text-sm leading-relaxed underline">
               help@issebya.com
             </a>
             . We will respond within one month, as required by law.
@@ -137,7 +137,7 @@ export default function PrivacyPolicyPage() {
               href="https://www.cnpd.pt"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-sm leading-relaxed underline"
             >
               CNPD (Comissão Nacional de Proteção de Dados)
             </a>

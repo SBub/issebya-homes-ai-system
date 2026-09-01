@@ -61,7 +61,7 @@ export default function Gallery({ images }: Props) {
           className="object-contain"
         />
       </div>
-      <div className="text-center font-hand text-lg break-words my-2 md:my-4 px-4">
+      <div className="text-center break-words my-2 md:my-4 px-4 text-secondary">
         {images[imageIndex].label}
       </div>
 

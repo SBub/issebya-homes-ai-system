@@ -13,7 +13,19 @@
 }
 
 @utility text-secondary {
-  @apply text-sm leading-relaxed text-foreground;
+  @apply text-sm leading-relaxed text-foreground font-sans;
+}
+
+@utility text-secondary-link {
+  @apply text-secondary underline hover:text-gray-900 underline-offset-4;
+}
+
+@utility text-secondary-link-bold {
+  @apply text-secondary-link font-bold;
+}
+
+@utility text-header {
+  @apply font-hand font-bold;
 }
 
 /*
