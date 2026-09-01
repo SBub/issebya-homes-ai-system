@@ -50,7 +50,7 @@ export default function Gallery({ images }: Props) {
   return (
     <>
       <div
-        className="relative w-full aspect-[4/3] bg-[#f5f0e8]"
+        className="relative w-[60%] mx-auto aspect-[4/3]"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
