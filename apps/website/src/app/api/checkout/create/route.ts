@@ -1,4 +1,5 @@
 import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "@sentry/nextjs";
+import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import { calculateTotalPrice } from "@/lib/price-utils";
 import { checkoutSchema } from "@/lib/shared/schemas/booking";
@@ -106,6 +107,10 @@ export async function POST(request: NextRequest) {
         const isAvailable = await checkAvailability(roomType, checkIn, checkOut);
         if (!isAvailable) {
           parentSpan?.setStatus({ code: 2, message: "Dates unavailable" });
+          // The client is about to re-fetch availability to refresh its calendar,
+          // expire the cached tag now so that read comes back genuinely fresh
+          // instead of the stale data that caused this conflict in the first place.
+          revalidateTag(`availability-${roomType}`, { expire: 0 });
           return NextResponse.json(
             {
               error: "dates_unavailable",

@@ -175,8 +175,9 @@ export function BookingEngineExpanded({
             span?.setStatus({ code: 2, message: responseData.error });
 
             if (responseData.error === "dates_unavailable") {
-              // Fetch fresh availability (bypass server cache) and update the query cache
-              const freshResponse = await fetch(`/api/availability?room=${roomType}&fresh=true`);
+              // The server already invalidated the availability cache for this room
+              // when it detected the conflict, so a normal read here comes back fresh.
+              const freshResponse = await fetch(`/api/availability?room=${roomType}`);
               if (freshResponse.ok) {
                 const freshData = await freshResponse.json();
                 const rawBookings = freshData.bookings.map(

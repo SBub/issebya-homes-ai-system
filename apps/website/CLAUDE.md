@@ -4,26 +4,7 @@
 
 Guest-facing booking site for issebya.homes. Two rooms, private event space, Stripe checkout, iCal availability sync. Deployed on Vercel.
 
-## Rendering strategy
-
-| Page                   | Strategy                                                      | Why                                                     |
-| ---------------------- | ------------------------------------------------------------- | ------------------------------------------------------- |
-| Room listing / booking | Partial Prerender (PPR) — static shell + dynamic availability | SEO for room content, real-time availability streams in |
-| Booking confirmation   | Server component, server-side fetch                           | No client JS needed, booking data fetched securely      |
-| Guest info             | Static (SSG)                                                  | Pure content, no dynamic data                           |
-| Contact                | Static (SSG)                                                  | Just a WhatsApp link                                    |
-| API routes             | Server-only                                                   | Stripe, Supabase, email — never reach the client        |
-
-## Caching
-
-| Layer                              | Strategy                                             | TTL                                    |
-| ---------------------------------- | ---------------------------------------------------- | -------------------------------------- |
-| Booking pages (PPR static shell)   | Build-time prerender — room content, layout          | Indefinite (redeployed on code change) |
-| `/api/availability`                | In-memory `Map` per room (server-side, per instance) | 1 hour; bypass with `?fresh=true`      |
-| Static pages (guest-info, contact) | Full SSG — no runtime cache needed                   | Build time                             |
-| All other API routes               | No cache — always fresh                              | —                                      |
-
-No `unstable_cache`, no `revalidate` headers in use. Availability is the only route with explicit caching logic (`src/app/api/availability/route.ts`).
+See `README.md` for the rendering strategy and caching reference tables.
 
 ## Project structure
 
