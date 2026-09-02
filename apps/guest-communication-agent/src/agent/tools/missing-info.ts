@@ -186,7 +186,7 @@ export async function handleMissingInfoNoReply(params: { correlationId: string }
 // notified" — that claim stays true even though this specific KB answer
 // never arrived in time.
 //
-// Called from run-turn.ts's NEEDS_APPROVAL branch (via run-hitl.ts's
+// Called from run-turn.ts's NEEDS_APPROVAL branch (via its own
 // requestApproval), never nested inside another step.run — Inngest doesn't
 // support calling a step tool from inside another step.run()'s callback, the
 // callback must be a self-contained unit of work.

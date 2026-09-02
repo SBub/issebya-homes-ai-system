@@ -48,7 +48,7 @@ const runCodeOutputSchema = z.union([
 //
 // Deliberately read-only/computational only: NEVER add sendBookingLink or
 // anything that moves real state/money here. Booking stays a normal,
-// approval-gated tool call (see run-hitl.ts's NEEDS_APPROVAL), never
+// approval-gated tool call (see run-turn.ts's NEEDS_APPROVAL), never
 // something callable from inside an agent-authored sandbox program.
 const sandboxApi: SandboxApi = {
   checkAvailability: (args: Parameters<typeof computeCheckAvailability>[0]) =>

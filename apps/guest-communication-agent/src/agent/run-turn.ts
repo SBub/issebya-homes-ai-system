@@ -4,12 +4,13 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
-import { NEEDS_APPROVAL, requestApproval } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
 import type { HitlDecision } from "@/agent/tools/approval-gate";
+import { requestSendBookingLinkApproval } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
+import { requestMissingInfoApproval } from "@/agent/tools/missing-info";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
@@ -82,28 +83,46 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 //   Telegram send that must not double-fire on an Inngest retry needs its
 //   own separately-memoized step, distinct from the span-creation and
 //   output-patch steps around it).
-// - missing_info and send_booking_link (run-hitl.ts's NEEDS_APPROVAL) need
-//   a genuine suspend: their execution span is created BEFORE a real
-//   approval wait starts (so nudge/decision/timeout spans nest under it as
+// - missing_info and send_booking_link (NEEDS_APPROVAL below) need a
+//   genuine suspend: their execution span is created BEFORE a real approval
+//   wait starts (so nudge/decision/timeout spans nest under it as
 //   children), and that wait can suspend for hours to up to a year
 //   (send_booking_link's BOOKING_LINK_APPROVAL_TIMEOUT). No single tool call
-//   can "own" a span spanning that — approval (run-hitl.ts's
-//   requestApproval) and execution (run-tool.ts's runTool, given the
-//   resolved HitlDecision) are two separate, sequential steps this loop
-//   calls directly (see the NEEDS_APPROVAL branch below), deliberately not
-//   bundled into one function, so the approval decision and the tool call
-//   stay visibly distinct here — the one remaining special case in this
-//   loop, forced by the wait duration, not by choice. Both the gated and
-//   ungated paths call the exact same runTool in the end, with zero
-//   span/step wrapping around that call in either case: the pre-created
-//   span belongs to missing_info/send_booking_link's own run<ToolName>
-//   (handed the id via the HitlDecision), which patches it itself — same as
-//   every other tool patching the span it created itself.
+//   can "own" a span spanning that — approval (the inlined switch in the
+//   NEEDS_APPROVAL branch below) and execution (run-tool.ts's runTool, given
+//   the resolved HitlDecision) are
+//   two separate, sequential steps this loop calls directly (see the
+//   NEEDS_APPROVAL branch below), deliberately not bundled into one
+//   function, so the approval decision and the tool call stay visibly
+//   distinct here — the one remaining special case in this loop, forced by
+//   the wait duration, not by choice. Both the gated and ungated paths call
+//   the exact same runTool in the end, with zero span/step wrapping around
+//   that call in either case: the pre-created span belongs to
+//   missing_info/send_booking_link's own run<ToolName> (handed the id via
+//   the HitlDecision), which patches it itself — same as every other tool
+//   patching the span it created itself.
 //
 // Inngest doesn't support calling a step tool from inside another
 // step.run()'s callback — the callback must be a self-contained unit of
 // work — which is why every tool dispatches its own step.run calls itself
 // rather than this loop wrapping them from outside.
+
+// Which tools go through the two-phase "calls human, then run the tool"
+// dispatch, instead of a single-phase call to run-tool.ts's runTool —
+// checked directly in the dispatch loop below, which inlines a switch over
+// requestMissingInfoApproval/requestSendBookingLinkApproval (no separate
+// dispatcher function for this — see that switch's own comment) and, only if
+// approved, calls run-tool.ts's runTool (given the resolved HitlDecision) as
+// two separate, sequential steps; that decoupling is deliberate, not an
+// implementation detail hidden away. wants_human is NOT here on purpose —
+// it's a one-way alert with no approve/reject (or answer-shaped) decision to
+// gate on, so it dispatches straight through runTool via wants-human.ts's
+// own runWantsHuman. Both tools below ARE approval-shaped (send_booking_link
+// genuinely approve/reject; missing_info resolves to an answer instead, but
+// still gates whether the tool call proceeds) — see approval-gate.ts's own
+// module comment for why missing_info still doesn't reuse
+// requestApprovalGate's generic mechanism.
+const NEEDS_APPROVAL = new Set(["missing_info", "send_booking_link"]);
 
 // Batches every tool call's output from a round into a single "tool" role
 // message with one content part per call, matching the shape AI SDK itself
@@ -346,29 +365,54 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a not-approved NEEDS_APPROVAL call returns
-    // requestApproval's own not-approved fallback and never reaches runTool
-    // at all.
+    // message ourselves; a not-approved NEEDS_APPROVAL call returns its own
+    // not-approved fallback and never reaches runTool at all.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         // missing_info and send_booking_link both require real owner
         // approval before they may run at all. This block does ONLY that —
-        // request approval (run-hitl.ts's requestApproval), then, on
-        // rejection/timeout, return its not-approved fallback immediately
-        // (already patched onto the tool-call span by requestApproval
-        // itself — nothing left for this loop to do but return it). No
+        // request approval (inline switch below, deliberately not its own
+        // named function — this is the one place in the app that needs to
+        // know "how do I get an approval decision for tool X", so there's no
+        // real caller-abstraction value in hiding it behind a wrapper), then,
+        // on rejection/timeout, return its not-approved fallback immediately
+        // (already patched onto the tool-call span by
+        // requestMissingInfoApproval/requestSendBookingLinkApproval
+        // themselves — nothing left for this loop to do but return it). No
         // tool-calling code lives in this block: the actual dispatch
         // (run-tool.ts's runTool, the exact same call every other tool in
         // this loop uses — see the trailing call below) only ever happens
         // after this block, never inside it, so approval and execution stay
         // two visibly distinct steps rather than one bundled underneath a
         // single `if`. Calls step.run/waitForEvent itself (inside
-        // requestApproval), so — same as every tool's own dispatch below
-        // (see the "RULE" comment above) — it must run un-nested here,
-        // never wrapped in an outer step.run.
+        // requestMissingInfoApproval/requestSendBookingLinkApproval), so —
+        // same as every tool's own dispatch below (see the "RULE" comment
+        // above) — it must run un-nested here, never wrapped in an outer
+        // step.run.
         let approvalDecision: HitlDecision<unknown> | undefined;
         if (NEEDS_APPROVAL.has(call.toolName)) {
-          approvalDecision = await requestApproval(call, correlationId, toolContext);
+          switch (call.toolName) {
+            case "missing_info":
+              approvalDecision = await requestMissingInfoApproval(
+                call.input as { reason: string },
+                toolContext,
+              );
+              break;
+            case "send_booking_link":
+              approvalDecision = await requestSendBookingLinkApproval(
+                call,
+                correlationId,
+                toolContext,
+              );
+              break;
+            default:
+              // Unreachable — NEEDS_APPROVAL only ever contains the two
+              // cases above; this exists so TypeScript sees every path
+              // through the switch assign approvalDecision, and to fail
+              // loudly (not silently dispatch an unapproved tool call) if
+              // NEEDS_APPROVAL ever gains a member without a matching case.
+              throw new Error(`"${call.toolName}" is not a gated tool`);
+          }
 
           if (!approvalDecision.approved) {
             // See RunAgentTurnResult.firedTags for why this is collected
@@ -387,9 +431,9 @@ export async function runAgentTurn(
         // convention — see wants-human.ts's runWantsHuman for the model
         // every tool follows). The 6 non-gated tools create their own
         // gen_ai.tool.<name> span from scratch; missing_info/
-        // send_booking_link patch the span requestApproval already created,
-        // using the toolSpanId carried on approvalDecision (see run-tool.ts's
-        // runTool for how that's threaded through) — see
+        // send_booking_link patch the span the approval switch above already
+        // created, using the toolSpanId carried on approvalDecision (see
+        // run-tool.ts's runTool for how that's threaded through) — see
         // requestMissingInfoApproval/requestSendBookingLinkApproval's own
         // comments for why that span can't be created fresh here. Re-executes
         // on every Inngest replay like the rest of this loop body, which is

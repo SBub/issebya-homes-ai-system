@@ -15,7 +15,7 @@ import { steppedSpan } from "@/lib/tracing";
 // The tool registry + dispatcher: which tools the model can call (`tools`,
 // handed to generateText by run-model.ts's runModel), and how each one
 // actually runs (`runTool`, called uniformly from run-turn.ts's dispatch
-// loop for every tool, gated or not — see run-hitl.ts for the approval half
+// loop for every tool, gated or not — see run-turn.ts for the approval half
 // NEEDS_APPROVAL's two go through first). Kept together in one file:
 // runTool's own "unknown tool name" fallback needs `Object.keys(tools)`, so
 // splitting the two apart would gain nothing.
