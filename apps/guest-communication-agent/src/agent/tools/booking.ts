@@ -1,6 +1,9 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { resolveToolApproval } from "./approval-gate";
+import { flushTracing } from "@/instrumentation";
+import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
+import { type HitlDecision, requestApprovalGate, resolveToolApproval } from "./approval-gate";
+import type { ToolContext } from "./config";
 
 // TODO: this trusts the model already called checkAvailability and got
 // "available" — it does not independently re-verify before creating the
@@ -10,15 +13,17 @@ import { resolveToolApproval } from "./approval-gate";
 // GET /api/availability?room= and return a structured error if unavailable.
 
 // sendBookingLink is approve/reject-gated before the model ever sees a
-// result — the real Telegram-nudge-then-suspend HITL mechanism lives in the
-// generic, reusable approval-gate.ts (see that file's module comment), and
-// the decision of WHETHER this tool needs approval (plus which event/timeout
-// it uses) is made visible in run-turn.ts's APPROVAL_GATES table, not hidden
-// in this file. By the time runSendBookingLink below is ever called, the
-// gate has already run and approved the call — this file is left with only
-// the parts that are genuinely booking-specific: the tool's schema, the
-// human-readable approval-reason text, the event/timeout policy constants,
-// and the actual URL-building logic.
+// result, split into two halves per this app's run<ToolName> convention (see
+// wants-human.ts's runWantsHuman/missing-info.ts's requestMissingInfoApproval
+// for the model this follows): requestSendBookingLinkApproval below is the
+// "calls human" half (creates the tool-call span, then reuses the generic,
+// reusable approve/reject HITL mechanism in approval-gate.ts's
+// requestApprovalGate — this tool genuinely IS approve/reject-shaped, unlike
+// missing_info), runSendBookingLink is the "tool call" half — the pure
+// URL-building logic, unchanged, run only once requestSendBookingLinkApproval
+// has resolved `approved: true`. run-turn.ts's dispatchGatedToolCall glues
+// the two together and patches the tool-call span's real output — see that
+// function's own comment.
 
 const sendBookingLinkSchema = z.object({
   guestName: z.string().describe("Guest full name"),
@@ -89,8 +94,92 @@ export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkS
 export const BOOKING_LINK_URL_PATTERN =
   /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
+// send_booking_link's "calls human" half: creates the real
+// gen_ai.tool.send_booking_link execution span FIRST — before
+// requestApprovalGate ever runs — with the model's real tool-call `input`
+// set at creation, same shape wants-human.ts's own runWantsHuman/
+// missing-info.ts's own requestMissingInfoApproval give their own tool
+// spans. Only `fn`'s return value (the real OTel-generated span id) survives
+// this step — no live Span object survives an Inngest step boundary. That id
+// becomes a new toolAnchor, passed to requestApprovalGate as its own
+// traceAnchor param, so the nudge/decision/timeout spans requestApprovalGate
+// creates internally become this tool-call span's real children instead of
+// siblings of the turn's own anchor.
+//
+// Deliberately does NOT execute the tool or patch the span's output — the
+// caller (run-turn.ts's dispatchGatedToolCall) does that once it has this
+// function's HitlDecision, same split missing-info.ts's
+// requestMissingInfoApproval/buildMissingInfoResult already has. `payload`
+// is left undefined (the default) — unlike missing_info's answer, the
+// model's own `call.input` already has everything runSendBookingLink needs,
+// nothing extra to hand forward.
+export async function requestSendBookingLinkApproval(
+  call: { toolCallId: string; toolName: string; input: Record<string, unknown> },
+  correlationId: string,
+  context: ToolContext,
+): Promise<HitlDecision> {
+  const { conversationId, phone, step, traceAnchor } = context;
+
+  const toolSpanId = await steppedSpan(
+    step,
+    `tool-${call.toolName}`,
+    traceAnchor,
+    `gen_ai.tool.${call.toolName}`,
+    {
+      "gen_ai.tool.name": call.toolName,
+      "gen_ai.operation.name": "execute_tool",
+      "gca.tool.input": JSON.stringify(call.input),
+      "braintrust.input": JSON.stringify(call.input),
+    },
+    async (span) => span.spanContext().spanId,
+  );
+  // Synchronous, awaited flush (not the routes' non-blocking after()) —
+  // guarantees this span's own OTel export lands before the caller's own
+  // later updateSpanIO patch can fire and race it. See wants-human.ts's own
+  // runWantsHuman's identical flushTracing() call for the full reasoning.
+  await flushTracing();
+  const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
+
+  const approved = await requestApprovalGate({
+    toolName: call.toolName,
+    event: BOOKING_LINK_APPROVAL_EVENT,
+    timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
+    reason: buildBookingApprovalReason(call.input as z.infer<typeof sendBookingLinkSchema>),
+    reasonCategory: "send_booking_link",
+    conversationId,
+    phone,
+    correlationId,
+    step,
+    traceAnchor: toolAnchor,
+    // The model's own real tool-call args — captured on this call's
+    // pending_owner_decisions row (see requestApprovalGate's own `context`
+    // param) so a later manual-resolve action can rebuild what this call
+    // would have done (room/checkIn/checkOut) without re-parsing
+    // buildBookingApprovalReason's human-readable prose.
+    context: call.input,
+  });
+
+  // requestApprovalGate itself doesn't distinguish a rejection from a
+  // timeout in its return value (both resolve `approved: false` — see its
+  // own doc comment), so neither does this: same not-approved shape the
+  // model has always seen on either exit path.
+  if (!approved) {
+    return {
+      approved: false,
+      notApprovedOutput: {
+        approved: false,
+        message: "This action was not approved. Do not retry it automatically.",
+      },
+      toolSpanId,
+      toolAnchor,
+    };
+  }
+
+  return { approved: true, toolSpanId, toolAnchor };
+}
+
 // Pure URL builder — no nudge, no suspend/wait. By the time run-turn.ts calls
-// this, its own APPROVAL_GATES check (backed by approval-gate.ts's
+// this, requestSendBookingLinkApproval above (backed by approval-gate.ts's
 // requestApprovalGate) has already run and approved the call. Takes the
 // guest's phone from ToolContext (already known — it's the WhatsApp
 // conversation's own number) so the website booking form can prefill it

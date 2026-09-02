@@ -6,12 +6,12 @@ import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { dispatchToolExecution, runTool } from "@/agent/run-tool";
-import { requestApprovalGate } from "@/agent/tools/approval-gate";
 import { flushTracing } from "@/instrumentation";
 import {
   BOOKING_LINK_APPROVAL_EVENT,
   BOOKING_LINK_APPROVAL_TIMEOUT,
   buildBookingApprovalReason,
+  requestSendBookingLinkApproval,
 } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { type OwnerNudgeReason } from "@/agent/tools/owner-nudge";
@@ -146,6 +146,17 @@ const APPROVAL_GATES: Partial<Record<string, ApprovalGateConfig>> = {
 // approval-gate.ts's shared mechanism instead of being entirely local to
 // this file.
 //
+// Glues send_booking_link's two halves together and patches the tool-call
+// span's real output — same shape missing-info.ts's own runMissingInfo has
+// relative to requestMissingInfoApproval/buildMissingInfoResult, just with
+// the gluing done here instead of in the tool's own file, since (unlike
+// missing_info) the "which tool needs approval and how" policy is still
+// visible in this file's own APPROVAL_GATES table for now. `gate` is
+// currently unused (requestSendBookingLinkApproval hardcodes booking's own
+// policy values itself) — kept in the signature/call site unchanged for
+// this step; APPROVAL_GATES/ApprovalGateConfig's removal is a later,
+// separate step.
+//
 // Every outcome funnels into one updateSpanIO patch on toolSpanId, unlike
 // the pre-fix behavior where only the approved path ever got an execution
 // span at all: a rejected/timed-out call patches the same not-approved shape
@@ -153,7 +164,7 @@ const APPROVAL_GATES: Partial<Record<string, ApprovalGateConfig>> = {
 // execution result. Private: only called from the loop's SELF_STEPPED_TOOLS
 // branch below, never nested inside another step.run — safe to call from
 // there because, like wants-human.ts's own runWantsHuman/missing-info.ts's
-// own runMissingInfo, this function calls step.run/requestApprovalGate
+// own runMissingInfo, this function calls step.run/requestSendBookingLinkApproval
 // itself rather than being called from inside one (see SELF_STEPPED_TOOLS's
 // own comment for why that nesting is unsafe).
 async function dispatchGatedToolCall(
@@ -162,72 +173,26 @@ async function dispatchGatedToolCall(
   correlationId: string,
   context: ToolContext,
 ): Promise<unknown> {
-  const { conversationId, phone, step, traceAnchor } = context;
+  void gate;
+  const decision = await requestSendBookingLinkApproval(call, correlationId, context);
 
-  const toolSpanId = await steppedSpan(
-    step,
-    `tool-${call.toolName}`,
-    traceAnchor,
-    `gen_ai.tool.${call.toolName}`,
-    {
-      "gen_ai.tool.name": call.toolName,
-      "gen_ai.operation.name": "execute_tool",
-      "gca.tool.input": JSON.stringify(call.input),
-      "braintrust.input": JSON.stringify(call.input),
-    },
-    async (span) => span.spanContext().spanId,
-  );
-  // Synchronous, awaited flush (not the routes' non-blocking after()) —
-  // guarantees this span's own OTel export lands before either of this
-  // function's later updateSpanIO patches (the not-approved path or the
-  // executed-result path below) can fire and race it. See wants-human.ts's
-  // own runWantsHuman's identical flushTracing() call for the full
-  // reasoning; one flush here covers both later patch paths.
-  await flushTracing();
-  const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
-
-  const approved = await requestApprovalGate({
-    toolName: call.toolName,
-    event: gate.event,
-    timeout: gate.timeout,
-    reason: gate.buildReason(call.input),
-    reasonCategory: gate.reasonCategory,
-    conversationId,
-    phone,
-    correlationId,
-    step,
-    traceAnchor: toolAnchor,
-    // The model's own real tool-call args — captured on this call's
-    // pending_owner_decisions row (see requestApprovalGate's own `context`
-    // param) so a later manual-resolve action can rebuild what this call
-    // would have done (e.g. send_booking_link's room/checkIn/checkOut)
-    // without re-parsing gate.buildReason's human-readable prose.
-    context: call.input,
-  });
-
-  // requestApprovalGate itself doesn't distinguish a rejection from a
-  // timeout in its return value (both resolve `approved: false` — see its
-  // own doc comment), so neither does this: same not-approved shape the
-  // model has always seen on either exit path.
-  if (!approved) {
-    const result = {
-      approved: false,
-      message: "This action was not approved. Do not retry it automatically.",
-    };
-    await step.run(`update-${call.toolName}-trace-io`, () =>
-      updateSpanIO(toolSpanId, { output: result }),
+  if (!decision.approved) {
+    await context.step.run(`update-${call.toolName}-trace-io`, () =>
+      updateSpanIO(decision.toolSpanId, { output: decision.notApprovedOutput }),
     );
-    return result;
+    return decision.notApprovedOutput;
   }
 
-  // Own step, distinct from the tool-span-creation step above — this is the
-  // call's real dispatch (runSendBookingLink today), memoized separately so a
-  // replay after some later suspend elsewhere in the same turn doesn't
-  // re-run it.
-  const output = await step.run(`execute-${call.toolName}`, () =>
+  // Own step, distinct from the tool-span-creation step inside
+  // requestSendBookingLinkApproval — this is the call's real dispatch
+  // (runSendBookingLink today), memoized separately so a replay after some
+  // later suspend elsewhere in the same turn doesn't re-run it.
+  const output = await context.step.run(`execute-${call.toolName}`, () =>
     runTool(call.toolName, call.input, context),
   );
-  await step.run(`update-${call.toolName}-trace-io`, () => updateSpanIO(toolSpanId, { output }));
+  await context.step.run(`update-${call.toolName}-trace-io`, () =>
+    updateSpanIO(decision.toolSpanId, { output }),
+  );
   return output;
 }
 

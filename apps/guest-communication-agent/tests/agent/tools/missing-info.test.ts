@@ -81,14 +81,33 @@ vi.mock("@/lib/tracing.js", async (importOriginal) => {
 });
 
 const {
+  buildMissingInfoResult,
   handleMissingInfoNoReply,
   handleMissingInfoReplyReceived,
   OWNER_NUDGE_ANSWERED_EVENT,
+  requestMissingInfoApproval,
   runMissingInfo,
 } = await import("@/agent/tools/missing-info.js");
 
 const MISSING_INFO_REPLY_TIMEOUT = "24h";
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
+type StepTools = GetStepTools<typeof inngest>;
+
+// Only `run`/`waitForEvent` are exercised by real code here — see
+// approval-gate.test.ts's own makeStepMock comment for why the rest of the
+// real StepTools surface is cast away rather than stubbed out. Shared by
+// every describe block below that drives requestMissingInfoApproval (either
+// directly, or indirectly through runMissingInfo).
+function makeStepMock() {
+  return {
+    run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    waitForEvent: vi.fn(),
+  } as unknown as StepTools & {
+    run: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+  };
+}
 
 describe("handleMissingInfoNoReply", () => {
   afterEach(() => {
@@ -177,22 +196,97 @@ describe("handleMissingInfoReplyReceived", () => {
   });
 });
 
+describe("requestMissingInfoApproval / buildMissingInfoResult", () => {
+  // The two halves runMissingInfo (below) glues together — see
+  // missing-info.ts's own comment on the split. Covers the HitlDecision
+  // shape directly, complementing runMissingInfo's own end-to-end coverage
+  // (span/step-order assertions live there, not duplicated here).
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spanExporter.reset();
+    step = makeStepMock();
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
+    insertPendingOwnerDecisionMock.mockResolvedValue(undefined);
+    resolvePendingOwnerDecisionByCorrelationIdMock.mockResolvedValue(undefined);
+    mockTraceAnchorInsert.mockResolvedValue({ error: null });
+  });
+
+  it("resolves approved: true with the owner's answer as payload when it arrives in time", async () => {
+    step.waitForEvent.mockResolvedValueOnce({
+      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
+    });
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(true);
+    expect(decision.payload).toBe("The AC is above the bed");
+    expect(decision.toolSpanId).toEqual(expect.any(String));
+    expect(decision.notApprovedOutput).toBeUndefined();
+  });
+
+  it("resolves approved: false with the honest not-reached fallback when the nudge fails to send", async () => {
+    sendOwnerNudgeMock.mockResolvedValue({ ok: false, error: "telegram-router down" });
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(false);
+    expect(decision.payload).toBeUndefined();
+    expect(decision.notApprovedOutput).toEqual({
+      escalated: true,
+      message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+    });
+  });
+
+  it("resolves approved: false with the owner-notified fallback (not the not-reached one) on a timeout", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(false);
+    expect(decision.notApprovedOutput).toEqual({
+      escalated: true,
+      message: "The owner has been notified and will be in touch shortly.",
+    });
+  });
+
+  it("buildMissingInfoResult is a pure formatter over the approval's payload", () => {
+    expect(buildMissingInfoResult("The AC is above the bed")).toEqual({
+      escalated: true,
+      answer: "The AC is above the bed",
+    });
+  });
+});
+
 describe("runMissingInfo", () => {
-  type StepTools = GetStepTools<typeof inngest>;
-
-  // Only `run`/`waitForEvent` are exercised by real code here — see
-  // approval-gate.test.ts's own makeStepMock comment for why the rest of the
-  // real StepTools surface is cast away rather than stubbed out.
-  function makeStepMock() {
-    return {
-      run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
-      waitForEvent: vi.fn(),
-    } as unknown as StepTools & {
-      run: ReturnType<typeof vi.fn>;
-      waitForEvent: ReturnType<typeof vi.fn>;
-    };
-  }
-
   let step: ReturnType<typeof makeStepMock>;
 
   beforeEach(() => {

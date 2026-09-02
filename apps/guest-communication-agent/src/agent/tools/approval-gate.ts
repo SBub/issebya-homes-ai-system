@@ -31,6 +31,31 @@ import { requestOwnerNudge } from "./owner-nudge";
 // wants_human is a one-way alert with no decision at all, so it needs no
 // gate of any kind.
 
+// Shared result shape for any tool's "calls human" half (the HITL
+// nudge/wait), kept separate from that tool's own "tool call" half — see
+// booking.ts's requestSendBookingLinkApproval and missing-info.ts's
+// requestMissingInfoApproval, the two real implementations of this contract.
+// Both resolve completely differently (a plain approve/reject vs. an
+// owner-supplied answer string) but return this one shape so their callers
+// don't need to know which. `payload` is generic precisely because of that
+// difference — undefined for a tool with nothing more to hand the execute
+// step than the model's own original args (send_booking_link), a real value
+// for one that needs it (missing_info's answer).
+export interface HitlDecision<TPayload = undefined> {
+  approved: boolean;
+  // Only set when approved.
+  payload?: TPayload;
+  // Only set when NOT approved — handed straight back to the model as the
+  // "rejected/timed out"/"couldn't reach the owner" result, whichever shape
+  // this tool uses.
+  notApprovedOutput?: unknown;
+  // The gen_ai.tool.<name> execution span, created before the HITL wait —
+  // the caller patches its real output onto this once the tool call (or the
+  // not-approved fallback) resolves.
+  toolSpanId: string;
+  toolAnchor: TraceAnchor;
+}
+
 /**
  * Sends an owner nudge and then suspends the current run via
  * step.waitForEvent until either a matching decision event arrives or the

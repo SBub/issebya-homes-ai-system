@@ -15,24 +15,28 @@ import {
   updateSpanIO,
   withSpan,
 } from "@/lib/tracing";
+import type { HitlDecision } from "./approval-gate";
 import type { ToolContext } from "./config";
 import { requestOwnerNudge } from "./owner-nudge";
 
 // Consolidated home for the missing_info tool: the schema/declaration the
 // model sees, the shared event/timeout constants, the tool's real dispatch
-// (runMissingInfo below — this app's run<ToolName> convention, see
-// wants-human.ts's runWantsHuman for the model this follows), and both
-// non-step branches of what happens once a nudge is settled — reply arrives
-// (handleMissingInfoReplyReceived) or doesn't (handleMissingInfoNoReply).
-// POST /api/owner-nudges/[correlationId]/answer is a thin trigger that calls
+// (split into requestMissingInfoApproval's "calls human" half and
+// buildMissingInfoResult's "tool call" half below, glued back together by
+// runMissingInfo for callers that just want the one entry point — this
+// app's run<ToolName> convention, see wants-human.ts's runWantsHuman for the
+// model this follows), and both non-step branches of what happens once a
+// nudge is settled — reply arrives (handleMissingInfoReplyReceived) or
+// doesn't (handleMissingInfoNoReply). POST
+// /api/owner-nudges/[correlationId]/answer is a thin trigger that calls
 // handleMissingInfoReplyReceived, not its own logic.
 //
-// runMissingInfo's own step/span/Inngest usage is a deliberate exception to
-// the general "tool files stay pure" posture most of src/agent/tools/*.ts
-// holds to (see run-turn.ts's comment near `tools`) — missing_info's
-// suspend/resume dispatch is real durability plumbing, and the established
-// pattern is that it lives inside the tool's own run<ToolName>, not in
-// run-turn.ts's dispatch loop. handleMissingInfoReplyReceived/
+// requestMissingInfoApproval's own step/span/Inngest usage is a deliberate
+// exception to the general "tool files stay pure" posture most of
+// src/agent/tools/*.ts holds to (see run-turn.ts's comment near `tools`) —
+// missing_info's suspend/resume dispatch is real durability plumbing, and
+// the established pattern is that it lives inside the tool's own file, not
+// in run-turn.ts's dispatch loop. handleMissingInfoReplyReceived/
 // handleMissingInfoNoReply stay free of step/Inngest-function usage of their
 // own; inngest.send below is a plain event send, not a step. The withSpan
 // import on handleMissingInfoReplyReceived's own DB write is the same narrow
@@ -63,15 +67,16 @@ export const missingInfo = tool({
   inputSchema: missingInfoSchema,
 });
 
-// The event runMissingInfo below waits for and handleMissingInfoReplyReceived
-// sends — shared as a constant so the two ends can't drift apart.
+// The event requestMissingInfoApproval below waits for and
+// handleMissingInfoReplyReceived sends — shared as a constant so the two
+// ends can't drift apart.
 export const OWNER_NUDGE_ANSWERED_EVENT = "gca/owner-nudge.answered";
 
 // 24h — same order of magnitude as harness-engineering's APPROVAL_TIMEOUT_S:
 // long enough for a human reply, but the guest still deserves a response
 // within their own conversation rather than waiting forever. The sole
-// step.waitForEvent timeout runMissingInfo below uses. Not exported — only
-// used within this file now that runMissingInfo lives here too.
+// step.waitForEvent timeout requestMissingInfoApproval below uses. Not
+// exported — only used within this file.
 const MISSING_INFO_REPLY_TIMEOUT = "24h";
 
 // "Reply received" branch: embeds the owner's answer into the KB (same
@@ -138,9 +143,9 @@ export async function handleMissingInfoReplyReceived(params: {
 }
 
 // Stub: only logs. No timeout/expiry side effect (re-nudging owner) exists
-// yet. Called by runMissingInfo below (wrapped in its own step/span there,
-// since this function itself must stay step/span-free) once its
-// step.waitForEvent times out.
+// yet. Called by requestMissingInfoApproval below (wrapped in its own
+// step/span there, since this function itself must stay step/span-free) once
+// its step.waitForEvent times out.
 export async function handleMissingInfoNoReply(params: { correlationId: string }): Promise<void> {
   const { correlationId } = params;
   console.warn(
@@ -148,24 +153,33 @@ export async function handleMissingInfoNoReply(params: { correlationId: string }
   );
 }
 
-// The tool's real dispatch: this app's run<ToolName> convention (see
-// wants-human.ts's runWantsHuman for the model this follows) — every tool's
-// own execution lives in its own file under this name, called directly from
-// run-turn.ts's runToolCall(). Unlike wants_human's one-way alert,
-// missing_info's full suspend/resume dispatch: creates the real
-// gen_ai.tool.missing_info execution span FIRST (its `input` — the model's
-// `reason` — is the one thing already known at this point), then sends the
-// owner nudge and genuinely suspends via step.waitForEvent until the owner
-// replies (handleMissingInfoReplyReceived above, called from the API route,
-// sends OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses, running the
-// no-reply-timeout fallback step in that case. Called from run-turn.ts's
-// SELF_STEPPED_TOOLS branch, never nested inside another step.run — Inngest
-// doesn't support calling a step tool from inside another step.run()'s
-// callback, the callback must be a self-contained unit of work.
-export async function runMissingInfo(
+// missing_info's "calls human" half: creates the real gen_ai.tool.missing_info
+// execution span FIRST (its `input` — the model's `reason` — is the one
+// thing already known at this point), sends the owner nudge, and genuinely
+// suspends via step.waitForEvent until the owner replies
+// (handleMissingInfoReplyReceived above, called from the API route, sends
+// OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses. Deliberately does NOT
+// build the tool's final result or patch the span's output — that's
+// buildMissingInfoResult/the caller's job (see runMissingInfo below), so
+// this function's only concern is "did an answer arrive, and if not, why
+// not" — the shared HitlDecision<string> contract (see approval-gate.ts)
+// `payload` is the owner's real answer when `approved` is true.
+//
+// Two distinct not-approved messages, both preserved exactly as before this
+// split: a nudge that failed to send gets the honest "couldn't reach the
+// owner" message (no point suspending on a reply the owner was never told to
+// give); a nudge that sent but timed out still gets "owner has been
+// notified" — that claim stays true even though this specific KB answer
+// never arrived in time.
+//
+// Called from run-turn.ts's SELF_STEPPED_TOOLS branch (via runMissingInfo),
+// never nested inside another step.run — Inngest doesn't support calling a
+// step tool from inside another step.run()'s callback, the callback must be
+// a self-contained unit of work.
+export async function requestMissingInfoApproval(
   args: { reason: string },
   context: ToolContext,
-): Promise<{ escalated: true; answer: string } | { escalated: true; message: string }> {
+): Promise<HitlDecision<string>> {
   const { conversationId, phone, step, correlationId, traceAnchor } = context;
 
   // Created FIRST, before the nudge, so owner_nudge.missing_info/
@@ -177,10 +191,8 @@ export async function runMissingInfo(
   // this step — the span itself has already closed by the time this
   // resolves, since no live Span object can survive across this (or any)
   // Inngest step boundary. `output` isn't set here because it isn't known
-  // yet; it's patched in retroactively, once the real result exists, via
-  // updateSpanIO at the bottom of this function — see that call's own
-  // comment for the same reliability caveat updateSpanIO's own doc comment
-  // already flags.
+  // yet; the caller patches it in retroactively, once the real result
+  // exists, via updateSpanIO — see runMissingInfo below.
   const toolSpanId = await steppedSpan(
     step,
     "tool-missing_info",
@@ -195,7 +207,7 @@ export async function runMissingInfo(
     async (span) => span.spanContext().spanId,
   );
   // Synchronous, awaited flush (not the routes' non-blocking after()) —
-  // guarantees this span's own OTel export lands before this function's own
+  // guarantees this span's own OTel export lands before the caller's own
   // later updateSpanIO patch (on the "escalated" happy path, or the no-reply
   // timeout path) can fire and race it. See wants-human.ts's own
   // runWantsHuman's identical flushTracing() call for the full reasoning.
@@ -249,117 +261,138 @@ export async function runMissingInfo(
       }),
   );
 
-  // Every exit path below funnels into this one shared value instead of
-  // returning early, so there's a single result to both hand back to the
-  // model and retroactively patch onto the tool-call span's output below —
-  // starts as the nudge-failed/timeout fallback since that's also the
-  // fallback for the "nudge never sent" branch that skips the block below
-  // entirely. Branches on `nudged` (already known at this point) so a failed
-  // nudge gets an honest message instead of falsely claiming the owner was
-  // notified.
-  let result: { escalated: true; answer: string } | { escalated: true; message: string } = nudged
-    ? { escalated: true, message: "The owner has been notified and will be in touch shortly." }
-    : {
-        escalated: true,
-        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
-      };
-
   // Nudge failed to send — skip straight to the same fallback a timeout
   // would produce; there's no point suspending if the owner was never told.
-  if (nudged) {
-    // Best-effort bookkeeping (see insertPendingOwnerDecision's own doc
-    // comment) — own step, only reached once the nudge is confirmed sent.
-    // Guarded on correlationId same as recordMissingInfoTraceAnchor's own
-    // call site above: only real runs supply one (see
-    // ToolContext.correlationId's own comment); there's nothing to key a row
-    // on for hypothetical callers outside a live run.
-    if (correlationId) {
-      await step.run("record-pending-decision", () =>
-        insertPendingOwnerDecision({
-          correlationId,
-          toolName: "missing_info",
-          conversationId,
-          phone,
-          reason: args.reason,
-        }),
-      );
-    }
-
-    const waitResult = await step.waitForEvent("wait-for-owner-answer", {
-      event: OWNER_NUDGE_ANSWERED_EVENT,
-      match: "data.correlationId",
-      timeout: MISSING_INFO_REPLY_TIMEOUT,
-    });
-
-    const answer = (waitResult?.data.answer as string | undefined) ?? null;
-    if (answer !== null) {
-      // Embedding already happened in handleMissingInfoReplyReceived before
-      // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
-      // re-embed here.
-      result = { escalated: true, answer };
-      // Own step — same replay-safety reasoning as the nudge-send step above.
-      // Mirrors missing-info-no-reply's own marker span, for the symmetric
-      // "an answer was received and consumed" case.
-      await steppedSpan(
-        step,
-        "missing-info-answer-received",
-        toolAnchor,
-        "missing_info.answer_received",
-        { "gca.correlation_id": correlationId ?? "unknown", "braintrust.tags": ["missing_info"] },
-        async () => {},
-      );
-      if (correlationId) {
-        await step.run("resolve-pending-decision", () =>
-          resolvePendingOwnerDecisionByCorrelationId(correlationId, "answered"),
-        );
-      }
-    } else {
-      console.warn(
-        `[missing-info] runMissingInfo timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
-      );
-      // Own step — same replay-safety reasoning as the nudge-send step above.
-      // braintrust.tags clears the same export filter as the nudge span above
-      // (see tracing.ts's attribute-namespace comment block) — this isn't an
-      // approve/reject decision (approval-gate.ts's braintrust.approval_decision
-      // doesn't apply here; a missing_info timeout means "gave up waiting for
-      // the KB answer," not a rejected gate), so it reuses the sibling nudge
-      // span's tagging mechanism instead.
-      await steppedSpan(
-        step,
-        "missing-info-no-reply",
-        toolAnchor,
-        "missing_info.no_reply",
-        {
-          "gca.timeout": MISSING_INFO_REPLY_TIMEOUT,
-          "braintrust.tags": ["missing_info"],
-          "gca.correlation_id": correlationId ?? "unknown",
-        },
-        () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
-      );
-      if (correlationId) {
-        await step.run("resolve-pending-decision-timeout", () =>
-          resolvePendingOwnerDecisionByCorrelationId(correlationId, "timeout"),
-        );
-      }
-      // Timed out — handleMissingInfoNoReply already ran above; result keeps
-      // its default fallback-message value.
-    }
+  if (!nudged) {
+    return {
+      approved: false,
+      notApprovedOutput: {
+        escalated: true,
+        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+      },
+      toolSpanId,
+      toolAnchor,
+    };
   }
 
-  // Retroactively patches the tool-call span's real output now that it's
-  // known — missing_info's actual resolution (the owner's real answer, or
-  // the fallback message) isn't knowable until after step.waitForEvent above
-  // has already resolved (or was skipped), well after the span itself was
-  // created and closed above, so there's no live Span object left to call
-  // span.setAttribute on. Same mechanism runAgentTurn's own
-  // "braintrust.guest_turn" root marker span already uses for its output —
-  // both flush synchronously right after span creation (see this function's
-  // own flushTracing() call above), so this patch can't be clobbered by a
-  // later out-of-order OTel export (see updateSpanIO's own doc comment for
-  // that mechanism). Own step, not a span — patching a span isn't itself a
-  // new event worth its own trace node.
+  // Best-effort bookkeeping (see insertPendingOwnerDecision's own doc
+  // comment) — own step, only reached once the nudge is confirmed sent.
+  // Guarded on correlationId same as recordMissingInfoTraceAnchor's own
+  // call site above: only real runs supply one (see
+  // ToolContext.correlationId's own comment); there's nothing to key a row
+  // on for hypothetical callers outside a live run.
+  if (correlationId) {
+    await step.run("record-pending-decision", () =>
+      insertPendingOwnerDecision({
+        correlationId,
+        toolName: "missing_info",
+        conversationId,
+        phone,
+        reason: args.reason,
+      }),
+    );
+  }
+
+  const waitResult = await step.waitForEvent("wait-for-owner-answer", {
+    event: OWNER_NUDGE_ANSWERED_EVENT,
+    match: "data.correlationId",
+    timeout: MISSING_INFO_REPLY_TIMEOUT,
+  });
+
+  const answer = (waitResult?.data.answer as string | undefined) ?? null;
+  if (answer !== null) {
+    // Embedding already happened in handleMissingInfoReplyReceived before
+    // OWNER_NUDGE_ANSWERED_EVENT delivered this answer here — do not
+    // re-embed here.
+    // Own step — same replay-safety reasoning as the nudge-send step above.
+    // Mirrors missing-info-no-reply's own marker span, for the symmetric
+    // "an answer was received and consumed" case.
+    await steppedSpan(
+      step,
+      "missing-info-answer-received",
+      toolAnchor,
+      "missing_info.answer_received",
+      { "gca.correlation_id": correlationId ?? "unknown", "braintrust.tags": ["missing_info"] },
+      async () => {},
+    );
+    if (correlationId) {
+      await step.run("resolve-pending-decision", () =>
+        resolvePendingOwnerDecisionByCorrelationId(correlationId, "answered"),
+      );
+    }
+    return { approved: true, payload: answer, toolSpanId, toolAnchor };
+  }
+
+  console.warn(
+    `[missing-info] requestMissingInfoApproval timed out after ${MISSING_INFO_REPLY_TIMEOUT} waiting for correlationId ${correlationId ?? "unknown"}'s reply`,
+  );
+  // Own step — same replay-safety reasoning as the nudge-send step above.
+  // braintrust.tags clears the same export filter as the nudge span above
+  // (see tracing.ts's attribute-namespace comment block, 4th bullet) — this
+  // isn't an approve/reject decision (approval-gate.ts's
+  // braintrust.approval_decision doesn't apply here; a missing_info timeout
+  // means "gave up waiting for the KB answer," not a rejected gate), so it
+  // reuses the sibling nudge span's tagging mechanism instead.
+  await steppedSpan(
+    step,
+    "missing-info-no-reply",
+    toolAnchor,
+    "missing_info.no_reply",
+    {
+      "gca.timeout": MISSING_INFO_REPLY_TIMEOUT,
+      "braintrust.tags": ["missing_info"],
+      "gca.correlation_id": correlationId ?? "unknown",
+    },
+    () => handleMissingInfoNoReply({ correlationId: correlationId ?? "unknown" }),
+  );
+  if (correlationId) {
+    await step.run("resolve-pending-decision-timeout", () =>
+      resolvePendingOwnerDecisionByCorrelationId(correlationId, "timeout"),
+    );
+  }
+  return {
+    approved: false,
+    notApprovedOutput: {
+      escalated: true,
+      message: "The owner has been notified and will be in touch shortly.",
+    },
+    toolSpanId,
+    toolAnchor,
+  };
+}
+
+// missing_info's "tool call" half — pure, trivial: once an answer exists
+// (requestMissingInfoApproval's `payload`), this is the entire real work.
+export function buildMissingInfoResult(answer: string): { escalated: true; answer: string } {
+  return { escalated: true, answer };
+}
+
+// The tool's single entry point, for callers that just want the whole
+// dispatch (run-turn.ts's runToolCall/SELF_STEPPED_TOOLS branch) without
+// caring that it's internally split into a "calls human" half
+// (requestMissingInfoApproval) and a "tool call" half
+// (buildMissingInfoResult). Patches the tool-call span's real output
+// retroactively — neither half above knows the final result at span-creation
+// time (a gated call's answer hasn't even arrived yet), so this is the one
+// place that does, right after whichever half resolves.
+export async function runMissingInfo(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<{ escalated: true; answer: string } | { escalated: true; message: string }> {
+  const { step } = context;
+  const decision = await requestMissingInfoApproval(args, context);
+
+  const result = decision.approved
+    ? buildMissingInfoResult(decision.payload as string)
+    : (decision.notApprovedOutput as { escalated: true; message: string });
+
+  // Own step, not a span — patching a span isn't itself a new event worth
+  // its own trace node. Same flushTracing()-then-patch ordering
+  // requestMissingInfoApproval's own comment describes, so this can't be
+  // silently clobbered by a later out-of-order OTel export (see
+  // updateSpanIO's own doc comment for that mechanism).
   await step.run("update-missing-info-trace-io", () =>
-    updateSpanIO(toolSpanId, { output: result }),
+    updateSpanIO(decision.toolSpanId, { output: result }),
   );
 
   return result;
