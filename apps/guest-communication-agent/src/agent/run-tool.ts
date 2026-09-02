@@ -1,5 +1,6 @@
 import type { ToolSet } from "ai";
 import { dispatchToolExecution } from "@/agent/tool-execution";
+import type { HitlDecision } from "@/agent/tools/approval-gate";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
@@ -14,9 +15,10 @@ import { steppedSpan } from "@/lib/tracing";
 // The tool registry + dispatcher: which tools the model can call (`tools`,
 // handed to generateText by run-model.ts's runModel), and how each one
 // actually runs (`runTool`, called uniformly from run-turn.ts's dispatch
-// loop for every tool except NEEDS_APPROVAL's two — see run-hitl.ts). Kept
-// together in one file: runTool's own "unknown tool name" fallback needs
-// `Object.keys(tools)`, so splitting the two apart would gain nothing.
+// loop for every tool, gated or not — see run-hitl.ts for the approval half
+// NEEDS_APPROVAL's two go through first). Kept together in one file:
+// runTool's own "unknown tool name" fallback needs `Object.keys(tools)`, so
+// splitting the two apart would gain nothing.
 //
 // Every registered tool's own gen_ai.tool.<name> execution span is created
 // by that tool's own run<ToolName>, inside its own file (see
@@ -45,16 +47,17 @@ export const tools = {
 // the single dispatcher every tool call in this app goes through, whether
 // gated or not (run-turn.ts's loop calls this uniformly; for NEEDS_APPROVAL
 // tools, run-hitl.ts's requestApproval must already have resolved
-// `approved: true` before this is ever reached, with its `payload` — the
-// owner's real answer, for missing_info; unused for send_booking_link —
-// passed through as this function's own 4th param). Every case just hands
-// off to that tool's own run<ToolName> — none of the tracing/span logic
-// used to live here; each tool now owns it.
+// `approved: true` before this is ever reached, with its full HitlDecision —
+// carrying the owner's real answer for missing_info, and the pre-created
+// span id both of NEEDS_APPROVAL's tools need to patch themselves — passed
+// through as this function's own 4th param). Every case just hands off to
+// that tool's own run<ToolName>, including any span/step wrapping that call
+// needs — none of that logic lives here.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
   context: ToolContext,
-  payload?: unknown,
+  approvalDecision?: HitlDecision<unknown>,
 ): Promise<unknown> {
   switch (toolName) {
     case "get_pricing":
@@ -67,9 +70,11 @@ export async function runTool(
         context,
       );
     case "send_booking_link":
-      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], {
-        phone: context.phone,
-      });
+      return runSendBookingLink(
+        input as Parameters<typeof runSendBookingLink>[0],
+        context,
+        approvalDecision!.toolSpanId,
+      );
     case "get_current_date":
       return runGetCurrentDate(context);
     case "run_code":
@@ -77,7 +82,12 @@ export async function runTool(
     case "wants_human":
       return runWantsHuman(input as { reason: string }, context);
     case "missing_info":
-      return runMissingInfo(input as { reason: string }, context, payload as string);
+      return runMissingInfo(
+        input as { reason: string },
+        context,
+        approvalDecision!.payload as string,
+        approvalDecision!.toolSpanId,
+      );
     default:
       // Native function-calling is supposed to constrain the model to exact
       // registered tool names, but some models (deepseek included) have been

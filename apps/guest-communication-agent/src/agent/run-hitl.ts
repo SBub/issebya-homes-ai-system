@@ -4,10 +4,10 @@ import type { ToolContext } from "@/agent/tools/config";
 import { requestMissingInfoApproval } from "@/agent/tools/missing-info";
 
 // Which tools go through the two-phase "calls human, then run the tool"
-// dispatch below, instead of the plain single-phase runTool (run-tool.ts) —
+// dispatch, instead of a single-phase call to run-tool.ts's runTool —
 // checked directly in run-turn.ts's own dispatch loop, which calls
 // requestApproval (this file) and, only if approved, run-tool.ts's runTool
-// (given the approved payload) as two separate, sequential steps; that
+// (given the resolved HitlDecision) as two separate, sequential steps; that
 // decoupling is deliberate, not an implementation detail hidden in here.
 // wants_human is NOT here on purpose — it's a one-way alert with no
 // approve/reject (or answer-shaped) decision to gate on, so it dispatches
@@ -23,10 +23,14 @@ export const NEEDS_APPROVAL = new Set(["missing_info", "send_booking_link"]);
 // table, matching run-tool.ts's own runTool dispatch style. Never calls the
 // tool itself — this only ever resolves a HitlDecision; execution happens
 // separately, via run-tool.ts's runTool, once run-turn.ts's loop has seen
-// `approved: true` here. requestMissingInfoApproval and
-// requestSendBookingLinkApproval are NOT signature-symmetric:
-// missing_info's correlationId already lives on `context`
-// (ToolContext.correlationId), so it only takes (args, context);
+// `approved: true` here. Each of requestMissingInfoApproval/
+// requestSendBookingLinkApproval already patches its own span with the
+// not-approved outcome before returning it here, when that's the outcome —
+// this function and its caller never touch span/step machinery of any kind,
+// they only read `approved`/`payload`/`notApprovedOutput`.
+// requestMissingInfoApproval and requestSendBookingLinkApproval are NOT
+// signature-symmetric: missing_info's correlationId already lives on
+// `context` (ToolContext.correlationId), so it only takes (args, context);
 // send_booking_link's dispatch predates that convention and still takes
 // correlationId as its own explicit param. Kept as-is rather than forcing
 // artificial symmetry between the two.
@@ -43,20 +47,4 @@ export async function requestApproval(
     default:
       throw new Error(`requestApproval: "${call.toolName}" is not a gated tool`);
   }
-}
-
-// missing_info's own runMissingInfo predates this file's split into
-// requestApproval/run-tool.ts's runTool, and already used a hardcoded
-// "update-missing-info-trace-io" step id (hyphenated, matching the file
-// name) — not the `update-${toolName}-trace-io` template send_booking_link's
-// own dispatch uses (which gives the underscored "update-send_booking_link-
-// trace-io"). The two were never symmetric; preserved exactly as each tool's
-// tests/the hitl-compliance scorer already expect, rather than unifying them
-// under one scheme now. Exported so run-turn.ts's loop (the only caller of
-// requestApproval) can patch the tool-call span's real output under the
-// same step id either path already used.
-export function traceIoStepId(toolName: string): string {
-  return toolName === "missing_info"
-    ? "update-missing-info-trace-io"
-    : `update-${toolName}-trace-io`;
 }

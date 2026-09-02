@@ -12,6 +12,7 @@ import {
   recordMissingInfoTraceAnchor,
   steppedSpan,
   type TraceAnchor,
+  updateSpanIO,
   withSpan,
 } from "@/lib/tracing";
 import type { HitlDecision } from "./approval-gate";
@@ -32,12 +33,14 @@ import { requestOwnerNudge } from "./owner-nudge";
 // requestMissingInfoApproval and runMissingInfo are NOT glued together by
 // anything in this file — run-tool.ts's runTool dispatches to runMissingInfo
 // directly (the same uniform way it dispatches to every other tool),
-// receiving the owner's answer as its own `payload` param, itself sourced
-// from run-hitl.ts's requestApproval having already called
-// requestMissingInfoApproval and resolved `approved: true`. run-turn.ts's
-// loop is what actually sequences "approve, then call the tool" and patches
-// the tool-call span's real output afterward — see that file's own
-// NEEDS_APPROVAL branch.
+// receiving the owner's answer and the pre-created span's id (both from
+// requestMissingInfoApproval's own HitlDecision) as its own params. Each of
+// the two functions patches its own span with whichever output it's the one
+// that actually knows: requestMissingInfoApproval patches its own
+// not-approved outcome before returning; runMissingInfo patches the real
+// answer once it has one. run-turn.ts's loop only sequences "approve, then —
+// if approved — call the tool" (its own NEEDS_APPROVAL branch); it does no
+// span/step wrapping of its own for either half.
 //
 // requestMissingInfoApproval's own step/span/Inngest usage is a deliberate
 // exception to the general "tool files stay pure" posture most of
@@ -166,13 +169,15 @@ export async function handleMissingInfoNoReply(params: { correlationId: string }
 // thing already known at this point), sends the owner nudge, and genuinely
 // suspends via step.waitForEvent until the owner replies
 // (handleMissingInfoReplyReceived above, called from the API route, sends
-// OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses. Deliberately does NOT
-// build the tool's final result or patch the span's output — that's
-// runMissingInfo/the caller's job (run-tool.ts's runTool calls runMissingInfo
-// once approved; run-turn.ts's loop patches the span afterward), so this
-// function's only concern is "did an answer arrive, and if not, why not" —
-// the shared HitlDecision<string> contract (see approval-gate.ts) `payload`
-// is the owner's real answer when `approved` is true.
+// OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses. Patches its own span
+// with the not-approved fallback before returning on either non-approved exit
+// path (nudge failed, or timed out) — it already knows that output at that
+// point, no reason to hand it back unpatched. Deliberately does NOT patch the
+// approved case, though: it doesn't know the real answer-embedding result,
+// only that an answer arrived — that's runMissingInfo's own job, once
+// run-tool.ts's runTool calls it. The shared HitlDecision<string> contract
+// (see approval-gate.ts) `payload` is the owner's real answer when `approved`
+// is true.
 //
 // Two distinct not-approved messages, both preserved exactly as before this
 // split: a nudge that failed to send gets the honest "couldn't reach the
@@ -272,16 +277,19 @@ export async function requestMissingInfoApproval(
 
   // Nudge failed to send — skip straight to the same fallback a timeout
   // would produce; there's no point suspending if the owner was never told.
+  // This outcome is fully known right here, so this function patches its own
+  // span with it before returning, rather than handing an unpatched span back
+  // for the caller to finish — same principle runMissingInfo below applies to
+  // the approved outcome.
   if (!nudged) {
-    return {
-      approved: false,
-      notApprovedOutput: {
-        escalated: true,
-        message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
-      },
-      toolSpanId,
-      toolAnchor,
+    const notApprovedOutput = {
+      escalated: true,
+      message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
     };
+    await step.run("update-missing-info-trace-io", () =>
+      updateSpanIO(toolSpanId, { output: notApprovedOutput }),
+    );
+    return { approved: false, notApprovedOutput, toolSpanId, toolAnchor };
   }
 
   // Best-effort bookkeeping (see insertPendingOwnerDecision's own doc
@@ -359,28 +367,41 @@ export async function requestMissingInfoApproval(
       resolvePendingOwnerDecisionByCorrelationId(correlationId, "timeout"),
     );
   }
-  return {
-    approved: false,
-    notApprovedOutput: {
-      escalated: true,
-      message: "The owner has been notified and will be in touch shortly.",
-    },
-    toolSpanId,
-    toolAnchor,
+  // Same self-patching reasoning as the nudge-failed branch above.
+  const notApprovedOutput = {
+    escalated: true,
+    message: "The owner has been notified and will be in touch shortly.",
   };
+  await step.run("update-missing-info-trace-io", () =>
+    updateSpanIO(toolSpanId, { output: notApprovedOutput }),
+  );
+  return { approved: false, notApprovedOutput, toolSpanId, toolAnchor };
 }
 
-// missing_info's "tool call" half — pure, trivial: once an answer exists
+// missing_info's "tool call" half — once an answer exists
 // (requestMissingInfoApproval's `payload`), embedding it into the result is
-// the entire real work. `args`/`context` aren't used in the body — kept only
-// so this matches every other tool's run<ToolName>(input, context) calling
+// the entire real work; `args` isn't used in that computation, kept only so
+// this matches every other tool's run<ToolName>(input, context) calling
 // convention, since run-tool.ts's runTool dispatches to this the same
-// uniform way it dispatches to every other tool (its own 4th `payload` param
-// is what carries `answer` through for this one case).
-export function runMissingInfo(
+// uniform way it dispatches to every other tool. `toolSpanId` is the one
+// honest asymmetry this tool (and send_booking_link) has versus every other
+// tool: it doesn't create its own execution span — requestMissingInfoApproval
+// already created one, before the approval wait, so nudge/decision/timeout
+// spans could nest under it — so this function is handed that id and patches
+// it with the real output itself, the same way every other tool's own
+// run<ToolName> patches the span IT created. Nothing else (run-tool.ts,
+// run-turn.ts's loop) does any span/step wrapping for this call.
+export async function runMissingInfo(
   args: { reason: string },
   context: ToolContext,
   answer: string,
-): { escalated: true; answer: string } {
-  return { escalated: true, answer };
+  toolSpanId: string,
+): Promise<{ escalated: true; answer: string }> {
+  const result = await context.step.run("execute-missing_info", () =>
+    Promise.resolve({ escalated: true as const, answer }),
+  );
+  await context.step.run("update-missing-info-trace-io", () =>
+    updateSpanIO(toolSpanId, { output: result }),
+  );
+  return result;
 }

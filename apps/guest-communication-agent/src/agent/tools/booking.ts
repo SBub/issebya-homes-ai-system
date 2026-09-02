@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { flushTracing } from "@/instrumentation";
-import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
+import { steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
 import { type HitlDecision, requestApprovalGate, resolveToolApproval } from "./approval-gate";
 import type { ToolContext } from "./config";
 
@@ -19,11 +19,12 @@ import type { ToolContext } from "./config";
 // "calls human" half (creates the tool-call span, then reuses the generic,
 // reusable approve/reject HITL mechanism in approval-gate.ts's
 // requestApprovalGate — this tool genuinely IS approve/reject-shaped, unlike
-// missing_info), runSendBookingLink is the "tool call" half — the pure
-// URL-building logic, unchanged, run only once requestSendBookingLinkApproval
-// has resolved `approved: true`. run-turn.ts's dispatchGatedToolCall glues
-// the two together and patches the tool-call span's real output — see that
-// function's own comment.
+// missing_info), runSendBookingLink is the "tool call" half — the URL-building
+// logic, run only once requestSendBookingLinkApproval has resolved
+// `approved: true`. run-turn.ts's loop is what sequences "approve, then —
+// if approved — call the tool" (via run-tool.ts's runTool); each half patches
+// its own span with whichever output it's the one that actually knows — see
+// each function's own comment.
 
 const sendBookingLinkSchema = z.object({
   guestName: z.string().describe("Guest full name"),
@@ -33,9 +34,9 @@ const sendBookingLinkSchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runSendBookingLink below by name, after its own APPROVAL_GATES check has
-// approved the call.
+// Schema-only declaration (no `execute`) — run-tool.ts's runTool dispatches
+// to runSendBookingLink below by name, once requestSendBookingLinkApproval
+// has approved the call.
 export const sendBookingLink = tool({
   description:
     "Send a booking link to the guest. Call this when the guest has confirmed they want to book a specific room and dates. Collect their name and email first if not known.",
@@ -70,8 +71,8 @@ function toEuropeanDate(isoDate: string): string {
 // text itself, not re-parsed downstream (see telegram-router's owner-nudges
 // route, which composes the approve/reject message straight from this
 // string). Dates rendered European-style for display. Called by
-// run-turn.ts's APPROVAL_GATES table (buildReason) before the gate
-// dispatches the nudge — this file doesn't send the nudge itself.
+// requestSendBookingLinkApproval below before the gate dispatches the nudge —
+// this function itself doesn't send the nudge, just builds the reason text.
 export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkSchema>): string {
   const { guestName, room, checkIn, checkOut } = args;
   return `${guestName} wants to book ${room} from ${toEuropeanDate(checkIn)} to ${toEuropeanDate(checkOut)}.`;
@@ -102,13 +103,16 @@ export const BOOKING_LINK_URL_PATTERN =
 // creates internally become this tool-call span's real children instead of
 // siblings of the turn's own anchor.
 //
-// Deliberately does NOT execute the tool or patch the span's output — the
-// caller (run-turn.ts's loop, via run-tool.ts's runTool) does that once it
-// has this function's HitlDecision, same split missing-info.ts's
-// requestMissingInfoApproval/runMissingInfo already has. `payload` is left
-// undefined (the default) — unlike missing_info's answer, the model's own
-// `call.input` already has everything runSendBookingLink needs, nothing
-// extra to hand forward.
+// Patches its own span with the not-approved fallback before returning, on
+// the rejected/timed-out exit path — it already knows that output at that
+// point, no reason to hand it back unpatched. Deliberately does NOT patch the
+// approved case: it doesn't know the real execution result, only that the
+// call was approved — that's runSendBookingLink's own job, once
+// run-tool.ts's runTool calls it, same split missing-info.ts's
+// requestMissingInfoApproval/runMissingInfo has. `payload` is left undefined
+// (the default) — unlike missing_info's answer, the model's own `call.input`
+// already has everything runSendBookingLink needs, nothing extra to hand
+// forward.
 export async function requestSendBookingLinkApproval(
   call: { toolName: string; input: Record<string, unknown> },
   correlationId: string,
@@ -160,34 +164,63 @@ export async function requestSendBookingLinkApproval(
   // own doc comment), so neither does this: same not-approved shape the
   // model has always seen on either exit path.
   if (!approved) {
-    return {
+    const notApprovedOutput = {
       approved: false,
-      notApprovedOutput: {
-        approved: false,
-        message: "This action was not approved. Do not retry it automatically.",
-      },
-      toolSpanId,
-      toolAnchor,
+      message: "This action was not approved. Do not retry it automatically.",
     };
+    await step.run("update-send_booking_link-trace-io", () =>
+      updateSpanIO(toolSpanId, { output: notApprovedOutput }),
+    );
+    return { approved: false, notApprovedOutput, toolSpanId, toolAnchor };
   }
 
   return { approved: true, toolSpanId, toolAnchor };
 }
 
-// Pure URL builder — no nudge, no suspend/wait. By the time run-turn.ts calls
-// this, requestSendBookingLinkApproval above (backed by approval-gate.ts's
-// requestApprovalGate) has already run and approved the call. Takes the
-// guest's phone from ToolContext (already known — it's the WhatsApp
-// conversation's own number) so the website booking form can prefill it
-// instead of asking the guest to type it again.
-export async function runSendBookingLink(
+// Pure URL builder — no nudge, no suspend/wait, no tracing. Kept separate
+// from runSendBookingLink below (which wraps this in real step/span
+// tracing) so a non-Inngest caller with no real ToolContext/step can still
+// rebuild the exact same deterministic URL — see
+// src/app/api/admin/pending-decisions/[id]/actions/resolve/route.ts, which
+// calls this directly to resend a booking link for a stuck
+// pending_owner_decisions row, outside any live run entirely. Same
+// compute<ToolName>/run<ToolName> split this app's plain tools use (see
+// current-date.ts's computeCurrentDate/runGetCurrentDate for the model).
+export function computeSendBookingLink(
   args: z.infer<typeof sendBookingLinkSchema>,
-  context: { phone: string },
-) {
+  phone: string,
+): { url: string } {
   const { guestName, email, room, checkIn, checkOut } = args;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
-  const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(context.phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
+  const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
   return { url };
+}
+
+// send_booking_link's "tool call" half: no nudge, no suspend/wait, just
+// builds the URL (via computeSendBookingLink above) — by the time
+// run-turn.ts calls this (via run-tool.ts's runTool),
+// requestSendBookingLinkApproval has already run and approved the call.
+// Takes the full ToolContext (not just phone) because it now needs
+// context.step too, to patch its own span — `toolSpanId` is the one honest
+// asymmetry this tool (and missing_info) has versus every other tool: it
+// doesn't create its own execution span — requestSendBookingLinkApproval
+// already created one, before the approval wait, so nudge/decision/timeout
+// spans could nest under it — so this function is handed that id and
+// patches it with the real output itself, the same way every other tool's
+// own run<ToolName> patches the span IT created. Nothing else (run-tool.ts,
+// run-turn.ts's loop) does any span/step wrapping for this call.
+export async function runSendBookingLink(
+  args: z.infer<typeof sendBookingLinkSchema>,
+  context: ToolContext,
+  toolSpanId: string,
+) {
+  const result = await context.step.run("execute-send_booking_link", () =>
+    Promise.resolve(computeSendBookingLink(args, context.phone)),
+  );
+  await context.step.run("update-send_booking_link-trace-io", () =>
+    updateSpanIO(toolSpanId, { output: result }),
+  );
+  return result;
 }
 
 // Thin wrapper around approval-gate.ts's generic resolveToolApproval, kept

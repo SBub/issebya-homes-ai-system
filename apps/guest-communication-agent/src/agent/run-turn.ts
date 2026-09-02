@@ -4,7 +4,7 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
-import { NEEDS_APPROVAL, requestApproval, traceIoStepId } from "@/agent/run-hitl";
+import { NEEDS_APPROVAL, requestApproval } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
@@ -12,7 +12,7 @@ import type { HitlDecision } from "@/agent/tools/approval-gate";
 import type { ToolContext } from "@/agent/tools/config";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { markSpanFailed, steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
+import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -89,15 +89,16 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 //   (send_booking_link's BOOKING_LINK_APPROVAL_TIMEOUT). No single tool call
 //   can "own" a span spanning that — approval (run-hitl.ts's
 //   requestApproval) and execution (run-tool.ts's runTool, given the
-//   approved payload) are two separate, sequential steps this loop calls
-//   directly (see the NEEDS_APPROVAL branch below), deliberately not
+//   resolved HitlDecision) are two separate, sequential steps this loop
+//   calls directly (see the NEEDS_APPROVAL branch below), deliberately not
 //   bundled into one function, so the approval decision and the tool call
 //   stay visibly distinct here — the one remaining special case in this
 //   loop, forced by the wait duration, not by choice. Both the gated and
-//   ungated paths call the exact same runTool in the end; only the gated
-//   path wraps that call in its own step.run/updateSpanIO patch, since the
-//   pre-created span needs it and runTool itself has no way to know that
-//   span exists.
+//   ungated paths call the exact same runTool in the end, with zero
+//   span/step wrapping around that call in either case: the pre-created
+//   span belongs to missing_info/send_booking_link's own run<ToolName>
+//   (handed the id via the HitlDecision), which patches it itself — same as
+//   every other tool patching the span it created itself.
 //
 // Inngest doesn't support calling a step tool from inside another
 // step.run()'s callback — the callback must be a self-contained unit of
@@ -353,26 +354,23 @@ export async function runAgentTurn(
         // missing_info and send_booking_link both require real owner
         // approval before they may run at all. This block does ONLY that —
         // request approval (run-hitl.ts's requestApproval), then, on
-        // rejection/timeout, return its not-approved fallback immediately.
-        // No tool-calling code lives in this block: the actual dispatch
-        // (run-tool.ts's runTool, the same function every other tool call
-        // in this loop uses) is a separate call below, outside this block
-        // entirely, so approval and execution stay two visibly distinct
-        // steps rather than one bundled underneath a single `if`.
-        // Calls step.run/waitForEvent itself (inside requestApproval), so —
-        // same as every tool's own dispatch below (see the "RULE" comment
-        // above) — it must run un-nested here, never wrapped in an outer
-        // step.run.
+        // rejection/timeout, return its not-approved fallback immediately
+        // (already patched onto the tool-call span by requestApproval
+        // itself — nothing left for this loop to do but return it). No
+        // tool-calling code lives in this block: the actual dispatch
+        // (run-tool.ts's runTool, the exact same call every other tool in
+        // this loop uses — see the trailing call below) only ever happens
+        // after this block, never inside it, so approval and execution stay
+        // two visibly distinct steps rather than one bundled underneath a
+        // single `if`. Calls step.run/waitForEvent itself (inside
+        // requestApproval), so — same as every tool's own dispatch below
+        // (see the "RULE" comment above) — it must run un-nested here,
+        // never wrapped in an outer step.run.
         let approvalDecision: HitlDecision<unknown> | undefined;
         if (NEEDS_APPROVAL.has(call.toolName)) {
           approvalDecision = await requestApproval(call, correlationId, toolContext);
 
           if (!approvalDecision.approved) {
-            await step.run(traceIoStepId(call.toolName), () =>
-              updateSpanIO(approvalDecision!.toolSpanId, {
-                output: approvalDecision!.notApprovedOutput,
-              }),
-            );
             // See RunAgentTurnResult.firedTags for why this is collected
             // here rather than as a span attribute — pushed regardless of
             // the decision's outcome (approved/rejected/timed out all still
@@ -382,47 +380,28 @@ export async function runAgentTurn(
           }
         }
 
-        // Reached only once requestApproval above has resolved
-        // `approved: true` — the real dispatch for a NEEDS_APPROVAL tool,
-        // structurally separate from the approval block above (not nested
-        // inside its `if`). Calls the exact same runTool every other tool in
-        // this loop calls (see the trailing call further down) — just with
-        // its own step.run/updateSpanIO wrapping around it, since the
-        // execution span here was already pre-created by requestApproval and
-        // needs its output patched retroactively, unlike a tool that owns
-        // its own span end-to-end. Own step, distinct from the
-        // tool-span-creation step inside requestApproval — memoized
-        // separately so a replay after some later suspend elsewhere in the
-        // same turn doesn't re-run it.
-        if (approvalDecision) {
-          const output = await step.run(`execute-${call.toolName}`, () =>
-            runTool(call.toolName, call.input, toolContext, approvalDecision!.payload),
-          );
-          await step.run(traceIoStepId(call.toolName), () =>
-            updateSpanIO(approvalDecision!.toolSpanId, { output }),
-          );
-          firedTags.push(call.toolName);
-          return output;
-        }
-
-        // Every tool other than NEEDS_APPROVAL's two — including
-        // wants_human — is called the same uniform way: runTool (run-tool.ts)
-        // dispatches to that tool's own run<ToolName>, which creates and
-        // owns its own gen_ai.tool.<name> execution span internally (this
-        // app's run<ToolName> convention — see wants-human.ts's
-        // runWantsHuman for the model every tool follows). This loop does no
-        // span-wrapping of its own for these calls; each tool's own file
-        // does. Re-executes on every Inngest replay like the rest of this
-        // loop body, which is safe here for the same reason it's safe for
-        // any self-stepped tool: each tool's own internal step.run calls (if
-        // any) are individually memoized, so a replay resumes correctly
-        // without re-running already-completed work.
-        const output = await runTool(call.toolName, call.input, toolContext);
-        // See RunAgentTurnResult.firedTags for why only wants_human (of the
-        // tools reaching this point — NEEDS_APPROVAL's two never do) gets
+        // Every tool — including wants_human and, once approved,
+        // NEEDS_APPROVAL's two — is called through this one runTool call.
+        // No span/step wrapping of any kind happens here: each tool's own
+        // run<ToolName> owns its own tracing (this app's run<ToolName>
+        // convention — see wants-human.ts's runWantsHuman for the model
+        // every tool follows). The 6 non-gated tools create their own
+        // gen_ai.tool.<name> span from scratch; missing_info/
+        // send_booking_link patch the span requestApproval already created,
+        // using the toolSpanId carried on approvalDecision (see run-tool.ts's
+        // runTool for how that's threaded through) — see
+        // requestMissingInfoApproval/requestSendBookingLinkApproval's own
+        // comments for why that span can't be created fresh here. Re-executes
+        // on every Inngest replay like the rest of this loop body, which is
+        // safe for the same reason it's safe for any tool with its own
+        // step.run calls: each is individually memoized, so a replay resumes
+        // correctly without re-running already-completed work.
+        const output = await runTool(call.toolName, call.input, toolContext, approvalDecision);
+        // See RunAgentTurnResult.firedTags for why only wants_human and
+        // NEEDS_APPROVAL's two (of the tools reaching this point) get
         // collected here: firedTags is deliberately narrow, not "every tool
         // this turn used".
-        if (call.toolName === "wants_human") {
+        if (call.toolName === "wants_human" || approvalDecision) {
           firedTags.push(call.toolName);
         }
         return output;

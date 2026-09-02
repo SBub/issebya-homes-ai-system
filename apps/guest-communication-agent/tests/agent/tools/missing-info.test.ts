@@ -278,16 +278,28 @@ describe("requestMissingInfoApproval / runMissingInfo", () => {
     });
   });
 
-  it("runMissingInfo is a pure formatter over the approval's payload — args/context unused, only the answer matters", () => {
-    expect(
+  it("runMissingInfo embeds the approval's payload into its result — args unused, only the answer matters", async () => {
+    await expect(
       runMissingInfo(
         { reason: "Where is the AC unit?" },
         { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
         "The AC is above the bed",
+        "test-tool-span-id",
       ),
-    ).toEqual({
+    ).resolves.toEqual({
       escalated: true,
       answer: "The AC is above the bed",
     });
+  });
+
+  it("runMissingInfo patches the given tool span with its real output", async () => {
+    const result = await runMissingInfo(
+      { reason: "Where is the AC unit?" },
+      { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
+      "The AC is above the bed",
+      "test-tool-span-id",
+    );
+
+    expect(updateSpanIOMock).toHaveBeenCalledWith("test-tool-span-id", { output: result });
   });
 });

@@ -6,6 +6,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { GetStepTools } from "inngest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolContext } from "@/agent/tools/config";
 import type { inngest } from "@/lib/inngest";
 
 // booking.ts's runSendBookingLink/buildBookingApprovalReason stay pure URL/
@@ -33,6 +34,17 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
+// updateSpanIO is a real fetch() to Braintrust's REST API — mocked the same
+// way missing-info.test.ts/run-turn.test.ts mock it, everything else in
+// tracing.ts (steppedSpan, etc.) stays real. Needed now that
+// requestSendBookingLinkApproval/runSendBookingLink each patch their own
+// span directly.
+const updateSpanIOMock = vi.fn();
+vi.mock("@/lib/tracing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
+  return { ...actual, updateSpanIO: updateSpanIOMock };
+});
+
 const insertPendingOwnerDecisionMock = vi.fn();
 const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
 vi.mock("@/lib/pending-owner-decisions.js", () => ({
@@ -42,6 +54,7 @@ vi.mock("@/lib/pending-owner-decisions.js", () => ({
 
 const {
   runSendBookingLink,
+  computeSendBookingLink,
   buildBookingApprovalReason,
   handleBookingLinkApprovalReceived,
   requestSendBookingLinkApproval,
@@ -49,6 +62,18 @@ const {
 } = await import("@/agent/tools/booking.js");
 
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
+// Minimal real ToolContext for runSendBookingLink's own tests below — only
+// phone/step are actually read by that function's body, the rest just
+// satisfies the type.
+function bookingToolContext(step: GetStepTools<typeof inngest>): ToolContext {
+  return {
+    conversationId: "convo-1",
+    phone: "+15551234567",
+    traceAnchor: TEST_TRACE_ANCHOR,
+    step,
+  };
+}
 
 const bookingArgs = {
   guestName: "Ana",
@@ -72,44 +97,82 @@ describe("buildBookingApprovalReason", () => {
   });
 });
 
-describe("runSendBookingLink", () => {
-  it("returns { url } built from room/checkIn/checkOut, with no nudge/approval logic of its own", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+describe("computeSendBookingLink", () => {
+  it("returns { url } built from room/checkIn/checkOut, with no nudge/approval/tracing logic of its own", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result).toEqual({ url: expect.stringContaining("/booking/room1?") });
     expect(result.url).toContain("checkIn=2026-09-01");
     expect(result.url).toContain("checkOut=2026-09-05");
   });
 
-  it("threads the guest's phone and source=gca so the website can prefill/attribute the booking", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's phone and source=gca so the website can prefill/attribute the booking", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`phone=${encodeURIComponent("+15551234567")}`);
     expect(result.url).toContain("source=gca");
   });
 
-  it("threads the guest's name so the website can prefill it too", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's name so the website can prefill it too", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`guestName=${encodeURIComponent("Ana")}`);
   });
 
-  it("threads the guest's email so the website can prefill it too", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's email so the website can prefill it too", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`email=${encodeURIComponent("ana@example.com")}`);
   });
 
-  it("defaults the site origin when NEXT_PUBLIC_SITE_URL isn't set", async () => {
+  it("defaults the site origin when NEXT_PUBLIC_SITE_URL isn't set", () => {
     const original = process.env.NEXT_PUBLIC_SITE_URL;
     delete process.env.NEXT_PUBLIC_SITE_URL;
 
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
     expect(result.url).toContain("https://issebya.com/booking");
 
     if (original !== undefined) {
       process.env.NEXT_PUBLIC_SITE_URL = original;
     }
+  });
+});
+
+describe("runSendBookingLink", () => {
+  type StepTools = GetStepTools<typeof inngest>;
+
+  function makeStepMock() {
+    return {
+      run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    } as unknown as StepTools & { run: ReturnType<typeof vi.fn> };
+  }
+
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    step = makeStepMock();
+  });
+
+  it("returns the same { url } computeSendBookingLink would, wrapped in real step tracing", async () => {
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+
+    expect(result).toEqual(computeSendBookingLink(bookingArgs, "+15551234567"));
+  });
+
+  it("patches the given tool span with its real output", async () => {
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+
+    expect(updateSpanIOMock).toHaveBeenCalledWith("span-1", { output: result });
+  });
+
+  it("memoizes the compute step under execute-send_booking_link", async () => {
+    await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+
+    expect(step.run.mock.calls.map((c) => c[0])).toEqual([
+      "execute-send_booking_link",
+      "update-send_booking_link-trace-io",
+    ]);
   });
 });
 
