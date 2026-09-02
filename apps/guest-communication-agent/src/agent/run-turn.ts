@@ -1,10 +1,11 @@
 import type { Span } from "@opentelemetry/api";
 import * as Sentry from "@sentry/nextjs";
-import { generateText, type JSONValue, type ModelMessage } from "ai";
+import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
-import { dispatchToolExecution, runTool, tools } from "@/agent/run-tool";
+import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
+import { dispatchToolExecution, runTool } from "@/agent/run-tool";
 import { requestApprovalGate } from "@/agent/tools/approval-gate";
 import { flushTracing } from "@/instrumentation";
 import {
@@ -16,14 +17,7 @@ import type { ToolContext } from "@/agent/tools/config";
 import { type OwnerNudgeReason } from "@/agent/tools/owner-nudge";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { openrouter } from "@/lib/openrouter";
-import {
-  markSpanFailed,
-  steppedSpan,
-  type TraceAnchor,
-  updateSpanIO,
-  withTurnSpan,
-} from "@/lib/tracing";
+import { markSpanFailed, steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -42,8 +36,6 @@ import { sendWhatsAppMessage } from "@/lib/twilio-send";
 // runAgentTurn itself stays free of guest-delivery side effects (recording
 // the reply, the proactive Twilio send) so it's easy to test/reason about in
 // isolation, while runGuestTurn is the thing that adds those on top.
-
-const MODEL = "deepseek/deepseek-v4-pro";
 
 // The system prompt lives in Braintrust (project BRAINTRUST_PROJECT_ID,
 // slug below), not this repo. No pinned version id here — Braintrust's
@@ -64,20 +56,12 @@ const MAX_AGENT_STEPS = 8;
 
 // Guest-facing text used whenever the model's own reply can't be used
 // as-is — currently: a final round with no tool calls and blank text (see
-// modelTurn's markSpanFailed call for the trace-visible side of this same
-// condition), and runGuestTurn's own "no assistant message at all" case.
-// Sending the model's raw "" straight to Twilio 400s (a message body can't
-// be empty), which is what silently ate a guest's reply before this existed.
+// run-model.ts's runModel's markSpanFailed call for the trace-visible side
+// of this same condition), and runGuestTurn's own "no assistant message at
+// all" case. Sending the model's raw "" straight to Twilio 400s (a message
+// body can't be empty), which is what silently ate a guest's reply before
+// this existed.
 const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again shortly.";
-
-// `.chat(MODEL)` targets Chat Completions — bare `openrouter(MODEL)` would
-// target the Responses API, which OpenRouter doesn't support.
-const model = openrouter.chat(MODEL);
-
-// MODEL is a reasoning model: its internal "thinking" tokens draw from the
-// same completion budget as the visible reply, so too low a cap can make it
-// silently return an empty string. 1000 leaves headroom for both.
-const MAX_OUTPUT_TOKENS = 1000;
 
 // RULE: most tool files (src/agent/tools/*.ts) stay pure — no step/span/
 // Inngest imports; all durability/tracing plumbing belongs here, in
@@ -144,116 +128,6 @@ const APPROVAL_GATES: Partial<Record<string, ApprovalGateConfig>> = {
     timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
   },
 };
-
-// One model call per round. Since none of `tools` has an `execute`,
-// generateText only ever returns the model's requested tool calls — it
-// never runs them itself.
-interface ModelTurnResult {
-  text: string;
-  toolCalls: Array<{ toolCallId: string; toolName: string; input: Record<string, unknown> }>;
-  response: { messages: ModelMessage[] };
-}
-
-// A reasoning model can burn its whole completion on internal "thinking"
-// tokens and come back with neither a text reply nor a tool call —
-// generateText doesn't treat that as an error (finishReason is often "stop",
-// not "length" — i.e. the model itself thinks it's done), so left alone this
-// silently looks like a successful, no-op turn everywhere except the guest,
-// who gets nothing back. Retrying is cheap insurance against exactly that
-// kind of transient flakiness. "content-filter" is the one finishReason
-// retrying can't fix — a deterministic moderation block — so that's the only
-// reason this gives up immediately instead of spending the remaining
-// attempts. 3 total attempts, not 3 retries: the first pass through the loop
-// below counts as attempt 1.
-const MAX_MODEL_ATTEMPTS = 3;
-
-async function modelTurn(
-  system: string,
-  messages: ModelMessage[],
-  turnAnchor: TraceAnchor,
-): Promise<ModelTurnResult> {
-  async function runModelChatTurn(span: Span): Promise<ModelTurnResult> {
-    // Plain non-generic closure over `tools`, purely so `typeof callModel`
-    // below gives `result` the exact GenerateTextResult<typeof tools, ...>
-    // shape — `ReturnType<typeof generateText>` on the generic function
-    // itself widens back to a bare ToolSet and loses the specific tool
-    // types.
-    // experimental_telemetry (the AI SDK's own OTel instrumentation, via the
-    // same globally-registered tracer instrumentation.ts sets up) auto-emits
-    // ai.generateText/ai.generateText.doGenerate child spans whose Input/
-    // Output/usage Braintrust already renders correctly on its own — unlike
-    // this app's own gen_ai.* attributes below, no braintrust.* duplication
-    // needed for these child spans. metadata.gca.attempt reads `attempt`
-    // live at each call, so it reflects the actual retry attempt per span.
-    const callModel = () =>
-      generateText({
-        model,
-        system,
-        messages,
-        tools,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: "gca.model_turn",
-          metadata: { "gca.attempt": attempt },
-        },
-      });
-
-    let result: Awaited<ReturnType<typeof callModel>>;
-    let attempt = 0;
-    for (;;) {
-      attempt++;
-      result = await callModel();
-      const isEmpty = result.text.trim() === "" && result.toolCalls.length === 0;
-      if (!isEmpty || result.finishReason === "content-filter" || attempt >= MAX_MODEL_ATTEMPTS) {
-        break;
-      }
-      console.warn(
-        `[run-turn] modelTurn got empty output on attempt ${attempt}/${MAX_MODEL_ATTEMPTS} (finishReason: ${result.finishReason}) — retrying`,
-      );
-      // Same signal as the console.warn above, but attached to the span so
-      // it's visible in the Axiom/Braintrust trace itself, not just server
-      // logs nobody is watching.
-      span.addEvent("gen_ai.retry", {
-        attempt,
-        finishReason: result.finishReason,
-      });
-    }
-
-    span.setAttribute("gen_ai.input.messages", JSON.stringify(messages));
-    span.setAttribute("gen_ai.output.messages", JSON.stringify(result.response.messages));
-    span.setAttribute("gen_ai.response.finish_reason", result.finishReason);
-    span.setAttribute("gen_ai.request.attempt_count", attempt);
-    // Still empty after MAX_MODEL_ATTEMPTS (or gave up early on a
-    // content-filter finish) — flag it so it shows up as an ERROR span
-    // instead of blending into every other "OK" span in the trace. See
-    // markSpanFailed's own comment for why this doesn't need to throw to
-    // be visible.
-    if (result.text.trim() === "" && result.toolCalls.length === 0) {
-      markSpanFailed(
-        span,
-        `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,
-      );
-    }
-
-    return {
-      text: result.text,
-      toolCalls: result.toolCalls.map((call) => ({
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        input: call.input as Record<string, unknown>,
-      })),
-      response: { messages: result.response.messages },
-    };
-  }
-
-  return withTurnSpan(
-    turnAnchor,
-    "gen_ai.chat",
-    { "gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL },
-    runModelChatTurn,
-  );
-}
 
 // APPROVAL_GATES-gated dispatch (send_booking_link today, any future gated
 // tool tomorrow): creates the real gen_ai.tool.<name> execution span FIRST —
@@ -586,13 +460,13 @@ export async function runAgentTurn(
 
     // Cast needed — see steppedSpan's doc comment in tracing.ts for why
     // step.run()'s return type gets narrowed at all (this call uses raw
-    // step.run, not steppedSpan, since modelTurn already opens its own
-    // withTurnSpan internally — same cast concern either way). GCA's
+    // step.run, not steppedSpan, since run-model.ts's runModel already opens
+    // its own withTurnSpan internally — same cast concern either way). GCA's
     // ModelMessage content here is always plain text/tool-call parts — this
     // agent never sends or receives file attachments — so the narrowing is
     // a false positive for this call site specifically.
     const result = (await step.run(`model-${stepCount}`, () =>
-      modelTurn(system, messages, turnAnchor),
+      runModel(system, messages, turnAnchor),
     )) as ModelTurnResult;
 
     if (result.toolCalls.length === 0) {
