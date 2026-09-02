@@ -231,7 +231,7 @@ export interface MissingInfoHitlComplianceResult {
 // outcome to check for, and unlike send_booking_link there's no fixed
 // URL-shaped pattern to detect a hand-typed bypass in turn.output: a
 // fabricated "I've alerted the owner"/fabricated KB answer reads exactly
-// like a real model paraphrase of buildMissingInfoResult's own message (both
+// like a real model paraphrase of runMissingInfo's own message (both
 // are free text, no literal format to regex-match), so no reliable
 // text-based bypass signal exists for this tool the way
 // BOOKING_LINK_URL_PATTERN exists for send_booking_link's real URL. This

@@ -41,19 +41,20 @@ export const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Dispatches a requested tool call to its run<ToolName> implementation.
-// Called after any configured NEEDS_APPROVAL check (run-hitl.ts) has already
-// approved the call, never before it. Every case just hands off to that
-// tool's own run<ToolName> — none of the tracing/span logic used to live
-// here; each tool now owns it. send_booking_link's/missing_info's cases
-// below are unreachable in practice: run-turn.ts's loop intercepts both tool
-// names via its own NEEDS_APPROVAL branch before a call ever reaches
-// runTool. Left in place rather than removed — a real, if stale, fallback
-// rather than a silent gap if that branch's tool list ever changes.
+// Dispatches a requested tool call to its run<ToolName> implementation —
+// the single dispatcher every tool call in this app goes through, whether
+// gated or not (run-turn.ts's loop calls this uniformly; for NEEDS_APPROVAL
+// tools, run-hitl.ts's requestApproval must already have resolved
+// `approved: true` before this is ever reached, with its `payload` — the
+// owner's real answer, for missing_info; unused for send_booking_link —
+// passed through as this function's own 4th param). Every case just hands
+// off to that tool's own run<ToolName> — none of the tracing/span logic
+// used to live here; each tool now owns it.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
   context: ToolContext,
+  payload?: unknown,
 ): Promise<unknown> {
   switch (toolName) {
     case "get_pricing":
@@ -76,7 +77,7 @@ export async function runTool(
     case "wants_human":
       return runWantsHuman(input as { reason: string }, context);
     case "missing_info":
-      return runMissingInfo(input as { reason: string }, context);
+      return runMissingInfo(input as { reason: string }, context, payload as string);
     default:
       // Native function-calling is supposed to constrain the model to exact
       // registered tool names, but some models (deepseek included) have been

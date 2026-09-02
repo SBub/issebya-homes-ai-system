@@ -103,12 +103,12 @@ export const BOOKING_LINK_URL_PATTERN =
 // siblings of the turn's own anchor.
 //
 // Deliberately does NOT execute the tool or patch the span's output — the
-// caller (run-turn.ts's dispatchGatedToolCall) does that once it has this
-// function's HitlDecision, same split missing-info.ts's
-// requestMissingInfoApproval/buildMissingInfoResult already has. `payload`
-// is left undefined (the default) — unlike missing_info's answer, the
-// model's own `call.input` already has everything runSendBookingLink needs,
-// nothing extra to hand forward.
+// caller (run-turn.ts's loop, via run-tool.ts's runTool) does that once it
+// has this function's HitlDecision, same split missing-info.ts's
+// requestMissingInfoApproval/runMissingInfo already has. `payload` is left
+// undefined (the default) — unlike missing_info's answer, the model's own
+// `call.input` already has everything runSendBookingLink needs, nothing
+// extra to hand forward.
 export async function requestSendBookingLinkApproval(
   call: { toolName: string; input: Record<string, unknown> },
   correlationId: string,

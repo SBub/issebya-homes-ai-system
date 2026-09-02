@@ -4,7 +4,7 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
-import { NEEDS_APPROVAL, requestApproval, runApprovedTool, traceIoStepId } from "@/agent/run-hitl";
+import { NEEDS_APPROVAL, requestApproval, traceIoStepId } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
@@ -88,12 +88,16 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 //   children), and that wait can suspend for hours to up to a year
 //   (send_booking_link's BOOKING_LINK_APPROVAL_TIMEOUT). No single tool call
 //   can "own" a span spanning that — approval (run-hitl.ts's
-//   requestApproval) and execution (run-hitl.ts's runApprovedTool) are two
-//   separate, sequential steps this loop calls directly (see the
-//   NEEDS_APPROVAL branch below), deliberately not bundled into one
-//   function, so the approval decision and the tool call stay visibly
-//   distinct here — the one remaining special case in this loop, forced by
-//   the wait duration, not by choice.
+//   requestApproval) and execution (run-tool.ts's runTool, given the
+//   approved payload) are two separate, sequential steps this loop calls
+//   directly (see the NEEDS_APPROVAL branch below), deliberately not
+//   bundled into one function, so the approval decision and the tool call
+//   stay visibly distinct here — the one remaining special case in this
+//   loop, forced by the wait duration, not by choice. Both the gated and
+//   ungated paths call the exact same runTool in the end; only the gated
+//   path wraps that call in its own step.run/updateSpanIO patch, since the
+//   pre-created span needs it and runTool itself has no way to know that
+//   span exists.
 //
 // Inngest doesn't support calling a step tool from inside another
 // step.run()'s callback — the callback must be a self-contained unit of
@@ -342,8 +346,8 @@ export async function runAgentTurn(
 
     // No tool has `execute`, so we dispatch and build the tool-result
     // message ourselves; a not-approved NEEDS_APPROVAL call returns
-    // requestApproval's own not-approved fallback and never reaches
-    // runApprovedTool/runTool at all.
+    // requestApproval's own not-approved fallback and never reaches runTool
+    // at all.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         // missing_info and send_booking_link both require real owner
@@ -351,9 +355,10 @@ export async function runAgentTurn(
         // request approval (run-hitl.ts's requestApproval), then, on
         // rejection/timeout, return its not-approved fallback immediately.
         // No tool-calling code lives in this block: the actual dispatch
-        // (run-hitl.ts's runApprovedTool) is a separate call below, outside
-        // this block entirely, so approval and execution stay two visibly
-        // distinct steps rather than one bundled underneath a single `if`.
+        // (run-tool.ts's runTool, the same function every other tool call
+        // in this loop uses) is a separate call below, outside this block
+        // entirely, so approval and execution stay two visibly distinct
+        // steps rather than one bundled underneath a single `if`.
         // Calls step.run/waitForEvent itself (inside requestApproval), so —
         // same as every tool's own dispatch below (see the "RULE" comment
         // above) — it must run un-nested here, never wrapped in an outer
@@ -380,13 +385,18 @@ export async function runAgentTurn(
         // Reached only once requestApproval above has resolved
         // `approved: true` — the real dispatch for a NEEDS_APPROVAL tool,
         // structurally separate from the approval block above (not nested
-        // inside its `if`). Own step, distinct from the tool-span-creation
-        // step inside requestApproval — memoized separately so a replay
-        // after some later suspend elsewhere in the same turn doesn't re-run
-        // it.
+        // inside its `if`). Calls the exact same runTool every other tool in
+        // this loop calls (see the trailing call further down) — just with
+        // its own step.run/updateSpanIO wrapping around it, since the
+        // execution span here was already pre-created by requestApproval and
+        // needs its output patched retroactively, unlike a tool that owns
+        // its own span end-to-end. Own step, distinct from the
+        // tool-span-creation step inside requestApproval — memoized
+        // separately so a replay after some later suspend elsewhere in the
+        // same turn doesn't re-run it.
         if (approvalDecision) {
           const output = await step.run(`execute-${call.toolName}`, () =>
-            runApprovedTool(call.toolName, call.input, approvalDecision!.payload, toolContext),
+            runTool(call.toolName, call.input, toolContext, approvalDecision!.payload),
           );
           await step.run(traceIoStepId(call.toolName), () =>
             updateSpanIO(approvalDecision!.toolSpanId, { output }),

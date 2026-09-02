@@ -12,7 +12,6 @@ import {
   recordMissingInfoTraceAnchor,
   steppedSpan,
   type TraceAnchor,
-  updateSpanIO,
   withSpan,
 } from "@/lib/tracing";
 import type { HitlDecision } from "./approval-gate";
@@ -22,14 +21,23 @@ import { requestOwnerNudge } from "./owner-nudge";
 // Consolidated home for the missing_info tool: the schema/declaration the
 // model sees, the shared event/timeout constants, the tool's real dispatch
 // (split into requestMissingInfoApproval's "calls human" half and
-// buildMissingInfoResult's "tool call" half below, glued back together by
-// runMissingInfo for callers that just want the one entry point — this
-// app's run<ToolName> convention, see wants-human.ts's runWantsHuman for the
-// model this follows), and both non-step branches of what happens once a
-// nudge is settled — reply arrives (handleMissingInfoReplyReceived) or
-// doesn't (handleMissingInfoNoReply). POST
-// /api/owner-nudges/[correlationId]/answer is a thin trigger that calls
-// handleMissingInfoReplyReceived, not its own logic.
+// runMissingInfo's "tool call" half below — this app's run<ToolName>
+// convention, see wants-human.ts's runWantsHuman for the model this
+// follows), and both non-step branches of what happens once a nudge is
+// settled — reply arrives (handleMissingInfoReplyReceived) or doesn't
+// (handleMissingInfoNoReply). POST /api/owner-nudges/[correlationId]/answer
+// is a thin trigger that calls handleMissingInfoReplyReceived, not its own
+// logic.
+//
+// requestMissingInfoApproval and runMissingInfo are NOT glued together by
+// anything in this file — run-tool.ts's runTool dispatches to runMissingInfo
+// directly (the same uniform way it dispatches to every other tool),
+// receiving the owner's answer as its own `payload` param, itself sourced
+// from run-hitl.ts's requestApproval having already called
+// requestMissingInfoApproval and resolved `approved: true`. run-turn.ts's
+// loop is what actually sequences "approve, then call the tool" and patches
+// the tool-call span's real output afterward — see that file's own
+// NEEDS_APPROVAL branch.
 //
 // requestMissingInfoApproval's own step/span/Inngest usage is a deliberate
 // exception to the general "tool files stay pure" posture most of
@@ -160,10 +168,11 @@ export async function handleMissingInfoNoReply(params: { correlationId: string }
 // (handleMissingInfoReplyReceived above, called from the API route, sends
 // OWNER_NUDGE_ANSWERED_EVENT) or the timeout elapses. Deliberately does NOT
 // build the tool's final result or patch the span's output — that's
-// buildMissingInfoResult/the caller's job (see runMissingInfo below), so
-// this function's only concern is "did an answer arrive, and if not, why
-// not" — the shared HitlDecision<string> contract (see approval-gate.ts)
-// `payload` is the owner's real answer when `approved` is true.
+// runMissingInfo/the caller's job (run-tool.ts's runTool calls runMissingInfo
+// once approved; run-turn.ts's loop patches the span afterward), so this
+// function's only concern is "did an answer arrive, and if not, why not" —
+// the shared HitlDecision<string> contract (see approval-gate.ts) `payload`
+// is the owner's real answer when `approved` is true.
 //
 // Two distinct not-approved messages, both preserved exactly as before this
 // split: a nudge that failed to send gets the honest "couldn't reach the
@@ -172,10 +181,10 @@ export async function handleMissingInfoNoReply(params: { correlationId: string }
 // notified" — that claim stays true even though this specific KB answer
 // never arrived in time.
 //
-// Called from run-turn.ts's SELF_STEPPED_TOOLS branch (via runMissingInfo),
-// never nested inside another step.run — Inngest doesn't support calling a
-// step tool from inside another step.run()'s callback, the callback must be
-// a self-contained unit of work.
+// Called from run-turn.ts's NEEDS_APPROVAL branch (via run-hitl.ts's
+// requestApproval), never nested inside another step.run — Inngest doesn't
+// support calling a step tool from inside another step.run()'s callback, the
+// callback must be a self-contained unit of work.
 export async function requestMissingInfoApproval(
   args: { reason: string },
   context: ToolContext,
@@ -191,8 +200,8 @@ export async function requestMissingInfoApproval(
   // this step — the span itself has already closed by the time this
   // resolves, since no live Span object can survive across this (or any)
   // Inngest step boundary. `output` isn't set here because it isn't known
-  // yet; the caller patches it in retroactively, once the real result
-  // exists, via updateSpanIO — see runMissingInfo below.
+  // yet; run-turn.ts's loop patches it in retroactively, once the real
+  // result exists, via updateSpanIO.
   const toolSpanId = await steppedSpan(
     step,
     "tool-missing_info",
@@ -362,38 +371,16 @@ export async function requestMissingInfoApproval(
 }
 
 // missing_info's "tool call" half — pure, trivial: once an answer exists
-// (requestMissingInfoApproval's `payload`), this is the entire real work.
-export function buildMissingInfoResult(answer: string): { escalated: true; answer: string } {
-  return { escalated: true, answer };
-}
-
-// The tool's single entry point, for callers that just want the whole
-// dispatch (run-turn.ts's runToolCall/SELF_STEPPED_TOOLS branch) without
-// caring that it's internally split into a "calls human" half
-// (requestMissingInfoApproval) and a "tool call" half
-// (buildMissingInfoResult). Patches the tool-call span's real output
-// retroactively — neither half above knows the final result at span-creation
-// time (a gated call's answer hasn't even arrived yet), so this is the one
-// place that does, right after whichever half resolves.
-export async function runMissingInfo(
+// (requestMissingInfoApproval's `payload`), embedding it into the result is
+// the entire real work. `args`/`context` aren't used in the body — kept only
+// so this matches every other tool's run<ToolName>(input, context) calling
+// convention, since run-tool.ts's runTool dispatches to this the same
+// uniform way it dispatches to every other tool (its own 4th `payload` param
+// is what carries `answer` through for this one case).
+export function runMissingInfo(
   args: { reason: string },
   context: ToolContext,
-): Promise<{ escalated: true; answer: string } | { escalated: true; message: string }> {
-  const { step } = context;
-  const decision = await requestMissingInfoApproval(args, context);
-
-  const result = decision.approved
-    ? buildMissingInfoResult(decision.payload as string)
-    : (decision.notApprovedOutput as { escalated: true; message: string });
-
-  // Own step, not a span — patching a span isn't itself a new event worth
-  // its own trace node. Same flushTracing()-then-patch ordering
-  // requestMissingInfoApproval's own comment describes, so this can't be
-  // silently clobbered by a later out-of-order OTel export (see
-  // updateSpanIO's own doc comment for that mechanism).
-  await step.run("update-missing-info-trace-io", () =>
-    updateSpanIO(decision.toolSpanId, { output: result }),
-  );
-
-  return result;
+  answer: string,
+): { escalated: true; answer: string } {
+  return { escalated: true, answer };
 }

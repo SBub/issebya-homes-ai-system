@@ -8,16 +8,17 @@ import type { GetStepTools } from "inngest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { inngest } from "@/lib/inngest";
 
-// missing-info.ts holds the full missing_info flow now: the tool schema/
+// missing-info.ts holds the full missing_info flow: the tool schema/
 // declaration, the shared event/timeout constants, the real suspend/resume
-// dispatch (runMissingInfo — this app's run<ToolName> convention, see
-// wants-human.test.ts for the sibling coverage this mirrors), and both
+// dispatch (requestMissingInfoApproval — this app's run<ToolName>
+// convention, see wants-human.test.ts for the sibling coverage this
+// mirrors), the pure post-approval formatter (runMissingInfo), and both
 // non-step branches of what happens once a nudge is settled — reply arrives
 // (handleMissingInfoReplyReceived) or doesn't (handleMissingInfoNoReply).
 //
 // Same in-memory OTel wiring as wants-human.test.ts/approval-gate.test.ts,
-// so runMissingInfo's span assertions below inspect a real span's
-// attributes instead of a no-op.
+// so requestMissingInfoApproval's span assertions below inspect a real
+// span's attributes instead of a no-op.
 const spanExporter = new InMemorySpanExporter();
 trace.setGlobalTracerProvider(
   new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
@@ -81,7 +82,6 @@ vi.mock("@/lib/tracing.js", async (importOriginal) => {
 });
 
 const {
-  buildMissingInfoResult,
   handleMissingInfoNoReply,
   handleMissingInfoReplyReceived,
   OWNER_NUDGE_ANSWERED_EVENT,
@@ -97,8 +97,7 @@ type StepTools = GetStepTools<typeof inngest>;
 // Only `run`/`waitForEvent` are exercised by real code here — see
 // approval-gate.test.ts's own makeStepMock comment for why the rest of the
 // real StepTools surface is cast away rather than stubbed out. Shared by
-// every describe block below that drives requestMissingInfoApproval (either
-// directly, or indirectly through runMissingInfo).
+// every describe block below that drives requestMissingInfoApproval.
 function makeStepMock() {
   return {
     run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
@@ -196,11 +195,12 @@ describe("handleMissingInfoReplyReceived", () => {
   });
 });
 
-describe("requestMissingInfoApproval / buildMissingInfoResult", () => {
-  // The two halves runMissingInfo (below) glues together — see
-  // missing-info.ts's own comment on the split. Covers the HitlDecision
-  // shape directly, complementing runMissingInfo's own end-to-end coverage
-  // (span/step-order assertions live there, not duplicated here).
+describe("requestMissingInfoApproval / runMissingInfo", () => {
+  // The two halves of missing_info's dispatch — see missing-info.ts's own
+  // comment on the split. Covers the HitlDecision shape directly; the
+  // span/step-order assertions for the full approve-then-execute sequence
+  // (as run-tool.ts's runTool + run-turn.ts's loop actually drive it) live
+  // in tests/agent/run-turn.test.ts, not duplicated here.
   let step: ReturnType<typeof makeStepMock>;
 
   beforeEach(() => {
@@ -278,221 +278,16 @@ describe("requestMissingInfoApproval / buildMissingInfoResult", () => {
     });
   });
 
-  it("buildMissingInfoResult is a pure formatter over the approval's payload", () => {
-    expect(buildMissingInfoResult("The AC is above the bed")).toEqual({
+  it("runMissingInfo is a pure formatter over the approval's payload — args/context unused, only the answer matters", () => {
+    expect(
+      runMissingInfo(
+        { reason: "Where is the AC unit?" },
+        { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
+        "The AC is above the bed",
+      ),
+    ).toEqual({
       escalated: true,
       answer: "The AC is above the bed",
     });
-  });
-});
-
-describe("runMissingInfo", () => {
-  let step: ReturnType<typeof makeStepMock>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    spanExporter.reset();
-    step = makeStepMock();
-    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
-    insertPendingOwnerDecisionMock.mockResolvedValue(undefined);
-    resolvePendingOwnerDecisionByCorrelationIdMock.mockResolvedValue(undefined);
-    mockTraceAnchorInsert.mockResolvedValue({ error: null });
-  });
-
-  it("sends the owner nudge with the model's reason under reasonCategory 'missing_info', carrying the correlationId", async () => {
-    step.waitForEvent.mockResolvedValueOnce({
-      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
-    });
-
-    await runMissingInfo(
-      { reason: "Where is the AC unit?" },
-      {
-        conversationId: "convo-1",
-        phone: "+3519",
-        correlationId: "corr-1",
-        traceAnchor: TEST_TRACE_ANCHOR,
-        step,
-      },
-    );
-
-    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: "convo-1",
-        phone: "+3519",
-        reason: "Where is the AC unit?",
-        reasonCategory: "missing_info",
-        correlationId: "corr-1",
-      }),
-    );
-  });
-
-  it("returns the owner's answer when it arrives within the timeout, and never re-embeds (that already happened in handleMissingInfoReplyReceived)", async () => {
-    step.waitForEvent.mockResolvedValueOnce({
-      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
-    });
-
-    await expect(
-      runMissingInfo(
-        { reason: "Where is the AC unit?" },
-        {
-          conversationId: "convo-1",
-          phone: "+3519",
-          correlationId: "corr-1",
-          traceAnchor: TEST_TRACE_ANCHOR,
-          step,
-        },
-      ),
-    ).resolves.toEqual({ escalated: true, answer: "The AC is above the bed" });
-
-    expect(embedMock).not.toHaveBeenCalled();
-    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
-      "corr-1",
-      "answered",
-    );
-  });
-
-  it("falls back to the owner-notified message and resolves the pending decision as 'timeout' when step.waitForEvent times out", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-
-    await expect(
-      runMissingInfo(
-        { reason: "Where is the AC unit?" },
-        {
-          conversationId: "convo-1",
-          phone: "+3519",
-          correlationId: "corr-1",
-          traceAnchor: TEST_TRACE_ANCHOR,
-          step,
-        },
-      ),
-    ).resolves.toEqual({
-      escalated: true,
-      message: "The owner has been notified and will be in touch shortly.",
-    });
-
-    expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
-      "corr-1",
-      "timeout",
-    );
-  });
-
-  it("skips step.waitForEvent entirely and returns the honest fallback message when the nudge itself failed to send", async () => {
-    sendOwnerNudgeMock.mockResolvedValue({ ok: false, error: "telegram-router down" });
-
-    await expect(
-      runMissingInfo(
-        { reason: "Where is the AC unit?" },
-        {
-          conversationId: "convo-1",
-          phone: "+3519",
-          correlationId: "corr-1",
-          traceAnchor: TEST_TRACE_ANCHOR,
-          step,
-        },
-      ),
-    ).resolves.toEqual({
-      escalated: true,
-      message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
-    });
-
-    expect(step.waitForEvent).not.toHaveBeenCalled();
-    expect(insertPendingOwnerDecisionMock).not.toHaveBeenCalled();
-  });
-
-  it("creates the gen_ai.tool.missing_info execution span first, nested nudge span, and step order for the answered path", async () => {
-    step.waitForEvent.mockResolvedValueOnce({
-      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
-    });
-
-    await runMissingInfo(
-      { reason: "Where is the AC unit?" },
-      {
-        conversationId: "convo-1",
-        phone: "+3519",
-        correlationId: "corr-1",
-        traceAnchor: TEST_TRACE_ANCHOR,
-        step,
-      },
-    );
-
-    expect(step.run.mock.calls.map((call) => call[0])).toEqual([
-      "tool-missing_info",
-      "record-missing-info-trace-anchor",
-      "owner-nudge-missing-info",
-      "record-pending-decision",
-      "missing-info-answer-received",
-      "resolve-pending-decision",
-      "update-missing-info-trace-io",
-    ]);
-    expect(step.waitForEvent).toHaveBeenCalledWith(
-      "wait-for-owner-answer",
-      expect.objectContaining({
-        event: OWNER_NUDGE_ANSWERED_EVENT,
-        match: "data.correlationId",
-        timeout: MISSING_INFO_REPLY_TIMEOUT,
-      }),
-    );
-
-    const execSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.missing_info");
-    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("missing_info");
-    expect(execSpan?.attributes["gca.tool.input"]).toBe(
-      JSON.stringify({ reason: "Where is the AC unit?" }),
-    );
-    // output isn't known until after the nudge/wait resolves, well after
-    // this span has already closed, so it's patched in retroactively via
-    // updateSpanIO instead — never set directly as a span attribute.
-    expect(execSpan?.attributes["gca.tool.output"]).toBeUndefined();
-
-    const nudgeSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.missing_info");
-    expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["missing_info"]);
-
-    const answeredSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "missing_info.answer_received");
-    expect(answeredSpan).toBeDefined();
-
-    expect(updateSpanIOMock).toHaveBeenCalledWith(execSpan?.spanContext().spanId, {
-      output: { escalated: true, answer: "The AC is above the bed" },
-    });
-  });
-
-  it("creates the missing_info.no_reply span and runs handleMissingInfoNoReply's fallback when the wait times out", async () => {
-    step.waitForEvent.mockResolvedValueOnce(null);
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await runMissingInfo(
-      { reason: "Where is the AC unit?" },
-      {
-        conversationId: "convo-1",
-        phone: "+3519",
-        correlationId: "corr-1",
-        traceAnchor: TEST_TRACE_ANCHOR,
-        step,
-      },
-    );
-
-    expect(step.run.mock.calls.map((call) => call[0])).toEqual([
-      "tool-missing_info",
-      "record-missing-info-trace-anchor",
-      "owner-nudge-missing-info",
-      "record-pending-decision",
-      "missing-info-no-reply",
-      "resolve-pending-decision-timeout",
-      "update-missing-info-trace-io",
-    ]);
-
-    const noReplySpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "missing_info.no_reply");
-    expect(noReplySpan?.attributes["gca.timeout"]).toBe(MISSING_INFO_REPLY_TIMEOUT);
-    // handleMissingInfoNoReply's own log, not a duplicate — confirms the
-    // real fallback function ran (not a stub) inside the no_reply span's step.
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("corr-1"));
-
-    consoleWarnSpy.mockRestore();
   });
 });
