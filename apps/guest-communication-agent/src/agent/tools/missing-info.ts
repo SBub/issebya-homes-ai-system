@@ -70,8 +70,9 @@ export const OWNER_NUDGE_ANSWERED_EVENT = "gca/owner-nudge.answered";
 // 24h — same order of magnitude as harness-engineering's APPROVAL_TIMEOUT_S:
 // long enough for a human reply, but the guest still deserves a response
 // within their own conversation rather than waiting forever. The sole
-// step.waitForEvent timeout runMissingInfo below uses.
-export const MISSING_INFO_REPLY_TIMEOUT = "24h";
+// step.waitForEvent timeout runMissingInfo below uses. Not exported — only
+// used within this file now that runMissingInfo lives here too.
+const MISSING_INFO_REPLY_TIMEOUT = "24h";
 
 // "Reply received" branch: embeds the owner's answer into the KB (same
 // embedding model/table property-question.ts reads from), then sends
