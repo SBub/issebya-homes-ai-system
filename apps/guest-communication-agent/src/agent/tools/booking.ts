@@ -110,7 +110,7 @@ export const BOOKING_LINK_URL_PATTERN =
 // model's own `call.input` already has everything runSendBookingLink needs,
 // nothing extra to hand forward.
 export async function requestSendBookingLinkApproval(
-  call: { toolCallId: string; toolName: string; input: Record<string, unknown> },
+  call: { toolName: string; input: Record<string, unknown> },
   correlationId: string,
   context: ToolContext,
 ): Promise<HitlDecision> {

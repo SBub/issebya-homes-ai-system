@@ -4,7 +4,6 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
-import { NEEDS_APPROVAL, runHitl } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { dispatchToolExecution, runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
@@ -73,8 +72,9 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 
 // Tools whose dispatch itself calls step.run/step.waitForEvent — wants_human
 // via wants-human.ts's own runWantsHuman, missing_info and send_booking_link
-// via run-hitl.ts's runHitl (see NEEDS_APPROVAL below) — see the "tool files
-// stay pure" rule above for the two kinds of exception this covers. Inngest
+// via run-hitl.ts's runHitl (run-tool.ts's runTool routes to it internally
+// for those two, from inside its own switch) — see the "tool files stay
+// pure" rule above for the two kinds of exception this covers. Inngest
 // doesn't support calling a step tool from inside another step.run()'s
 // callback — the callback must be a self-contained unit of work — so
 // wants_human, missing_info, and send_booking_link are all dispatched
@@ -329,8 +329,10 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a not-approved NEEDS_APPROVAL call never reaches
-    // run-tool.ts's runTool.
+    // message ourselves; a not-approved gated call never reaches run-tool.ts's
+    // runTool's own dispatch to the real send_booking_link/missing_info work
+    // (run-hitl.ts's runHitl intercepts it first, from inside runTool's own
+    // switch).
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
         // See SELF_STEPPED_TOOLS above for why wants_human/missing_info/
@@ -347,23 +349,17 @@ export async function runAgentTurn(
         // value without re-running the callback — so wrapping the runTool
         // call inside it there is replay-safe.
         if (SELF_STEPPED_TOOLS.has(call.toolName)) {
-          // The gating check itself: only NEEDS_APPROVAL tools (run-hitl.ts)
-          // go through runHitl at all — wants_human isn't one (see
-          // NEEDS_APPROVAL's own comment) and falls straight through to
-          // runTool below.
-          if (NEEDS_APPROVAL.has(call.toolName)) {
-            const output = await runHitl(call, correlationId, toolContext);
-            // See RunAgentTurnResult.firedTags for why this is collected
-            // here rather than as a span attribute — pushed regardless of
-            // the gate's outcome (approved/rejected/timed out all still
-            // count as "this tool was attempted this turn").
-            firedTags.push(call.toolName);
-            return output;
-          }
-
+          // One unconditional call for every self-stepped tool — runTool
+          // itself (run-tool.ts) is the single place that knows whether a
+          // given tool name needs the calls-human-first HITL flow
+          // (missing_info/send_booking_link, routed to run-hitl.ts's runHitl
+          // from inside runTool's own switch) or just runs (wants_human).
+          // This loop doesn't branch on that distinction at all.
           const output = await runTool(call.toolName, call.input, toolContext);
           // See RunAgentTurnResult.firedTags for why this is collected here
-          // rather than as a span attribute.
+          // rather than as a span attribute — pushed regardless of a gated
+          // call's outcome (approved/rejected/timed out all still count as
+          // "this tool was attempted this turn").
           firedTags.push(call.toolName);
           return output;
         }
