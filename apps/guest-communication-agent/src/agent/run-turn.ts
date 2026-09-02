@@ -8,6 +8,7 @@ import { NEEDS_APPROVAL, requestApproval, runApprovedTool, traceIoStepId } from 
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { dispatchToolExecution, runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
+import type { HitlDecision } from "@/agent/tools/approval-gate";
 import type { ToolContext } from "@/agent/tools/config";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
@@ -350,38 +351,48 @@ export async function runAgentTurn(
       result.toolCalls.map(async (call) => {
         // Checked first, ahead of SELF_STEPPED_TOOLS below: missing_info and
         // send_booking_link both require real owner approval before they may
-        // run at all, so their dispatch is two separate, sequential steps —
-        // request approval (run-hitl.ts's requestApproval), then, only if
-        // approved, run the tool (run-hitl.ts's runApprovedTool) — kept as
-        // two distinct calls here rather than one bundling function, so the
-        // approval decision and the tool call stay visibly decoupled in this
-        // loop. Like the rest of this branch, calls step.run/waitForEvent
-        // itself (inside requestApproval), so it must run un-nested here,
-        // same reasoning as SELF_STEPPED_TOOLS's own comment below.
+        // run at all. This block does ONLY that — request approval
+        // (run-hitl.ts's requestApproval), then, on rejection/timeout, return
+        // its not-approved fallback immediately. No tool-calling code lives
+        // in this block: the actual dispatch (run-hitl.ts's runApprovedTool)
+        // is a separate call below, outside this block entirely, so approval
+        // and execution stay two visibly distinct steps rather than one
+        // bundled underneath a single `if`. Like the rest of this branch,
+        // calls step.run/waitForEvent itself (inside requestApproval), so it
+        // must run un-nested here, same reasoning as SELF_STEPPED_TOOLS's own
+        // comment below.
+        let approvalDecision: HitlDecision<unknown> | undefined;
         if (NEEDS_APPROVAL.has(call.toolName)) {
-          const decision = await requestApproval(call, correlationId, toolContext);
+          approvalDecision = await requestApproval(call, correlationId, toolContext);
 
-          if (!decision.approved) {
+          if (!approvalDecision.approved) {
             await step.run(traceIoStepId(call.toolName), () =>
-              updateSpanIO(decision.toolSpanId, { output: decision.notApprovedOutput }),
+              updateSpanIO(approvalDecision!.toolSpanId, {
+                output: approvalDecision!.notApprovedOutput,
+              }),
             );
             // See RunAgentTurnResult.firedTags for why this is collected
             // here rather than as a span attribute — pushed regardless of
             // the decision's outcome (approved/rejected/timed out all still
             // count as "this tool was attempted this turn").
             firedTags.push(call.toolName);
-            return decision.notApprovedOutput;
+            return approvalDecision.notApprovedOutput;
           }
+        }
 
-          // Own step, distinct from the tool-span-creation step inside
-          // requestApproval — this is the call's real dispatch, memoized
-          // separately so a replay after some later suspend elsewhere in the
-          // same turn doesn't re-run it.
+        // Reached only once requestApproval above has resolved
+        // `approved: true` — the real dispatch for a NEEDS_APPROVAL tool,
+        // structurally separate from the approval block above (not nested
+        // inside its `if`). Own step, distinct from the tool-span-creation
+        // step inside requestApproval — memoized separately so a replay
+        // after some later suspend elsewhere in the same turn doesn't re-run
+        // it.
+        if (approvalDecision) {
           const output = await step.run(`execute-${call.toolName}`, () =>
-            runApprovedTool(call.toolName, call.input, decision.payload, toolContext),
+            runApprovedTool(call.toolName, call.input, approvalDecision!.payload, toolContext),
           );
           await step.run(traceIoStepId(call.toolName), () =>
-            updateSpanIO(decision.toolSpanId, { output }),
+            updateSpanIO(approvalDecision!.toolSpanId, { output }),
           );
           firedTags.push(call.toolName);
           return output;
