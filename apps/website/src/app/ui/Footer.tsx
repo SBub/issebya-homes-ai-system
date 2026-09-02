@@ -15,9 +15,7 @@ export default function Footer() {
           Privacy Policy
         </Link>
       </div>
-      <Suspense fallback={<div>Loading cop...</div>}>
-        <Copyright />
-      </Suspense>
+      <Copyright />
     </footer>
   );
 }

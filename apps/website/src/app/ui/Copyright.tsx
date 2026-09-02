@@ -1,5 +1,8 @@
+import { cacheLife } from "next/cache";
+
 export default async function Copyright() {
   "use cache";
+  cacheLife("max");
 
   const currentYear = new Date().getFullYear();
   return (
