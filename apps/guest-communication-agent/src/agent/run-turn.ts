@@ -97,15 +97,18 @@ const model = openrouter.chat(MODEL);
 // silently return an empty string. 1000 leaves headroom for both.
 const MAX_OUTPUT_TOKENS = 1000;
 
-// RULE: tool files (src/agent/tools/*.ts, except approval-gate.ts) must stay
-// pure — no step/span/Inngest imports. All durability/tracing plumbing
-// belongs here, in run-turn.ts's dispatch loop, or in approval-gate.ts's
-// shared gate. Reason: keeps "where's the real business logic" (any tools/*
-// file) a one-glance answer, separate from "where's the durability/tracing
-// plumbing" (this file + approval-gate.ts). booking.ts is the model for what
-// "pure" looks like. One deliberate, narrow exception: property-question.ts
-// keeps a plain OTel span (no step, no Inngest) around its own DB call — see
-// that file's own comment for why.
+// RULE: most tool files (src/agent/tools/*.ts) stay pure — no step/span/
+// Inngest imports; all durability/tracing plumbing belongs here, in
+// run-turn.ts's dispatch loop, or in approval-gate.ts's shared gate.
+// booking.ts is the model for what "pure" looks like. Two kinds of
+// deliberate exception exist: a plain OTel span with zero step/Inngest
+// coupling (property-question.ts's own DB-call span, owner-nudge.ts's send
+// span) — not durability plumbing, just tracing; and a tool whose own
+// dispatch genuinely needs real Inngest step/waitForEvent semantics
+// (wants-human.ts's own runWantsHuman) — that plumbing lives inside the
+// tool's own run<ToolName>, per this app's run<ToolName> convention, not
+// here. If you're adding either kind, ask whether it's genuinely the same
+// case before treating it as precedent.
 
 // Schema-only tool declarations — dispatch happens manually in runToolCall()
 // below. Every key here is the literal snake_case tool name the model sees
@@ -123,18 +126,18 @@ const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Tools whose dispatch itself calls step.run/step.waitForEvent (via this
-// file's own private dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall
-// — the last of these also calls into approval-gate.ts's requestApprovalGate
-// for any APPROVAL_GATES-gated tool, send_booking_link today) — see the "tool
-// files stay pure" rule above for why that plumbing lives here rather than in
-// wants-human.ts/missing-info.ts/booking.ts themselves. Inngest doesn't
-// support calling a step tool from inside another step.run()'s callback —
-// the callback must be a self-contained unit of work — so wants_human,
-// missing_info, and send_booking_link are all dispatched directly from the
-// loop below (never wrapped in an outer step.run). Every other tool has no
-// step usage of its own, so wrapping the whole call in one step.run is safe
-// and gives it real memoization/replay safety.
+// Tools whose dispatch itself calls step.run/step.waitForEvent — wants_human
+// via wants-human.ts's own runWantsHuman, missing_info/send_booking_link via
+// this file's own private runMissingInfo/dispatchGatedToolCall (the latter
+// also calls into approval-gate.ts's requestApprovalGate for any
+// APPROVAL_GATES-gated tool, send_booking_link today) — see the "tool files
+// stay pure" rule above for the two kinds of exception this covers. Inngest
+// doesn't support calling a step tool from inside another step.run()'s
+// callback — the callback must be a self-contained unit of work — so
+// wants_human, missing_info, and send_booking_link are all dispatched
+// directly from the loop below (never wrapped in an outer step.run). Every
+// other tool has no step usage of its own, so wrapping the whole call in one
+// step.run is safe and gives it real memoization/replay safety.
 const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "send_booking_link"]);
 
 // The gating POLICY table: which tools require real owner approve/reject
@@ -326,10 +329,11 @@ function detectToolSoftFailure(output: unknown): string | null {
 // on the steppedSpan already open around this call (see tracing.ts's
 // withTurnSpan doc comment for why the braintrust.* duplication exists) — the
 // same 4 attributes every one of these call sites used to set by hand. Not
-// used by dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall below: none
-// of the three knows its tool call's real output at span-creation time (a
-// gated call's approval hasn't even been decided yet), so each patches output
-// in retroactively via updateSpanIO instead — see each of their own comments.
+// used by wants-human.ts's runWantsHuman or this file's own private
+// runMissingInfo/dispatchGatedToolCall below: none of the three knows its
+// tool call's real output at span-creation time (a gated call's approval
+// hasn't even been decided yet), so each patches output in retroactively via
+// updateSpanIO instead — see each of their own comments.
 //
 // Also marks the span ERROR (via markSpanFailed, same mechanism
 // runGuestTurn's own send-whatsapp-reply call site already uses for
@@ -358,93 +362,6 @@ async function dispatchToolExecution<T>(
     markSpanFailed(span, failureMessage);
   }
   return output;
-}
-
-// Creates the real gen_ai.tool.wants_human execution span FIRST (its
-// `input` — the model's `reason` — is the one thing already known at this
-// point), then sends the owner nudge as its real child (not a sibling of the
-// turn's own anchor), then patches the span's `output` retroactively once
-// runWantsHuman()'s result exists. Same shape runMissingInfo below gives
-// gen_ai.tool.missing_info and its own owner_nudge.missing_info sub-span —
-// see that function's own comment for the full reasoning — just without a
-// step.waitForEvent in between, since wants_human is a one-way alert with no
-// suspend/resume: runWantsHuman()'s result is a constant, known immediately
-// after the nudge send, not after some later cross-request event. This is
-// the "durability/tracing plumbing" half of wants_human that used to live in
-// wants-human.ts's own runWantsHuman before the "tool files stay pure" rule
-// above — see that file's own comment. Private: only called from
-// runToolCall's "wants_human" case below, never nested inside another
-// step.run (see SELF_STEPPED_TOOLS's comment for why).
-async function dispatchWantsHuman(
-  args: { reason: string },
-  context: ToolContext,
-): Promise<ReturnType<typeof runWantsHuman>> {
-  const { conversationId, phone, step, traceAnchor } = context;
-
-  // Only `fn`'s return value (the real OTel-generated span id) survives this
-  // step — the span itself has already closed by the time this resolves, no
-  // live Span object can survive across this (or any) Inngest step boundary.
-  // Same pattern runMissingInfo's own toolSpanId uses below.
-  const toolSpanId = await steppedSpan(
-    step,
-    "tool-wants_human",
-    traceAnchor,
-    "gen_ai.tool.wants_human",
-    {
-      "gen_ai.tool.name": "wants_human",
-      "gen_ai.operation.name": "execute_tool",
-      "gca.tool.input": JSON.stringify(args),
-      "braintrust.input": JSON.stringify(args),
-    },
-    async (span) => span.spanContext().spanId,
-  );
-  // Synchronous, awaited flush (not the routes' non-blocking after()) —
-  // guarantees this span's own OTel export lands at Braintrust before
-  // update-wants-human-trace-io's later updateSpanIO patch can fire.
-  // Without this happens-before, whichever write lands last wins: the OTel
-  // export carries no output of its own, so it can silently wipe the patch
-  // back to null if it lands second (see updateSpanIO's own comment).
-  await flushTracing();
-  const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
-
-  const nudged = await steppedSpan(
-    step,
-    "owner-nudge-wants-human",
-    toolAnchor,
-    "owner_nudge.wants_human",
-    // braintrust.tags is also what gets this span past @braintrust/otel's
-    // export filter at all (see tracing.ts's attribute-namespace comment
-    // block, 4th bullet) — this span's other attributes (gca.*) don't match
-    // any filter prefix. Mirrors approval-gate.ts's sendGatedOwnerNudge,
-    // which tags its own nudge span the same way for the same reason.
-    {
-      "gca.conversation_id": conversationId,
-      "gca.phone": phone,
-      "braintrust.tags": ["wants_human"],
-    },
-    () =>
-      requestOwnerNudge({
-        conversationId,
-        phone,
-        reason: args.reason,
-        reasonCategory: "wants_human",
-        step,
-      }),
-  );
-
-  const result = runWantsHuman(nudged);
-
-  // Retroactively patches the tool-call span's output now that it's known —
-  // same mechanism runMissingInfo below already uses for its own
-  // gen_ai.tool.missing_info span's output. The flushTracing() call above
-  // guarantees this patch lands after the span's own OTel export, so it
-  // can't be silently wiped by a later out-of-order write (see
-  // updateSpanIO's own doc comment for that mechanism). Own step, not a
-  // span — patching a span isn't itself a new event worth its own trace
-  // node.
-  await step.run("update-wants-human-trace-io", () => updateSpanIO(toolSpanId, { output: result }));
-
-  return result;
 }
 
 // missing_info's full suspend/resume dispatch: creates the real
@@ -497,8 +414,8 @@ async function runMissingInfo(
   // Synchronous, awaited flush (not the routes' non-blocking after()) —
   // guarantees this span's own OTel export lands before this function's own
   // later updateSpanIO patch (on the "escalated" happy path, or the no-reply
-  // timeout path) can fire and race it. See dispatchWantsHuman's identical
-  // flushTracing() call above for the full reasoning.
+  // timeout path) can fire and race it. See wants-human.ts's own
+  // runWantsHuman's identical flushTracing() call for the full reasoning.
   await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
@@ -525,8 +442,8 @@ async function runMissingInfo(
   // Telegram nudge on every replay).
   // braintrust.tags is also what gets this span past @braintrust/otel's
   // export filter at all (see tracing.ts's attribute-namespace comment
-  // block, 4th bullet) — same reason dispatchWantsHuman's own nudge span
-  // above sets it.
+  // block, 4th bullet) — same reason wants-human.ts's own runWantsHuman
+  // nudge span sets it.
   const nudged = await steppedSpan(
     step,
     "owner-nudge-missing-info",
@@ -667,8 +584,9 @@ async function runMissingInfo(
 // APPROVAL_GATES-gated dispatch (send_booking_link today, any future gated
 // tool tomorrow): creates the real gen_ai.tool.<name> execution span FIRST —
 // before requestApprovalGate ever runs — with the model's real tool-call
-// `input` set at creation, same shape dispatchWantsHuman/runMissingInfo above
-// give their own tool spans. Only `fn`'s return value (the real
+// `input` set at creation, same shape wants-human.ts's own runWantsHuman/
+// this file's own runMissingInfo above give their own tool spans. Only
+// `fn`'s return value (the real
 // OTel-generated span id) survives this step — same pattern those two
 // functions' own toolSpanId uses, for the same reason (no live Span object
 // survives an Inngest step boundary). That id becomes a new toolAnchor,
@@ -686,9 +604,10 @@ async function runMissingInfo(
 // already returned to the model; an approved call patches the real
 // execution result. Private: only called from the loop's SELF_STEPPED_TOOLS
 // branch below, never nested inside another step.run — safe to call from
-// there because, like dispatchWantsHuman/runMissingInfo, this function calls
-// step.run/requestApprovalGate itself rather than being called from inside
-// one (see SELF_STEPPED_TOOLS's own comment for why that nesting is unsafe).
+// there because, like wants-human.ts's own runWantsHuman/this file's own
+// runMissingInfo, this function calls step.run/requestApprovalGate itself
+// rather than being called from inside one (see SELF_STEPPED_TOOLS's own
+// comment for why that nesting is unsafe).
 async function dispatchGatedToolCall(
   call: { toolCallId: string; toolName: string; input: Record<string, unknown> },
   gate: ApprovalGateConfig,
@@ -713,8 +632,8 @@ async function dispatchGatedToolCall(
   // Synchronous, awaited flush (not the routes' non-blocking after()) —
   // guarantees this span's own OTel export lands before either of this
   // function's later updateSpanIO patches (the not-approved path or the
-  // executed-result path below) can fire and race it. See
-  // dispatchWantsHuman's identical flushTracing() call for the full
+  // executed-result path below) can fire and race it. See wants-human.ts's
+  // own runWantsHuman's identical flushTracing() call for the full
   // reasoning; one flush here covers both later patch paths.
   await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
@@ -788,7 +707,7 @@ async function runToolCall(
     case "run_code":
       return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
-      return dispatchWantsHuman(input as { reason: string }, context);
+      return runWantsHuman(input as { reason: string }, context);
     case "missing_info":
       return runMissingInfo(input as { reason: string }, context);
     default:
@@ -868,9 +787,10 @@ export interface RunAgentTurnResult {
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
   // missing_info, send_booking_link). All three now get their own
   // gen_ai.tool.* execution span too, unconditionally (wants_human's via
-  // dispatchWantsHuman's own steppedSpan; missing_info's via runMissingInfo's
-  // own steppedSpan; send_booking_link's via dispatchGatedToolCall's own
-  // steppedSpan — created in this file, before requestApprovalGate ever
+  // wants-human.ts's own runWantsHuman's steppedSpan; missing_info's via
+  // runMissingInfo's own steppedSpan; send_booking_link's via
+  // dispatchGatedToolCall's own steppedSpan — created in this file, before
+  // requestApprovalGate ever
   // runs, not inside approval-gate.ts, which only creates that span's own
   // nudge/decision/timeout children), so none of the three strictly needs to
   // ride along in firedTags too — but all three are dispatched via
@@ -932,9 +852,9 @@ export async function runAgentTurn(
   // carries neither input nor output for this marker span (only
   // gca.conversation_id/gca.phone), so it can silently wipe the patch back
   // to null if it lands second — confirmed happening in practice via this
-  // span's own Braintrust audit_data trail. See dispatchWantsHuman's
-  // identical flushTracing() call for the same reasoning applied to a
-  // tool-call span instead of this turn-level marker.
+  // span's own Braintrust audit_data trail. See wants-human.ts's own
+  // runWantsHuman's identical flushTracing() call for the same reasoning
+  // applied to a tool-call span instead of this turn-level marker.
   await flushTracing();
 
   // Every span from here on nests under the real "braintrust.guest_turn"

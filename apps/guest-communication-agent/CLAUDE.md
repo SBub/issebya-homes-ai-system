@@ -3,7 +3,9 @@
 ## Tracing/durability plumbing
 
 - Never hand-nest `step.run(id, () => withTurnSpan(...))`. Use `steppedSpan(step, id, traceAnchor, name, attrs, fn)` from `src/lib/tracing.ts` — collapses Inngest's step + this app's OTel span into one call.
-- Tool files (`src/agent/tools/*.ts`, except `approval-gate.ts`) must stay pure: no `step`/`span`/Inngest imports. All durability/tracing plumbing belongs in `run-turn.ts`'s dispatch loop or `approval-gate.ts`'s shared gate. `booking.ts` and `run-code.ts` are the model for what "pure" looks like. (Narrow, deliberate exceptions exist — `property-question.ts`'s DB-call span, `owner-nudge.ts`'s send span — because they're plain OTel spans with zero Inngest/step coupling, not durability plumbing. If you're adding one, ask whether it's genuinely the same case before treating it as precedent.)
+- Most tool files (`src/agent/tools/*.ts`) must stay pure: no `step`/`span`/Inngest imports. All durability/tracing plumbing belongs in `run-turn.ts`'s dispatch loop or `approval-gate.ts`'s shared gate. `booking.ts` and `run-code.ts` are the model for what "pure" looks like. Two kinds of deliberate exception exist:
+  - A plain OTel span with zero Inngest/step coupling — `property-question.ts`'s DB-call span, `owner-nudge.ts`'s send span. Not durability plumbing, just tracing.
+  - A tool whose own dispatch genuinely needs real Inngest step/waitForEvent semantics (HITL-style: sending an owner nudge, suspending, resuming) — that tool's own `run<ToolName>` owns it, per this app's `run<ToolName>` convention. `wants-human.ts`'s `runWantsHuman` is the model for this. If you're adding either kind, ask whether it's genuinely the same case before treating it as precedent.
 - Inside a `steppedSpan`/`withTurnSpan`/`withSpan` call, pass a named function for any real logic — not a trivial one-liner — declared just above the call, closing over the same locals. Keeps the wrapper call itself scannable as pure plumbing, separate from the logic.
 
 ## Comments
