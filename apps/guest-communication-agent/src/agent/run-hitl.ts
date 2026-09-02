@@ -2,29 +2,34 @@ import { type HitlDecision } from "@/agent/tools/approval-gate";
 import { requestSendBookingLinkApproval, runSendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { buildMissingInfoResult, requestMissingInfoApproval } from "@/agent/tools/missing-info";
-import { updateSpanIO } from "@/lib/tracing";
 
 // Which tools go through the two-phase "calls human, then run the tool"
 // dispatch below, instead of the plain single-phase runTool (run-tool.ts) —
-// missing_info and send_booking_link, both switches below. wants_human is
-// NOT one of them on purpose — it's a one-way alert with no approve/reject
-// (or answer-shaped) decision to gate on, so it dispatches straight through
-// runTool via wants-human.ts's own runWantsHuman. The two tools below ARE
-// approval-shaped (send_booking_link genuinely approve/reject; missing_info
-// resolves to an answer instead, but still gates whether the tool call
-// proceeds) — see approval-gate.ts's own module comment for why missing_info
-// still doesn't reuse requestApprovalGate's generic mechanism.
-//
-// The "calls human" half — a switch, not a lookup table, matching
-// run-tool.ts's own runTool dispatch style (run-tool.ts's switch is the only
-// caller, deciding per tool name whether to reach this file at all).
-// requestMissingInfoApproval and requestSendBookingLinkApproval are NOT
-// signature-symmetric: missing_info's correlationId already lives on
-// `context` (ToolContext.correlationId), so it only takes (args, context);
+// checked directly in run-turn.ts's own dispatch loop, which calls
+// requestApproval and runApprovedTool below as two separate, sequential
+// steps (approval, then — only if approved — the tool call) rather than one
+// function bundling both; that decoupling is deliberate, not an
+// implementation detail hidden in here. wants_human is NOT here on purpose —
+// it's a one-way alert with no approve/reject (or answer-shaped) decision to
+// gate on, so it dispatches straight through runTool via wants-human.ts's
+// own runWantsHuman. Both tools below ARE approval-shaped (send_booking_link
+// genuinely approve/reject; missing_info resolves to an answer instead, but
+// still gates whether the tool call proceeds) — see approval-gate.ts's own
+// module comment for why missing_info still doesn't reuse
+// requestApprovalGate's generic mechanism.
+export const NEEDS_APPROVAL = new Set(["missing_info", "send_booking_link"]);
+
+// The approval half for each NEEDS_APPROVAL tool — a switch, not a lookup
+// table, matching run-tool.ts's own runTool dispatch style. Never calls the
+// tool itself (see runApprovedTool below for that, a fully separate
+// function) — this only ever resolves a HitlDecision. requestMissingInfoApproval
+// and requestSendBookingLinkApproval are NOT signature-symmetric:
+// missing_info's correlationId already lives on `context`
+// (ToolContext.correlationId), so it only takes (args, context);
 // send_booking_link's dispatch predates that convention and still takes
 // correlationId as its own explicit param. Kept as-is rather than forcing
 // artificial symmetry between the two.
-async function requestApproval(
+export async function requestApproval(
   call: { toolName: string; input: Record<string, unknown> },
   correlationId: string,
   context: ToolContext,
@@ -39,12 +44,14 @@ async function requestApproval(
   }
 }
 
-// The "tool call" half — only ever reached once requestApproval above has
-// resolved `approved: true`. `payload` is requestMissingInfoApproval's real
-// answer for missing_info; send_booking_link ignores it (unused, undefined)
-// since the model's own `input` already has everything runSendBookingLink
-// needs.
-function runApprovedTool(
+// The tool-call half — only ever called by run-turn.ts's loop once
+// requestApproval above has resolved `approved: true`; never calls
+// requestApproval itself, never decides approval. `payload` is
+// requestMissingInfoApproval's real answer for missing_info (its actual
+// "tool call" is just formatting that answer, buildMissingInfoResult);
+// send_booking_link ignores `payload` (unused, undefined) since the model's
+// own `input` already has everything runSendBookingLink needs.
+export function runApprovedTool(
   toolName: string,
   input: Record<string, unknown>,
   payload: unknown,
@@ -62,51 +69,19 @@ function runApprovedTool(
   }
 }
 
-// missing_info's own runMissingInfo (predating this file) already used a
-// hardcoded "update-missing-info-trace-io" step id (hyphenated, matching the
-// file name) before this dispatch existed here — not the
-// `update-${toolName}-trace-io` template send_booking_link's own dispatch
-// uses (which gives the underscored "update-send_booking_link-trace-io").
-// The two were never symmetric; preserved exactly as each tool's tests/the
-// hitl-compliance scorer already expect, rather than unifying them under one
-// scheme now.
-function traceIoStepId(toolName: string): string {
+// missing_info's own runMissingInfo (predating the requestApproval/
+// runApprovedTool split above) already used a hardcoded
+// "update-missing-info-trace-io" step id (hyphenated, matching the file
+// name) before this dispatch existed — not the `update-${toolName}-trace-io`
+// template send_booking_link's own dispatch uses (which gives the
+// underscored "update-send_booking_link-trace-io"). The two were never
+// symmetric; preserved exactly as each tool's tests/the hitl-compliance
+// scorer already expect, rather than unifying them under one scheme now.
+// Exported so run-turn.ts's loop (the only caller of requestApproval/
+// runApprovedTool) can patch the tool-call span's real output under the
+// same step id either path already used.
+export function traceIoStepId(toolName: string): string {
   return toolName === "missing_info"
     ? "update-missing-info-trace-io"
     : `update-${toolName}-trace-io`;
-}
-
-// The single entry point run-tool.ts's runTool calls, from inside its own
-// switch, for missing_info/send_booking_link: request approval, then either
-// return the not-approved fallback or run the real tool — patching the
-// tool-call span's real output in both cases. Glues
-// requestApproval/runApprovedTool together the same way missing-info.ts's
-// own runMissingInfo glues requestMissingInfoApproval/buildMissingInfoResult
-// for that tool alone; this is the shared version covering both gated
-// tools, one call site instead of two.
-export async function runHitl(
-  call: { toolName: string; input: Record<string, unknown> },
-  correlationId: string,
-  context: ToolContext,
-): Promise<unknown> {
-  const decision = await requestApproval(call, correlationId, context);
-
-  if (!decision.approved) {
-    await context.step.run(traceIoStepId(call.toolName), () =>
-      updateSpanIO(decision.toolSpanId, { output: decision.notApprovedOutput }),
-    );
-    return decision.notApprovedOutput;
-  }
-
-  // Own step, distinct from the tool-span-creation step inside
-  // requestApproval — this is the call's real dispatch, memoized separately
-  // so a replay after some later suspend elsewhere in the same turn doesn't
-  // re-run it.
-  const output = await context.step.run(`execute-${call.toolName}`, () =>
-    runApprovedTool(call.toolName, call.input, decision.payload, context),
-  );
-  await context.step.run(traceIoStepId(call.toolName), () =>
-    updateSpanIO(decision.toolSpanId, { output }),
-  );
-  return output;
 }

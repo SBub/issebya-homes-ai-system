@@ -1,11 +1,10 @@
 import type { Span } from "@opentelemetry/api";
 import type { ToolSet } from "ai";
-import { runHitl } from "@/agent/run-hitl";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
-import { sendBookingLink } from "@/agent/tools/booking";
+import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { getCurrentDate, runGetCurrentDate } from "@/agent/tools/current-date";
-import { missingInfo } from "@/agent/tools/missing-info";
+import { missingInfo, runMissingInfo } from "@/agent/tools/missing-info";
 import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runCode, runRunCode } from "@/agent/tools/run-code";
@@ -13,19 +12,14 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { markSpanFailed } from "@/lib/tracing";
 
 // The tool registry + dispatcher: which tools the model can call (`tools`,
-// handed to generateText by run-model.ts's runModel), and how each one
-// actually runs (`runTool`, the single dispatch point run-turn.ts's
-// tool-call loop calls unconditionally for every SELF_STEPPED_TOOLS member —
-// wants_human and the 5 plain tools dispatch directly (or via
-// dispatchToolExecution's tracing wrapper, for the plain ones), while
-// missing_info/send_booking_link route through run-hitl.ts's runHitl from
-// inside this switch, since only those two are NEEDS_APPROVAL-gated). Kept
-// together in one file rather than split across run-turn.ts/here: runTool's
-// own "unknown tool name" fallback needs `Object.keys(tools)`, so splitting
-// them would mean a circular import between this file and run-turn.ts.
-// Importing run-hitl.ts here is safe — it imports from
-// @/agent/tools/booking and @/agent/tools/missing-info, never from this
-// file, so no cycle.
+// handed to generateText by run-turn.ts's modelTurn), and how each one
+// actually runs (`runTool`, dispatched from run-turn.ts's tool-call loop —
+// directly for wants_human/missing_info, after an APPROVAL_GATES check for
+// send_booking_link, or wrapped in dispatchToolExecution's tracing for every
+// other tool). Kept together in one file rather than split across
+// run-turn.ts/here: runTool's own "unknown tool name" fallback needs
+// `Object.keys(tools)`, so splitting them would mean a circular import
+// between this file and run-turn.ts.
 
 // Schema-only tool declarations — dispatch happens manually in runTool()
 // below. Every key here is the literal snake_case tool name the model sees
@@ -120,18 +114,9 @@ export async function dispatchToolExecution<T>(
   return output;
 }
 
-// Dispatches a requested tool call to its run<ToolName> implementation — the
-// single call site run-turn.ts's dispatch loop uses for every
-// SELF_STEPPED_TOOLS member, unconditionally. `missing_info`/
-// `send_booking_link` (NEEDS_APPROVAL) route through run-hitl.ts's runHitl
-// right here, inside this switch, rather than the loop branching on
-// NEEDS_APPROVAL itself before ever reaching runTool — this is the one place
-// that decides "does this tool name need the calls-human-first HITL flow, or
-// does it just run." `context.correlationId!`: real call paths always supply
-// one (see ToolContext.correlationId's own doc comment in config.ts — the
-// `?` is only for hypothetical callers outside a live run), same assumption
-// requestMissingInfoApproval already makes when it reads `context.
-// correlationId` directly.
+// Dispatches a requested tool call to its run<ToolName> implementation.
+// Called after any configured APPROVAL_GATES check (run-turn.ts) has already
+// approved the call, never before it.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
@@ -144,15 +129,18 @@ export async function runTool(
       return runCheckAvailability(input as Parameters<typeof runCheckAvailability>[0]);
     case "answer_property_question":
       return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
+    case "send_booking_link":
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], {
+        phone: context.phone,
+      });
     case "get_current_date":
       return runGetCurrentDate();
     case "run_code":
       return runRunCode(input as Parameters<typeof runRunCode>[0]);
     case "wants_human":
       return runWantsHuman(input as { reason: string }, context);
-    case "send_booking_link":
     case "missing_info":
-      return runHitl({ toolName, input }, context.correlationId!, context);
+      return runMissingInfo(input as { reason: string }, context);
     default:
       // Native function-calling is supposed to constrain the model to exact
       // registered tool names, but some models (deepseek included) have been

@@ -4,13 +4,14 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
+import { NEEDS_APPROVAL, requestApproval, runApprovedTool, traceIoStepId } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { dispatchToolExecution, runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
 import type { ToolContext } from "@/agent/tools/config";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
+import { markSpanFailed, steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -59,8 +60,9 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 // RULE: most tool files (src/agent/tools/*.ts) stay pure — no step/span/
 // Inngest imports; all durability/tracing plumbing belongs here, in
 // run-tool.ts (the tool registry + generic dispatcher this file calls into),
-// or in approval-gate.ts's shared gate. booking.ts is the model for what
-// "pure" looks like. Two kinds of
+// run-hitl.ts (the approval/tool-call halves this loop calls directly for
+// NEEDS_APPROVAL tools, see below), or in approval-gate.ts's shared gate.
+// booking.ts is the model for what "pure" looks like. Two kinds of
 // deliberate exception exist: a plain OTel span with zero step/Inngest
 // coupling (property-question.ts's own DB-call span, owner-nudge.ts's send
 // span) — not durability plumbing, just tracing; and a tool whose own
@@ -71,16 +73,26 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 // whether it's genuinely the same case before treating it as precedent.
 
 // Tools whose dispatch itself calls step.run/step.waitForEvent — wants_human
-// via wants-human.ts's own runWantsHuman, missing_info and send_booking_link
-// via run-hitl.ts's runHitl (run-tool.ts's runTool routes to it internally
-// for those two, from inside its own switch) — see the "tool files stay
-// pure" rule above for the two kinds of exception this covers. Inngest
-// doesn't support calling a step tool from inside another step.run()'s
-// callback — the callback must be a self-contained unit of work — so
-// wants_human, missing_info, and send_booking_link are all dispatched
-// directly from the loop below (never wrapped in an outer step.run). Every
-// other tool has no step usage of its own, so wrapping the whole call in one
-// step.run is safe and gives it real memoization/replay safety.
+// via wants-human.ts's own runWantsHuman (through the generic runTool
+// below), missing_info and send_booking_link via this loop's own
+// NEEDS_APPROVAL branch (run-hitl.ts's requestApproval, then — only once
+// approved — run-hitl.ts's runApprovedTool: two separate, sequential steps,
+// deliberately not bundled into one function, so the approval decision and
+// the tool call stay visibly distinct here) — see the "tool files stay pure"
+// rule above for the two kinds of exception this covers. Inngest doesn't
+// support calling a step tool from inside another step.run()'s callback —
+// the callback must be a self-contained unit of work — so wants_human,
+// missing_info, and send_booking_link are all dispatched directly from the
+// loop below (never wrapped in an outer step.run). Every other tool has no
+// step usage of its own, so wrapping the whole call in one step.run is safe
+// and gives it real memoization/replay safety.
+//
+// In practice, since the loop checks NEEDS_APPROVAL first (see below) and
+// missing_info/send_booking_link are both members of it, this set's own
+// branch is only ever actually reached by wants_human — kept as a real
+// 3-member set regardless, since the underlying step-nesting constraint it
+// documents is genuinely true for all three, independent of NEEDS_APPROVAL's
+// separate (narrower) gating concern.
 const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "send_booking_link"]);
 
 // Batches every tool call's output from a round into a single "tool" role
@@ -152,9 +164,9 @@ export interface RunAgentTurnResult {
   // wait ever runs, not inside approval-gate.ts, which only creates that
   // span's own
   // nudge/decision/timeout children), so none of the three strictly needs to
-  // ride along in firedTags too — but all three are dispatched via
-  // this same SELF_STEPPED_TOOLS branch below, which pushes every
-  // self-stepped tool name in on dispatch (approved/rejected/timed-out — see
+  // ride along in firedTags too — but all three are dispatched via one of
+  // this loop's own NEEDS_APPROVAL/SELF_STEPPED_TOOLS branches below, each of
+  // which pushes its own tool name in on dispatch (approved/rejected/timed-out — see
   // the branch's own comment), so they end up here as a harmless natural side
   // effect rather than something worth special-casing out. Threaded out so
   // runGuestTurn can attach these tags to the "update-turn-trace-io" result
@@ -329,60 +341,83 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a not-approved gated call never reaches run-tool.ts's
-    // runTool's own dispatch to the real send_booking_link/missing_info work
-    // (run-hitl.ts's runHitl intercepts it first, from inside runTool's own
-    // switch).
+    // message ourselves; a not-approved NEEDS_APPROVAL call returns
+    // requestApproval's own not-approved fallback and never reaches
+    // runApprovedTool/runTool at all.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
-        // See SELF_STEPPED_TOOLS above for why wants_human/missing_info/
-        // send_booking_link are dispatched directly here instead of wrapped in
-        // step.run. Concretely: this branch (like the rest of the loop body)
-        // re-executes on every Inngest replay, so tracing it here would
-        // duplicate-emit a span every time the function replays after a
-        // suspend (missing_info's up-to-24h and send_booking_link's
-        // effectively-forever step.waitForEvent waits — the latter now
-        // inside approval-gate.ts's requestApprovalGate — are exactly the
-        // highest-value case this would corrupt). Every other tool IS
-        // already inside step.run(`tool-${call.toolName}`, ...) below, which
-        // Inngest only actually executes once — replays return the memoized
-        // value without re-running the callback — so wrapping the runTool
-        // call inside it there is replay-safe.
-        if (SELF_STEPPED_TOOLS.has(call.toolName)) {
-          // One unconditional call for every self-stepped tool — runTool
-          // itself (run-tool.ts) is the single place that knows whether a
-          // given tool name needs the calls-human-first HITL flow
-          // (missing_info/send_booking_link, routed to run-hitl.ts's runHitl
-          // from inside runTool's own switch) or just runs (wants_human).
-          // This loop doesn't branch on that distinction at all.
-          const output = await runTool(call.toolName, call.input, toolContext);
-          // See RunAgentTurnResult.firedTags for why this is collected here
-          // rather than as a span attribute — pushed regardless of a gated
-          // call's outcome (approved/rejected/timed out all still count as
-          // "this tool was attempted this turn").
+        // Checked first, ahead of SELF_STEPPED_TOOLS below: missing_info and
+        // send_booking_link both require real owner approval before they may
+        // run at all, so their dispatch is two separate, sequential steps —
+        // request approval (run-hitl.ts's requestApproval), then, only if
+        // approved, run the tool (run-hitl.ts's runApprovedTool) — kept as
+        // two distinct calls here rather than one bundling function, so the
+        // approval decision and the tool call stay visibly decoupled in this
+        // loop. Like the rest of this branch, calls step.run/waitForEvent
+        // itself (inside requestApproval), so it must run un-nested here,
+        // same reasoning as SELF_STEPPED_TOOLS's own comment below.
+        if (NEEDS_APPROVAL.has(call.toolName)) {
+          const decision = await requestApproval(call, correlationId, toolContext);
+
+          if (!decision.approved) {
+            await step.run(traceIoStepId(call.toolName), () =>
+              updateSpanIO(decision.toolSpanId, { output: decision.notApprovedOutput }),
+            );
+            // See RunAgentTurnResult.firedTags for why this is collected
+            // here rather than as a span attribute — pushed regardless of
+            // the decision's outcome (approved/rejected/timed out all still
+            // count as "this tool was attempted this turn").
+            firedTags.push(call.toolName);
+            return decision.notApprovedOutput;
+          }
+
+          // Own step, distinct from the tool-span-creation step inside
+          // requestApproval — this is the call's real dispatch, memoized
+          // separately so a replay after some later suspend elsewhere in the
+          // same turn doesn't re-run it.
+          const output = await step.run(`execute-${call.toolName}`, () =>
+            runApprovedTool(call.toolName, call.input, decision.payload, toolContext),
+          );
+          await step.run(traceIoStepId(call.toolName), () =>
+            updateSpanIO(decision.toolSpanId, { output }),
+          );
           firedTags.push(call.toolName);
           return output;
         }
 
-        // Every other tool (not self-stepped, not gated): dispatchToolExecution
-        // (run-tool.ts) gives it the same gen_ai.tool.* execution span shape as
-        // the gated/wants_human call sites above. send_booking_link never
-        // reaches this branch (see SELF_STEPPED_TOOLS above) — its
-        // "braintrust.tags" tagging happens inside approval-gate.ts's
-        // requestApprovalGate span instead.
-        async function dispatchGenericTool(span: Span): Promise<unknown> {
-          return dispatchToolExecution(span, call.input, () =>
-            runTool(call.toolName, call.input, toolContext),
-          );
+        // See SELF_STEPPED_TOOLS above for why wants_human is dispatched
+        // directly here instead of wrapped in step.run — in practice, the
+        // only tool that still reaches this branch, since NEEDS_APPROVAL
+        // above already consumed missing_info/send_booking_link.
+        // Concretely: this branch (like the rest of the loop body)
+        // re-executes on every Inngest replay, so tracing it here would
+        // duplicate-emit a span every time the function replays after a
+        // suspend. Every other tool IS already inside
+        // step.run(`tool-${call.toolName}`, ...) below, which Inngest only
+        // actually executes once — replays return the memoized value without
+        // re-running the callback — so wrapping the runTool call inside it
+        // there is replay-safe.
+        if (SELF_STEPPED_TOOLS.has(call.toolName)) {
+          const output = await runTool(call.toolName, call.input, toolContext);
+          // See RunAgentTurnResult.firedTags for why this is collected here
+          // rather than as a span attribute.
+          firedTags.push(call.toolName);
+          return output;
         }
 
+        // Every other tool (the 5 plain ones): dispatchToolExecution
+        // (run-tool.ts) gives it the same gen_ai.tool.* execution span shape
+        // as the NEEDS_APPROVAL/wants_human call sites above.
         return await steppedSpan(
           step,
           `tool-${call.toolName}`,
           turnAnchor,
           `gen_ai.tool.${call.toolName}`,
           { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-          dispatchGenericTool,
+          (span) =>
+            dispatchToolExecution(span, call.input, () =>
+              runTool(call.toolName, call.input, toolContext),
+            ),
         );
       }),
     );
