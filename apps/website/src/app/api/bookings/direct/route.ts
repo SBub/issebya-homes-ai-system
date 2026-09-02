@@ -6,9 +6,9 @@ import { stripe } from "@/lib/stripe";
 
 // bookings no longer stores email directly (see
 // 20260821160000_link_bookings_to_guest_contacts.sql) — it's joined through
-// guest_contact_id and flattened back onto a top-level `email` key so
-// BookingConfirmationDetails.tsx's existing `booking.email` usage keeps
-// working unchanged.
+// guest_contact_id and flattened back onto a top-level `email` key so the
+// booking confirmation page's (page.tsx) existing `booking.email` usage
+// keeps working unchanged.
 type EmbeddedGuestContact =
   { email: string | null } | { email: string | null }[] | null | undefined;
 
