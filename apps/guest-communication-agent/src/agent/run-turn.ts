@@ -87,13 +87,15 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 // step usage of its own, so wrapping the whole call in one step.run is safe
 // and gives it real memoization/replay safety.
 //
-// In practice, since the loop checks NEEDS_APPROVAL first (see below) and
-// missing_info/send_booking_link are both members of it, this set's own
-// branch is only ever actually reached by wants_human — kept as a real
-// 3-member set regardless, since the underlying step-nesting constraint it
-// documents is genuinely true for all three, independent of NEEDS_APPROVAL's
-// separate (narrower) gating concern.
-const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "send_booking_link"]);
+// SELF_STEPPED_TOOLS is the name for that shared constraint (wants_human,
+// missing_info, send_booking_link), referenced by comments across this app
+// (approval-gate.ts, missing-info.ts, wants-human.ts, tracing.ts,
+// property-question.ts) — not a live Set here: since the loop checks
+// NEEDS_APPROVAL first (see below) and missing_info/send_booking_link are
+// both members of it, the branch below that would have checked
+// SELF_STEPPED_TOOLS is only ever actually reachable by wants_human, so it
+// checks that directly instead of via a 3-member Set whose other two
+// members could never arrive there.
 
 // Batches every tool call's output from a round into a single "tool" role
 // message with one content part per call, matching the shape AI SDK itself
@@ -385,19 +387,21 @@ export async function runAgentTurn(
           return output;
         }
 
-        // See SELF_STEPPED_TOOLS above for why wants_human is dispatched
-        // directly here instead of wrapped in step.run — in practice, the
-        // only tool that still reaches this branch, since NEEDS_APPROVAL
-        // above already consumed missing_info/send_booking_link.
-        // Concretely: this branch (like the rest of the loop body)
-        // re-executes on every Inngest replay, so tracing it here would
-        // duplicate-emit a span every time the function replays after a
-        // suspend. Every other tool IS already inside
-        // step.run(`tool-${call.toolName}`, ...) below, which Inngest only
-        // actually executes once — replays return the memoized value without
-        // re-running the callback — so wrapping the runTool call inside it
-        // there is replay-safe.
-        if (SELF_STEPPED_TOOLS.has(call.toolName)) {
+        // wants_human is the only tool that can reach this branch: it's a
+        // SELF_STEPPED_TOOLS tool (see that comment above for why — its own
+        // dispatch calls step.run itself, so it must not be nested inside
+        // another step.run), but the other two SELF_STEPPED_TOOLS tools
+        // (missing_info/send_booking_link) are NEEDS_APPROVAL too, so the
+        // branch above already returns for them before execution ever
+        // reaches here. Concretely:
+        // this branch (like the rest of the loop body) re-executes on every
+        // Inngest replay, so tracing it here would duplicate-emit a span
+        // every time the function replays after a suspend. Every other tool
+        // IS already inside step.run(`tool-${call.toolName}`, ...) below,
+        // which Inngest only actually executes once — replays return the
+        // memoized value without re-running the callback — so wrapping the
+        // runTool call inside it there is replay-safe.
+        if (call.toolName === "wants_human") {
           const output = await runTool(call.toolName, call.input, toolContext);
           // See RunAgentTurnResult.firedTags for why this is collected here
           // rather than as a span attribute.
