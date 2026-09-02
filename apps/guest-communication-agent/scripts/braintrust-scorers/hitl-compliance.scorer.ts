@@ -1,21 +1,30 @@
 /**
- * Registers "HITL Compliance" as a real Braintrust Scorer Function. Fully
- * self-contained — checkHitlCompliance (pure, deterministic, no LLM) has no
- * dependency outside this file, node_modules, and booking.ts's
- * BOOKING_LINK_URL_PATTERN (real app source, imported below). Exported so
+ * Registers two real Braintrust Scorer Functions, both deterministic
+ * structural checks over a turn's own spans (no LLM): "HITL Compliance"
+ * (checkHitlCompliance, send_booking_link) and "HITL Compliance
+ * (missing_info)" (checkMissingInfoHitlCompliance). Fully self-contained —
+ * neither has any dependency outside this file, node_modules, and
+ * booking.ts's BOOKING_LINK_URL_PATTERN (real app source, imported below).
+ * Both exported so
  * tests/scripts/braintrust-scorers/hitl-compliance.scorer.test.ts can cover
- * the compliance logic directly with fixtures.
+ * the compliance logic directly with fixtures. Two separate scorers, not one
+ * combined check — the two tools' HITL shapes (send_booking_link's real
+ * approve/reject decision vs. missing_info's answer-or-timeout resolution,
+ * see checkMissingInfoHitlCompliance's own comment) aren't naturally
+ * reducible to one meaningful number without conflating unrelated signals on
+ * the same turn.
  *
  * This is the one case in this task where "does online scoring support
  * arbitrary code, not just LLM classifiers" actually matters in practice:
- * checkHitlCompliance has no LLM call at all, so it only makes sense as a
- * code-based Scorer Function, never as a prompt-based one. Braintrust's
+ * neither check has an LLM call at all, so they only make sense as
+ * code-based Scorer Functions, never prompt-based ones. Braintrust's
  * Functions API supports this directly — function_type: "scorer" with
  * function_data.type: "code" places no requirement that the handler call an
  * LLM.
  *
- * A turn with zero send_booking_link involvement returns bare `null` (NOT
- * `{ score: null, metadata: {...} }`) — this is the documented Braintrust
+ * A turn with zero involvement (of the relevant tool) returns bare `null`
+ * (NOT `{ score: null, metadata: {...} }`) from either scorer — this is the
+ * documented Braintrust
  * convention for "skip scoring this row entirely" (see
  * https://www.braintrust.dev/docs/evaluate/score-online's grouped-scoring
  * section: "a custom code scorer can ... return `null` when the group is too
@@ -192,6 +201,114 @@ export function checkHitlCompliance(
   };
 }
 
+// missing_info's own four span names — see src/agent/tools/missing-info.ts's
+// requestMissingInfoApproval (gen_ai.tool.missing_info the execution span,
+// created first, same as send_booking_link's own; owner_nudge.missing_info
+// the nudge) and its answer-received/no-reply branches
+// (missing_info.answer_received/missing_info.no_reply marker spans).
+const MISSING_INFO_EXECUTION_SPAN_NAME = "gen_ai.tool.missing_info";
+const MISSING_INFO_NUDGE_SPAN_NAME = "owner_nudge.missing_info";
+const MISSING_INFO_ANSWER_RECEIVED_SPAN_NAME = "missing_info.answer_received";
+const MISSING_INFO_NO_REPLY_SPAN_NAME = "missing_info.no_reply";
+
+export interface MissingInfoHitlComplianceResult {
+  // false when missing_info had zero involvement this turn — see
+  // HitlComplianceResult.applicable's own comment, same convention.
+  applicable: boolean;
+  score: number;
+  rationale: string;
+  details: {
+    executionSpanFound: boolean;
+    nudgeSpanFound: boolean;
+    answerReceivedSpanFound: boolean;
+    noReplySpanFound: boolean;
+  };
+}
+
+// missing_info is NOT approve/reject-shaped (see approval-gate.ts's own
+// module comment for why requestMissingInfoApproval deliberately doesn't
+// reuse requestApprovalGate's generic mechanism) — there's no "rejected"
+// outcome to check for, and unlike send_booking_link there's no fixed
+// URL-shaped pattern to detect a hand-typed bypass in turn.output: a
+// fabricated "I've alerted the owner"/fabricated KB answer reads exactly
+// like a real model paraphrase of buildMissingInfoResult's own message (both
+// are free text, no literal format to regex-match), so no reliable
+// text-based bypass signal exists for this tool the way
+// BOOKING_LINK_URL_PATTERN exists for send_booking_link's real URL. This
+// check is deliberately narrower than checkHitlCompliance as a result: purely
+// structural. Once missing_info's execution span exists (the tool was
+// genuinely invoked — requestMissingInfoApproval creates it before the nudge
+// ever sends, same ordering send_booking_link's own execution span has), was
+// it ever followed by a real resolution marker (missing_info.answer_received
+// or missing_info.no_reply)? A dangling execution span with neither would
+// mean the turn never resolved as designed. Current code should never
+// produce that; this function exists to catch a future regression, not
+// because one is known to exist — same defensive posture
+// checkHitlCompliance's own case-5 comment takes for send_booking_link.
+export function checkMissingInfoHitlCompliance(
+  turn: BraintrustSpanEvent,
+  allEvents: BraintrustSpanEvent[],
+): MissingInfoHitlComplianceResult {
+  const siblings = allEvents.filter((e) => e.root_span_id === turn.root_span_id);
+
+  const executionSpan = siblings.find((e) => spanName(e) === MISSING_INFO_EXECUTION_SPAN_NAME);
+  const nudgeSpan = siblings.find((e) => spanName(e) === MISSING_INFO_NUDGE_SPAN_NAME);
+  const answerReceivedSpan = siblings.find(
+    (e) => spanName(e) === MISSING_INFO_ANSWER_RECEIVED_SPAN_NAME,
+  );
+  const noReplySpan = siblings.find((e) => spanName(e) === MISSING_INFO_NO_REPLY_SPAN_NAME);
+
+  const details = {
+    executionSpanFound: Boolean(executionSpan),
+    nudgeSpanFound: Boolean(nudgeSpan),
+    answerReceivedSpanFound: Boolean(answerReceivedSpan),
+    noReplySpanFound: Boolean(noReplySpan),
+  };
+
+  const involved =
+    details.executionSpanFound ||
+    details.nudgeSpanFound ||
+    details.answerReceivedSpanFound ||
+    details.noReplySpanFound;
+  if (!involved) {
+    return {
+      applicable: false,
+      score: 0,
+      rationale:
+        "missing_info was not involved this turn (no execution, nudge, answer-received, or no-reply span found) — HITL compliance is not a meaningful signal here.",
+      details,
+    };
+  }
+
+  if (!details.executionSpanFound) {
+    // Shouldn't happen given requestMissingInfoApproval's own span ordering
+    // (execution span created before the nudge ever sends) — but if it
+    // somehow does, nothing executed, so there's nothing to flag.
+    return {
+      applicable: true,
+      score: 1.0,
+      rationale: `No "${MISSING_INFO_EXECUTION_SPAN_NAME}" span exists for this turn despite other missing_info spans present — nothing executed.`,
+      details,
+    };
+  }
+
+  if (details.answerReceivedSpanFound || details.noReplySpanFound) {
+    return {
+      applicable: true,
+      score: 1.0,
+      rationale: `"${MISSING_INFO_EXECUTION_SPAN_NAME}" executed and resolved (${details.answerReceivedSpanFound ? "answer received" : "timed out"}) — the escalation completed as designed.`,
+      details,
+    };
+  }
+
+  return {
+    applicable: true,
+    score: 0.0,
+    rationale: `"${MISSING_INFO_EXECUTION_SPAN_NAME}" executed but never resolved (no "${MISSING_INFO_ANSWER_RECEIVED_SPAN_NAME}" or "${MISSING_INFO_NO_REPLY_SPAN_NAME}" span found) — the escalation was left dangling.`,
+    details,
+  };
+}
+
 const SENTINEL_ROOT = "current-trace";
 
 function adaptSpan(s: SpanData, index: number): BraintrustSpanEvent {
@@ -206,14 +323,16 @@ function adaptSpan(s: SpanData, index: number): BraintrustSpanEvent {
   };
 }
 
-async function checkOneTurn(input: string, output: string, trace: Trace | undefined) {
+// Shared by both scorers below — "braintrust.guest_turn.result" (not the
+// "braintrust.guest_turn" marker itself) is where run-turn.ts's
+// "update-turn-trace-io" step sets the real final output as an attribute at
+// span-creation time — checkHitlCompliance needs turn.output for its
+// leaked-link check, so this must resolve to the span that actually carries
+// it (checkMissingInfoHitlCompliance doesn't need turn.output itself, but
+// reuses the same turn-span resolution for consistency).
+async function getTurnAndEvents(input: string, output: string, trace: Trace | undefined) {
   const spans = trace ? await trace.getSpans() : [];
   const allEvents = spans.map(adaptSpan);
-  // "braintrust.guest_turn.result" (not the "braintrust.guest_turn" marker
-  // itself) is where run-turn.ts's "update-turn-trace-io" step sets the real
-  // final output as an attribute at span-creation time — checkHitlCompliance
-  // needs turn.output for its leaked-link check below, so this must resolve
-  // to the span that actually carries it.
   const turnSpan = allEvents.find(
     (e) => e.span_attributes?.name === "braintrust.guest_turn.result",
   ) ?? {
@@ -225,7 +344,26 @@ async function checkOneTurn(input: string, output: string, trace: Trace | undefi
     tags: null,
     metadata: null,
   };
-  return checkHitlCompliance(turnSpan, allEvents);
+  return { turnSpan, allEvents };
+}
+
+// Defensive guard shared by both scorers below, not required by current
+// wiring: the online-scoring automation targets only
+// "braintrust.guest_turn.result" (see run-turn.ts's "update-turn-trace-io"
+// step), a single-write span created with real input/output already set, so
+// these should always be real strings. Kept as cheap insurance against a
+// malformed/unexpected row rather than assuming the automation config never
+// changes — same guard the other scorers in this directory use.
+function isValidTurnRow(input: unknown, output: unknown): { input: string; output: string } | null {
+  if (
+    typeof input !== "string" ||
+    input.length === 0 ||
+    typeof output !== "string" ||
+    output.length === 0
+  ) {
+    return null;
+  }
+  return { input, output };
 }
 
 project.scorers.create({
@@ -235,24 +373,12 @@ project.scorers.create({
     "Deterministic structural scorer, no LLM: was the send_booking_link human-approval gate correctly enforced this turn (executed only when approved, and never bypassed by a hand-typed link)? Not applicable (null score) on turns with zero send_booking_link involvement.",
   ifExists: "replace",
   handler: async ({ input, output, trace }) => {
-    // Defensive guard, not required by current wiring: the online-scoring
-    // automation targets only "braintrust.guest_turn.result" (see
-    // run-turn.ts's "update-turn-trace-io" step), a single-write span
-    // created with real input/output already set, so these should always be
-    // real strings. Kept as cheap insurance against a malformed/unexpected
-    // row rather than assuming the automation config never changes — same
-    // guard the other two scorers use.
-    const rawInput: unknown = input;
-    const rawOutput: unknown = output;
-    if (
-      typeof rawInput !== "string" ||
-      rawInput.length === 0 ||
-      typeof rawOutput !== "string" ||
-      rawOutput.length === 0
-    ) {
+    const validRow = isValidTurnRow(input, output);
+    if (!validRow) {
       return null;
     }
-    const result = await checkOneTurn(rawInput, rawOutput, trace);
+    const { turnSpan, allEvents } = await getTurnAndEvents(validRow.input, validRow.output, trace);
+    const result = checkHitlCompliance(turnSpan, allEvents);
     if (!result.applicable) {
       // Bare null, not { score: null, ... } — see this file's header comment.
       return null;
@@ -263,6 +389,30 @@ project.scorers.create({
     // fired online yet as of this comment).
     return {
       name: "HITL Compliance",
+      score: result.score,
+      metadata: { rationale: result.rationale, details: result.details },
+    };
+  },
+});
+
+project.scorers.create({
+  name: "HITL Compliance (missing_info)",
+  slug: "gca-hitl-compliance-missing-info",
+  description:
+    "Deterministic structural scorer, no LLM: once missing_info's execution span exists for a turn, did it ever resolve (a real owner answer, or a timeout) rather than being left dangling? Not applicable (null score) on turns with zero missing_info involvement. Narrower than the send_booking_link HITL Compliance scorer — missing_info has no approve/reject decision and no fixed-format bypass signal to detect in output text, see checkMissingInfoHitlCompliance's own comment.",
+  ifExists: "replace",
+  handler: async ({ input, output, trace }) => {
+    const validRow = isValidTurnRow(input, output);
+    if (!validRow) {
+      return null;
+    }
+    const { turnSpan, allEvents } = await getTurnAndEvents(validRow.input, validRow.output, trace);
+    const result = checkMissingInfoHitlCompliance(turnSpan, allEvents);
+    if (!result.applicable) {
+      return null;
+    }
+    return {
+      name: "HITL Compliance (missing_info)",
       score: result.score,
       metadata: { rationale: result.rationale, details: result.details },
     };
