@@ -42,12 +42,10 @@ export const sendBookingLink = tool({
   inputSchema: sendBookingLinkSchema,
 });
 
-// The event a suspended run-turn.ts approval-gate wait resolves on, and that
+// The event a suspended requestApprovalGate wait resolves on, and that
 // handleBookingLinkApprovalReceived below sends — shared as a constant so the
 // two ends can't drift apart, same reasoning as missing-info.ts's
-// OWNER_NUDGE_ANSWERED_EVENT. Exported for run-turn.ts's APPROVAL_GATES
-// table — the gate's caller, not this file, is what actually waits on it
-// (see approval-gate.ts's requestApprovalGate).
+// OWNER_NUDGE_ANSWERED_EVENT. Exported for tests/agent/tools/booking.test.ts.
 export const BOOKING_LINK_APPROVAL_EVENT = "gca/booking-link.approval";
 
 // Inngest's step.waitForEvent requires a bounded `timeout` string (see
@@ -56,10 +54,8 @@ export const BOOKING_LINK_APPROVAL_EVENT = "gca/booking-link.approval";
 // the owner must be able to approve/reject whenever they get to it, not lose
 // the request after a fixed window like missing_info's 24h. "52w" (~1 year)
 // is the longest practical stand-in for "forever" this constraint allows.
-// Exported for run-turn.ts's APPROVAL_GATES table — still a booking-specific
-// policy value, just consumed by the runtime dispatch loop instead of used
-// internally here.
-export const BOOKING_LINK_APPROVAL_TIMEOUT = "52w";
+// Not exported — only used within this file's own requestSendBookingLinkApproval.
+const BOOKING_LINK_APPROVAL_TIMEOUT = "52w";
 
 // Renders an ISO YYYY-MM-DD date as European DD-MM-YYYY for human display —
 // the owner-facing Telegram nudge text, never the tool's own args/URL, which

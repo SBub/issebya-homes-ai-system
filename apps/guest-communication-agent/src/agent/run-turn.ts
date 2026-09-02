@@ -4,20 +4,14 @@ import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
+import { NEEDS_APPROVAL, runHitl } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { dispatchToolExecution, runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
-import {
-  BOOKING_LINK_APPROVAL_EVENT,
-  BOOKING_LINK_APPROVAL_TIMEOUT,
-  buildBookingApprovalReason,
-  requestSendBookingLinkApproval,
-} from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
-import { type OwnerNudgeReason } from "@/agent/tools/owner-nudge";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { markSpanFailed, steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
+import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
@@ -78,12 +72,9 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 // whether it's genuinely the same case before treating it as precedent.
 
 // Tools whose dispatch itself calls step.run/step.waitForEvent — wants_human
-// via wants-human.ts's own runWantsHuman, missing_info via missing-info.ts's
-// own runMissingInfo, send_booking_link via this file's own private
-// dispatchGatedToolCall (which also calls into approval-gate.ts's
-// requestApprovalGate for any APPROVAL_GATES-gated tool, send_booking_link
-// today) — see the "tool files stay pure" rule above for the two kinds of
-// exception this covers. Inngest
+// via wants-human.ts's own runWantsHuman, missing_info and send_booking_link
+// via run-hitl.ts's runHitl (see NEEDS_APPROVAL below) — see the "tool files
+// stay pure" rule above for the two kinds of exception this covers. Inngest
 // doesn't support calling a step tool from inside another step.run()'s
 // callback — the callback must be a self-contained unit of work — so
 // wants_human, missing_info, and send_booking_link are all dispatched
@@ -91,110 +82,6 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 // other tool has no step usage of its own, so wrapping the whole call in one
 // step.run is safe and gives it real memoization/replay safety.
 const SELF_STEPPED_TOOLS = new Set(["wants_human", "missing_info", "send_booking_link"]);
-
-// The gating POLICY table: which tools require real owner approve/reject
-// before they're allowed to dispatch, and how (which Telegram nudge reason
-// text/category, which Inngest event, how long to wait for a decision).
-// Deliberately visible here, in the runtime dispatch loop, rather than
-// buried inside each tool's own file — this is the one place to read
-// "which tool calls need approval and how" at a glance. The generic
-// suspend/nudge/wait MECHANISM those approved tools reuse lives in
-// approval-gate.ts's requestApprovalGate; this table only supplies the
-// per-tool policy values that mechanism needs.
-//
-// wants_human and missing_info have no entry here on purpose: wants_human is
-// a one-way alert with no decision to approve, and missing_info's
-// suspend/resume resolves to an answer STRING to embed in the KB, not a
-// yes/no decision — neither is approve/reject-shaped, so neither goes
-// through this gate. Both still dispatch via SELF_STEPPED_TOOLS below,
-// exactly as before.
-//
-// Pulled out as its own named type (not inlined into APPROVAL_GATES' own
-// declaration) so dispatchGatedToolCall further down can accept one without
-// repeating the object-literal shape at both definition sites.
-interface ApprovalGateConfig {
-  reasonCategory: OwnerNudgeReason;
-  buildReason: (input: Record<string, unknown>) => string;
-  event: string;
-  timeout: string;
-}
-
-const APPROVAL_GATES: Partial<Record<string, ApprovalGateConfig>> = {
-  send_booking_link: {
-    reasonCategory: "send_booking_link",
-    buildReason: (input) =>
-      buildBookingApprovalReason(input as Parameters<typeof buildBookingApprovalReason>[0]),
-    event: BOOKING_LINK_APPROVAL_EVENT,
-    timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
-  },
-};
-
-// APPROVAL_GATES-gated dispatch (send_booking_link today, any future gated
-// tool tomorrow): creates the real gen_ai.tool.<name> execution span FIRST —
-// before requestApprovalGate ever runs — with the model's real tool-call
-// `input` set at creation, same shape wants-human.ts's own runWantsHuman/
-// missing-info.ts's own runMissingInfo give their own tool spans. Only
-// `fn`'s return value (the real OTel-generated span id) survives this step —
-// same pattern those two functions' own toolSpanId uses, for the same reason
-// (no live Span object survives an Inngest step boundary). That id becomes a
-// new toolAnchor, passed to requestApprovalGate as its own traceAnchor
-// param, so the nudge/decision/timeout spans requestApprovalGate creates
-// internally become this tool-call span's real children instead of siblings
-// of the turn's own anchor — the same reparenting missing-info.ts's own
-// runMissingInfo gets for owner_nudge.missing_info/missing_info.no_reply
-// relative to gen_ai.tool.missing_info, just crossing into
-// approval-gate.ts's shared mechanism instead of being entirely local to
-// this file.
-//
-// Glues send_booking_link's two halves together and patches the tool-call
-// span's real output — same shape missing-info.ts's own runMissingInfo has
-// relative to requestMissingInfoApproval/buildMissingInfoResult, just with
-// the gluing done here instead of in the tool's own file, since (unlike
-// missing_info) the "which tool needs approval and how" policy is still
-// visible in this file's own APPROVAL_GATES table for now. `gate` is
-// currently unused (requestSendBookingLinkApproval hardcodes booking's own
-// policy values itself) — kept in the signature/call site unchanged for
-// this step; APPROVAL_GATES/ApprovalGateConfig's removal is a later,
-// separate step.
-//
-// Every outcome funnels into one updateSpanIO patch on toolSpanId, unlike
-// the pre-fix behavior where only the approved path ever got an execution
-// span at all: a rejected/timed-out call patches the same not-approved shape
-// already returned to the model; an approved call patches the real
-// execution result. Private: only called from the loop's SELF_STEPPED_TOOLS
-// branch below, never nested inside another step.run — safe to call from
-// there because, like wants-human.ts's own runWantsHuman/missing-info.ts's
-// own runMissingInfo, this function calls step.run/requestSendBookingLinkApproval
-// itself rather than being called from inside one (see SELF_STEPPED_TOOLS's
-// own comment for why that nesting is unsafe).
-async function dispatchGatedToolCall(
-  call: { toolCallId: string; toolName: string; input: Record<string, unknown> },
-  gate: ApprovalGateConfig,
-  correlationId: string,
-  context: ToolContext,
-): Promise<unknown> {
-  void gate;
-  const decision = await requestSendBookingLinkApproval(call, correlationId, context);
-
-  if (!decision.approved) {
-    await context.step.run(`update-${call.toolName}-trace-io`, () =>
-      updateSpanIO(decision.toolSpanId, { output: decision.notApprovedOutput }),
-    );
-    return decision.notApprovedOutput;
-  }
-
-  // Own step, distinct from the tool-span-creation step inside
-  // requestSendBookingLinkApproval — this is the call's real dispatch
-  // (runSendBookingLink today), memoized separately so a replay after some
-  // later suspend elsewhere in the same turn doesn't re-run it.
-  const output = await context.step.run(`execute-${call.toolName}`, () =>
-    runTool(call.toolName, call.input, context),
-  );
-  await context.step.run(`update-${call.toolName}-trace-io`, () =>
-    updateSpanIO(decision.toolSpanId, { output }),
-  );
-  return output;
-}
 
 // Batches every tool call's output from a round into a single "tool" role
 // message with one content part per call, matching the shape AI SDK itself
@@ -259,11 +146,11 @@ export interface RunAgentTurnResult {
   // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
   // missing_info, send_booking_link). All three now get their own
   // gen_ai.tool.* execution span too, unconditionally (wants_human's via
-  // wants-human.ts's own runWantsHuman's steppedSpan; missing_info's via
-  // missing-info.ts's own runMissingInfo's steppedSpan; send_booking_link's
-  // via dispatchGatedToolCall's own steppedSpan — created in this file,
-  // before requestApprovalGate ever runs, not inside approval-gate.ts, which
-  // only creates that span's own
+  // wants-human.ts's own runWantsHuman's steppedSpan; missing_info's/
+  // send_booking_link's via their own requestMissingInfoApproval/
+  // requestSendBookingLinkApproval steppedSpan — created before the HITL
+  // wait ever runs, not inside approval-gate.ts, which only creates that
+  // span's own
   // nudge/decision/timeout children), so none of the three strictly needs to
   // ride along in firedTags too — but all three are dispatched via
   // this same SELF_STEPPED_TOOLS branch below, which pushes every
@@ -442,7 +329,7 @@ export async function runAgentTurn(
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
-    // message ourselves; a rejected APPROVAL_GATES call never reaches
+    // message ourselves; a not-approved NEEDS_APPROVAL call never reaches
     // run-tool.ts's runTool.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
@@ -460,13 +347,12 @@ export async function runAgentTurn(
         // value without re-running the callback — so wrapping the runTool
         // call inside it there is replay-safe.
         if (SELF_STEPPED_TOOLS.has(call.toolName)) {
-          // The gating check itself: only tools with an APPROVAL_GATES entry
-          // (send_booking_link today) go through dispatchGatedToolCall at all —
-          // wants_human/missing_info have no entry (see APPROVAL_GATES'
-          // comment) and fall straight through to runTool below.
-          const gate = APPROVAL_GATES[call.toolName];
-          if (gate) {
-            const output = await dispatchGatedToolCall(call, gate, correlationId, toolContext);
+          // The gating check itself: only NEEDS_APPROVAL tools (run-hitl.ts)
+          // go through runHitl at all — wants_human isn't one (see
+          // NEEDS_APPROVAL's own comment) and falls straight through to
+          // runTool below.
+          if (NEEDS_APPROVAL.has(call.toolName)) {
+            const output = await runHitl(call, correlationId, toolContext);
             // See RunAgentTurnResult.firedTags for why this is collected
             // here rather than as a span attribute — pushed regardless of
             // the gate's outcome (approved/rejected/timed out all still
