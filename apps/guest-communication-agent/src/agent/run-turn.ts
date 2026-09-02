@@ -6,7 +6,7 @@ import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
 import { NEEDS_APPROVAL, requestApproval, runApprovedTool, traceIoStepId } from "@/agent/run-hitl";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
-import { dispatchToolExecution, runTool } from "@/agent/run-tool";
+import { runTool } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
 import type { HitlDecision } from "@/agent/tools/approval-gate";
 import type { ToolContext } from "@/agent/tools/config";
@@ -58,45 +58,47 @@ const MAX_AGENT_STEPS = 8;
 // this existed.
 const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again shortly.";
 
-// RULE: most tool files (src/agent/tools/*.ts) stay pure — no step/span/
-// Inngest imports; all durability/tracing plumbing belongs here, in
-// run-tool.ts (the tool registry + generic dispatcher this file calls into),
-// run-hitl.ts (the approval/tool-call halves this loop calls directly for
-// NEEDS_APPROVAL tools, see below), or in approval-gate.ts's shared gate.
-// booking.ts is the model for what "pure" looks like. Two kinds of
-// deliberate exception exist: a plain OTel span with zero step/Inngest
-// coupling (property-question.ts's own DB-call span, owner-nudge.ts's send
-// span) — not durability plumbing, just tracing; and a tool whose own
-// dispatch genuinely needs real Inngest step/waitForEvent semantics
-// (wants-human.ts's own runWantsHuman, missing-info.ts's own runMissingInfo)
-// — that plumbing lives inside the tool's own run<ToolName>, per this app's
-// run<ToolName> convention, not here. If you're adding either kind, ask
-// whether it's genuinely the same case before treating it as precedent.
-
-// Tools whose dispatch itself calls step.run/step.waitForEvent — wants_human
-// via wants-human.ts's own runWantsHuman (through the generic runTool
-// below), missing_info and send_booking_link via this loop's own
-// NEEDS_APPROVAL branch (run-hitl.ts's requestApproval, then — only once
-// approved — run-hitl.ts's runApprovedTool: two separate, sequential steps,
-// deliberately not bundled into one function, so the approval decision and
-// the tool call stay visibly distinct here) — see the "tool files stay pure"
-// rule above for the two kinds of exception this covers. Inngest doesn't
-// support calling a step tool from inside another step.run()'s callback —
-// the callback must be a self-contained unit of work — so wants_human,
-// missing_info, and send_booking_link are all dispatched directly from the
-// loop below (never wrapped in an outer step.run). Every other tool has no
-// step usage of its own, so wrapping the whole call in one step.run is safe
-// and gives it real memoization/replay safety.
+// RULE: every tool owns its own gen_ai.tool.<name> execution span and any
+// step/waitForEvent usage it needs — created inside that tool's own
+// run<ToolName>, in its own file under src/agent/tools/ (this app's
+// run<ToolName> convention, see wants-human.ts's runWantsHuman for the
+// model every tool follows). This loop calls tools uniformly (see the
+// dispatch loop below) and does no span-wrapping of its own for any of
+// them — that used to live here as a generic wrapper; it's now inside each
+// tool instead, so "what does this tool actually do" and "how is it traced"
+// are answerable from one file per tool, not split between the tool's own
+// file and this one.
 //
-// SELF_STEPPED_TOOLS is the name for that shared constraint (wants_human,
-// missing_info, send_booking_link), referenced by comments across this app
-// (approval-gate.ts, missing-info.ts, wants-human.ts, tracing.ts,
-// property-question.ts) — not a live Set here: since the loop checks
-// NEEDS_APPROVAL first (see below) and missing_info/send_booking_link are
-// both members of it, the branch below that would have checked
-// SELF_STEPPED_TOOLS is only ever actually reachable by wants_human, so it
-// checks that directly instead of via a 3-member Set whose other two
-// members could never arrive there.
+// Two tiers of tool exist, differing only in how MUCH step/span machinery
+// they need, not in whether they need any:
+// - The 5 plain tools (get_pricing, check_availability,
+//   answer_property_question, get_current_date, run_code) and wants_human
+//   have no real side effect worth protecting across a crash-and-replay
+//   beyond one atomic unit of work, so each wraps its whole logic in a
+//   single steppedSpan call (see tool-execution.ts's dispatchToolExecution,
+//   the shared helper the 5 plain tools call from inside that one step).
+//   wants_human is the one exception in this tier that needs more than a
+//   single step — see wants-human.ts's own comment for why (a real
+//   Telegram send that must not double-fire on an Inngest retry needs its
+//   own separately-memoized step, distinct from the span-creation and
+//   output-patch steps around it).
+// - missing_info and send_booking_link (run-hitl.ts's NEEDS_APPROVAL) need
+//   a genuine suspend: their execution span is created BEFORE a real
+//   approval wait starts (so nudge/decision/timeout spans nest under it as
+//   children), and that wait can suspend for hours to up to a year
+//   (send_booking_link's BOOKING_LINK_APPROVAL_TIMEOUT). No single tool call
+//   can "own" a span spanning that — approval (run-hitl.ts's
+//   requestApproval) and execution (run-hitl.ts's runApprovedTool) are two
+//   separate, sequential steps this loop calls directly (see the
+//   NEEDS_APPROVAL branch below), deliberately not bundled into one
+//   function, so the approval decision and the tool call stay visibly
+//   distinct here — the one remaining special case in this loop, forced by
+//   the wait duration, not by choice.
+//
+// Inngest doesn't support calling a step tool from inside another
+// step.run()'s callback — the callback must be a self-contained unit of
+// work — which is why every tool dispatches its own step.run calls itself
+// rather than this loop wrapping them from outside.
 
 // Batches every tool call's output from a round into a single "tool" role
 // message with one content part per call, matching the shape AI SDK itself
@@ -158,22 +160,17 @@ export interface RunAgentTurnResult {
   // below) instead of being patched onto this one — see that step's own
   // comment.
   guestTurnSpanId: string;
-  // Tool names dispatched from SELF_STEPPED_TOOLS this turn (wants_human,
-  // missing_info, send_booking_link). All three now get their own
-  // gen_ai.tool.* execution span too, unconditionally (wants_human's via
-  // wants-human.ts's own runWantsHuman's steppedSpan; missing_info's/
-  // send_booking_link's via their own requestMissingInfoApproval/
-  // requestSendBookingLinkApproval steppedSpan — created before the HITL
-  // wait ever runs, not inside approval-gate.ts, which only creates that
-  // span's own
-  // nudge/decision/timeout children), so none of the three strictly needs to
-  // ride along in firedTags too — but all three are dispatched via one of
-  // this loop's own NEEDS_APPROVAL/SELF_STEPPED_TOOLS branches below, each of
-  // which pushes its own tool name in on dispatch (approved/rejected/timed-out — see
-  // the branch's own comment), so they end up here as a harmless natural side
-  // effect rather than something worth special-casing out. Threaded out so
-  // runGuestTurn can attach these tags to the "update-turn-trace-io" result
-  // span alongside the final input/output.
+  // Deliberately narrow, not "every tool this turn used": only wants_human,
+  // missing_info, and send_booking_link ever get pushed here (see the
+  // dispatch loop's own push sites below) — these three are the tools worth
+  // a turn-level "did this happen" signal (escalation/gating), unlike
+  // get_pricing/check_availability/etc., which fire on nearly every turn and
+  // would just be noise as a filterable tag. All three already get their own
+  // gen_ai.tool.* execution span regardless (each tool's own run<ToolName>
+  // creates it — see the "RULE" comment above), so firedTags isn't needed
+  // for that; it exists purely for this narrower turn-level tagging.
+  // Threaded out so runGuestTurn can attach these tags to the
+  // "update-turn-trace-io" result span alongside the final input/output.
   firedTags: string[];
 }
 
@@ -349,18 +346,18 @@ export async function runAgentTurn(
     // runApprovedTool/runTool at all.
     const toolOutputs = await Promise.all(
       result.toolCalls.map(async (call) => {
-        // Checked first, ahead of SELF_STEPPED_TOOLS below: missing_info and
-        // send_booking_link both require real owner approval before they may
-        // run at all. This block does ONLY that — request approval
-        // (run-hitl.ts's requestApproval), then, on rejection/timeout, return
-        // its not-approved fallback immediately. No tool-calling code lives
-        // in this block: the actual dispatch (run-hitl.ts's runApprovedTool)
-        // is a separate call below, outside this block entirely, so approval
-        // and execution stay two visibly distinct steps rather than one
-        // bundled underneath a single `if`. Like the rest of this branch,
-        // calls step.run/waitForEvent itself (inside requestApproval), so it
-        // must run un-nested here, same reasoning as SELF_STEPPED_TOOLS's own
-        // comment below.
+        // missing_info and send_booking_link both require real owner
+        // approval before they may run at all. This block does ONLY that —
+        // request approval (run-hitl.ts's requestApproval), then, on
+        // rejection/timeout, return its not-approved fallback immediately.
+        // No tool-calling code lives in this block: the actual dispatch
+        // (run-hitl.ts's runApprovedTool) is a separate call below, outside
+        // this block entirely, so approval and execution stay two visibly
+        // distinct steps rather than one bundled underneath a single `if`.
+        // Calls step.run/waitForEvent itself (inside requestApproval), so —
+        // same as every tool's own dispatch below (see the "RULE" comment
+        // above) — it must run un-nested here, never wrapped in an outer
+        // step.run.
         let approvalDecision: HitlDecision<unknown> | undefined;
         if (NEEDS_APPROVAL.has(call.toolName)) {
           approvalDecision = await requestApproval(call, correlationId, toolContext);
@@ -398,42 +395,27 @@ export async function runAgentTurn(
           return output;
         }
 
-        // wants_human is the only tool that can reach this branch: it's a
-        // SELF_STEPPED_TOOLS tool (see that comment above for why — its own
-        // dispatch calls step.run itself, so it must not be nested inside
-        // another step.run), but the other two SELF_STEPPED_TOOLS tools
-        // (missing_info/send_booking_link) are NEEDS_APPROVAL too, so the
-        // branch above already returns for them before execution ever
-        // reaches here. Concretely:
-        // this branch (like the rest of the loop body) re-executes on every
-        // Inngest replay, so tracing it here would duplicate-emit a span
-        // every time the function replays after a suspend. Every other tool
-        // IS already inside step.run(`tool-${call.toolName}`, ...) below,
-        // which Inngest only actually executes once — replays return the
-        // memoized value without re-running the callback — so wrapping the
-        // runTool call inside it there is replay-safe.
+        // Every tool other than NEEDS_APPROVAL's two — including
+        // wants_human — is called the same uniform way: runTool (run-tool.ts)
+        // dispatches to that tool's own run<ToolName>, which creates and
+        // owns its own gen_ai.tool.<name> execution span internally (this
+        // app's run<ToolName> convention — see wants-human.ts's
+        // runWantsHuman for the model every tool follows). This loop does no
+        // span-wrapping of its own for these calls; each tool's own file
+        // does. Re-executes on every Inngest replay like the rest of this
+        // loop body, which is safe here for the same reason it's safe for
+        // any self-stepped tool: each tool's own internal step.run calls (if
+        // any) are individually memoized, so a replay resumes correctly
+        // without re-running already-completed work.
+        const output = await runTool(call.toolName, call.input, toolContext);
+        // See RunAgentTurnResult.firedTags for why only wants_human (of the
+        // tools reaching this point — NEEDS_APPROVAL's two never do) gets
+        // collected here: firedTags is deliberately narrow, not "every tool
+        // this turn used".
         if (call.toolName === "wants_human") {
-          const output = await runTool(call.toolName, call.input, toolContext);
-          // See RunAgentTurnResult.firedTags for why this is collected here
-          // rather than as a span attribute.
           firedTags.push(call.toolName);
-          return output;
         }
-
-        // Every other tool (the 5 plain ones): dispatchToolExecution
-        // (run-tool.ts) gives it the same gen_ai.tool.* execution span shape
-        // as the NEEDS_APPROVAL/wants_human call sites above.
-        return await steppedSpan(
-          step,
-          `tool-${call.toolName}`,
-          turnAnchor,
-          `gen_ai.tool.${call.toolName}`,
-          { "gen_ai.tool.name": call.toolName, "gen_ai.operation.name": "execute_tool" },
-          (span) =>
-            dispatchToolExecution(span, call.input, () =>
-              runTool(call.toolName, call.input, toolContext),
-            ),
-        );
+        return output;
       }),
     );
     messages = [

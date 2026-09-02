@@ -1,9 +1,11 @@
 import type { Span } from "@opentelemetry/api";
 import { embed, tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
 import { openrouter } from "@/lib/openrouter";
-import { markSpanFailed, withSpan } from "@/lib/tracing";
+import { markSpanFailed, steppedSpan, withSpan } from "@/lib/tracing";
 import { createClient } from "../../lib/supabase";
+import type { ToolContext } from "./config";
 
 type DocumentMetadata = {
   source: string;
@@ -34,22 +36,15 @@ export const answerPropertyQuestion = tool({
 // Always searches unfiltered — a prior `filter.type` param was dropped after
 // the model guessing a wrong type silently excluded relevant content.
 //
-// The withSpan below is a deliberate, narrow exception to run-turn.ts's "tool
-// files stay pure, no step/span" rule (see that file's comment near `tools`):
-// it wraps only this file's own DB call, never touches `step`/Inngest, and
-// carries none of the replay-safety hazard that rule exists to prevent (see
-// SELF_STEPPED_TOOLS's comment in run-turn.ts for that hazard). It nests
-// automatically (via OTel's ambient context) inside the generic per-tool span
-// run-turn.ts's dispatch loop already opens for this call, giving fine-grained
-// timing on the DB query specifically — separate from embed() and the rest of
-// this function. Moving it to run-turn.ts would mean moving the Supabase call
-// itself there too (the span has to wrap the actual query), which would pull
-// real business logic into the orchestrator — exactly backwards from what the
-// rule is for. Kept here on purpose; do not treat this as license to add
-// `step`/Inngest usage to this file.
-export async function runAnswerPropertyQuestion(
-  args: z.infer<typeof answerPropertyQuestionSchema>,
-) {
+// The inner withSpan below is a deliberate, narrow exception to this app's
+// "tool files stay pure, no step/Inngest" rule (see run-tool.ts's/
+// run-turn.ts's comments): it wraps only this file's own DB call, never
+// touches `step`/Inngest, and carries none of the replay-safety hazard that
+// rule exists to prevent. It nests automatically (via OTel's ambient
+// context) inside runAnswerPropertyQuestion's own gen_ai.tool.* execution
+// span below, giving fine-grained timing on the DB query specifically —
+// separate from embed() and the rest of this function.
+async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQuestionSchema>) {
   const { embedding } = await embed({
     model: openrouter.embedding("openai/text-embedding-3-small"),
     value: args.query,
@@ -84,4 +79,22 @@ export async function runAnswerPropertyQuestion(
   }
 
   return withSpan("db.matchDocuments", { "db.table": "documents" }, matchDocumentsForQuery);
+}
+
+// The tool's real dispatch: this app's run<ToolName> convention (see
+// wants-human.ts's runWantsHuman for the model this follows) — creates its
+// own gen_ai.tool.answer_property_question execution span, called directly
+// from run-tool.ts's runTool().
+export async function runAnswerPropertyQuestion(
+  args: z.infer<typeof answerPropertyQuestionSchema>,
+  context: ToolContext,
+) {
+  return steppedSpan(
+    context.step,
+    "tool-answer_property_question",
+    context.traceAnchor,
+    "gen_ai.tool.answer_property_question",
+    { "gen_ai.tool.name": "answer_property_question", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, args, () => queryPropertyKnowledgeBase(args)),
+  );
 }

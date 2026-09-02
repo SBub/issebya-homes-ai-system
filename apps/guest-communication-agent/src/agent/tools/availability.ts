@@ -1,5 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
+import { steppedSpan } from "@/lib/tracing";
+import type { ToolContext } from "./config";
 
 function datesOverlap(reqStart: Date, reqEnd: Date, bookedStart: Date, bookedEnd: Date): boolean {
   return reqStart < bookedEnd && reqEnd > bookedStart;
@@ -21,8 +24,10 @@ export const checkAvailability = tool({
 
 // Calls the live GET /api/availability?room= endpoint (which has its own
 // 1-hour in-memory cache server-side) rather than duplicating apps/website's
-// iCal/availability parsing here.
-export async function runCheckAvailability(args: z.infer<typeof checkAvailabilitySchema>) {
+// iCal/availability parsing here. No tracing of its own — also called
+// directly by run-code.ts's sandboxApi (an internal helper invocation, not a
+// real dispatched tool call worth its own trace span).
+export async function computeCheckAvailability(args: z.infer<typeof checkAvailabilitySchema>) {
   const { room, checkIn, checkOut } = args;
   const reqStart = new Date(checkIn);
   const reqEnd = new Date(checkOut);
@@ -45,4 +50,22 @@ export async function runCheckAvailability(args: z.infer<typeof checkAvailabilit
   );
 
   return { available: !conflict, room, checkIn, checkOut };
+}
+
+// The tool's real dispatch: this app's run<ToolName> convention (see
+// wants-human.ts's runWantsHuman for the model this follows) — creates its
+// own gen_ai.tool.check_availability execution span, called directly from
+// run-tool.ts's runTool().
+export async function runCheckAvailability(
+  args: z.infer<typeof checkAvailabilitySchema>,
+  context: ToolContext,
+) {
+  return steppedSpan(
+    context.step,
+    "tool-check_availability",
+    context.traceAnchor,
+    "gen_ai.tool.check_availability",
+    { "gen_ai.tool.name": "check_availability", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, args, () => computeCheckAvailability(args)),
+  );
 }

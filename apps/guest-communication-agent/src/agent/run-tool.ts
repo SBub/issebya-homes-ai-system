@@ -1,5 +1,5 @@
-import type { Span } from "@opentelemetry/api";
 import type { ToolSet } from "ai";
+import { dispatchToolExecution } from "@/agent/tool-execution";
 import { checkAvailability, runCheckAvailability } from "@/agent/tools/availability";
 import { runSendBookingLink, sendBookingLink } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
@@ -9,17 +9,21 @@ import { getPricing, runGetPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion, runAnswerPropertyQuestion } from "@/agent/tools/property-question";
 import { runCode, runRunCode } from "@/agent/tools/run-code";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
-import { markSpanFailed } from "@/lib/tracing";
+import { steppedSpan } from "@/lib/tracing";
 
 // The tool registry + dispatcher: which tools the model can call (`tools`,
-// handed to generateText by run-turn.ts's modelTurn), and how each one
-// actually runs (`runTool`, dispatched from run-turn.ts's tool-call loop —
-// directly for wants_human/missing_info, after an APPROVAL_GATES check for
-// send_booking_link, or wrapped in dispatchToolExecution's tracing for every
-// other tool). Kept together in one file rather than split across
-// run-turn.ts/here: runTool's own "unknown tool name" fallback needs
-// `Object.keys(tools)`, so splitting them would mean a circular import
-// between this file and run-turn.ts.
+// handed to generateText by run-model.ts's runModel), and how each one
+// actually runs (`runTool`, called uniformly from run-turn.ts's dispatch
+// loop for every tool except NEEDS_APPROVAL's two — see run-hitl.ts). Kept
+// together in one file: runTool's own "unknown tool name" fallback needs
+// `Object.keys(tools)`, so splitting the two apart would gain nothing.
+//
+// Every registered tool's own gen_ai.tool.<name> execution span is created
+// by that tool's own run<ToolName>, inside its own file (see
+// tool-execution.ts's dispatchToolExecution, the shared helper each of them
+// calls) — this file does no span-wrapping of its own except for the
+// "unknown tool name" fallback below, which has no tool file of its own to
+// own that span.
 
 // Schema-only tool declarations — dispatch happens manually in runTool()
 // below. Every key here is the literal snake_case tool name the model sees
@@ -37,86 +41,15 @@ export const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Detects the soft-fail result shapes a tool can hand back to
-// dispatchToolExecution below WITHOUT throwing — a real exception already
-// gets recordException + ERROR status for free from withTurnSpan's own catch
-// block (see tracing.ts), so this is only for the intentional "return an
-// error object instead of throwing" shapes. Two known shapes flow through
-// here today:
-//   - run_code's SandboxResult ({ ok: false, error, logs } — see
-//     sandbox.ts's runInSandbox, every one of its early-return branches uses
-//     this shape).
-//   - runTool's own "unknown tool name" fallback (its switch's default
-//     case, below), which returns a bare { error: string } with no `ok`
-//     field at all.
-// Deliberately narrow, not "does this object have an `error` key anywhere":
-// several tools return a plain, successful object that happens to contain an
-// `error`-named field as part of normal (non-exceptional) data — e.g.
-// checkAvailability's { available: false, error: "Invalid date format" } for
-// a malformed date range, which is a valid tool result, not a dispatch
-// failure. Only `ok === false` explicitly, or the fallback's exact
-// single-key `{ error: string }` shape, count as a soft-fail here — anything
-// else (a plain string, a plain object with other fields, `ok: true`, no
-// `ok`/`error` fields at all) is left alone and never marked failed.
-function detectToolSoftFailure(output: unknown): string | null {
-  if (typeof output !== "object" || output === null) {
-    return null;
-  }
-  const record = output as Record<string, unknown>;
-  if (record.ok === false) {
-    return typeof record.error === "string" ? record.error : "tool call failed";
-  }
-  const keys = Object.keys(record);
-  if (keys.length === 1 && keys[0] === "error" && typeof record.error === "string") {
-    return record.error;
-  }
-  return null;
-}
-
-// Shared by every non-gated, non-self-stepped tool's execution span (see
-// run-turn.ts's runAgentTurn loop, dispatchGenericTool). Runs `execute`, then
-// records gca.tool.input/gca.tool.output + braintrust.input/braintrust.output
-// on the steppedSpan already open around this call (see tracing.ts's
-// withTurnSpan doc comment for why the braintrust.* duplication exists) — the
-// same 4 attributes every one of these call sites used to set by hand. Not
-// used by wants-human.ts's runWantsHuman, missing-info.ts's runMissingInfo,
-// or run-turn.ts's own private dispatchGatedToolCall: none of the three
-// knows its tool call's real output at span-creation time (a gated call's
-// approval hasn't even been decided yet), so each patches output in
-// retroactively via updateSpanIO instead — see each of their own comments.
-//
-// Also marks the span ERROR (via markSpanFailed, same mechanism
-// runGuestTurn's own send-whatsapp-reply call site already uses for
-// sendWhatsAppMessage's own soft-fail shape) when `execute`'s result looks
-// like an intentional soft-fail rather than a real success — see
-// detectToolSoftFailure's own comment for exactly which shapes qualify. This
-// is the one choke point every non-self-stepped tool call (including the
-// "unknown tool name" fallback, which reaches here the same way any other
-// unrecognized-but-not-gated tool name would — see runTool's default case
-// below) dispatches through, so putting the check here covers all of them
-// without touching each tool's own file. Purely additive: does not throw,
-// does not change `output`, does not alter the caller's control flow — a
-// soft-failed call still returns its normal (now span-marked) result.
-export async function dispatchToolExecution<T>(
-  span: Span,
-  input: Record<string, unknown>,
-  execute: () => Promise<T>,
-): Promise<T> {
-  const output = await execute();
-  span.setAttribute("gca.tool.input", JSON.stringify(input));
-  span.setAttribute("gca.tool.output", JSON.stringify(output));
-  span.setAttribute("braintrust.input", JSON.stringify(input));
-  span.setAttribute("braintrust.output", JSON.stringify(output));
-  const failureMessage = detectToolSoftFailure(output);
-  if (failureMessage !== null) {
-    markSpanFailed(span, failureMessage);
-  }
-  return output;
-}
-
 // Dispatches a requested tool call to its run<ToolName> implementation.
-// Called after any configured APPROVAL_GATES check (run-turn.ts) has already
-// approved the call, never before it.
+// Called after any configured NEEDS_APPROVAL check (run-hitl.ts) has already
+// approved the call, never before it. Every case just hands off to that
+// tool's own run<ToolName> — none of the tracing/span logic used to live
+// here; each tool now owns it. send_booking_link's/missing_info's cases
+// below are unreachable in practice: run-turn.ts's loop intercepts both tool
+// names via its own NEEDS_APPROVAL branch before a call ever reaches
+// runTool. Left in place rather than removed — a real, if stale, fallback
+// rather than a silent gap if that branch's tool list ever changes.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
@@ -124,19 +57,22 @@ export async function runTool(
 ): Promise<unknown> {
   switch (toolName) {
     case "get_pricing":
-      return runGetPricing(input as Parameters<typeof runGetPricing>[0]);
+      return runGetPricing(input as Parameters<typeof runGetPricing>[0], context);
     case "check_availability":
-      return runCheckAvailability(input as Parameters<typeof runCheckAvailability>[0]);
+      return runCheckAvailability(input as Parameters<typeof runCheckAvailability>[0], context);
     case "answer_property_question":
-      return runAnswerPropertyQuestion(input as Parameters<typeof runAnswerPropertyQuestion>[0]);
+      return runAnswerPropertyQuestion(
+        input as Parameters<typeof runAnswerPropertyQuestion>[0],
+        context,
+      );
     case "send_booking_link":
       return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], {
         phone: context.phone,
       });
     case "get_current_date":
-      return runGetCurrentDate();
+      return runGetCurrentDate(context);
     case "run_code":
-      return runRunCode(input as Parameters<typeof runRunCode>[0]);
+      return runRunCode(input as Parameters<typeof runRunCode>[0], context);
     case "wants_human":
       return runWantsHuman(input as { reason: string }, context);
     case "missing_info":
@@ -148,9 +84,21 @@ export async function runTool(
       // for "get_current_date") anyway. Returns a recoverable error instead of
       // throwing — throwing here would crash the whole Inngest step with no
       // reply sent to the guest at all — so the model sees the error and can
-      // retry with a real tool name in the same turn.
-      return {
-        error: `Unknown tool name: "${toolName}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
-      };
+      // retry with a real tool name in the same turn. Wrapped in its own
+      // gen_ai.tool.<name> span (unlike every real tool above, which wraps
+      // itself) since there's no tool file to own that span for a name that
+      // isn't actually registered — this is the one remaining span this file
+      // creates directly, same shape every other tool's own span has.
+      return steppedSpan(
+        context.step,
+        `tool-${toolName}`,
+        context.traceAnchor,
+        `gen_ai.tool.${toolName}`,
+        { "gen_ai.tool.name": toolName, "gen_ai.operation.name": "execute_tool" },
+        (span) =>
+          dispatchToolExecution(span, input, async () => ({
+            error: `Unknown tool name: "${toolName}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
+          })),
+      );
   }
 }

@@ -1,9 +1,12 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { runCheckAvailability } from "@/agent/tools/availability";
-import { runGetCurrentDate } from "@/agent/tools/current-date";
-import { runGetPricing } from "@/agent/tools/pricing";
+import { dispatchToolExecution } from "@/agent/tool-execution";
+import { computeCheckAvailability } from "@/agent/tools/availability";
+import { computeCurrentDate } from "@/agent/tools/current-date";
+import { computeGetPricingResult } from "@/agent/tools/pricing";
 import { runInSandbox, type SandboxApi } from "@/agent/tools/sandbox";
+import { steppedSpan } from "@/lib/tracing";
+import type { ToolContext } from "./config";
 
 // Reference pattern this is ported from: a harness that runs agent-authored
 // JS in node:vm and dispatches "runCode" to `runInSandbox(code, sandboxApi)`
@@ -38,17 +41,21 @@ const runCodeOutputSchema = z.union([
 // mirrored directly inside the generated sandbox script, so those two
 // closures here mainly make this object the single source of truth for
 // "these tool names are exposed to runCode", letting runInSandbox assert
-// against its SUPPORTED_TOOLS list).
+// against its SUPPORTED_TOOLS list). Calls each tool's own untraced pure
+// compute function (compute*, not run<ToolName>) — this is an internal
+// helper invocation, not a real dispatched tool call worth its own trace
+// span, and there's no ToolContext available here to give one anyway.
 //
 // Deliberately read-only/computational only: NEVER add sendBookingLink or
 // anything that moves real state/money here. Booking stays a normal,
-// approval-gated tool call (see run-turn.ts's APPROVAL_GATES table), never
+// approval-gated tool call (see run-hitl.ts's NEEDS_APPROVAL), never
 // something callable from inside an agent-authored sandbox program.
 const sandboxApi: SandboxApi = {
-  checkAvailability: (args: Parameters<typeof runCheckAvailability>[0]) =>
-    runCheckAvailability(args),
-  getPricing: (args: Parameters<typeof runGetPricing>[0]) => runGetPricing(args),
-  getCurrentDate: () => runGetCurrentDate(),
+  checkAvailability: (args: Parameters<typeof computeCheckAvailability>[0]) =>
+    computeCheckAvailability(args),
+  getPricing: (args: Parameters<typeof computeGetPricingResult>[0]) =>
+    computeGetPricingResult(args),
+  getCurrentDate: () => computeCurrentDate(),
 };
 
 // Schema-only declaration (no `execute`) — run-turn.ts dispatches to
@@ -70,6 +77,17 @@ export const runCode = tool({
   outputSchema: runCodeOutputSchema,
 });
 
-export async function runRunCode(args: z.infer<typeof runCodeSchema>) {
-  return runInSandbox(args.code, sandboxApi);
+// The tool's real dispatch: this app's run<ToolName> convention (see
+// wants-human.ts's runWantsHuman for the model this follows) — creates its
+// own gen_ai.tool.run_code execution span, called directly from
+// run-tool.ts's runTool().
+export async function runRunCode(args: z.infer<typeof runCodeSchema>, context: ToolContext) {
+  return steppedSpan(
+    context.step,
+    "tool-run_code",
+    context.traceAnchor,
+    "gen_ai.tool.run_code",
+    { "gen_ai.tool.name": "run_code", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, args, () => runInSandbox(args.code, sandboxApi)),
+  );
 }

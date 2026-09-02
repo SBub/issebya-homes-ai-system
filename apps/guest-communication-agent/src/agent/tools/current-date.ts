@@ -1,5 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
+import { steppedSpan } from "@/lib/tracing";
+import type { ToolContext } from "./config";
 
 const getCurrentDateSchema = z.object({});
 
@@ -12,7 +15,10 @@ export const getCurrentDate = tool({
   inputSchema: getCurrentDateSchema,
 });
 
-export async function runGetCurrentDate() {
+// No tracing of its own — also called directly by run-code.ts's sandboxApi
+// (an internal helper invocation, not a real dispatched tool call worth its
+// own trace span).
+export function computeCurrentDate() {
   // NOTE: there is no property/host timezone concept anywhere in this
   // codebase (confirmed via grep) — this deliberately uses UTC rather than
   // guessing one (e.g. assuming Portugal/Lisbon just because some test
@@ -29,4 +35,19 @@ export async function runGetCurrentDate() {
     isoTimestamp: now.toISOString(),
     timezone: "UTC",
   };
+}
+
+// The tool's real dispatch: this app's run<ToolName> convention (see
+// wants-human.ts's runWantsHuman for the model this follows) — creates its
+// own gen_ai.tool.get_current_date execution span, called directly from
+// run-tool.ts's runTool().
+export async function runGetCurrentDate(context: ToolContext) {
+  return steppedSpan(
+    context.step,
+    "tool-get_current_date",
+    context.traceAnchor,
+    "gen_ai.tool.get_current_date",
+    { "gen_ai.tool.name": "get_current_date", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, {}, async () => computeCurrentDate()),
+  );
 }
