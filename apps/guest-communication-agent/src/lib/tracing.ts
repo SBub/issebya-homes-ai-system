@@ -5,39 +5,30 @@ import { createAdminClient } from "@/lib/supabase";
 
 const tracer = trace.getTracer("guest-communication-agent");
 
-// A real span's identity, threaded explicitly (as plain JSON) so later spans
-// — possibly in a different process, or a different Inngest replay — can
-// parent to it without ever holding the original Span object open. See
-// startTraceRoot/withTurnSpan below.
+// A real span's identity, threaded as plain JSON (not a live Span object) so
+// a later span — possibly a different process, possibly a different Inngest
+// replay — can still parent to it. No live Span object survives an Inngest
+// step boundary, which is why every helper below takes/returns a TraceAnchor
+// or a span id instead of a Span.
 export interface TraceAnchor {
   traceId: string;
   spanId: string;
 }
 
-// Stamps the real OTel trace id onto every span as a plain attribute.
-// Braintrust doesn't expose the underlying OTel trace id as a searchable
-// field anywhere in its UI — you can only ever see it after already opening
-// a trace — but it does index arbitrary attributes under a searchable
-// `metadata.*` namespace. Setting it here means pasting an Axiom trace id
-// into Braintrust's search bar as `metadata."gca.trace_id"` actually finds
-// the matching trace.
+// Braintrust doesn't expose the OTel trace id anywhere in its UI directly,
+// but does index attributes under a searchable `metadata.*` namespace — this
+// makes an Axiom trace id pasted into Braintrust's search bar
+// (metadata."gca.trace_id") actually find the matching trace.
 function stampTraceId(span: Span): void {
   span.setAttribute("gca.trace_id", span.spanContext().traceId);
 }
 
-// Records a marker event on whatever span is ambient in context, if any —
-// used by every "best-effort, never throw" helper below (updateSpanIO,
-// {record,consume}{MissingInfo,ApprovalGate}TraceAnchor) so a permanent,
-// silent failure of one of these Braintrust/anchor niceties is at least
-// visible on the trace, instead of only a console.error nobody's tailing.
-// Deliberately an event, not markSpanFailed/an ERROR status — these helpers'
-// own doc comments are explicit that they must never be allowed to make a
-// guest's actual turn look like it failed just because a trace-linking
-// nicety silently failed in the background. Same non-fatal-but-noteworthy
-// pattern as run-turn.ts's modelTurn "gen_ai.retry" event.
-// No-ops if there's no active span in context at the call site — that's a
-// legitimate outcome (e.g. called from code with no ambient turn span), not
-// something worth forcing a span into existence for.
+// Best-effort helpers below (updateSpanIO, the *TraceAnchor functions) must
+// never fail a guest's turn just because a tracing nicety broke — this
+// records that failure as an event (not markSpanFailed/ERROR) on whatever
+// span is ambient, so it's at least visible in the trace instead of only a
+// console.error. No-ops with no ambient span; that's a legitimate case, not
+// worth forcing a span into existence for.
 function recordBestEffortFailure(helper: string, message: string): void {
   const span = trace.getActiveSpan();
   if (span) {
@@ -48,21 +39,14 @@ function recordBestEffortFailure(helper: string, message: string): void {
   }
 }
 
-// Starts a genuine trace root: an unparented real span, letting the OTel SDK
-// generate both trace_id and span_id for real (unlike withTurnSpan below,
-// which always parents to an already-known anchor). Call this exactly once
-// per real turn — the webhook route's very first span (route.ts's POST) —
-// then thread the returned `anchor` through everything downstream via
-// withTurnSpan(anchor, ...), including across the webhook-request ->
-// Inngest-function boundary (the triggering event payload carries `anchor`
-// as plain JSON — see run-turn.ts's GuestTurnRequestedEventData).
-//
-// The anchor must be a real, emitted span id, not a synthetic/hashed
-// placeholder — a fake, never-emitted parent id would make every span in a
-// turn point at the same non-existent parent instead of at each other,
-// leaving the trace flat in Braintrust and showing a "(missing)" root in
-// Axiom's waterfall view. Inngest's guarantee that `event.data` replays
-// identically is what keeps the anchor stable across replays.
+// Starts a genuine, unparented trace root — the OTel SDK generates a real
+// trace_id/span_id (unlike withTurnSpan below, which always parents to an
+// already-known anchor). Call once per turn (the webhook route's first
+// span); thread the returned `anchor` downstream via withTurnSpan, including
+// across the webhook -> Inngest boundary via the event payload (see
+// run-turn.ts's GuestTurnRequestedEventData). Must be a real emitted span
+// id, not a synthetic one — a fake parent leaves every span in the turn
+// pointing at a non-existent parent instead of each other.
 export async function startTraceRoot<T>(
   name: string,
   attributes: Attributes,
@@ -84,25 +68,22 @@ export async function startTraceRoot<T>(
   });
 }
 
-// Runs `fn` as a new span parented to `anchor` (see startTraceRoot/
-// TraceAnchor above) — every span sharing the same anchor.traceId lands in
-// the same Braintrust trace, properly nested under whichever real span
-// anchor.spanId refers to, across Inngest replays, without ever holding a
-// live Span object across a step boundary. Callers MUST wrap every call to
-// this in a step.run() (or only call it from code that only executes once)
-// — see run-turn.ts's SELF_STEPPED_TOOLS comment for why calling this from
-// un-stepped code would duplicate-emit spans on Inngest replay.
+// LANDMINE: only ever call this from inside an already-established
+// step.run() callback (or other code that runs at most once per real
+// invocation) — never from un-stepped Inngest function-body code. Un-stepped
+// code re-executes on every Inngest replay, and this function always emits a
+// real, new OTel span, so calling it un-stepped would duplicate-emit spans
+// on replay.
 //
-// Deliberately does NOT set an OK status when `fn` resolves without
-// throwing — an unset status already reads as "not an error" in every OTel
-// backend, and explicitly setting OK here would clobber markSpanFailed's
-// ERROR status on "soft-fail" call sites (e.g. send-whatsapp-reply: `fn`
-// catches sendWhatsAppMessage's failure, calls markSpanFailed, then returns
-// normally without throwing — an explicit OK on success would overwrite
-// that ERROR status right after, silently undercounting failures in any
-// error-rate query filtered on status). Only ever set ERROR, never OK —
-// matches OTel's own guidance that an explicit OK is for overriding an
-// already-set error status, not a default to apply everywhere.
+// Runs `fn` as a new span parented to `anchor`, so every span sharing
+// anchor.traceId lands in the same Braintrust trace, properly nested, across
+// replays, with no live Span object held across a step boundary.
+//
+// Deliberately never sets an explicit OK status on success — only ERROR, on
+// throw. An explicit OK would clobber markSpanFailed's ERROR status on a
+// soft-fail call site that catches its own error and returns normally
+// (e.g. run-turn.ts's send-whatsapp-reply) — an unset status already reads
+// as "not an error" everywhere OTel is consumed.
 export async function withTurnSpan<T>(
   anchor: TraceAnchor,
   name: string,
@@ -131,68 +112,30 @@ export async function withTurnSpan<T>(
   );
 }
 
-// Braintrust reads specific attribute namespaces to populate its UI — set
-// the wrong one and the data is still in the trace (visible in Axiom/OTel)
-// but invisible in Braintrust's own views. Three distinct facts, easy to
-// conflate because they share the "braintrust." prefix but govern different
-// parts of the UI — this comment is the one canonical explanation of all
-// three; call sites that set these attributes should point back here rather
-// than re-explain:
+// LANDMINE (canonical explanation — reference this comment, don't re-derive
+// it): Braintrust reads specific attribute namespaces to populate its UI.
+// Set the wrong one and the data is still in the trace (visible in
+// Axiom/OTel) but invisible in Braintrust's own views. All three below are
+// plain span.setAttribute(...) calls made at each call site — nothing here
+// sets them automatically.
 //   - `braintrust.input`/`braintrust.output` map to a span's top-level
-//     Input/Output fields (Traces list + per-span view). `gen_ai.*`
-//     attributes (gen_ai.input.messages, etc.) only ever land in the span's
-//     Metadata tab — @braintrust/otel's BraintrustSpanProcessor does no
-//     gen_ai.*-to-input/output conversion of its own (see
-//     node_modules/@braintrust/otel/dist/index.js). Any call site that wants
-//     its gen_ai.* content to actually show up as Input/Output has to
-//     duplicate it under braintrust.input/braintrust.output too — see
-//     memory.ts's summarizer call for a real example. (run-turn.ts's
-//     modelTurn instead sets experimental_telemetry on its generateText
-//     call, which gets Braintrust the same Input/Output for free on the
-//     ai.generateText.doGenerate child span — no manual duplication needed
-//     there.)
-//   - `braintrust.tags` aggregates from ANY span in a trace up to the whole
-//     trace level, making the whole trace filterable by a tag set on one
-//     span deep in the tree — see run-turn.ts's firedTags for how this app
-//     uses that. String arrays are a native OTel attribute value — no
-//     JSON.stringify needed.
-//   - A `braintrust.*`-prefixed attribute is also what gets a span past
-//     export filtering at all, unrelated to what Braintrust's UI does with
-//     the value once it arrives. `@braintrust/otel`'s AISpanProcessor (wired
-//     via `filterAISpans: true` in instrumentation.ts) drops any span whose
-//     name AND every non-system attribute key fail to start with one of
-//     `gen_ai.`/`braintrust.`/`llm.`/`ai.`/`traceloop.` (confirmed directly
-//     from `node_modules/@braintrust/otel/dist/index.js`'s `FILTER_PREFIXES`/
-//     `isAISpan`) — a span named e.g. `owner_nudge.sendBookingLink.decision`
-//     with only `gca.*` attributes never reaches Braintrust at all, no
-//     matter how meaningful its data is. See approval-gate.ts's
-//     `requestApprovalGate` and run-turn.ts's `dispatchWantsHuman`/
-//     `runMissingInfo` for real call sites that set a `braintrust.tags`/
-//     `braintrust.approval_decision` attribute only to clear this filter, not
-//     to populate Input/Output/tags.
-// All are plain span.setAttribute(...) calls made at each call site, not
-// something withTurnSpan/withSpan set automatically — there's no single
-// choke point to hang this logic on, which is exactly why the explanation
-// tends to drift when repeated instead of referenced.
+//     Input/Output fields. `gen_ai.*` attributes only ever land in the
+//     Metadata tab — a call site that wants gen_ai.* content to show as
+//     Input/Output must duplicate it under braintrust.input/output too.
+//   - `braintrust.tags` aggregates from any span up to the whole trace,
+//     making the trace filterable by a tag set deep in the tree.
+//   - A `braintrust.*`-prefixed attribute (or a span name starting with
+//     `gen_ai.`/`llm.`/`ai.`/`traceloop.`) is also what gets a span past
+//     `@braintrust/otel`'s export filter at all — a span whose name and every
+//     attribute key fail all five prefixes never reaches Braintrust,
+//     regardless of how meaningful its data is.
 
-// Collapses the two-call nesting that shows up at every real call site in
-// this app — `step.run(stepId, () => withTurnSpan(anchor, name, attrs, fn))`
-// — into one call, so the actual business logic (`fn`) isn't buried two
-// closures deep behind boilerplate that's identical everywhere it appears.
-// The two calls being combined do genuinely different jobs and both still
-// happen, in the same order, with the same semantics:
-//   - step.run (Inngest's GetStepTools, from `inngest`'s own types) is the
-//     durability/replay-memoization primitive — Inngest persists `fn`'s
-//     result under `stepId` and, on any later replay of this function (e.g.
-//     after a step.waitForEvent elsewhere resumes), returns the memoized
-//     result instead of re-running `fn`. That's what makes it safe to send a
-//     real Telegram/WhatsApp message or write to Postgres inside `fn`.
-//   - withTurnSpan (above) is this app's own OTel span helper — it opens a
-//     span parented to `traceAnchor`, runs `fn`, and closes the span,
-//     recording an exception/ERROR status if `fn` throws.
-// step.run must wrap withTurnSpan, not the other way around, so the span
-// itself is also only ever created once (inside the memoized callback), not
-// re-emitted on every replay.
+// Collapses `step.run(stepId, () => withTurnSpan(anchor, name, attrs, fn))`
+// into one call. step.run (Inngest's replay-memoization primitive — persists
+// `fn`'s result under `stepId`, returns the memoized result on any later
+// replay instead of re-running `fn`) must wrap withTurnSpan, not the other
+// way, so the span itself is also only created once, not re-emitted on
+// replay.
 export async function steppedSpan<T>(
   step: GetStepTools<typeof inngest>,
   stepId: string,
@@ -210,20 +153,10 @@ export async function steppedSpan<T>(
   return step.run(stepId, () => withTurnSpan(traceAnchor, spanName, attributes, fn)) as Promise<T>;
 }
 
-// Generic, non-deterministic child span — same lifecycle (recordException +
-// ERROR status on throw, always end()) as withTurnSpan's inner block, minus
-// the deterministic correlationId-derived parent wiring. Nests automatically
-// under whatever span is active via context.active() (e.g. a webhook.* stage
-// span, a gen_ai.tool.* span, a run-turn.ts step span) — no explicit parent
-// needed. If nothing is active, it starts a fresh root trace, which is
-// correct for callers with no ambient turn context (e.g. a standalone
-// probe outside any guest turn).
-//
-// Same replay-safety caveat as withTurnSpan: only call this from code that
-// runs at most once per real invocation — i.e. from inside an already-
-// established step.run() callback, or from plain (non-Inngest-replayed) HTTP
-// handler code. Calling it from un-stepped Inngest function-body code that
-// re-executes on replay would duplicate-emit spans.
+// Same lifecycle/replay-safety caveat as withTurnSpan above, minus explicit
+// parent wiring — nests under whatever span is active via context.active(),
+// or starts a fresh root if nothing is active (correct for callers with no
+// ambient turn context).
 export async function withSpan<T>(
   name: string,
   attributes: Attributes,
@@ -246,21 +179,12 @@ export async function withSpan<T>(
   });
 }
 
-// Marks a span ERROR without throwing — for call sites that already catch a
-// failure and downgrade it to a plain return value (e.g. sendWhatsAppMessage's
-// `{ ok: false, error }`, requestOwnerNudge's `false`) rather than propagate
-// an exception. Using this instead of a throw keeps existing control flow and
-// return values exactly as they are; it only makes the failure visible on the
-// trace, where before it was invisible even to a wrapping withSpan/
-// withTurnSpan (their catch blocks only fire on a real throw).
-//
-// Accepts either the real caught value from a `catch (err)` block or a plain
-// semantic string — widened to `unknown` so call sites that already have a
-// real Error in scope can hand it straight through instead of pre-extracting
-// `.message` and losing its real stack trace. An already-Error value is
-// recorded as-is (real stack preserved); anything else (a plain string, or
-// any other non-Error value) still gets wrapped in a synthetic `new
-// Error(...)` exactly as before — there's no real stack to preserve for those.
+// Marks a span ERROR without throwing — for call sites that catch a failure
+// and downgrade it to a plain return value instead of propagating (a
+// wrapping withSpan/withTurnSpan's own catch only fires on a real throw, so
+// without this the failure would be invisible on the trace). Accepts a real
+// Error (recorded with its real stack) or any other value (wrapped in a
+// synthetic Error).
 export function markSpanFailed(span: Span, messageOrError: unknown): void {
   if (messageOrError instanceof Error) {
     span.recordException(messageOrError);
@@ -276,38 +200,22 @@ export function markSpanFailed(span: Span, messageOrError: unknown): void {
 // in this app (instrumentation.ts, scripts/migrate-prompts-to-braintrust.ts).
 const BRAINTRUST_API_BASE = process.env.BRAINTRUST_API_URL ?? "https://api-eu.braintrust.dev";
 
-// Retroactively patches a specific span's input/output fields after the
-// span has already closed, via Braintrust's log-insert-with-merge REST API
-// (POST /v1/project_logs/{project_id}/insert, { _is_merge: true }, keyed by
-// the row's `id` — Braintrust maps a span's OTel-generated span id directly
-// to that row id). `_is_merge: true` deep-merges just the given fields into
-// the existing row, leaving its real metadata/metrics/span_attributes/trace
-// linkage untouched.
+// LANDMINE: retroactively patches a span's input/output after it has
+// already closed (no live Span object survives an Inngest step boundary),
+// via Braintrust's log-insert-with-merge REST API — `_is_merge: true` keyed
+// by the row's `id` (Braintrust maps a span's OTel span id directly to that
+// row id), deep-merging just the given fields.
 //
-// Exists for run-turn.ts's "braintrust.guest_turn" root marker span: its
-// input (the guest's incoming message) is known when the span is created,
-// but its output (the turn's final reply) isn't known until well after the
-// span has already been created and closed inside its own step.run — so
-// there's no live Span object left to call span.setAttribute on by the time
-// the reply exists. This patches the row directly instead.
+// Races the span's own OTel export: both are independent writes to the same
+// row, and whichever lands last wins — if the export lands after this
+// patch, it silently resets input/output back to null. Callers MUST call
+// flushTracing() (src/instrumentation.ts) right after their span's creation
+// resolves, before anything else that could race ahead of it, or the patch
+// can be silently lost.
 //
-// Best-effort and non-fatal, matching this app's existing convention for
-// optional enrichment calls (e.g. TELEGRAM_ROUTER_API_URL unset just
-// degrades a feature rather than crashing): no-ops if
-// BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID aren't set, and never throws — a
-// trace-enrichment call failing must never break a guest's actual reply.
-//
-// Races the span's own OTel export: this merge-patch and the span's export
-// are two independent writes to the same Braintrust row, and the export
-// carries no input/output of its own for a span whose fields are only ever
-// set via this function. Whichever write lands last wins — if the export
-// lands after this patch, it silently resets input/output back to null.
-// Callers that need this patch to actually stick must call flushTracing()
-// (src/instrumentation.ts) right after their span's creation resolves,
-// before doing anything else that could race ahead of it — see
-// wants-human.ts's runWantsHuman, missing-info.ts's
-// requestMissingInfoApproval, and booking.ts's requestSendBookingLinkApproval
-// for the pattern.
+// Best-effort and non-fatal: no-ops without BRAINTRUST_API_KEY/
+// BRAINTRUST_PROJECT_ID, never throws — a trace-enrichment failure must
+// never break a guest's actual reply.
 export async function updateSpanIO(
   spanId: string,
   fields: { input?: unknown; output?: unknown; tags?: string[] },
@@ -347,30 +255,25 @@ export async function updateSpanIO(
   }
 }
 
-// The DB table recordMissingInfoTraceAnchor/consumeMissingInfoTraceAnchor
-// below read/write — see supabase/migrations's
-// create_missing_info_trace_anchors.sql for the schema and the full
-// tradeoff writeup (self-cleans on the happy path, can leak an orphaned row
-// on a timed-out/never-answered missing_info call).
+// Schema: supabase/migrations's create_missing_info_trace_anchors.sql
+// (self-cleans on the happy path, can leak an orphaned row if missing_info
+// times out unanswered).
 const MISSING_INFO_TRACE_ANCHOR_TABLE = "missing_info_trace_anchors";
 
-// Cross-HTTP-request trace anchor handoff, for missing_info's owner-reply
-// flow specifically. The Inngest step boundary threads a TraceAnchor through
-// event.data (see startTraceRoot's own comment) because Inngest guarantees
-// event.data replays identically — there's no equivalent guarantee, or even
-// a shared payload at all, across an HTTP-request boundary to a completely
-// separate route (the owner-nudges answer route, triggered by
-// apps/telegram-router's own webhook, sometimes hours later, possibly a
-// different server instance). This small DB-backed lookup fills that gap
-// instead: missing-info.ts's requestMissingInfoApproval writes its own
-// hitl.missing_info GATE span's anchor here right after creating it, keyed
-// by this turn's correlationId; the answer route reads (and deletes) it once
-// the owner's reply arrives.
-//
-// Best-effort like updateSpanIO: a failed write here only degrades tracing
-// (the embedding step's span falls back to its own disconnected trace root
-// instead of nesting under the real hitl.missing_info span) — never
-// the actual KB write or guest-facing behavior.
+// LANDMINE (canonical explanation for this table and
+// APPROVAL_GATE_TRACE_ANCHOR_TABLE below): fills a gap TraceAnchor-via-
+// event.data doesn't cover. Inngest guarantees event.data replays
+// identically, which is why startTraceRoot's anchor can travel through it —
+// but there's no equivalent guarantee, or even a shared payload, across an
+// HTTP-request boundary to a separate route (here: the owner-nudges answer
+// route, triggered by telegram-router's webhook, possibly hours later, on a
+// possibly different server instance). This DB-backed lookup fills that
+// gap: the writer stores its own GATE span's anchor here right after
+// creating it, keyed by correlationId; the separate route reads (and
+// deletes) it once the owner's reply/decision arrives. Best-effort like
+// updateSpanIO — a failed write only degrades tracing (the other route's
+// span falls back to its own disconnected trace root), never the real
+// KB write, approval handling, or guest-facing behavior.
 export async function recordMissingInfoTraceAnchor(
   correlationId: string,
   anchor: TraceAnchor,
@@ -397,12 +300,8 @@ export async function recordMissingInfoTraceAnchor(
   }
 }
 
-// Reads AND deletes in one call — the row's only reader is the one real
-// owner reply for this correlationId, so consuming it here is what makes the
-// table self-clean on the happy path (see the migration's own comment for
-// the orphaned-row case this doesn't cover). Returns null (not a throw) on
-// any failure or a genuine miss — same best-effort posture as
-// recordMissingInfoTraceAnchor above and updateSpanIO.
+// Reads and deletes in one call — makes the table self-clean on the happy
+// path. Returns null (not a throw) on any failure or a genuine miss.
 export async function consumeMissingInfoTraceAnchor(
   correlationId: string,
 ): Promise<TraceAnchor | null> {
@@ -428,40 +327,15 @@ export async function consumeMissingInfoTraceAnchor(
   }
 }
 
-// The DB table recordApprovalGateTraceAnchor/consumeApprovalGateTraceAnchor
-// below read/write — see supabase/migrations's
-// create_approval_gate_trace_anchors.sql for the schema and the full
-// tradeoff writeup (self-cleans on the happy path, can leak an orphaned row
-// on a timed-out/never-decided gated call). A separate table from
-// MISSING_INFO_TRACE_ANCHOR_TABLE above, on purpose — this pair is generic
-// over every approval-gate.ts's requestApprovalGate caller (any
-// run-turn.ts APPROVAL_GATES entry, send_booking_link today, any future tool
-// tomorrow), not just one tool, and keeping it a fully separate mechanism
-// means it can't ever disturb the already-verified-working missing_info
-// path above.
+// Schema: supabase/migrations's create_approval_gate_trace_anchors.sql. A
+// separate table from MISSING_INFO_TRACE_ANCHOR_TABLE on purpose — generic
+// over every requestApprovalGate caller (send_booking_link today, any future
+// gated tool), not just missing_info.
 const APPROVAL_GATE_TRACE_ANCHOR_TABLE = "approval_gate_trace_anchors";
 
-// Cross-HTTP-request trace anchor handoff, for approval-gate.ts's
-// requestApprovalGate specifically (generic over every APPROVAL_GATES-gated
-// tool, not hardcoded to one). Same gap this fills as
-// recordMissingInfoTraceAnchor above: the HTTP-request boundary to the
-// owner-nudges approve route (triggered by apps/telegram-router's own
-// webhook, possibly hours later, possibly a different server instance) has
-// no shared payload/Inngest event.data to carry a TraceAnchor through. This
-// small DB-backed lookup fills that gap instead: requestApprovalGate writes
-// the gated tool's real hitl.<toolName> GATE span's anchor here right when
-// it's called (that anchor arrives as this function's own `anchor` param —
-// requestApprovalGate never touches a live Span object, only the
-// already-extracted {traceId, spanId} its caller, booking.ts's
-// requestSendBookingLinkApproval, passes in as `traceAnchor`), keyed by this
-// turn's correlationId; the approve route reads (and deletes) it once the
-// owner's decision arrives.
-//
-// Best-effort like recordMissingInfoTraceAnchor: a failed write here only
-// degrades tracing (the approve route's decision span falls back to its own
-// disconnected trace root instead of nesting under the real
-// hitl.<toolName> span) — never the actual approval/rejection
-// handling or guest-facing behavior.
+// Same landmine/mechanism as recordMissingInfoTraceAnchor above, for
+// approval-gate.ts's requestApprovalGate — fills the same HTTP-boundary gap
+// for the owner-nudges approve route instead of the answer route.
 export async function recordApprovalGateTraceAnchor(
   correlationId: string,
   anchor: TraceAnchor,
@@ -488,10 +362,7 @@ export async function recordApprovalGateTraceAnchor(
   }
 }
 
-// Reads AND deletes in one call — same self-cleaning-on-the-happy-path
-// reasoning as consumeMissingInfoTraceAnchor above. Returns null (not a
-// throw) on any failure or a genuine miss — same best-effort posture as
-// recordApprovalGateTraceAnchor above.
+// Same reads-and-deletes self-cleaning as consumeMissingInfoTraceAnchor above.
 export async function consumeApprovalGateTraceAnchor(
   correlationId: string,
 ): Promise<TraceAnchor | null> {

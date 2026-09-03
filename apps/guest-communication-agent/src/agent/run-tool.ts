@@ -12,26 +12,17 @@ import { runCode, runRunCode } from "@/agent/tools/run-code";
 import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { steppedSpan } from "@/lib/tracing";
 
-// The tool registry + dispatcher: which tools the model can call (`tools`,
-// handed to generateText by run-model.ts's runModel), and how each one
-// actually runs (`runTool`, called uniformly from run-turn.ts's dispatch
-// loop for every tool, gated or not — see run-turn.ts for the approval half
-// NEEDS_APPROVAL's two go through first). Kept together in one file:
-// runTool's own "unknown tool name" fallback needs `Object.keys(tools)`, so
-// splitting the two apart would gain nothing.
+// The tool registry (`tools`, handed to generateText) + dispatcher
+// (`runTool`, called uniformly from run-turn.ts's loop for every tool,
+// gated or not). Kept together since runTool's "unknown tool name" fallback
+// needs `Object.keys(tools)`.
 //
 // Every registered tool's own gen_ai.tool.<name> execution span is created
-// by that tool's own run<ToolName>, inside its own file (see
-// tool-execution.ts's dispatchToolExecution, the shared helper each of them
-// calls) — this file does no span-wrapping of its own except for the
-// "unknown tool name" fallback below, which has no tool file of its own to
-// own that span.
+// inside that tool's own run<ToolName> (see run-turn.ts's RULE comment) —
+// this file wraps nothing except the "unknown tool name" fallback below,
+// which has no tool file of its own to own a span.
 
-// Schema-only tool declarations — dispatch happens manually in runTool()
-// below. Every key here is the literal snake_case tool name the model sees
-// via native tool-calling — the TS identifiers on the right (sendBookingLink,
-// wantsHuman, etc.) stay camelCase; only the model-facing string names are
-// snake_case.
+// Model-facing tool names are snake_case; the TS identifiers stay camelCase.
 export const tools = {
   get_pricing: getPricing,
   check_availability: checkAvailability,
@@ -43,26 +34,17 @@ export const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Every valid model-facing tool name, derived from `tools` above (the real
-// source of truth) instead of hand-listed — used by run-turn.ts to type-check
-// its NEEDS_APPROVAL set against actual registered tool names. Deliberately
-// NOT used to type runTool's own `toolName` param below, which stays a plain
-// `string` on purpose (see that param's own comment): a model can hallucinate
-// a name outside this union, and runTool's `default` case is the real runtime
-// handling for that, not something a stricter type should paper over.
+// Derived from `tools`, the real source of truth — used by run-turn.ts to
+// type-check NEEDS_APPROVAL. NOT used for runTool's own `toolName` param
+// below, which stays plain `string`: a model can hallucinate a name outside
+// this union, and runTool's `default` case is the real runtime handling for
+// that.
 export type ToolName = keyof typeof tools;
 
-// Dispatches a requested tool call to its run<ToolName> implementation —
-// the single dispatcher every tool call in this app goes through, whether
-// gated or not (run-turn.ts's loop calls this uniformly; for NEEDS_APPROVAL
-// tools, run-turn.ts's own inline approval switch must already have resolved
-// `approved: true` before this is ever reached — its HitlDecision carries the
-// owner's real answer for missing_info as `payload`, passed through as this
-// function's own 4th param; send_booking_link/missing_info's run<ToolName>
-// no longer need a pre-created span id from it — see each's own comment for
-// why they create their own fresh execution span instead now). Every case
-// just hands off to that tool's own run<ToolName>, including any span/step
-// wrapping that call needs — none of that logic lives here.
+// The single dispatcher every tool call goes through. For NEEDS_APPROVAL
+// tools, run-turn.ts's approval switch must have already resolved
+// `approved: true` before this is reached — its HitlDecision carries
+// missing_info's answer as `payload`, this function's 4th param.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
@@ -94,17 +76,10 @@ export async function runTool(
         approvalDecision!.payload as string,
       );
     default:
-      // Native function-calling is supposed to constrain the model to exact
-      // registered tool names, but some models (deepseek included) have been
-      // observed hallucinating a close-but-wrong name (e.g. "get_current_dates"
-      // for "get_current_date") anyway. Returns a recoverable error instead of
-      // throwing — throwing here would crash the whole Inngest step with no
-      // reply sent to the guest at all — so the model sees the error and can
-      // retry with a real tool name in the same turn. Wrapped in its own
-      // gen_ai.tool.<name> span (unlike every real tool above, which wraps
-      // itself) since there's no tool file to own that span for a name that
-      // isn't actually registered — this is the one remaining span this file
-      // creates directly, same shape every other tool's own span has.
+      // Some models (deepseek included) hallucinate a close-but-wrong tool
+      // name despite native function-calling's constraint. A recoverable
+      // error, not a throw — throwing would crash the Inngest step with no
+      // reply sent; this way the model sees the error and can retry.
       return steppedSpan(
         context.step,
         `tool-${toolName}`,

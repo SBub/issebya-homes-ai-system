@@ -2,81 +2,48 @@ import * as Sentry from "@sentry/nextjs";
 import { Sandbox } from "@vercel/sandbox";
 import { markSpanFailed, withSpan } from "@/lib/tracing";
 
-// Vercel-Sandbox-backed implementation of the runCode tool's execution
-// engine. Ported from a reference harness's node:vm-based sandbox.ts (see
-// run-code.ts's top-of-file comment for the reference), keeping the exact
-// same SandboxResult/SandboxApi contract and {ok, result, logs} shape — only
-// the execution engine changes.
+// Vercel-Sandbox-backed execution engine for the runCode tool.
 //
-// ## The cross-process bridging problem
-//
-// node:vm can hand real JS closures straight into the sandboxed context
-// because it runs inside THIS process's own memory (see
-// vm.createContext({ tools: api, ... }) in the reference). Vercel Sandbox is
-// a genuinely separate remote machine (a Firecracker microVM) — code running
-// inside it cannot call back into a closure living in this Node process, and
-// there is no tunnel wired up here that would let the sandbox reach back
-// into this machine's localhost (that only becomes possible once this app
-// itself is deployed with a public URL a callback route could live on —
-// option (a), a real HTTP callback endpoint, e.g. reusing this app's own
-// Next.js route surface).
-//
-// Both of the tools actually exposed to runCode below happen to need no
-// such callback (option (b) instead):
-//   - checkAvailability's real implementation (runCheckAvailability in
-//     availability.ts) is ITSELF just `fetch(${SITE_URL}/api/availability)`
-//     plus a pure in-memory date-overlap check — no DB, no secrets, nothing
-//     that only exists in this process's memory. The generated sandbox
-//     script below re-issues that exact same fetch against the exact same
-//     public endpoint and mirrors the same overlap check, so code running
-//     remotely gets live, real data without any callback plumbing.
-//   - getPricing's real implementation (runGetPricing in pricing.ts) does
-//     NO I/O at all — it returns a hardcoded constant. Rather than
-//     hand-copying that constant here (drift risk), this module calls the
-//     real `api.getPricing` closure once per room, IN THIS PROCESS, before
-//     the sandbox starts, and embeds the actual current result as a small
+// LANDMINE — cross-process bridging: Vercel Sandbox is a genuinely separate
+// remote machine (a Firecracker microVM), so code running inside it cannot
+// call back into a closure living in this Node process — there's no tunnel
+// for that (it would require a real HTTP callback route on this app's own
+// public surface, which doesn't exist yet). The 3 tools bridged below avoid
+// needing one:
+//   - checkAvailability: its real implementation is itself just a public
+//     fetch + a pure date-overlap check, so the generated script re-issues
+//     that same fetch directly — no callback needed.
+//   - getPricing: no I/O, a hardcoded constant. Rather than hand-copying it
+//     (drift risk), this module calls the real closure once per room, in
+//     this process, before the sandbox starts, and embeds the result as a
 //     lookup table in the generated script.
-//   - getCurrentDate has no args and no I/O either — its logic (today's
-//     date in UTC) is mirrored directly, evaluated at the moment the
-//     sandbox actually runs the agent's code rather than precomputed here,
-//     so it stays accurate even if sandbox provisioning takes a few
-//     seconds.
+//   - getCurrentDate: no I/O either — its logic is mirrored directly,
+//     evaluated when the sandbox actually runs (not precomputed), so it
+//     stays accurate even if provisioning takes a few seconds.
 //
-// If a future tool needs real per-call access to this process's private
-// state (a DB query, a secret), it will need real option (a) callback
-// plumbing — a public API route on this app's already-public Next.js
-// surface that the sandbox fetches — since Vercel Sandbox has no way to
-// call back into an arbitrary local process. SUPPORTED_TOOLS below is the
-// explicit list of tool names this module knows how to bridge; run-code.ts
-// asserts its SandboxApi only ever contains a subset of it.
+// A future tool needing real per-call access to this process's private
+// state (a DB query, a secret) would need a real callback route — Vercel
+// Sandbox has no way to call back into an arbitrary local process.
+// SUPPORTED_TOOLS below is the explicit list this module knows how to
+// bridge; run-code.ts's SandboxApi must only ever be a subset of it.
 
 export type SandboxResult =
   { ok: true; result: unknown; logs: string[] } | { ok: false; error: string; logs: string[] };
 
-// Matches the reference harness's SandboxApi shape exactly — a generic
-// "callable tool" bag whose members each have their own real, specific arg
-// types at the call site (see run-code.ts's sandboxApi), so a narrower
-// shared signature isn't possible.
+// A generic "callable tool" bag — each member has its own real arg types at
+// the call site (run-code.ts's sandboxApi), so a narrower shared signature
+// isn't possible.
 // biome-ignore lint/suspicious/noExplicitAny: see comment above.
 export type SandboxApi = Record<string, (...args: any[]) => unknown>;
 
-// Rooms this property has. Duplicated from the z.enum(["room1", "room2"])
-// literals in availability.ts/pricing.ts/booking.ts — there's no shared
-// constant for this anywhere in the codebase yet (checked: none exists), so
-// this follows the same per-file duplication those already do rather than
-// inventing a new shared module for it. Only used to precompute getPricing's
-// tiny, fully enumerable result table below.
+// Duplicated from the z.enum(["room1", "room2"]) literals elsewhere — no
+// shared constant exists yet. Only used to precompute getPricing's table.
 const ROOMS = ["room1", "room2"] as const;
 
-// Tool names this module knows how to bridge into a remote sandbox script.
-// run-code.ts's SandboxApi must only ever contain a subset of these — see
-// the assertion in runInSandbox below.
 const SUPPORTED_TOOLS = ["checkAvailability", "getPricing", "getCurrentDate"] as const;
 
-// Sandbox provisioning (spinning up a real Firecracker VM) alone can take a
-// few seconds on top of the actual execution time, so this is generous
-// compared to the reference's 2000ms node:vm default — that default assumed
-// near-zero-latency in-process execution, which no longer holds here.
+// Sandbox provisioning (a real Firecracker VM) alone can take a few seconds
+// on top of execution time, hence the generous default.
 const DEFAULT_TIMEOUT_MS = 30_000;
 // The sandbox's own max lifetime needs headroom beyond the command's
 // timeoutMs (execution budget) below, or the VM's own timeout could kill it
@@ -143,17 +110,11 @@ export async function runInSandbox(
       logs: [],
     };
   } finally {
-    // Always tear the sandbox down so runs don't leak — an unstopped
-    // sandbox keeps consuming a slot until its own timeout eventually fires
-    // on its own. Wrapped in its own span (not a throw) purely for
-    // visibility: by this point the guest already has their real run_code
-    // result, so a stop() failure must stay fire-and-forget from the
-    // caller's perspective, same as before — this only makes a failure
-    // visible on the trace instead of only in logs, matching
-    // property-question.ts's db.matchDocuments / missing-info.ts's
-    // db.insertDocument span pattern. No explicit parent anchor needed: this
-    // runs synchronously, in-process, inside the same run_code tool call
-    // already nested under whatever span is active via ambient OTel context.
+    // Always tear the sandbox down so runs don't leak (an unstopped sandbox
+    // keeps consuming a slot until its own timeout fires). By this point the
+    // guest already has their result, so a stop() failure stays
+    // fire-and-forget — the span just makes it visible on the trace instead
+    // of only in logs.
     await withSpan("sandbox.stop", {}, async (span) => {
       try {
         await sandbox.stop();
@@ -179,13 +140,11 @@ function parseSandboxOutput(stdout: string): SandboxResult | null {
   }
 }
 
-// Builds the full Node script that actually runs inside the remote sandbox:
-// a `tools` object with one hand-written shim per requested SandboxApi key
-// (see this file's top-of-file comment for why these are hand-written
-// mirrors, not the real closures), followed by the agent-authored `code` as
-// an async function body — same wrapping shape as the node:vm reference
-// (`(async () => { ${code} })()`), just written to a file and executed with
-// a real `node` process instead of vm.runInContext.
+// Builds the full Node script that runs inside the remote sandbox: a
+// `tools` object with one hand-written shim per requested SandboxApi key
+// (see this file's top comment for why these are mirrors, not real
+// closures), followed by the agent-authored `code` as an async function
+// body.
 async function buildScript(code: string, api: SandboxApi): Promise<string> {
   const requested = new Set(Object.keys(api));
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";

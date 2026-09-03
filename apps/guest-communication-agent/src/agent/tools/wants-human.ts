@@ -13,45 +13,26 @@ const wantsHumanSchema = z.object({
     ),
 });
 
-// Schema-only declaration — dispatched by run-turn.ts's runToolCall, straight
-// to runWantsHuman below. A one-way alert with no decision to approve, so it
-// has no entry in run-turn.ts's NEEDS_APPROVAL set.
+// A one-way alert with no decision to approve, so it has no entry in
+// run-turn.ts's NEEDS_APPROVAL set.
 export const wantsHuman = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person, or when they've made a request only the owner can act on or approve (e.g. early check-in, a special accommodation) that you can't resolve yourself.",
   inputSchema: wantsHumanSchema,
 });
 
-// The tool's real dispatch: this app's run<ToolName> convention (see
-// booking.ts's runSendBookingLink, missing-info.ts) — every tool's own
-// execution lives in its own file under this name, called directly from
-// run-turn.ts's runToolCall(). wants_human is a one-way alert with no
-// suspend/resume of its own, so unlike missing_info/send_booking_link this
-// resolves in one round trip: create the real gen_ai.tool.wants_human
-// execution span FIRST (its `input` — the model's `reason` — is the one
-// thing already known at this point), send the owner nudge as its real child
-// (not a sibling of the turn's own anchor), then patch the span's `output`
-// retroactively once the nudge's result is known.
-//
-// This is a deliberate exception to the general "tool files stay pure, no
-// step/span/Inngest" posture most of src/agent/tools/*.ts holds to (see
-// run-turn.ts's comment near `tools`): wants_human's own HITL-adjacent
-// dispatch (like send_booking_link's/missing_info's) is real durability
-// plumbing, and the established pattern is that it lives inside the tool's
-// own run<ToolName>, not in run-turn.ts's dispatch loop. run-turn.ts calls
-// this directly from its SELF_STEPPED_TOOLS branch, never nested inside
-// another step.run() — Inngest doesn't support calling a step tool from
-// inside another step.run()'s callback, the callback must be a
-// self-contained unit of work.
+// wants_human is a one-way alert with no suspend/resume, so unlike
+// missing_info/send_booking_link this resolves in one round trip: create
+// the gen_ai.tool.wants_human span FIRST (input already known), send the
+// nudge as its real child, then patch `output` once the nudge result is
+// known. Deliberate exception to "tool files stay pure" (run-turn.ts's RULE
+// comment) — real durability plumbing lives here, not in the dispatch loop.
 export async function runWantsHuman(
   args: { reason: string },
   context: ToolContext,
 ): Promise<{ escalated: true; message: string }> {
   const { conversationId, phone, step, traceAnchor } = context;
 
-  // Only `fn`'s return value (the real OTel-generated span id) survives this
-  // step — the span itself has already closed by the time this resolves, no
-  // live Span object can survive across this (or any) Inngest step boundary.
   const toolSpanId = await steppedSpan(
     step,
     "tool-wants_human",
@@ -65,12 +46,8 @@ export async function runWantsHuman(
     },
     async (span) => span.spanContext().spanId,
   );
-  // Synchronous, awaited flush (not the routes' non-blocking after()) —
-  // guarantees this span's own OTel export lands at Braintrust before this
-  // function's own later updateSpanIO patch can fire. Without this
-  // happens-before, whichever write lands last wins: the OTel export carries
-  // no output of its own, so it can silently wipe the patch back to null if
-  // it lands second (see updateSpanIO's own comment).
+  // See updateSpanIO's doc comment (tracing.ts) for why this flush must
+  // happen before the later patch below.
   await flushTracing();
   const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
 
@@ -79,10 +56,8 @@ export async function runWantsHuman(
     "owner-nudge-wants-human",
     toolAnchor,
     "owner_nudge.wants_human",
-    // braintrust.tags is also what gets this span past @braintrust/otel's
-    // export filter at all (see tracing.ts's attribute-namespace comment
-    // block) — this span's other attributes (gca.*) don't match any filter
-    // prefix.
+    // braintrust.tags clears the export filter — see tracing.ts's
+    // Braintrust-attribute-namespace comment.
     {
       "gca.conversation_id": conversationId,
       "gca.phone": phone,
@@ -105,9 +80,6 @@ export async function runWantsHuman(
         message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       };
 
-  // Retroactively patches the tool-call span's output now that it's known —
-  // own step, not a span (patching a span isn't itself a new event worth its
-  // own trace node).
   await step.run("update-wants-human-trace-io", () => updateSpanIO(toolSpanId, { output: result }));
 
   return result;

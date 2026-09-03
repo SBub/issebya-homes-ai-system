@@ -1,35 +1,17 @@
 import type { Span } from "@opentelemetry/api";
 import { markSpanFailed } from "@/lib/tracing";
 
-// Shared, tool-agnostic tracing helper: every tool's own run<ToolName>
-// creates its own gen_ai.tool.<name> execution span (this app's
-// run<ToolName> convention — see wants-human.ts's runWantsHuman for the
-// model this follows) and calls dispatchToolExecution from inside it. Lives
-// here, not inside any one tool file or run-tool.ts, so every tool file can
-// import it without a circular dependency (run-tool.ts already imports each
-// tool's schema/run<ToolName>; a tool file importing back from run-tool.ts
-// would cycle).
+// Shared tracing helper every tool's run<ToolName> calls from inside its own
+// gen_ai.tool.<name> span. Lives here (not in any one tool file or
+// run-tool.ts) so every tool file can import it without a circular
+// dependency (run-tool.ts already imports each tool's run<ToolName>).
 
-// Detects the soft-fail result shapes a tool can hand back to
-// dispatchToolExecution below WITHOUT throwing — a real exception already
-// gets recordException + ERROR status for free from withTurnSpan's own catch
-// block (see tracing.ts), so this is only for the intentional "return an
-// error object instead of throwing" shapes. Two known shapes flow through
-// here today:
-//   - run_code's SandboxResult ({ ok: false, error, logs } — see
-//     sandbox.ts's runInSandbox, every one of its early-return branches uses
-//     this shape).
-//   - run-tool.ts's runTool own "unknown tool name" fallback, which returns
-//     a bare { error: string } with no `ok` field at all.
-// Deliberately narrow, not "does this object have an `error` key anywhere":
-// several tools return a plain, successful object that happens to contain an
-// `error`-named field as part of normal (non-exceptional) data — e.g.
-// checkAvailability's { available: false, error: "Invalid date format" } for
-// a malformed date range, which is a valid tool result, not a dispatch
-// failure. Only `ok === false` explicitly, or the fallback's exact
-// single-key `{ error: string }` shape, count as a soft-fail here — anything
-// else (a plain string, a plain object with other fields, `ok: true`, no
-// `ok`/`error` fields at all) is left alone and never marked failed.
+// Deliberately narrow — only `ok === false`, or the exact single-key
+// `{ error: string }` shape (run-tool.ts's "unknown tool name" fallback) —
+// not "does this object have an error key anywhere". Several tools return a
+// plain successful object that happens to have an `error`-named field as
+// normal data (e.g. checkAvailability's `{ available: false, error: "..." }`
+// for a malformed date), which must not be marked failed.
 function detectToolSoftFailure(output: unknown): string | null {
   if (typeof output !== "object" || output === null) {
     return null;
@@ -45,25 +27,13 @@ function detectToolSoftFailure(output: unknown): string | null {
   return null;
 }
 
-// Runs `execute`, then records gca.tool.input/gca.tool.output +
-// braintrust.input/braintrust.output on the span already open around this
-// call (see tracing.ts's withTurnSpan doc comment for why the braintrust.*
-// duplication exists) — the same 4 attributes every tool used to set by hand
-// before this was centralized. Not used by wants-human.ts's runWantsHuman,
-// missing-info.ts's requestMissingInfoApproval, or booking.ts's
-// requestSendBookingLinkApproval: none of the three knows its tool call's
-// real output at span-creation time (an approval-gated call's decision
-// hasn't even been made yet), so each patches output in retroactively via
-// updateSpanIO instead — see each of their own comments.
-//
-// Also marks the span ERROR (via markSpanFailed, same mechanism
-// runGuestTurn's own send-whatsapp-reply call site already uses for
-// sendWhatsAppMessage's own soft-fail shape) when `execute`'s result looks
-// like an intentional soft-fail rather than a real success — see
-// detectToolSoftFailure's own comment for exactly which shapes qualify.
-// Purely additive: does not throw, does not change `output`, does not alter
-// the caller's control flow — a soft-failed call still returns its normal
-// (now span-marked) result.
+// Runs `execute`, records gca.tool.*/braintrust.* input+output on the
+// already-open span, and marks it ERROR (via markSpanFailed, without
+// throwing) if the result looks like an intentional soft-fail — see
+// detectToolSoftFailure above. Not used by the gated/multi-step tools
+// (wants_human, missing_info, send_booking_link): none of them knows its
+// real output at span-creation time, so each patches it in via updateSpanIO
+// instead.
 export async function dispatchToolExecution<T>(
   span: Span,
   input: Record<string, unknown>,

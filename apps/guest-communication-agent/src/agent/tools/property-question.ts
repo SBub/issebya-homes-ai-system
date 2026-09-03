@@ -25,8 +25,8 @@ const answerPropertyQuestionSchema = z.object({
   query: z.string().describe("The search query based on what the guest is asking"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runAnswerPropertyQuestion below by name.
+// Schema-only — run-turn.ts dispatches to runAnswerPropertyQuestion below by
+// name.
 export const answerPropertyQuestion = tool({
   description:
     "Search the property knowledge base for information about rooms, pricing, check-in, location, house rules, local recommendations, and more.",
@@ -36,14 +36,9 @@ export const answerPropertyQuestion = tool({
 // Always searches unfiltered — a prior `filter.type` param was dropped after
 // the model guessing a wrong type silently excluded relevant content.
 //
-// The inner withSpan below is a deliberate, narrow exception to this app's
-// "tool files stay pure, no step/Inngest" rule (see run-tool.ts's/
-// run-turn.ts's comments): it wraps only this file's own DB call, never
-// touches `step`/Inngest, and carries none of the replay-safety hazard that
-// rule exists to prevent. It nests automatically (via OTel's ambient
-// context) inside runAnswerPropertyQuestion's own gen_ai.tool.* execution
-// span below, giving fine-grained timing on the DB query specifically —
-// separate from embed() and the rest of this function.
+// The inner withSpan is a plain OTel span, no step/Inngest — nests
+// automatically under runAnswerPropertyQuestion's own execution span,
+// giving fine-grained timing on the DB query alone.
 async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQuestionSchema>) {
   const { embedding } = await embed({
     model: openrouter.embedding("openai/text-embedding-3-small"),
@@ -63,11 +58,9 @@ async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQue
     });
 
     if (error) {
-      // Previously collapsed into the same "no relevant information found"
-      // string a genuine no-match produces — a DB/RPC outage and "nothing
-      // matched" were indistinguishable. Still returns the same fallback
-      // text (the guest/model shouldn't see a different answer either way),
-      // just makes the real cause visible on the trace.
+      // Same fallback text as a genuine no-match, so the guest/model sees no
+      // difference — markSpanFailed just makes the real cause visible on
+      // the trace instead of indistinguishable from "nothing matched".
       markSpanFailed(span, error.message);
       return "No relevant information found in the knowledge base.";
     }
@@ -81,10 +74,6 @@ async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQue
   return withSpan("db.matchDocuments", { "db.table": "documents" }, matchDocumentsForQuery);
 }
 
-// The tool's real dispatch: this app's run<ToolName> convention (see
-// wants-human.ts's runWantsHuman for the model this follows) — creates its
-// own gen_ai.tool.answer_property_question execution span, called directly
-// from run-tool.ts's runTool().
 export async function runAnswerPropertyQuestion(
   args: z.infer<typeof answerPropertyQuestionSchema>,
   context: ToolContext,

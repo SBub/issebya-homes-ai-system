@@ -14,19 +14,16 @@ const checkAvailabilitySchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runCheckAvailability below by name.
+// Schema-only — run-turn.ts dispatches to runCheckAvailability below by name.
 export const checkAvailability = tool({
   description:
     "Check if a room is available for the requested dates. Use when the guest mentions specific check-in and check-out dates.",
   inputSchema: checkAvailabilitySchema,
 });
 
-// Calls the live GET /api/availability?room= endpoint (which has its own
-// 1-hour in-memory cache server-side) rather than duplicating apps/website's
-// iCal/availability parsing here. No tracing of its own — also called
-// directly by run-code.ts's sandboxApi (an internal helper invocation, not a
-// real dispatched tool call worth its own trace span).
+// Calls the live GET /api/availability?room= endpoint (its own 1h in-memory
+// cache) rather than duplicating apps/website's iCal parsing here. Also
+// called directly by run-code.ts's sandboxApi as an internal helper.
 export async function computeCheckAvailability(args: z.infer<typeof checkAvailabilitySchema>) {
   const { room, checkIn, checkOut } = args;
   const reqStart = new Date(checkIn);
@@ -52,10 +49,6 @@ export async function computeCheckAvailability(args: z.infer<typeof checkAvailab
   return { available: !conflict, room, checkIn, checkOut };
 }
 
-// The tool's real dispatch: this app's run<ToolName> convention (see
-// wants-human.ts's runWantsHuman for the model this follows) — creates its
-// own gen_ai.tool.check_availability execution span, called directly from
-// run-tool.ts's runTool().
 export async function runCheckAvailability(
   args: z.infer<typeof checkAvailabilitySchema>,
   context: ToolContext,

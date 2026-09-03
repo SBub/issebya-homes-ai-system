@@ -4,9 +4,6 @@ import { tools } from "@/agent/run-tool";
 import { openrouter } from "@/lib/openrouter";
 import { markSpanFailed, type TraceAnchor, withTurnSpan } from "@/lib/tracing";
 
-// Exported: run-turn.ts's loadSystemPromptText passes this as
-// loadPrompt()'s `defaults.model` — that's system-prompt-loading, not
-// model-call logic, so it stays in run-turn.ts rather than moving here too.
 export const MODEL = "deepseek/deepseek-v4-pro";
 
 // `.chat(MODEL)` targets Chat Completions — bare `openrouter(MODEL)` would
@@ -27,41 +24,27 @@ export interface ModelTurnResult {
   response: { messages: ModelMessage[] };
 }
 
-// A reasoning model can burn its whole completion on internal "thinking"
-// tokens and come back with neither a text reply nor a tool call —
-// generateText doesn't treat that as an error (finishReason is often "stop",
-// not "length" — i.e. the model itself thinks it's done), so left alone this
-// silently looks like a successful, no-op turn everywhere except the guest,
-// who gets nothing back. Retrying is cheap insurance against exactly that
-// kind of transient flakiness. "content-filter" is the one finishReason
-// retrying can't fix — a deterministic moderation block — so that's the only
-// reason this gives up immediately instead of spending the remaining
-// attempts. 3 total attempts, not 3 retries: the first pass through the loop
-// below counts as attempt 1.
+// LANDMINE: a reasoning model can burn its whole completion on internal
+// "thinking" tokens and return neither text nor a tool call, with
+// finishReason "stop" (not "length") — generateText doesn't treat this as an
+// error, so left alone it silently looks like a successful no-op turn
+// everywhere except the guest, who gets nothing back. Retried up to 3 total
+// attempts; "content-filter" (a deterministic moderation block) gives up
+// immediately instead, since retrying can't fix it.
 const MAX_MODEL_ATTEMPTS = 3;
 
-// This app's run<ToolName> convention, applied to the model call itself:
-// run-turn.ts's dispatch loop calls this directly (one call per reasoning
-// round), same shape as run-tool.ts's runTool or wants-human.ts's
-// runWantsHuman.
 export async function runModel(
   system: string,
   messages: ModelMessage[],
   turnAnchor: TraceAnchor,
 ): Promise<ModelTurnResult> {
   async function runModelChatTurn(span: Span): Promise<ModelTurnResult> {
-    // Plain non-generic closure over `tools`, purely so `typeof callModel`
-    // below gives `result` the exact GenerateTextResult<typeof tools, ...>
-    // shape — `ReturnType<typeof generateText>` on the generic function
-    // itself widens back to a bare ToolSet and loses the specific tool
-    // types.
-    // experimental_telemetry (the AI SDK's own OTel instrumentation, via the
-    // same globally-registered tracer instrumentation.ts sets up) auto-emits
-    // ai.generateText/ai.generateText.doGenerate child spans whose Input/
-    // Output/usage Braintrust already renders correctly on its own — unlike
-    // this app's own gen_ai.* attributes below, no braintrust.* duplication
-    // needed for these child spans. metadata.gca.attempt reads `attempt`
-    // live at each call, so it reflects the actual retry attempt per span.
+    // Non-generic closure so `typeof callModel` gives `result` the exact
+    // GenerateTextResult<typeof tools, ...> shape (the generic function's
+    // own ReturnType widens back to a bare ToolSet).
+    // experimental_telemetry auto-emits ai.generateText.doGenerate child
+    // spans that Braintrust renders correctly on its own — no manual
+    // braintrust.* duplication needed for these, unlike gen_ai.* below.
     const callModel = () =>
       generateText({
         model,
