@@ -1,8 +1,9 @@
 /**
  * Registers two real Braintrust Scorer Functions, both deterministic
- * structural checks over a turn's own spans (no LLM): "HITL Compliance"
- * (checkHitlCompliance, send_booking_link) and "HITL Compliance
- * (missing_info)" (checkMissingInfoHitlCompliance). Fully self-contained —
+ * structural checks over a turn's own spans (no LLM): "HITL Compliance
+ * (send_booking_link)" (checkHitlCompliance) and "HITL Compliance
+ * (missing_info)" (checkMissingInfoHitlCompliance) — named consistently so
+ * both are identifiable at a glance in a scores list. Fully self-contained —
  * neither has any dependency outside this file, node_modules, and
  * booking.ts's BOOKING_LINK_URL_PATTERN (real app source, imported below).
  * Both exported so
@@ -382,7 +383,7 @@ function isValidTurnRow(input: unknown, output: unknown): { input: string; outpu
 }
 
 project.scorers.create({
-  name: "HITL Compliance",
+  name: "HITL Compliance (send_booking_link)",
   slug: "gca-hitl-compliance",
   description:
     "Deterministic structural scorer, no LLM: was the send_booking_link human-approval gate correctly enforced this turn (executed only when approved, and never bypassed by a hand-typed link)? Not applicable (null score) on turns with zero send_booking_link involvement.",
@@ -403,7 +404,7 @@ project.scorers.create({
     // mode when it's missing — same bug, same fix, this branch just hadn't
     // fired online yet as of this comment).
     return {
-      name: "HITL Compliance",
+      name: "HITL Compliance (send_booking_link)",
       score: result.score,
       metadata: { rationale: result.rationale, details: result.details },
     };
