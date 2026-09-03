@@ -43,6 +43,15 @@ export const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
+// Every valid model-facing tool name, derived from `tools` above (the real
+// source of truth) instead of hand-listed — used by run-turn.ts to type-check
+// its NEEDS_APPROVAL set against actual registered tool names. Deliberately
+// NOT used to type runTool's own `toolName` param below, which stays a plain
+// `string` on purpose (see that param's own comment): a model can hallucinate
+// a name outside this union, and runTool's `default` case is the real runtime
+// handling for that, not something a stricter type should paper over.
+export type ToolName = keyof typeof tools;
+
 // Dispatches a requested tool call to its run<ToolName> implementation —
 // the single dispatcher every tool call in this app goes through, whether
 // gated or not (run-turn.ts's loop calls this uniformly; for NEEDS_APPROVAL

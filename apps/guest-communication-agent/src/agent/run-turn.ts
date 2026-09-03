@@ -5,7 +5,7 @@ import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
 import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
-import { runTool } from "@/agent/run-tool";
+import { runTool, type ToolName } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
 import type { HitlDecision } from "@/agent/tools/approval-gate";
 import { requestSendBookingLinkApproval } from "@/agent/tools/booking";
@@ -113,20 +113,33 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 
 // Which tools go through the two-phase "calls human, then run the tool"
 // dispatch, instead of a single-phase call to run-tool.ts's runTool —
-// checked directly in the dispatch loop below, which inlines a switch over
-// requestMissingInfoApproval/requestSendBookingLinkApproval (no separate
-// dispatcher function for this — see that switch's own comment) and, only if
-// approved, calls run-tool.ts's runTool (given the resolved HitlDecision) as
-// two separate, sequential steps; that decoupling is deliberate, not an
-// implementation detail hidden away. wants_human is NOT here on purpose —
-// it's a one-way alert with no approve/reject (or answer-shaped) decision to
-// gate on, so it dispatches straight through runTool via wants-human.ts's
-// own runWantsHuman. Both tools below ARE approval-shaped (send_booking_link
-// genuinely approve/reject; missing_info resolves to an answer instead, but
-// still gates whether the tool call proceeds) — see approval-gate.ts's own
-// module comment for why missing_info still doesn't reuse
-// requestApprovalGate's generic mechanism.
-const NEEDS_APPROVAL = new Set(["missing_info", "send_booking_link"]);
+// checked directly in the dispatch loop below via isGatedTool, which inlines
+// a switch over requestMissingInfoApproval/requestSendBookingLinkApproval (no
+// separate dispatcher function for this — see that switch's own comment) and,
+// only if approved, calls run-tool.ts's runTool (given the resolved
+// HitlDecision) as two separate, sequential steps; that decoupling is
+// deliberate, not an implementation detail hidden away. wants_human is NOT
+// here on purpose — it's a one-way alert with no approve/reject (or
+// answer-shaped) decision to gate on, so it dispatches straight through
+// runTool via wants-human.ts's own runWantsHuman. Both tools below ARE
+// approval-shaped (send_booking_link genuinely approve/reject; missing_info
+// resolves to an answer instead, but still gates whether the tool call
+// proceeds) — see approval-gate.ts's own module comment for why missing_info
+// still doesn't reuse requestApprovalGate's generic mechanism.
+//
+// `satisfies readonly ToolName[]` checks each entry against run-tool.ts's
+// real tool registry at compile time (a typo/stale rename here would
+// otherwise silently exempt a tool from approval, discovered only if someone
+// happens to notice it never gates). GatedToolName, derived from this same
+// array, is what lets isGatedTool below actually narrow call.toolName —
+// Set<string>.has() doesn't narrow, which is why the switch used to need a
+// runtime-only default case (see that switch's own comment).
+const NEEDS_APPROVAL = ["missing_info", "send_booking_link"] as const satisfies readonly ToolName[];
+type GatedToolName = (typeof NEEDS_APPROVAL)[number];
+
+function isGatedTool(toolName: string): toolName is GatedToolName {
+  return (NEEDS_APPROVAL as readonly string[]).includes(toolName);
+}
 
 // Batches every tool call's output from a round into a single "tool" role
 // message with one content part per call, matching the shape AI SDK itself
@@ -394,7 +407,7 @@ export async function runAgentTurn(
         // above) — it must run un-nested here, never wrapped in an outer
         // step.run.
         let approvalDecision: HitlDecision<unknown> | undefined;
-        if (NEEDS_APPROVAL.has(call.toolName)) {
+        if (isGatedTool(call.toolName)) {
           switch (call.toolName) {
             case "missing_info":
               approvalDecision = await requestMissingInfoApproval(
@@ -409,13 +422,17 @@ export async function runAgentTurn(
                 toolContext,
               );
               break;
-            default:
-              // Unreachable — NEEDS_APPROVAL only ever contains the two
-              // cases above; this exists so TypeScript sees every path
-              // through the switch assign approvalDecision, and to fail
-              // loudly (not silently dispatch an unapproved tool call) if
-              // NEEDS_APPROVAL ever gains a member without a matching case.
-              throw new Error(`"${call.toolName}" is not a gated tool`);
+            default: {
+              // isGatedTool above narrows call.toolName to GatedToolName, so
+              // this branch is a compile-time exhaustiveness check, not just
+              // a runtime guard: if GatedToolName ever gains a member without
+              // a matching case, call.toolName's real type stops being
+              // assignable to `never` here and tsc fails the build — caught
+              // before a real call for the new tool ever reaches this switch
+              // unapproved, not just the first time one does in production.
+              const exhaustiveCheck: never = call.toolName;
+              throw new Error(`unhandled gated tool "${exhaustiveCheck}"`);
+            }
           }
 
           if (!approvalDecision.approved) {
