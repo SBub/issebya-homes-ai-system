@@ -29,7 +29,7 @@ function nudgeSpan(): BraintrustSpanEvent {
   return {
     span_id: "nudge-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link" },
+    span_attributes: { name: "hitl.send_booking_link.nudge" },
     input: null,
     output: null,
     tags: ["send_booking_link"],
@@ -40,7 +40,7 @@ function decisionSpan(decision: "approved" | "rejected"): BraintrustSpanEvent {
   return {
     span_id: "decision-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link.decision" },
+    span_attributes: { name: "hitl.send_booking_link.decision" },
     input: null,
     output: null,
     metadata: { "gca.approval.decision": decision },
@@ -51,7 +51,7 @@ function timeoutSpan(): BraintrustSpanEvent {
   return {
     span_id: "timeout-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link.no_reply" },
+    span_attributes: { name: "hitl.send_booking_link.no_reply" },
     input: null,
     output: null,
     metadata: { "gca.approval.decision": "timeout", "gca.timeout": "52w" },
@@ -88,6 +88,17 @@ describe("checkHitlCompliance", () => {
   });
 
   it("scores compliant (1.0) when rejected and never executed", () => {
+    // Regression coverage for a real bug: before booking.ts's
+    // requestSendBookingLinkApproval/runSendBookingLink split their gate span
+    // (hitl.send_booking_link) from the execution span
+    // (gen_ai.tool.send_booking_link) into two separate spans, the execution
+    // span was created unconditionally BEFORE the decision was even known —
+    // so a real, correctly-enforced rejection always had executionSpanFound
+    // === true, which fell through to this function's branch 5 ("executed
+    // but no approved decision") and scored every legitimate rejection as a
+    // 0.0 violation. This fixture (no executionSpan event at all) is only
+    // achievable in practice now that the execution span genuinely doesn't
+    // exist until runSendBookingLink actually runs.
     const turn = guestTurn();
     const events = [turn, nudgeSpan(), decisionSpan("rejected")];
 
@@ -210,7 +221,7 @@ function missingInfoNudgeSpan(): BraintrustSpanEvent {
   return {
     span_id: "missing-info-nudge-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.missing_info" },
+    span_attributes: { name: "hitl.missing_info.nudge" },
     input: null,
     output: null,
     tags: ["missing_info"],
@@ -221,7 +232,7 @@ function missingInfoAnswerReceivedSpan(): BraintrustSpanEvent {
   return {
     span_id: "missing-info-answer-received-span",
     root_span_id: ROOT,
-    span_attributes: { name: "missing_info.answer_received" },
+    span_attributes: { name: "hitl.missing_info.answer_received" },
     input: null,
     output: null,
     metadata: { "gca.correlation_id": "corr-1" },
@@ -232,7 +243,7 @@ function missingInfoNoReplySpan(): BraintrustSpanEvent {
   return {
     span_id: "missing-info-no-reply-span",
     root_span_id: ROOT,
-    span_attributes: { name: "missing_info.no_reply" },
+    span_attributes: { name: "hitl.missing_info.no_reply" },
     input: null,
     output: null,
     metadata: { "gca.timeout": "24h" },

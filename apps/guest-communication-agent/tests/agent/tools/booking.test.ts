@@ -155,24 +155,27 @@ describe("runSendBookingLink", () => {
   });
 
   it("returns the same { url } computeSendBookingLink would, wrapped in real step tracing", async () => {
-    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step));
 
     expect(result).toEqual(computeSendBookingLink(bookingArgs, "+15551234567"));
   });
 
-  it("patches the given tool span with its real output", async () => {
-    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+  it("creates its own fresh gen_ai.tool.send_booking_link execution span with real output known at creation, no updateSpanIO patch", async () => {
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step));
 
-    expect(updateSpanIOMock).toHaveBeenCalledWith("span-1", { output: result });
+    const execSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.send_booking_link");
+    expect(execSpan).toBeDefined();
+    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("send_booking_link");
+    expect(execSpan?.attributes["gca.tool.output"]).toBe(JSON.stringify(result));
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
   });
 
-  it("memoizes the compute step under execute-send_booking_link", async () => {
-    await runSendBookingLink(bookingArgs, bookingToolContext(step), "span-1");
+  it("memoizes the compute+span-creation under a single tool-send_booking_link step", async () => {
+    await runSendBookingLink(bookingArgs, bookingToolContext(step));
 
-    expect(step.run.mock.calls.map((c) => c[0])).toEqual([
-      "execute-send_booking_link",
-      "update-send_booking_link-trace-io",
-    ]);
+    expect(step.run.mock.calls.map((c) => c[0])).toEqual(["tool-send_booking_link"]);
   });
 });
 
@@ -270,7 +273,7 @@ describe("requestSendBookingLinkApproval", () => {
     expect(decision.approved).toBe(true);
     expect(decision.payload).toBeUndefined();
     expect(decision.notApprovedOutput).toBeUndefined();
-    expect(decision.toolSpanId).toEqual(expect.any(String));
+    expect(decision.hitlSpanId).toEqual(expect.any(String));
   });
 
   it("resolves approved: false with the standard not-approved message on a rejection", async () => {
@@ -309,7 +312,7 @@ describe("requestSendBookingLinkApproval", () => {
     });
   });
 
-  it("creates the gen_ai.tool.send_booking_link execution span first, before the nudge", async () => {
+  it("creates the hitl.send_booking_link gate span first, as the nudge/decision spans' real parent — no gen_ai.tool.send_booking_link span exists on this path", async () => {
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
 
     await requestSendBookingLinkApproval(call, "corr-1", {
@@ -320,22 +323,29 @@ describe("requestSendBookingLinkApproval", () => {
       step,
     });
 
-    expect(step.run.mock.calls.map((c) => c[0])[0]).toBe("tool-send_booking_link");
+    expect(step.run.mock.calls.map((c) => c[0])[0]).toBe("hitl-send_booking_link");
 
-    const execSpan = spanExporter
+    const hitlSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.send_booking_link");
-    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("send_booking_link");
-    expect(execSpan?.attributes["gca.tool.input"]).toBe(JSON.stringify(call.input));
+      .find((span) => span.name === "hitl.send_booking_link");
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(JSON.stringify(call.input));
+    expect(hitlSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
 
     const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link");
+      .find((span) => span.name === "hitl.send_booking_link.nudge");
     expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
 
     const decisionSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .find((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
+
+    // The real execution span only gets created by runSendBookingLink, once
+    // run-tool.ts's runTool is actually called with the approved decision —
+    // requestSendBookingLinkApproval on its own never creates one.
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.send_booking_link"),
+    ).toBeUndefined();
   });
 });

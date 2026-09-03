@@ -49,11 +49,14 @@ export interface HitlDecision<TPayload = undefined> {
   // "rejected/timed out"/"couldn't reach the owner" result, whichever shape
   // this tool uses.
   notApprovedOutput?: unknown;
-  // The gen_ai.tool.<name> execution span, created before the HITL wait —
-  // the caller patches its real output onto this once the tool call (or the
-  // not-approved fallback) resolves.
-  toolSpanId: string;
-  toolAnchor: TraceAnchor;
+  // The hitl.<name> gate span, created before the HITL wait — the caller
+  // patches its own real output onto this if the call is NOT approved (the
+  // approved path creates a fresh, separate gen_ai.tool.<name> execution
+  // span instead — see missing-info.ts's/booking.ts's own comments for why
+  // the gate span and the execution span are deliberately two different
+  // spans, not one span reused for both).
+  hitlSpanId: string;
+  hitlAnchor: TraceAnchor;
 }
 
 /**
@@ -125,17 +128,15 @@ export async function requestApprovalGate(params: {
   // recordApprovalGateTraceAnchor's own doc comment in tracing.ts for what
   // this is for (letting the owner-nudges approve route, a separate HTTP
   // request that may run hours later on a different server instance, nest
-  // its own decision span under this call's real gen_ai.tool.<toolName>
-  // span) and its known orphaned-row gap when the owner never decides.
-  // `traceAnchor` here already IS that gen_ai.tool.<toolName> span's real
-  // anchor — run-turn.ts's dispatchGatedToolCall creates that span first and
-  // passes its anchor in as this param, the same shape runMissingInfo's own
-  // toolAnchor has relative to gen_ai.tool.missing_info — so no live Span
-  // object is needed here, unlike missing_info's equivalent call this
-  // doesn't need a correlationId truthiness guard either: unlike
-  // ToolContext.correlationId (optional, for hypothetical callers outside a
-  // live run), this function's own `correlationId` param above is a
-  // required string.
+  // its own decision span under this call's real hitl.<toolName> gate span)
+  // and its known orphaned-row gap when the owner never decides. `traceAnchor`
+  // here already IS that hitl.<toolName> span's real anchor — booking.ts's
+  // requestSendBookingLinkApproval creates that span first and passes its
+  // anchor in as this param — so no live Span object is needed here, unlike
+  // missing_info's equivalent call this doesn't need a correlationId
+  // truthiness guard either: unlike ToolContext.correlationId (optional, for
+  // hypothetical callers outside a live run), this function's own
+  // `correlationId` param above is a required string.
   await step.run(`record-approval-gate-trace-anchor-${toolName}`, () =>
     recordApprovalGateTraceAnchor(correlationId, traceAnchor),
   );
@@ -167,9 +168,9 @@ export async function requestApprovalGate(params: {
 
   const nudged = await steppedSpan(
     step,
-    `owner-nudge-${toolName}`,
+    `hitl-${toolName}-nudge`,
     traceAnchor,
-    `owner_nudge.${toolName}`,
+    `hitl.${toolName}.nudge`,
     {
       "gca.conversation_id": conversationId,
       "gca.phone": phone,
@@ -230,9 +231,9 @@ export async function requestApprovalGate(params: {
     // Braintrust's UI does with it.
     await steppedSpan(
       step,
-      `${toolName}-approval-timeout`,
+      `hitl-${toolName}-no-reply`,
       traceAnchor,
-      `owner_nudge.${toolName}.no_reply`,
+      `hitl.${toolName}.no_reply`,
       {
         "gca.timeout": timeout,
         "gca.approval.decision": "timeout",
@@ -261,9 +262,9 @@ export async function requestApprovalGate(params: {
   const decision = approved ? "approved" : "rejected";
   await steppedSpan(
     step,
-    `${toolName}-approval-decision`,
+    `hitl-${toolName}-decision`,
     traceAnchor,
-    `owner_nudge.${toolName}.decision`,
+    `hitl.${toolName}.decision`,
     {
       "gca.approval.decision": decision,
       "braintrust.approval_decision": decision,

@@ -84,23 +84,27 @@ const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again
 //   own separately-memoized step, distinct from the span-creation and
 //   output-patch steps around it).
 // - missing_info and send_booking_link (NEEDS_APPROVAL below) need a
-//   genuine suspend: their execution span is created BEFORE a real approval
-//   wait starts (so nudge/decision/timeout spans nest under it as
-//   children), and that wait can suspend for hours to up to a year
+//   genuine suspend: each creates its own hitl.<name> GATE span (a separate
+//   span from its real gen_ai.tool.<name> execution span — see
+//   missing-info.ts's/booking.ts's own comments) BEFORE a real approval wait
+//   starts, so nudge/decision/timeout spans nest under the gate span as
+//   children, and that wait can suspend for hours to up to a year
 //   (send_booking_link's BOOKING_LINK_APPROVAL_TIMEOUT). No single tool call
 //   can "own" a span spanning that — approval (the inlined switch in the
 //   NEEDS_APPROVAL branch below) and execution (run-tool.ts's runTool, given
-//   the resolved HitlDecision) are
-//   two separate, sequential steps this loop calls directly (see the
-//   NEEDS_APPROVAL branch below), deliberately not bundled into one
-//   function, so the approval decision and the tool call stay visibly
-//   distinct here — the one remaining special case in this loop, forced by
-//   the wait duration, not by choice. Both the gated and ungated paths call
-//   the exact same runTool in the end, with zero span/step wrapping around
-//   that call in either case: the pre-created span belongs to
-//   missing_info/send_booking_link's own run<ToolName> (handed the id via
-//   the HitlDecision), which patches it itself — same as every other tool
-//   patching the span it created itself.
+//   the resolved HitlDecision) are two separate, sequential steps this loop
+//   calls directly (see the NEEDS_APPROVAL branch below), deliberately not
+//   bundled into one function, so the approval decision and the tool call
+//   stay visibly distinct here — the one remaining special case in this
+//   loop, forced by the wait duration, not by choice. Both the gated and
+//   ungated paths call the exact same runTool in the end, with zero
+//   span/step wrapping around that call in either case: on rejection/timeout
+//   the gate span patches itself with the not-approved fallback and runTool
+//   is never reached at all; on approval, missing_info/send_booking_link's
+//   own run<ToolName> creates a genuinely fresh execution span with real
+//   output known at creation — the same one-shot shape every plain tool
+//   already has — no pre-created span or retroactive patch involved for that
+//   half anymore.
 //
 // Inngest doesn't support calling a step tool from inside another
 // step.run()'s callback — the callback must be a self-contained unit of
@@ -376,7 +380,7 @@ export async function runAgentTurn(
         // know "how do I get an approval decision for tool X", so there's no
         // real caller-abstraction value in hiding it behind a wrapper), then,
         // on rejection/timeout, return its not-approved fallback immediately
-        // (already patched onto the tool-call span by
+        // (already patched onto the tool's own hitl.<name> gate span by
         // requestMissingInfoApproval/requestSendBookingLinkApproval
         // themselves — nothing left for this loop to do but return it). No
         // tool-calling code lives in this block: the actual dispatch
@@ -429,16 +433,18 @@ export async function runAgentTurn(
         // No span/step wrapping of any kind happens here: each tool's own
         // run<ToolName> owns its own tracing (this app's run<ToolName>
         // convention — see wants-human.ts's runWantsHuman for the model
-        // every tool follows). The 6 non-gated tools create their own
-        // gen_ai.tool.<name> span from scratch; missing_info/
-        // send_booking_link patch the span the approval switch above already
-        // created, using the toolSpanId carried on approvalDecision (see
-        // run-tool.ts's runTool for how that's threaded through) — see
-        // requestMissingInfoApproval/requestSendBookingLinkApproval's own
-        // comments for why that span can't be created fresh here. Re-executes
-        // on every Inngest replay like the rest of this loop body, which is
-        // safe for the same reason it's safe for any tool with its own
-        // step.run calls: each is individually memoized, so a replay resumes
+        // every tool follows). Every tool, gated or not, creates its own
+        // fresh gen_ai.tool.<name> execution span from scratch here, with
+        // real output known at creation — missing_info/send_booking_link no
+        // longer patch a pre-created span at this point (that only happens
+        // on the approval switch's own not-approved exit above, targeting
+        // its own separate hitl.<name> gate span, never this execution
+        // span). approvalDecision is still threaded through only so
+        // missing_info's run<ToolName> can read its `payload` (the owner's
+        // real answer) — see run-tool.ts's runTool. Re-executes on every
+        // Inngest replay like the rest of this loop body, which is safe for
+        // the same reason it's safe for any tool with its own step.run
+        // calls: each is individually memoized, so a replay resumes
         // correctly without re-running already-completed work.
         const output = await runTool(call.toolName, call.input, toolContext, approvalDecision);
         // See RunAgentTurnResult.firedTags for why only wants_human and

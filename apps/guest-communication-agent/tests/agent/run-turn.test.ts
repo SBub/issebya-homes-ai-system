@@ -501,16 +501,13 @@ describe("runAgentTurn", () => {
       content: "All set, here is your link!",
     });
 
-    // send_booking_link no longer passes through the generic
-    // dispatchTracedToolCall wrapper (it's SELF_STEPPED_TOOLS, gated through
-    // dispatchGatedToolCall first — see run-turn.ts's comment). Its
-    // "gen_ai.tool.send_booking_link" execution span is now created FIRST, in
-    // run-turn.ts's dispatchGatedToolCall, BEFORE requestApprovalGate ever
-    // runs — so "owner_nudge.send_booking_link" (opened inside
-    // approval-gate.ts's requestApprovalGate) nests as this span's real
-    // child, not its sibling. Literal parent/child span linkage
-    // (ReadableSpan.parentSpanContext.spanId) can't actually be asserted in
-    // this vitest environment — no real AsyncLocalStorage-based
+    // send_booking_link is one of NEEDS_APPROVAL's two tools — its approval
+    // half creates a "hitl.send_booking_link" GATE span FIRST, before
+    // requestApprovalGate ever runs, so "hitl.send_booking_link.nudge"
+    // (opened inside approval-gate.ts's requestApprovalGate) nests as this
+    // gate span's real child, not its sibling. Literal parent/child span
+    // linkage (ReadableSpan.parentSpanContext.spanId) can't actually be
+    // asserted in this vitest environment — no real AsyncLocalStorage-based
     // ContextManager is registered here (only instrumentation.ts registers
     // one, for the real Next.js runtime), so context.with() silently no-ops
     // and every span gets its own independently-generated trace id
@@ -519,27 +516,26 @@ describe("runAgentTurn", () => {
     // `traceAnchor` param requestApprovalGate was actually called with
     // (below, via requestApprovalGateSpy) is the strongest same-harness
     // proof of correct reparenting available instead.
-    const bookingExecSpan = spanExporter
+    const hitlSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.send_booking_link");
-    expect(bookingExecSpan).toBeDefined();
+      .find((span) => span.name === "hitl.send_booking_link");
+    expect(hitlSpan).toBeDefined();
     expect(requestApprovalGateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "send_booking_link",
         traceAnchor: {
           traceId: TEST_TRACE_ANCHOR.traceId,
-          spanId: bookingExecSpan?.spanContext().spanId,
+          spanId: hitlSpan?.spanContext().spanId,
         },
       }),
     );
 
     const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link");
+      .find((span) => span.name === "hitl.send_booking_link.nudge");
     expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
 
-    expect(bookingExecSpan?.attributes["gen_ai.tool.name"]).toBe("send_booking_link");
-    expect(bookingExecSpan?.attributes["gca.tool.input"]).toBe(
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(
       JSON.stringify({
         guestName: "Ana",
         email: "ana@example.com",
@@ -548,18 +544,25 @@ describe("runAgentTurn", () => {
         checkOut: "2026-09-05",
       }),
     );
-    expect(bookingExecSpan?.attributes["braintrust.input"]).toBe(
-      bookingExecSpan?.attributes["gca.tool.input"],
+    expect(hitlSpan?.attributes["braintrust.input"]).toBe(hitlSpan?.attributes["gca.tool.input"]);
+
+    // The real execution span is a SEPARATE span from the gate span above —
+    // created fresh only once approved (by runSendBookingLink, via
+    // run-tool.ts's runTool), a sibling of the gate span under the turn, not
+    // its child. Real output is known at creation time now (same one-shot
+    // shape every plain tool already has), so it's a real span attribute,
+    // never a retroactive updateSpanIO patch — that patch mechanism is only
+    // ever used by the gate span, and only on a not-approved outcome (not
+    // exercised on this approved path).
+    const bookingExecSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.send_booking_link");
+    expect(bookingExecSpan).toBeDefined();
+    expect(bookingExecSpan?.attributes["gen_ai.tool.name"]).toBe("send_booking_link");
+    expect(bookingExecSpan?.attributes["gca.tool.output"]).toEqual(
+      expect.stringContaining("/booking/room1?"),
     );
-    // Output isn't known until after requestApprovalGate resolves, well
-    // after this span has already closed — same as missing_info's/
-    // wants_human's own execution spans, it's never a span attribute, only
-    // a retroactive updateSpanIO patch (asserted below).
-    expect(bookingExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
-    expect(bookingExecSpan?.attributes["braintrust.output"]).toBeUndefined();
-    expect(updateSpanIOMock).toHaveBeenCalledWith(bookingExecSpan?.spanContext().spanId, {
-      output: { url: expect.stringContaining("/booking/room1?") },
-    });
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
 
     // get_pricing isn't send_booking_link — its own span must not pick up the tag.
     const pricingSpan = spanExporter
@@ -567,23 +570,26 @@ describe("runAgentTurn", () => {
       .find((span) => span.name === "gen_ai.tool.get_pricing");
     expect(pricingSpan?.attributes["braintrust.tags"]).toBeUndefined();
 
-    // send_booking_link IS a real "tool-send_booking_link" step now (the
-    // tool-span-creation step, created before the gate) — it's dispatched
-    // via the SELF_STEPPED_TOOLS branch, not the generic
-    // dispatchTracedToolCall path. The approved dispatch itself, and the
-    // retroactive output patch, are each their own separate step too.
+    // send_booking_link IS a real "hitl-send_booking_link" step now (the
+    // gate-span-creation step, created before the approval wait) — it's
+    // dispatched via the NEEDS_APPROVAL branch, not the generic runTool path
+    // directly. Once approved, runSendBookingLink's own one-shot
+    // "tool-send_booking_link" step runs too — no more separate execute-/
+    // update-*-trace-io steps for the execution half, since real output is
+    // known at span-creation time now.
     const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("hitl-send_booking_link");
     expect(stepIds).toContain("tool-send_booking_link");
-    expect(stepIds).toContain("execute-send_booking_link");
-    expect(stepIds).toContain("update-send_booking_link-trace-io");
+    expect(stepIds).not.toContain("execute-send_booking_link");
+    expect(stepIds).not.toContain("update-send_booking_link-trace-io");
 
     // The approval decision itself is independently visible too — nested
-    // under the same tool-call span in a real trace (see the
-    // requestApprovalGateSpy assertion above for why that's asserted via the
-    // real traceAnchor param instead of literal span linkage here).
+    // under the gate span in a real trace (see the requestApprovalGateSpy
+    // assertion above for why that's asserted via the real traceAnchor param
+    // instead of literal span linkage here).
     const decisionSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .find((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
 
     // pending_owner_decisions bookkeeping: recorded once the nudge is
@@ -692,51 +698,56 @@ describe("runAgentTurn", () => {
 
     // missing_info manages its own step checkpointing internally (it calls
     // context.step directly), so the outer loop must NOT also wrap it in a
-    // "tool-missing_info" step.run (Inngest doesn't support nesting step
-    // calls inside another step.run()'s callback) — but runMissingInfo's own
-    // internal steppedSpan DOES create a step of that exact id, now called
-    // FIRST (before the nudge, not after the wait) since it's what creates
-    // the gen_ai.tool.missing_info span the nudge/no_reply spans nest under
-    // — see this function's own top comment.
-    expect(step.run.mock.calls.map((call) => call[0])).toContain("tool-missing_info");
-    // The retroactive output-patch step also ran, once the wait resolved.
-    expect(step.run.mock.calls.map((call) => call[0])).toContain("update-missing-info-trace-io");
+    // step.run (Inngest doesn't support nesting step calls inside another
+    // step.run()'s callback) — but requestMissingInfoApproval's own internal
+    // steppedSpan DOES create a "hitl-missing_info" step, since it's what
+    // creates the hitl.missing_info GATE span the nudge/answer-received spans
+    // nest under. Once approved, runMissingInfo's own steppedSpan creates a
+    // SEPARATE "tool-missing_info" step too — its own fresh
+    // gen_ai.tool.missing_info execution span, with real output known at
+    // creation, so no retroactive patch step runs for it.
+    const stepIds = step.run.mock.calls.map((call) => call[0]);
+    expect(stepIds).toContain("hitl-missing_info");
+    expect(stepIds).toContain("tool-missing_info");
+    expect(stepIds).not.toContain("update-missing-info-trace-io");
 
+    const hitlSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.missing_info");
+    expect(hitlSpan).toBeDefined();
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Guest asked about the sauna" }),
+    );
+    expect(hitlSpan?.attributes["braintrust.input"]).toBe(hitlSpan?.attributes["gca.tool.input"]);
+    // The gate span never gets patched on this approved path — only the
+    // not-approved exit paths patch it (see the timeout/nudge-failed tests
+    // below). Its own real output lands on runMissingInfo's separate
+    // execution span instead (asserted next).
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
+
+    // The real execution span is a SEPARATE span from the gate span above —
+    // created fresh only once approved (by runMissingInfo, via
+    // run-tool.ts's runTool), a sibling of the gate span under the turn, not
+    // its child. Real output is known at creation time now (same one-shot
+    // shape every plain tool already has), so it's a real span attribute.
     const missingInfoExecSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "gen_ai.tool.missing_info");
     expect(missingInfoExecSpan).toBeDefined();
     expect(missingInfoExecSpan?.attributes["gen_ai.tool.name"]).toBe("missing_info");
-    // Only `input` is set as a span attribute at creation time — `output`
-    // isn't known until after step.waitForEvent resolves, well after this
-    // span has already closed, so it's never a span attribute at all; it's
-    // patched in retroactively via updateSpanIO instead (asserted below).
-    expect(missingInfoExecSpan?.attributes["gca.tool.input"]).toBe(
-      JSON.stringify({ reason: "Guest asked about the sauna" }),
+    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBe(
+      JSON.stringify({ escalated: true, answer: "The sauna is on the ground floor." }),
     );
-    expect(missingInfoExecSpan?.attributes["braintrust.input"]).toBe(
-      missingInfoExecSpan?.attributes["gca.tool.input"],
-    );
-    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
-    expect(missingInfoExecSpan?.attributes["braintrust.output"]).toBeUndefined();
 
-    // The retroactive patch — same mechanism (and the same best-effort
-    // reliability caveat) runAgentTurn's own "braintrust.guest_turn" root
-    // marker span already uses for its output.
-    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
-      output: { escalated: true, answer: "The sauna is on the ground floor." },
-    });
-
-    // owner_nudge.missing_info now nests under the tool-call span
-    // (toolAnchor) instead of the turn's own anchor — the outer loop's
-    // firedTags/message-shape behavior is otherwise unchanged by this
-    // reparenting.
+    // hitl.missing_info.nudge nests under the gate span (hitlAnchor), not
+    // the turn's own anchor — the outer loop's firedTags/message-shape
+    // behavior is otherwise unchanged by this.
     const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.missing_info");
+      .find((span) => span.name === "hitl.missing_info.nudge");
     expect(nudgeSpan).toBeDefined();
 
-    // missing_info's owner-nudge span DOES still carry braintrust.tags
+    // missing_info's own nudge span DOES still carry braintrust.tags
     // directly (unchanged by this fix — see run-turn.ts's dispatchWantsHuman
     // comment), so firedTags is a harmless natural side effect here now, not
     // the only route — see RunAgentTurnResult.firedTags.
@@ -804,43 +815,49 @@ describe("runAgentTurn", () => {
       },
     });
 
-    // All of missing_info's own steps ran: the tool-span-creation step
-    // (now FIRST, before the nudge — see runMissingInfo's own comment), the
-    // record-trace-anchor write, the nudge send, the no-reply-timeout
-    // fallback (which calls missing-info.ts's handleMissingInfoNoReply — a
-    // pure, unmocked, log-only function here), and the retroactive
-    // output-patch step.
+    // All of missing_info's own steps ran: the gate-span-creation step
+    // (FIRST, before the nudge — see requestMissingInfoApproval's own
+    // comment), the record-trace-anchor write, the nudge send, the
+    // no-reply-timeout fallback (which calls missing-info.ts's
+    // handleMissingInfoNoReply — a pure, unmocked, log-only function here),
+    // and the retroactive output-patch step (targeting the gate span, since
+    // this is a not-approved exit — runMissingInfo/its own
+    // "tool-missing_info" step never run on this path at all).
     const stepIds = step.run.mock.calls.map((call) => call[0]);
-    expect(stepIds).toContain("tool-missing_info");
+    expect(stepIds).toContain("hitl-missing_info");
+    expect(stepIds).not.toContain("tool-missing_info");
     expect(stepIds).toContain("record-missing-info-trace-anchor");
-    expect(stepIds).toContain("owner-nudge-missing-info");
-    expect(stepIds).toContain("missing-info-no-reply");
+    expect(stepIds).toContain("hitl-missing-info-nudge");
+    expect(stepIds).toContain("hitl-missing-info-no-reply");
     expect(stepIds).toContain("update-missing-info-trace-io");
 
     const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.missing_info");
+      .find((span) => span.name === "hitl.missing_info.nudge");
     expect(nudgeSpan).toBeDefined();
     const timeoutSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "missing_info.no_reply");
+      .find((span) => span.name === "hitl.missing_info.no_reply");
     expect(timeoutSpan).toBeDefined();
 
-    // The timeout case's own execution span only ever carries `input` as a
-    // span attribute (set at creation, before the nudge/wait) — the
-    // fallback `output` isn't known until after the wait times out, so it's
-    // never a span attribute; it's patched in retroactively via
-    // updateSpanIO instead (asserted below), same as the answered case.
-    const missingInfoExecSpan = spanExporter
+    // The gate span only ever carries `input` as a span attribute (set at
+    // creation, before the nudge/wait) — the not-approved fallback `output`
+    // isn't known until after the wait times out, so it's never a span
+    // attribute at creation; it's patched in retroactively via updateSpanIO
+    // instead (asserted below). No gen_ai.tool.missing_info execution span
+    // exists at all on this not-approved path — the tool never actually ran.
+    const hitlSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.missing_info");
-    expect(missingInfoExecSpan).toBeDefined();
-    expect(missingInfoExecSpan?.attributes["gca.tool.input"]).toBe(
+      .find((span) => span.name === "hitl.missing_info");
+    expect(hitlSpan).toBeDefined();
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(
       JSON.stringify({ reason: "Guest asked about the sauna" }),
     );
-    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.missing_info"),
+    ).toBeUndefined();
 
-    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
+    expect(updateSpanIOMock).toHaveBeenCalledWith(hitlSpan?.spanContext().spanId, {
       output: {
         escalated: true,
         message: "The owner has been notified and will be in touch shortly.",
@@ -892,20 +909,24 @@ describe("runAgentTurn", () => {
     });
     // Nudge failed means nothing to wait on.
     expect(step.waitForEvent).not.toHaveBeenCalled();
-    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("missing-info-no-reply");
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("hitl-missing-info-no-reply");
 
-    // The tool-call span itself is still created on this third exit path too
+    // The gate span itself is still created on this third exit path too
     // (it's created FIRST, before the nudge is even attempted — see
-    // runMissingInfo's own comment) and its output still gets retroactively
-    // patched to the honest nudge-failed fallback message (distinct from the
-    // "notified" message the other two exit paths share, since here the
-    // owner genuinely was never told).
-    const missingInfoExecSpan = spanExporter
+    // requestMissingInfoApproval's own comment) and its output still gets
+    // retroactively patched to the honest nudge-failed fallback message
+    // (distinct from the "notified" message the other two exit paths share,
+    // since here the owner genuinely was never told). No
+    // gen_ai.tool.missing_info execution span exists at all — the tool never
+    // ran.
+    const hitlSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.missing_info");
-    expect(missingInfoExecSpan).toBeDefined();
-    expect(missingInfoExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
-    expect(updateSpanIOMock).toHaveBeenCalledWith(missingInfoExecSpan?.spanContext().spanId, {
+      .find((span) => span.name === "hitl.missing_info");
+    expect(hitlSpan).toBeDefined();
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.missing_info"),
+    ).toBeUndefined();
+    expect(updateSpanIOMock).toHaveBeenCalledWith(hitlSpan?.spanContext().spanId, {
       output: {
         escalated: true,
         message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
@@ -948,10 +969,10 @@ describe("runAgentTurn", () => {
         reasonCategory: "wants_human",
       }),
     );
-    // wants_human's owner-nudge send now nests under the tool-call span
-    // (toolAnchor) instead of the turn's own anchor — same reparenting
-    // runMissingInfo's own owner_nudge.missing_info gets (see
-    // dispatchWantsHuman's own comment) — step id/span name unchanged.
+    // wants_human's owner-nudge send nests under its own tool-call span
+    // (unlike missing_info's/send_booking_link's hitl.<name>.nudge, which
+    // nests under a separate gate span — wants_human has no gate at all,
+    // see wants-human.ts's own comment) — step id/span name unchanged.
     expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-wants-human");
     expect(
       spanExporter.getFinishedSpans().find((span) => span.name === "owner_nudge.wants_human"),
@@ -1045,11 +1066,11 @@ describe("runAgentTurn", () => {
     expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
       expect.objectContaining({ reasonCategory: "send_booking_link" }),
     );
-    // wants_human has no entry in run-turn.ts's APPROVAL_GATES table, so
-    // there's no nudge/wait step under its name at all — only
-    // send_booking_link's, driven by requestApprovalGate.
-    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("owner-nudge-wants_human");
-    expect(step.run.mock.calls.map((call) => call[0])).toContain("owner-nudge-send_booking_link");
+    // wants_human isn't in NEEDS_APPROVAL, so there's no gate/nudge/wait step
+    // under its name at all — only send_booking_link's, driven by
+    // requestApprovalGate.
+    expect(step.run.mock.calls.map((call) => call[0])).not.toContain("hitl-wants_human-nudge");
+    expect(step.run.mock.calls.map((call) => call[0])).toContain("hitl-send_booking_link-nudge");
     expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Sure thing!" });
     // Both tools are SELF_STEPPED_TOOLS, so both push into firedTags — order
     // isn't asserted since the two dispatches run concurrently via
@@ -1103,39 +1124,45 @@ describe("runAgentTurn", () => {
     // real decision made is still worth finding in this turn's trace tags).
     expect(result.firedTags).toEqual(["send_booking_link"]);
 
-    // A rejected call still gets its "gen_ai.tool.send_booking_link" execution
-    // span — it's created FIRST, before requestApprovalGate ever runs (see
-    // dispatchGatedToolCall's own comment), so the tool-call span exists
-    // regardless of outcome, unlike the pre-fix behavior where only an
-    // approved call ever got one. runSendBookingLink itself is never called
-    // on this path (no "execute-send_booking_link" step) — only the
-    // not-approved shape gets retroactively patched onto the span's output.
-    const bookingExecSpan = spanExporter
+    // A rejected call gets its "hitl.send_booking_link" GATE span — it's
+    // created FIRST, before requestApprovalGate ever runs (see
+    // requestSendBookingLinkApproval's own comment) — but crucially, NO
+    // "gen_ai.tool.send_booking_link" execution span exists on this path at
+    // all: runSendBookingLink is never called (no "tool-send_booking_link"
+    // step either), since the tool never actually ran. This is exactly the
+    // shape scripts/braintrust-scorers/hitl-compliance.scorer.ts's
+    // checkHitlCompliance already expects for a correctly-withheld call ("no
+    // execution span -> compliant") — before this span split, the execution
+    // span was created unconditionally before the decision was known, which
+    // made every legitimate rejection look like a violation to that scorer.
+    const hitlSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "gen_ai.tool.send_booking_link");
-    expect(bookingExecSpan).toBeDefined();
-    expect(bookingExecSpan?.attributes["gca.tool.output"]).toBeUndefined();
-    expect(updateSpanIOMock).toHaveBeenCalledWith(bookingExecSpan?.spanContext().spanId, {
+      .find((span) => span.name === "hitl.send_booking_link");
+    expect(hitlSpan).toBeDefined();
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.send_booking_link"),
+    ).toBeUndefined();
+    expect(updateSpanIOMock).toHaveBeenCalledWith(hitlSpan?.spanContext().spanId, {
       output: {
         approved: false,
         message: "This action was not approved. Do not retry it automatically.",
       },
     });
     const stepIds = step.run.mock.calls.map((call) => call[0]);
-    expect(stepIds).toContain("tool-send_booking_link");
-    expect(stepIds).not.toContain("execute-send_booking_link");
+    expect(stepIds).toContain("hitl-send_booking_link");
+    expect(stepIds).not.toContain("tool-send_booking_link");
     expect(stepIds).toContain("update-send_booking_link-trace-io");
 
     const decisionSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .find((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("rejected");
     expect(requestApprovalGateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "send_booking_link",
         traceAnchor: {
           traceId: TEST_TRACE_ANCHOR.traceId,
-          spanId: bookingExecSpan?.spanContext().spanId,
+          spanId: hitlSpan?.spanContext().spanId,
         },
       }),
     );
@@ -1188,13 +1215,14 @@ describe("runAgentTurn", () => {
 
   // The real trace that motivated this fix (see
   // docs/braintrust-online-eval-testing.md section 6n) had two parallel
-  // send_booking_link calls in one round — one per room. dispatchGatedToolCall
-  // has no shared/module-level state (toolSpanId/toolAnchor/result are all
-  // local to each call's own async frame), so two concurrent invocations
-  // should never cross-contaminate each other's spans/decisions purely by
-  // construction — this test proves that's actually true at runtime, not
-  // just by code review, with one call approved and the other rejected so a
-  // mix-up (room1 getting room2's decision, or vice versa) would be visible.
+  // send_booking_link calls in one round — one per room.
+  // requestSendBookingLinkApproval has no shared/module-level state
+  // (hitlSpanId/hitlAnchor/result are all local to each call's own async
+  // frame), so two concurrent invocations should never cross-contaminate
+  // each other's spans/decisions purely by construction — this test proves
+  // that's actually true at runtime, not just by code review, with one call
+  // approved and the other rejected so a mix-up (room1 getting room2's
+  // decision, or vice versa) would be visible.
   //
   // step.waitForEvent's two queued resolutions are consumed in call order,
   // not matched by argument (both calls share the same toolName/event/
@@ -1264,35 +1292,51 @@ describe("runAgentTurn", () => {
       },
     });
 
-    // Two independent tool-call spans, one per room, each with its own real
-    // span id and its own real input — proves toolAnchor isn't shared.
+    // Two independent gate spans, one per room, each with its own real span
+    // id and its own real input — proves hitlAnchor isn't shared.
+    const hitlSpans = spanExporter
+      .getFinishedSpans()
+      .filter((span) => span.name === "hitl.send_booking_link");
+    expect(hitlSpans).toHaveLength(2);
+    const room1HitlSpan = hitlSpans.find((s) =>
+      (s.attributes["gca.tool.input"] as string).includes("room1"),
+    );
+    const room2HitlSpan = hitlSpans.find((s) =>
+      (s.attributes["gca.tool.input"] as string).includes("room2"),
+    );
+    expect(room1HitlSpan).toBeDefined();
+    expect(room2HitlSpan).toBeDefined();
+    expect(room1HitlSpan?.spanContext().spanId).not.toBe(room2HitlSpan?.spanContext().spanId);
+
+    // Room 1 (approved) gets its own, separate, freshly-created
+    // gen_ai.tool.send_booking_link execution span, real output known at
+    // creation — never a retroactive patch. Room 2 (rejected) gets none at
+    // all: only its own gate span gets patched with the not-approved
+    // fallback. Each room's own real output lands on its OWN span, never the
+    // other room's — the cross-contamination this test exists to rule out.
     const bookingExecSpans = spanExporter
       .getFinishedSpans()
       .filter((span) => span.name === "gen_ai.tool.send_booking_link");
-    expect(bookingExecSpans).toHaveLength(2);
-    const room1Span = bookingExecSpans.find((s) =>
-      (s.attributes["gca.tool.input"] as string).includes("room1"),
+    expect(bookingExecSpans).toHaveLength(1);
+    expect(bookingExecSpans[0].attributes["gca.tool.output"]).toEqual(
+      expect.stringContaining("/booking/room1?"),
     );
-    const room2Span = bookingExecSpans.find((s) =>
-      (s.attributes["gca.tool.input"] as string).includes("room2"),
+    expect(updateSpanIOMock).not.toHaveBeenCalledWith(
+      bookingExecSpans[0].spanContext().spanId,
+      expect.anything(),
     );
-    expect(room1Span).toBeDefined();
-    expect(room2Span).toBeDefined();
-    expect(room1Span?.spanContext().spanId).not.toBe(room2Span?.spanContext().spanId);
-
-    // Each room's own output is patched onto its OWN span's id, not the
-    // other room's — the cross-contamination this test exists to rule out.
-    expect(updateSpanIOMock).toHaveBeenCalledWith(room1Span?.spanContext().spanId, {
-      output: { url: expect.stringContaining("/booking/room1?") },
-    });
-    expect(updateSpanIOMock).toHaveBeenCalledWith(room2Span?.spanContext().spanId, {
+    expect(updateSpanIOMock).not.toHaveBeenCalledWith(
+      room1HitlSpan?.spanContext().spanId,
+      expect.anything(),
+    );
+    expect(updateSpanIOMock).toHaveBeenCalledWith(room2HitlSpan?.spanContext().spanId, {
       output: {
         approved: false,
         message: "This action was not approved. Do not retry it automatically.",
       },
     });
 
-    // Each room's requestApprovalGate call carried its OWN toolAnchor
+    // Each room's requestApprovalGate call carried its OWN hitlAnchor
     // (located by its own real `reason` text, built from that call's own
     // input — never the other room's).
     const room1GateCall = requestApprovalGateSpy.mock.calls.find((c) =>
@@ -1303,18 +1347,18 @@ describe("runAgentTurn", () => {
     );
     expect(room1GateCall?.[0].traceAnchor).toEqual({
       traceId: TEST_TRACE_ANCHOR.traceId,
-      spanId: room1Span?.spanContext().spanId,
+      spanId: room1HitlSpan?.spanContext().spanId,
     });
     expect(room2GateCall?.[0].traceAnchor).toEqual({
       traceId: TEST_TRACE_ANCHOR.traceId,
-      spanId: room2Span?.spanContext().spanId,
+      spanId: room2HitlSpan?.spanContext().spanId,
     });
 
     // Two independent decision spans — one approved, one rejected, neither
     // mixed up with the other.
     const decisionSpans = spanExporter
       .getFinishedSpans()
-      .filter((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .filter((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpans).toHaveLength(2);
     expect(decisionSpans.map((s) => s.attributes["gca.approval.decision"]).sort()).toEqual([
       "approved",
@@ -1458,12 +1502,13 @@ describe("runAgentTurn", () => {
   // Regression coverage for the bug documented in tracing.ts's Braintrust
   // attribute-namespace comment block (4th bullet), same class of bug section
   // 6d of docs/braintrust-online-eval-testing.md fixed for approval-gate.ts's
-  // decision/no_reply spans: dispatchWantsHuman's/runMissingInfo's
-  // owner_nudge.wants_human, owner_nudge.missing_info, and
-  // missing_info.no_reply spans only ever carried gca.*-prefixed attributes,
-  // none matching @braintrust/otel's FILTER_PREFIXES, so they were silently
-  // dropped before export — confirmed absent from real Braintrust data (see
-  // that doc's section 6a Bug 2). The tests above assert what this app's own
+  // decision/no_reply spans: runWantsHuman's/requestMissingInfoApproval's
+  // owner_nudge.wants_human, hitl.missing_info.nudge, and
+  // hitl.missing_info.no_reply spans only ever carried gca.*-prefixed
+  // attributes, none matching @braintrust/otel's FILTER_PREFIXES, so they
+  // were silently dropped before export — confirmed absent from real
+  // Braintrust data (see that doc's section 6a Bug 2). The tests above assert
+  // what this app's own
   // InMemorySpanExporter sees; they'd pass identically whether or not the
   // real @braintrust/otel filter would also let the span through. This block
   // exercises the real, installed `@braintrust/otel` package's own
@@ -1583,14 +1628,14 @@ describe("runAgentTurn", () => {
         { correlationId: "corr-missing-info-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
 
-      braintrustProcessor.onEnd(findSpan("owner_nudge.missing_info"));
+      braintrustProcessor.onEnd(findSpan("hitl.missing_info.nudge"));
 
       expect(captured).toHaveLength(1);
     });
 
     it("lets the missing_info no_reply/timeout span through", async () => {
       // beforeEach already defaults step.waitForEvent to resolving null (a
-      // timeout), driving runMissingInfo's no-reply fallback.
+      // timeout), driving requestMissingInfoApproval's no-reply fallback.
       generateTextMock
         .mockResolvedValueOnce(
           toolCallResponse([
@@ -1612,7 +1657,7 @@ describe("runAgentTurn", () => {
         { correlationId: "corr-missing-info-timeout-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
 
-      braintrustProcessor.onEnd(findSpan("missing_info.no_reply"));
+      braintrustProcessor.onEnd(findSpan("hitl.missing_info.no_reply"));
 
       expect(captured).toHaveLength(1);
     });
@@ -1623,7 +1668,14 @@ describe("runAgentTurn", () => {
     // node_modules/@braintrust/otel/dist/index.js's isAISpan), so it should
     // clear the real filter on that alone, with no braintrust.*-prefixed
     // attribute needed the way the sibling nudge/no_reply spans above do.
+    // Only created on the approved path now (an answer must actually arrive
+    // for runMissingInfo to run at all), so this overrides the describe
+    // block's default timeout — unlike the two tests above, which exercise
+    // the not-approved gate span/spans instead.
     it("lets the missing_info execution span through, on its own gen_ai. name prefix", async () => {
+      step.waitForEvent.mockResolvedValueOnce({
+        data: { correlationId: "corr-missing-info-exec-filter", answer: "The AC is above the bed" },
+      });
       generateTextMock
         .mockResolvedValueOnce(
           toolCallResponse([
@@ -1650,18 +1702,19 @@ describe("runAgentTurn", () => {
       expect(captured).toHaveLength(1);
     });
 
-    // send_booking_link's owner_nudge.send_booking_link/.decision/.no_reply spans
-    // are now reparented to dispatchGatedToolCall's own toolAnchor instead of
-    // the turn's own anchor (see that function's comment) — reparenting only
-    // changes a span's parent context, not its own name/attributes, which is
-    // all @braintrust/otel's isAISpan check inspects, so these three should
-    // still clear the filter the same way they did before this change (via
-    // their existing braintrust.tags/braintrust.approval_decision
-    // attribute-prefix trick, established in section 6d) — confirmed here
-    // against the real, reparented spans runAgentTurn actually emits now,
-    // not assumed to still hold just because approval-gate.test.ts's own
-    // (unreparented, fixed-anchor) equivalent block still passes.
-    it("lets the send_booking_link nudge span through, reparented under its own tool-call span", async () => {
+    // send_booking_link's hitl.send_booking_link.nudge/.decision/.no_reply
+    // spans nest under requestSendBookingLinkApproval's own hitlAnchor
+    // instead of the turn's own anchor (see that function's comment) —
+    // reparenting only changes a span's parent context, not its own
+    // name/attributes, which is all @braintrust/otel's isAISpan check
+    // inspects, so these three should still clear the filter the same way
+    // they did before this change (via their existing
+    // braintrust.tags/braintrust.approval_decision attribute-prefix trick,
+    // established in section 6d) — confirmed here against the real,
+    // reparented spans runAgentTurn actually emits now, not assumed to still
+    // hold just because approval-gate.test.ts's own (unreparented,
+    // fixed-anchor) equivalent block still passes.
+    it("lets the send_booking_link nudge span through, reparented under its own gate span", async () => {
       step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
       generateTextMock
         .mockResolvedValueOnce(
@@ -1690,7 +1743,7 @@ describe("runAgentTurn", () => {
         { correlationId: "corr-booking-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
 
-      braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link"));
+      braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.nudge"));
 
       expect(captured).toHaveLength(1);
     });
@@ -1729,7 +1782,7 @@ describe("runAgentTurn", () => {
       expect(captured).toHaveLength(1);
     });
 
-    it("lets the send_booking_link decision span through, reparented under its own tool-call span", async () => {
+    it("lets the send_booking_link decision span through, reparented under its own gate span", async () => {
       step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
       generateTextMock
         .mockResolvedValueOnce(
@@ -1758,12 +1811,12 @@ describe("runAgentTurn", () => {
         { correlationId: "corr-booking-decision-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
 
-      braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link.decision"));
+      braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.decision"));
 
       expect(captured).toHaveLength(1);
     });
 
-    it("lets the send_booking_link no_reply/timeout span through, reparented under its own tool-call span", async () => {
+    it("lets the send_booking_link no_reply/timeout span through, reparented under its own gate span", async () => {
       // beforeEach already defaults step.waitForEvent to resolving null (a
       // timeout).
       generateTextMock
@@ -1793,7 +1846,7 @@ describe("runAgentTurn", () => {
         { correlationId: "corr-booking-timeout-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
 
-      braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link.no_reply"));
+      braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.no_reply"));
 
       expect(captured).toHaveLength(1);
     });

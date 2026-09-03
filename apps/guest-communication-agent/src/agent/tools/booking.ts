@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
 import { flushTracing } from "@/instrumentation";
 import { steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
 import { type HitlDecision, requestApprovalGate, resolveToolApproval } from "./approval-gate";
@@ -16,15 +17,20 @@ import type { ToolContext } from "./config";
 // result, split into two halves per this app's run<ToolName> convention (see
 // wants-human.ts's runWantsHuman/missing-info.ts's requestMissingInfoApproval
 // for the model this follows): requestSendBookingLinkApproval below is the
-// "calls human" half (creates the tool-call span, then reuses the generic,
-// reusable approve/reject HITL mechanism in approval-gate.ts's
-// requestApprovalGate — this tool genuinely IS approve/reject-shaped, unlike
-// missing_info), runSendBookingLink is the "tool call" half — the URL-building
-// logic, run only once requestSendBookingLinkApproval has resolved
-// `approved: true`. run-turn.ts's loop is what sequences "approve, then —
-// if approved — call the tool" (via run-tool.ts's runTool); each half patches
-// its own span with whichever output it's the one that actually knows — see
-// each function's own comment.
+// "calls human" half (creates the hitl.send_booking_link gate span, then
+// reuses the generic, reusable approve/reject HITL mechanism in
+// approval-gate.ts's requestApprovalGate — this tool genuinely IS
+// approve/reject-shaped, unlike missing_info), runSendBookingLink is the
+// "tool call" half — the URL-building logic, run only once
+// requestSendBookingLinkApproval has resolved `approved: true`. The two
+// halves own two DIFFERENT spans, not one shared span: the gate span covers
+// only the approval wait; runSendBookingLink creates its own fresh
+// gen_ai.tool.send_booking_link execution span, only once approved, with
+// real output known at creation — see that function's own comment for why.
+// run-turn.ts's loop is what sequences "approve, then — if approved — call
+// the tool" (via run-tool.ts's runTool); each half patches/creates its own
+// span with whichever output it's the one that actually knows — see each
+// function's own comment.
 
 const sendBookingLinkSchema = z.object({
   guestName: z.string().describe("Guest full name"),
@@ -92,23 +98,32 @@ export const BOOKING_LINK_URL_PATTERN =
   /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
 // send_booking_link's "calls human" half: creates the real
-// gen_ai.tool.send_booking_link execution span FIRST — before
-// requestApprovalGate ever runs — with the model's real tool-call `input`
-// set at creation, same shape wants-human.ts's own runWantsHuman/
-// missing-info.ts's own requestMissingInfoApproval give their own tool
-// spans. Only `fn`'s return value (the real OTel-generated span id) survives
-// this step — no live Span object survives an Inngest step boundary. That id
-// becomes a new toolAnchor, passed to requestApprovalGate as its own
-// traceAnchor param, so the nudge/decision/timeout spans requestApprovalGate
-// creates internally become this tool-call span's real children instead of
-// siblings of the turn's own anchor.
+// hitl.send_booking_link gate span FIRST — before requestApprovalGate ever
+// runs — with the model's real tool-call `input` set at creation, same shape
+// wants-human.ts's own runWantsHuman/missing-info.ts's own
+// requestMissingInfoApproval give their own spans. This is the HITL gate
+// span, NOT a tool-execution span — it covers only "are we approved to run
+// this tool", which is why it's named hitl.send_booking_link rather than
+// gen_ai.tool.send_booking_link: the real execution span (created by
+// runSendBookingLink below, only once approved) is a separate span, a
+// sibling of this one under the turn, not its child — nesting the
+// nudge/decision wait under a span literally named "the tool call" would
+// misrepresent the sequence (approve, THEN call the tool) as the wait
+// happening inside the tool call. Only `fn`'s return value (the real
+// OTel-generated span id) survives this step — no live Span object survives
+// an Inngest step boundary. That id becomes a new hitlAnchor, passed to
+// requestApprovalGate as its own traceAnchor param, so the
+// nudge/decision/timeout spans requestApprovalGate creates internally become
+// this gate span's real children instead of siblings of the turn's own
+// anchor.
 //
 // Patches its own span with the not-approved fallback before returning, on
 // the rejected/timed-out exit path — it already knows that output at that
-// point, no reason to hand it back unpatched. Deliberately does NOT patch the
-// approved case: it doesn't know the real execution result, only that the
-// call was approved — that's runSendBookingLink's own job, once
-// run-tool.ts's runTool calls it, same split missing-info.ts's
+// point, no reason to hand it back unpatched. Deliberately does NOT patch
+// anything on the approved case: this span's job is done once approval is
+// granted — the real execution result lands on runSendBookingLink's own,
+// separate, freshly-created execution span instead, once run-tool.ts's
+// runTool calls it, same split missing-info.ts's
 // requestMissingInfoApproval/runMissingInfo has. `payload` is left undefined
 // (the default) — unlike missing_info's answer, the model's own `call.input`
 // already has everything runSendBookingLink needs, nothing extra to hand
@@ -120,16 +135,15 @@ export async function requestSendBookingLinkApproval(
 ): Promise<HitlDecision> {
   const { conversationId, phone, step, traceAnchor } = context;
 
-  const toolSpanId = await steppedSpan(
+  const hitlSpanId = await steppedSpan(
     step,
-    `tool-${call.toolName}`,
+    `hitl-${call.toolName}`,
     traceAnchor,
-    `gen_ai.tool.${call.toolName}`,
+    `hitl.${call.toolName}`,
     {
-      "gen_ai.tool.name": call.toolName,
-      "gen_ai.operation.name": "execute_tool",
       "gca.tool.input": JSON.stringify(call.input),
       "braintrust.input": JSON.stringify(call.input),
+      "braintrust.tags": [call.toolName],
     },
     async (span) => span.spanContext().spanId,
   );
@@ -138,7 +152,7 @@ export async function requestSendBookingLinkApproval(
   // later updateSpanIO patch can fire and race it. See wants-human.ts's own
   // runWantsHuman's identical flushTracing() call for the full reasoning.
   await flushTracing();
-  const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
+  const hitlAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: hitlSpanId };
 
   const approved = await requestApprovalGate({
     toolName: call.toolName,
@@ -150,7 +164,7 @@ export async function requestSendBookingLinkApproval(
     phone,
     correlationId,
     step,
-    traceAnchor: toolAnchor,
+    traceAnchor: hitlAnchor,
     // The model's own real tool-call args — captured on this call's
     // pending_owner_decisions row (see requestApprovalGate's own `context`
     // param) so a later manual-resolve action can rebuild what this call
@@ -169,12 +183,12 @@ export async function requestSendBookingLinkApproval(
       message: "This action was not approved. Do not retry it automatically.",
     };
     await step.run("update-send_booking_link-trace-io", () =>
-      updateSpanIO(toolSpanId, { output: notApprovedOutput }),
+      updateSpanIO(hitlSpanId, { output: notApprovedOutput }),
     );
-    return { approved: false, notApprovedOutput, toolSpanId, toolAnchor };
+    return { approved: false, notApprovedOutput, hitlSpanId, hitlAnchor };
   }
 
-  return { approved: true, toolSpanId, toolAnchor };
+  return { approved: true, hitlSpanId, hitlAnchor };
 }
 
 // Pure URL builder — no nudge, no suspend/wait, no tracing. Kept separate
@@ -199,28 +213,29 @@ export function computeSendBookingLink(
 // send_booking_link's "tool call" half: no nudge, no suspend/wait, just
 // builds the URL (via computeSendBookingLink above) — by the time
 // run-turn.ts calls this (via run-tool.ts's runTool),
-// requestSendBookingLinkApproval has already run and approved the call.
-// Takes the full ToolContext (not just phone) because it now needs
-// context.step too, to patch its own span — `toolSpanId` is the one honest
-// asymmetry this tool (and missing_info) has versus every other tool: it
-// doesn't create its own execution span — requestSendBookingLinkApproval
-// already created one, before the approval wait, so nudge/decision/timeout
-// spans could nest under it — so this function is handed that id and
-// patches it with the real output itself, the same way every other tool's
-// own run<ToolName> patches the span IT created. Nothing else (run-tool.ts,
-// run-turn.ts's loop) does any span/step wrapping for this call.
+// requestSendBookingLinkApproval has already run and approved the call. A
+// genuine one-shot dispatch, the same shape every plain tool's own
+// run<ToolName> already has (see current-date.ts's runGetCurrentDate/
+// tool-execution.ts's dispatchToolExecution): the real result is computed
+// synchronously here, so gen_ai.tool.send_booking_link is created fresh with
+// real output set at creation — no pre-created span, no retroactive
+// updateSpanIO patch, unlike requestSendBookingLinkApproval's own
+// hitl.send_booking_link gate span (which DOES need that, since it starts
+// before the approval wait and must nest nudge/decision/timeout spans under
+// it as real children).
 export async function runSendBookingLink(
   args: z.infer<typeof sendBookingLinkSchema>,
   context: ToolContext,
-  toolSpanId: string,
 ) {
-  const result = await context.step.run("execute-send_booking_link", () =>
-    Promise.resolve(computeSendBookingLink(args, context.phone)),
+  return steppedSpan(
+    context.step,
+    "tool-send_booking_link",
+    context.traceAnchor,
+    "gen_ai.tool.send_booking_link",
+    { "gen_ai.tool.name": "send_booking_link", "gen_ai.operation.name": "execute_tool" },
+    (span) =>
+      dispatchToolExecution(span, args, async () => computeSendBookingLink(args, context.phone)),
   );
-  await context.step.run("update-send_booking_link-trace-io", () =>
-    updateSpanIO(toolSpanId, { output: result }),
-  );
-  return result;
 }
 
 // Thin wrapper around approval-gate.ts's generic resolveToolApproval, kept

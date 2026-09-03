@@ -33,17 +33,17 @@ import {
  * startTraceRoot's own comment) — it only ever receives `correlationId` (a
  * plain string), often hours later, from a completely separate process
  * (telegram-router's webhook, relaying the owner's reply), possibly a
- * different server instance. run-turn.ts's runMissingInfo works around this
- * by writing its gen_ai.tool.missing_info span's real {traceId, spanId} to a
- * small DB table (missing_info_trace_anchors) keyed by this same
- * correlationId, right when that span is created — see
+ * different server instance. missing-info.ts's requestMissingInfoApproval
+ * works around this by writing its hitl.missing_info GATE span's real
+ * {traceId, spanId} to a small DB table (missing_info_trace_anchors) keyed
+ * by this same correlationId, right when that span is created — see
  * tracing.ts's recordMissingInfoTraceAnchor/consumeMissingInfoTraceAnchor
  * and the migration's own comment for why a DB lookup was chosen over
  * threading the anchor through telegram-router's `[ref:...]` tag mechanism
  * (that would require changing a separate app; this doesn't).
  * consumeMissingInfoTraceAnchor below reads (and deletes) that row. If found,
  * the embedding step's span nests as a real child of the original
- * gen_ai.tool.missing_info span via withTurnSpan. If not found (write
+ * hitl.missing_info span via withTurnSpan. If not found (write
  * failed, row already consumed by a duplicate call, or the anchor's
  * best-effort write simply never landed — see recordMissingInfoTraceAnchor's
  * own reliability caveat), this falls back to its own small disconnected
@@ -109,10 +109,10 @@ export async function POST(
   }
 
   try {
-    const toolAnchor = await consumeMissingInfoTraceAnchor(correlationId);
-    if (toolAnchor) {
+    const hitlAnchor = await consumeMissingInfoTraceAnchor(correlationId);
+    if (hitlAnchor) {
       await withTurnSpan(
-        toolAnchor,
+        hitlAnchor,
         "gen_ai.embed.missing_info_answer",
         { "gen_ai.operation.name": "embed" },
         embedAndRecordAnswer,

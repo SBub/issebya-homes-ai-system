@@ -304,9 +304,10 @@ const BRAINTRUST_API_BASE = process.env.BRAINTRUST_API_URL ?? "https://api-eu.br
 // lands after this patch, it silently resets input/output back to null.
 // Callers that need this patch to actually stick must call flushTracing()
 // (src/instrumentation.ts) right after their span's creation resolves,
-// before doing anything else that could race ahead of it — see run-turn.ts's
-// dispatchWantsHuman/runMissingInfo/dispatchGatedToolCall/runAgentTurn for
-// the pattern.
+// before doing anything else that could race ahead of it — see
+// wants-human.ts's runWantsHuman, missing-info.ts's
+// requestMissingInfoApproval, and booking.ts's requestSendBookingLinkApproval
+// for the pattern.
 export async function updateSpanIO(
   spanId: string,
   fields: { input?: unknown; output?: unknown; tags?: string[] },
@@ -361,13 +362,14 @@ const MISSING_INFO_TRACE_ANCHOR_TABLE = "missing_info_trace_anchors";
 // separate route (the owner-nudges answer route, triggered by
 // apps/telegram-router's own webhook, sometimes hours later, possibly a
 // different server instance). This small DB-backed lookup fills that gap
-// instead: run-turn.ts's runMissingInfo writes the tool-call span's anchor
-// here right after creating it, keyed by this turn's correlationId; the
-// answer route reads (and deletes) it once the owner's reply arrives.
+// instead: missing-info.ts's requestMissingInfoApproval writes its own
+// hitl.missing_info GATE span's anchor here right after creating it, keyed
+// by this turn's correlationId; the answer route reads (and deletes) it once
+// the owner's reply arrives.
 //
 // Best-effort like updateSpanIO: a failed write here only degrades tracing
 // (the embedding step's span falls back to its own disconnected trace root
-// instead of nesting under the real gen_ai.tool.missing_info span) — never
+// instead of nesting under the real hitl.missing_info span) — never
 // the actual KB write or guest-facing behavior.
 export async function recordMissingInfoTraceAnchor(
   correlationId: string,
@@ -447,18 +449,18 @@ const APPROVAL_GATE_TRACE_ANCHOR_TABLE = "approval_gate_trace_anchors";
 // webhook, possibly hours later, possibly a different server instance) has
 // no shared payload/Inngest event.data to carry a TraceAnchor through. This
 // small DB-backed lookup fills that gap instead: requestApprovalGate writes
-// the gated tool's real gen_ai.tool.<toolName> span's anchor here right when
+// the gated tool's real hitl.<toolName> GATE span's anchor here right when
 // it's called (that anchor arrives as this function's own `anchor` param —
 // requestApprovalGate never touches a live Span object, only the
-// already-extracted {traceId, spanId} its caller, run-turn.ts's
-// dispatchGatedToolCall, passes in as `traceAnchor`), keyed by this turn's
-// correlationId; the approve route reads (and deletes) it once the owner's
-// decision arrives.
+// already-extracted {traceId, spanId} its caller, booking.ts's
+// requestSendBookingLinkApproval, passes in as `traceAnchor`), keyed by this
+// turn's correlationId; the approve route reads (and deletes) it once the
+// owner's decision arrives.
 //
 // Best-effort like recordMissingInfoTraceAnchor: a failed write here only
 // degrades tracing (the approve route's decision span falls back to its own
 // disconnected trace root instead of nesting under the real
-// gen_ai.tool.<toolName> span) — never the actual approval/rejection
+// hitl.<toolName> span) — never the actual approval/rejection
 // handling or guest-facing behavior.
 export async function recordApprovalGateTraceAnchor(
   correlationId: string,

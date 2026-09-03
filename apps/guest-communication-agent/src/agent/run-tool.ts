@@ -46,13 +46,14 @@ export const tools = {
 // Dispatches a requested tool call to its run<ToolName> implementation —
 // the single dispatcher every tool call in this app goes through, whether
 // gated or not (run-turn.ts's loop calls this uniformly; for NEEDS_APPROVAL
-// tools, run-hitl.ts's requestApproval must already have resolved
-// `approved: true` before this is ever reached, with its full HitlDecision —
-// carrying the owner's real answer for missing_info, and the pre-created
-// span id both of NEEDS_APPROVAL's tools need to patch themselves — passed
-// through as this function's own 4th param). Every case just hands off to
-// that tool's own run<ToolName>, including any span/step wrapping that call
-// needs — none of that logic lives here.
+// tools, run-turn.ts's own inline approval switch must already have resolved
+// `approved: true` before this is ever reached — its HitlDecision carries the
+// owner's real answer for missing_info as `payload`, passed through as this
+// function's own 4th param; send_booking_link/missing_info's run<ToolName>
+// no longer need a pre-created span id from it — see each's own comment for
+// why they create their own fresh execution span instead now). Every case
+// just hands off to that tool's own run<ToolName>, including any span/step
+// wrapping that call needs — none of that logic lives here.
 export async function runTool(
   toolName: string,
   input: Record<string, unknown>,
@@ -70,11 +71,7 @@ export async function runTool(
         context,
       );
     case "send_booking_link":
-      return runSendBookingLink(
-        input as Parameters<typeof runSendBookingLink>[0],
-        context,
-        approvalDecision!.toolSpanId,
-      );
+      return runSendBookingLink(input as Parameters<typeof runSendBookingLink>[0], context);
     case "get_current_date":
       return runGetCurrentDate(context);
     case "run_code":
@@ -86,7 +83,6 @@ export async function runTool(
         input as { reason: string },
         context,
         approvalDecision!.payload as string,
-        approvalDecision!.toolSpanId,
       );
     default:
       // Native function-calling is supposed to constrain the model to exact

@@ -12,9 +12,11 @@ import type { inngest } from "@/lib/inngest";
 // declaration, the shared event/timeout constants, the real suspend/resume
 // dispatch (requestMissingInfoApproval — this app's run<ToolName>
 // convention, see wants-human.test.ts for the sibling coverage this
-// mirrors), the pure post-approval formatter (runMissingInfo), and both
-// non-step branches of what happens once a nudge is settled — reply arrives
-// (handleMissingInfoReplyReceived) or doesn't (handleMissingInfoNoReply).
+// mirrors), the post-approval execution half (runMissingInfo — a genuine
+// one-shot dispatch, same shape a plain tool's own run<ToolName> has), and
+// both non-step branches of what happens once a nudge is settled — reply
+// arrives (handleMissingInfoReplyReceived) or doesn't
+// (handleMissingInfoNoReply).
 //
 // Same in-memory OTel wiring as wants-human.test.ts/approval-gate.test.ts,
 // so requestMissingInfoApproval's span assertions below inspect a real
@@ -231,7 +233,7 @@ describe("requestMissingInfoApproval / runMissingInfo", () => {
 
     expect(decision.approved).toBe(true);
     expect(decision.payload).toBe("The AC is above the bed");
-    expect(decision.toolSpanId).toEqual(expect.any(String));
+    expect(decision.hitlSpanId).toEqual(expect.any(String));
     expect(decision.notApprovedOutput).toBeUndefined();
   });
 
@@ -278,13 +280,51 @@ describe("requestMissingInfoApproval / runMissingInfo", () => {
     });
   });
 
+  it("creates the hitl.missing_info gate span first, as the nudge/answer-received spans' real parent — no gen_ai.tool.missing_info span exists on this path", async () => {
+    step.waitForEvent.mockResolvedValueOnce({
+      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
+    });
+
+    await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(step.run.mock.calls.map((c) => c[0])[0]).toBe("hitl-missing_info");
+    const hitlSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.missing_info");
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Where is the AC unit?" }),
+    );
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "hitl.missing_info.nudge"),
+    ).toBeDefined();
+    expect(
+      spanExporter
+        .getFinishedSpans()
+        .find((span) => span.name === "hitl.missing_info.answer_received"),
+    ).toBeDefined();
+    // The real execution span only gets created by runMissingInfo, once
+    // run-tool.ts's runTool is actually called with the approved decision —
+    // requestMissingInfoApproval on its own never creates one.
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.missing_info"),
+    ).toBeUndefined();
+  });
+
   it("runMissingInfo embeds the approval's payload into its result — args unused, only the answer matters", async () => {
     await expect(
       runMissingInfo(
         { reason: "Where is the AC unit?" },
         { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
         "The AC is above the bed",
-        "test-tool-span-id",
       ),
     ).resolves.toEqual({
       escalated: true,
@@ -292,14 +332,19 @@ describe("requestMissingInfoApproval / runMissingInfo", () => {
     });
   });
 
-  it("runMissingInfo patches the given tool span with its real output", async () => {
+  it("runMissingInfo creates its own fresh gen_ai.tool.missing_info execution span with real output known at creation, no updateSpanIO patch", async () => {
     const result = await runMissingInfo(
       { reason: "Where is the AC unit?" },
       { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
       "The AC is above the bed",
-      "test-tool-span-id",
     );
 
-    expect(updateSpanIOMock).toHaveBeenCalledWith("test-tool-span-id", { output: result });
+    const execSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.missing_info");
+    expect(execSpan).toBeDefined();
+    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("missing_info");
+    expect(execSpan?.attributes["gca.tool.output"]).toBe(JSON.stringify(result));
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
   });
 });

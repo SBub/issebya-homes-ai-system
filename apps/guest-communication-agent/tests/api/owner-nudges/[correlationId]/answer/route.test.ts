@@ -191,9 +191,9 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
       return span;
     }
 
-    it("nests under the real toolAnchor when consumeMissingInfoTraceAnchor finds one", async () => {
-      const toolAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
-      consumeMissingInfoTraceAnchorMock.mockResolvedValueOnce(toolAnchor);
+    it("nests under the real hitlAnchor when consumeMissingInfoTraceAnchor finds one", async () => {
+      const hitlAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
+      consumeMissingInfoTraceAnchorMock.mockResolvedValueOnce(hitlAnchor);
 
       await POST(makeRequest({ answer: "The AC is above the bed" }), makeParams("corr-abc-123"));
 
@@ -202,7 +202,7 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
       // returned — see this describe block's own comment for why this is
       // the strongest same-harness proof of correct threading available.
       expect(withTurnSpanSpy).toHaveBeenCalledWith(
-        toolAnchor,
+        hitlAnchor,
         "gen_ai.embed.missing_info_answer",
         expect.any(Object),
         expect.any(Function),
