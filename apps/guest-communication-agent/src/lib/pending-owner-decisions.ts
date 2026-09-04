@@ -184,3 +184,44 @@ export async function markPendingOwnerDecisionResolvedById(
     throw new Error(`Failed to resolve pending_owner_decisions row ${id}: ${error.message}`);
   }
 }
+
+// Every still-open row whose owner decision/answer was relayed into a
+// (possibly-dead) suspended run at least 5 minutes ago and never resolved —
+// failure class 3's stuck signal (see the migration's own comment). Backs
+// both GET /api/admin/conversations' per-conversation `stuck` summary and
+// GET /api/admin/conversations/[id]/messages' pendingDecisions list.
+export async function listStuckPendingOwnerDecisions(): Promise<PendingOwnerDecisionRow[]> {
+  const supabase = createAdminClient();
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("pending_owner_decisions")
+    .select("*")
+    .not("relayed_at", "is", null)
+    .is("resolved_at", null)
+    .lt("relayed_at", cutoff);
+  if (error) {
+    throw new Error(`Failed to list stuck pending_owner_decisions: ${error.message}`);
+  }
+  return (data ?? []).map(toRow);
+}
+
+// Every pending_owner_decisions row for one conversation, newest first —
+// backs GET /api/admin/conversations/[id]/messages' pendingDecisions list
+// (surfaced as its own array alongside the message history, not pinned to
+// one exact message — see that route's own comment for why).
+export async function listPendingOwnerDecisionsForConversation(
+  conversationId: string,
+): Promise<PendingOwnerDecisionRow[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("pending_owner_decisions")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .order("sent_at", { ascending: false });
+  if (error) {
+    throw new Error(
+      `Failed to list pending_owner_decisions for conversation ${conversationId}: ${error.message}`,
+    );
+  }
+  return (data ?? []).map(toRow);
+}
