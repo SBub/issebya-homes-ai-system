@@ -32,21 +32,19 @@ trace.setGlobalTracerProvider(
 // Postgres, telegram-router, Braintrust's prompt store, and generateText
 // itself. Real tool implementations still run against the mocks below.
 const loadMemoryMock = vi.fn();
-const foldMemoryMock = vi.fn();
 vi.mock("@/agent/memory.js", () => ({
   loadMemory: loadMemoryMock,
-  foldMemory: foldMemoryMock,
 }));
 
 // check_availability does a real fetch() and answer_property_question a real
 // embedding call, so neither is exercised here. No more escalations table —
 // requestOwnerNudge talks to telegram-router only, not Supabase.
 // send_booking_link is a pure stub now (no DB write). The one real caller left
-// is tracing.ts's recordMissingInfoTraceAnchor (via runMissingInfo, on every
-// missing_info dispatch) — insert() always resolves cleanly here so that
-// best-effort write's own try/catch never has anything to report; the write
-// itself isn't asserted on in this file (see the owner-nudges answer route's
-// own test file for the read side of this same table).
+// is tracing.ts's recordMissingInfoTraceAnchor (via requestMissingInfoApproval,
+// on every missing_info dispatch) — insert() always resolves cleanly here so
+// that best-effort write's own try/catch never has anything to report; the
+// write itself isn't asserted on in this file (see the owner-nudges answer
+// route's own test file for the read side of this same table).
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: vi.fn(() => ({
     from: () => ({ insert: () => Promise.resolve({ error: null }) }),
@@ -61,29 +59,16 @@ vi.mock("@/lib/telegram-router.js", () => ({
   sendOwnerNudge: sendOwnerNudgeMock,
 }));
 
-const recordMessageMock = vi.fn();
-const updateMessageDeliveryStatusMock = vi.fn();
-vi.mock("@/lib/conversations.js", () => ({
-  recordMessage: recordMessageMock,
-  updateMessageDeliveryStatus: updateMessageDeliveryStatusMock,
-}));
-
 // pending_owner_decisions bookkeeping — real callers are approval-gate.ts's
 // requestApprovalGate (real code in this suite, only spied — see
-// requestApprovalGateSpy below) and this file's own private runMissingInfo.
-// Mocked at this module boundary, same "mock the module's exported
-// external-call function directly" style as recordMessage/
-// updateMessageDeliveryStatus above.
+// requestApprovalGateSpy below) and missing-info.ts's own
+// requestMissingInfoApproval. Mocked at this module boundary, same "mock the
+// module's exported external-call function directly" style used elsewhere.
 const insertPendingOwnerDecisionMock = vi.fn();
 const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
 vi.mock("@/lib/pending-owner-decisions.js", () => ({
   insertPendingOwnerDecision: insertPendingOwnerDecisionMock,
   resolvePendingOwnerDecisionByCorrelationId: resolvePendingOwnerDecisionByCorrelationIdMock,
-}));
-
-const sendWhatsAppMessageMock = vi.fn();
-vi.mock("@/lib/twilio-send.js", () => ({
-  sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
 
 // run_code's real dispatch (runRunCode -> sandbox.ts's runInSandbox) talks to
@@ -104,11 +89,10 @@ vi.mock("@vercel/sandbox", () => ({
 }));
 
 // tracing.ts's real withTurnSpan stays real (it's pure OTel API calls, no
-// network) so run-turn.ts's "start-trace"/model/tool spans still exercise
-// real span-id generation — only updateSpanIO (a real fetch() to
+// network) so run-agent-turn.ts's "start-trace"/model/tool spans still
+// exercise real span-id generation — only updateSpanIO (a real fetch() to
 // Braintrust's REST API) is mocked, the same "mock the module's exported
-// external-call function directly" style used for sendWhatsAppMessage etc.
-// above.
+// external-call function directly" style used for sendOwnerNudge etc. above.
 const updateSpanIOMock = vi.fn();
 vi.mock("@/lib/tracing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
@@ -118,9 +102,9 @@ vi.mock("@/lib/tracing.js", async (importOriginal) => {
 // approval-gate.ts's requestApprovalGate stays real (it's what actually
 // sends the nudge and drives step.waitForEvent) — spied, not replaced, so
 // the send_booking_link reparenting tests below can assert on the real
-// `traceAnchor` param dispatchGatedToolCall actually passed it, since real
-// parent/child span linkage isn't observable in this harness (see the "fans
-// out" test's own comment for why).
+// `traceAnchor` param requestSendBookingLinkApproval actually passed it,
+// since real parent/child span linkage isn't observable in this harness (see
+// the "fans out" test's own comment for why).
 const requestApprovalGateSpy = vi.fn();
 vi.mock("@/agent/tools/approval-gate.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/agent/tools/approval-gate.js")>();
@@ -133,9 +117,9 @@ vi.mock("@/agent/tools/approval-gate.js", async (importOriginal) => {
   };
 });
 
-// run-turn.ts's loadPrompt({ slug: SYSTEM_PROMPT_SLUG, ... }) call — mocked
-// to return a stub Prompt whose build() returns a fixed messages array,
-// instead of actually hitting Braintrust.
+// run-agent-turn.ts's loadPrompt({ slug: SYSTEM_PROMPT_SLUG, ... }) call —
+// mocked to return a stub Prompt whose build() returns a fixed messages
+// array, instead of actually hitting Braintrust.
 const loadPromptMock = vi.fn();
 vi.mock("braintrust", () => ({
   loadPrompt: loadPromptMock,
@@ -154,7 +138,7 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { runAgentTurn, runGuestTurn, sanitizeReplyText } = await import("@/agent/run-turn.js");
+const { runAgentTurn, sanitizeReplyText } = await import("@/agent/run-agent-turn.js");
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
 
@@ -164,7 +148,7 @@ const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
 // hand-mocked in this suite. step.run immediately invokes its callback
 // (matching how a real step.run behaves from the caller's perspective once
 // memoized state doesn't short-circuit it) rather than pulling in
-// @inngest/test's heavier InngestTestEngine harness, since run-turn.ts now
+// @inngest/test's heavier InngestTestEngine harness, since run-agent-turn.ts
 // takes `step` as a plain explicit parameter instead of an ambient import —
 // a plain mock object is enough.
 type StepTools = GetStepTools<typeof inngest>;
@@ -192,8 +176,8 @@ function textResponse(text: string) {
 
 // Builds a mocked generateText round result for one or more tool calls.
 // response.messages only carries the assistant message with the tool-call
-// parts, no tool-result message — that's built for real by run-turn.ts's
-// own runToolCall() + toolResultMessage().
+// parts, no tool-result message — that's built for real by
+// run-agent-turn.ts's own runAgentTurn loop + toolResultMessage().
 function toolCallResponse(
   calls: Array<{ toolName: string; input: Record<string, unknown>; toolCallId: string }>,
 ) {
@@ -230,7 +214,8 @@ describe("runAgentTurn", () => {
     spanExporter.reset();
     step = makeStepMock();
     // waitForEvent defaults to resolving null (a timeout), driving
-    // runMissingInfo's real "owner has been notified" fallback path.
+    // requestMissingInfoApproval's real "owner has been notified" fallback
+    // path.
     step.waitForEvent.mockResolvedValue(null);
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
@@ -240,8 +225,6 @@ describe("runAgentTurn", () => {
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
     });
     sendOwnerNudgeMock.mockResolvedValue({ ok: true });
-    recordMessageMock.mockResolvedValue("msg-assistant-1");
-    sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
     // Resolves to a fake sandbox whose runCommand() rejects — runInSandbox's
     // own catch block (inside its try, unlike Sandbox.create itself) turns
     // that into a `{ ok: false, error, logs: [] }` soft-fail (see
@@ -259,7 +242,7 @@ describe("runAgentTurn", () => {
     // historyMessages already ends with this turn's incoming guest message —
     // the webhook route records it to whatsapp_messages before the turn ever
     // starts, so loadMemory's own DB read (real code, mocked wholesale here)
-    // always returns it as the last row. run-turn.ts must not append
+    // always returns it as the last row. run-agent-turn.ts must not append
     // incomingMessage a second time on top of this (that was the duplicate-
     // message bug this fixes).
     const history: ModelMessage[] = [
@@ -447,7 +430,7 @@ describe("runAgentTurn", () => {
 
   it("fans out to every tool call in one round and correlates tool results by tool_call_id, then loops back to the model", async () => {
     // send_booking_link now genuinely suspends on step.waitForEvent, via
-    // run-turn.ts's APPROVAL_GATES table + approval-gate.ts's
+    // run-agent-turn.ts's NEEDS_APPROVAL switch + approval-gate.ts's
     // requestApprovalGate — resolve it approved so this test can still
     // assert on a real { url } tool result and a real final reply.
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
@@ -748,9 +731,9 @@ describe("runAgentTurn", () => {
     expect(nudgeSpan).toBeDefined();
 
     // missing_info's own nudge span DOES still carry braintrust.tags
-    // directly (unchanged by this fix — see run-turn.ts's dispatchWantsHuman
-    // comment), so firedTags is a harmless natural side effect here now, not
-    // the only route — see RunAgentTurnResult.firedTags.
+    // directly (unchanged by this fix), so firedTags is a harmless natural
+    // side effect here now, not the only route — see
+    // RunAgentTurnResult.firedTags.
     expect(result.firedTags).toEqual(["missing_info"]);
 
     // pending_owner_decisions bookkeeping: recorded once the nudge is
@@ -770,11 +753,9 @@ describe("runAgentTurn", () => {
   });
 
   // The rest of missing_info's suspend/resume behavior — previously unit
-  // tested directly against missing-info.ts's exported runMissingInfo/
-  // waitForMissingInfoReply — now lives in run-turn.ts's private
-  // runMissingInfo (see that file's "tool files stay pure" rule) and can only
-  // be exercised indirectly through runAgentTurn, same as send_booking_link's
-  // approval-gate flow above.
+  // tested directly against missing-info.ts's exported requestMissingInfoApproval/
+  // runMissingInfo — now can only be exercised indirectly through
+  // runAgentTurn, same as send_booking_link's approval-gate flow above.
   it("sends the missing_info owner nudge with the reason, conversationId, phone, and correlationId, and falls back to the owner-notified message (running the no-reply-timeout step) when step.waitForEvent times out", async () => {
     // This suite's default: step.waitForEvent resolves null (a timeout).
     generateTextMock
@@ -983,14 +964,14 @@ describe("runAgentTurn", () => {
     });
     expect(result.firedTags).toEqual(["wants_human"]);
 
-    // wants_human's gen_ai.tool.wants_human execution span is now created
-    // FIRST, before the nudge (dispatchWantsHuman's own steppedSpan) — same
+    // wants_human's gen_ai.tool.wants_human execution span is created FIRST,
+    // before the nudge (runWantsHuman's own steppedSpan) — same
     // gca.tool.input/braintrust.input shape as missing_info's/send_booking_link's/
     // get_pricing's, but output is NOT a span attribute (unlike the
     // non-suspending tools that use dispatchToolExecution): it isn't known
     // until after the nudge send, well after this span has already closed,
     // so it's patched in retroactively via updateSpanIO instead (asserted
-    // below) — same reasoning as missing_info's own execution span.
+    // below) — same reasoning as missing_info's own gate span.
     expect(step.run.mock.calls.map((call) => call[0])).toContain("tool-wants_human");
     const wantsHumanExecSpan = spanExporter
       .getFinishedSpans()
@@ -1017,7 +998,7 @@ describe("runAgentTurn", () => {
     });
   });
 
-  it("dispatches wants_human directly with no approval gate, while send_booking_link goes through its own real APPROVAL_GATES-driven wait", async () => {
+  it("dispatches wants_human directly with no approval gate, while send_booking_link goes through its own real NEEDS_APPROVAL-driven wait", async () => {
     // send_booking_link's approval-gate wait — resolve it approved so the call
     // completes with a real { url } result in the same turn.
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
@@ -1053,8 +1034,8 @@ describe("runAgentTurn", () => {
       { correlationId: "corr-hitl", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
 
-    // Both tools ran to completion — wants_human has no APPROVAL_GATES entry
-    // so it dispatches straight through with zero gating, send_booking_link
+    // Both tools ran to completion — wants_human isn't in NEEDS_APPROVAL so
+    // it dispatches straight through with zero gating, send_booking_link
     // went through its own real requestApprovalGate wait (resolved approved
     // above).
     const toolMessage = result.messages.find((m) => m.role === "tool");
@@ -1072,9 +1053,8 @@ describe("runAgentTurn", () => {
     expect(step.run.mock.calls.map((call) => call[0])).not.toContain("hitl-wants_human-nudge");
     expect(step.run.mock.calls.map((call) => call[0])).toContain("hitl-send_booking_link-nudge");
     expect(result.messages.at(-1)).toEqual({ role: "assistant", content: "Sure thing!" });
-    // Both tools are SELF_STEPPED_TOOLS, so both push into firedTags — order
-    // isn't asserted since the two dispatches run concurrently via
-    // Promise.all.
+    // Both tools push into firedTags — order isn't asserted since the two
+    // dispatches run concurrently via Promise.all.
     expect(result.firedTags).toEqual(expect.arrayContaining(["wants_human", "send_booking_link"]));
     expect(result.firedTags).toHaveLength(2);
   });
@@ -1119,9 +1099,9 @@ describe("runAgentTurn", () => {
         message: "This action was not approved. Do not retry it automatically.",
       },
     });
-    // A rejected gate still pushes into firedTags — same as before
-    // APPROVAL_GATES existed (a gated call that got a real nudge sent and a
-    // real decision made is still worth finding in this turn's trace tags).
+    // A rejected gate still pushes into firedTags — a gated call that got a
+    // real nudge sent and a real decision made is still worth finding in
+    // this turn's trace tags.
     expect(result.firedTags).toEqual(["send_booking_link"]);
 
     // A rejected call gets its "hitl.send_booking_link" GATE span — it's
@@ -1370,7 +1350,7 @@ describe("runAgentTurn", () => {
     expect(result.firedTags).toEqual(["send_booking_link", "send_booking_link"]);
   });
 
-  it("does not gate get_pricing at all (no APPROVAL_GATES entry, so no nudge and no wait)", async () => {
+  it("does not gate get_pricing at all (not in NEEDS_APPROVAL, so no nudge and no wait)", async () => {
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
@@ -1392,13 +1372,13 @@ describe("runAgentTurn", () => {
     expect(step.waitForEvent).not.toHaveBeenCalled();
   });
 
-  // dispatchToolExecution (run-turn.ts) is the shared choke point every
-  // non-gated, non-self-stepped tool call — run_code included — dispatches
-  // through. Before this test's fix, a soft-failed tool result (returned,
-  // not thrown — see sandbox.ts's runInSandbox, whose every early-return
-  // failure branch uses this exact `{ ok: false, error, logs }` shape) closed
-  // its execution span as an unmarked success, so a completely broken
-  // sandbox looked healthy in any status.code == "ERROR" trace query.
+  // dispatchToolExecution (tool-execution.ts) is the shared choke point
+  // every non-gated tool call — run_code included — dispatches through.
+  // Before this test's fix, a soft-failed tool result (returned, not thrown
+  // — see sandbox.ts's runInSandbox, whose every early-return failure branch
+  // uses this exact `{ ok: false, error, logs }` shape) closed its execution
+  // span as an unmarked success, so a completely broken sandbox looked
+  // healthy in any status.code == "ERROR" trace query.
   it("marks the tool-call span failed when run_code's sandbox soft-fails (ok: false)", async () => {
     generateTextMock
       .mockResolvedValueOnce(
@@ -1437,7 +1417,7 @@ describe("runAgentTurn", () => {
 
   // get_pricing's own result ({ room, pricePerNight, currency, note } — see
   // pricing.ts) has no `ok`/`error` field at all, the ordinary case
-  // detectToolSoftFailure (run-turn.ts) must leave alone. Regression
+  // detectToolSoftFailure (tool-execution.ts) must leave alone. Regression
   // coverage against a too-broad detector marking every generic tool's
   // successful span failed.
   it("does not mark a successful get_pricing call's span failed", async () => {
@@ -1466,7 +1446,7 @@ describe("runAgentTurn", () => {
 
   // Some models (deepseek included) have been observed hallucinating a
   // close-but-wrong tool name in production despite native function-calling
-  // supposedly constraining them to the real `tools` ToolSet. runToolCall()'s
+  // supposedly constraining them to the real `tools` ToolSet. runTool's
   // default case turns that into a recoverable tool-result instead of
   // crashing the whole turn, so the model can retry with a real name.
   it("recovers from an unrecognized tool call name instead of crashing the turn, and marks its span failed", async () => {
@@ -1488,11 +1468,11 @@ describe("runAgentTurn", () => {
     expect(output).toMatchObject({ error: expect.stringMatching(/unknown tool name.*bogusTool/i) });
 
     // The "unknown tool name" fallback isn't a separate dispatch path — it
-    // still reaches dispatchToolExecution the same way any other
-    // non-gated, non-self-stepped tool call would (bogusTool matches none of
-    // SELF_STEPPED_TOOLS/APPROVAL_GATES), so its execution span must get the
-    // same ERROR-status treatment as a real soft-fail like run_code's below,
-    // not silently close as a normal success.
+    // still reaches dispatchToolExecution the same way any other non-gated
+    // tool call would (bogusTool matches nothing in NEEDS_APPROVAL), so its
+    // execution span must get the same ERROR-status treatment as a real
+    // soft-fail like run_code's below, not silently close as a normal
+    // success.
     const bogusSpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "gen_ai.tool.bogusTool");
@@ -1861,274 +1841,5 @@ describe("sanitizeReplyText", () => {
     expect(sanitizeReplyText("**Hairdryer** and *towels* included")).toBe(
       "Hairdryer and towels included",
     );
-  });
-});
-
-// The Inngest-driven delivery orchestrator: drives the real runAgentTurn
-// (via this suite's existing mocks — loadMemory, generateText, etc.), then
-// records the reply and sends it proactively. No CRM touch step — see the
-// CRM removal in this app's history. runGuestTurn is the plain function
-// runGuestTurnFunction (in the real app) wraps with inngest.createFunction —
-// exercised directly here with a hand-rolled step mock instead of a real
-// Inngest engine.
-describe("runGuestTurn", () => {
-  let step: ReturnType<typeof makeStepMock>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    spanExporter.reset();
-    step = makeStepMock();
-    step.waitForEvent.mockResolvedValue(null);
-    loadMemoryMock.mockResolvedValue({
-      historyMessages: [],
-      memoryMessage: null,
-    });
-    loadPromptMock.mockResolvedValue({
-      build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
-    });
-    recordMessageMock.mockResolvedValue("msg-assistant-1");
-    updateMessageDeliveryStatusMock.mockResolvedValue(undefined);
-    sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
-    updateSpanIOMock.mockResolvedValue(undefined);
-    foldMemoryMock.mockResolvedValue(undefined);
-  });
-
-  it("runs the turn, records the assistant reply, and sends it via Twilio, both inside their own step.run", async () => {
-    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
-
-    await runGuestTurn({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      incomingMessage: "Is room 1 free?",
-      triggerMessageId: "msg-user-1",
-      correlationId: "corr-1",
-      traceAnchor: TEST_TRACE_ANCHOR,
-      step,
-    });
-
-    expect(recordMessageMock).toHaveBeenCalledWith(
-      "convo-1",
-      "assistant",
-      "Yes, room 1 is available!",
-      expect.any(String),
-    );
-    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
-      "+351920742845",
-      "Yes, room 1 is available!",
-    );
-    const resultSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "braintrust.guest_turn.result");
-    expect(resultSpan?.attributes["braintrust.input"]).toBe("Is room 1 free?");
-    expect(resultSpan?.attributes["braintrust.output"]).toBe("Yes, room 1 is available!");
-    const stepIds = step.run.mock.calls.map((call) => call[0]);
-    expect(stepIds).toEqual(
-      expect.arrayContaining([
-        "update-turn-trace-io",
-        "record-reply",
-        "send-whatsapp-reply",
-        "update-message-delivery-status",
-        "fold-memory-summary",
-      ]),
-    );
-    // recordMessage's own return value (the row id) is what gets the
-    // delivery-status follow-up update — see conversations.ts's
-    // updateMessageDeliveryStatus doc comment.
-    expect(updateMessageDeliveryStatusMock).toHaveBeenCalledWith("msg-assistant-1", "sent");
-  });
-
-  // The whole point of this fix: the summarizer's LLM round-trip must not
-  // sit on the guest's reply-latency critical path. Asserting real call
-  // order (not just presence in stepIds) is what actually proves that.
-  it("runs fold-memory-summary strictly after send-whatsapp-reply, and awaits it before returning", async () => {
-    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
-
-    // Order of resolution: fold's own promise only settles after this flag
-    // flips, so if the outer runGuestTurn call returned before actually
-    // awaiting it, this assertion would still catch it via the "awaited
-    // before returning" check below (foldMemoryMock is guaranteed called by
-    // then, otherwise the array-order assertion on step.run's calls already
-    // proves ordering independent of timing).
-    let foldStarted = false;
-    foldMemoryMock.mockImplementation(async () => {
-      foldStarted = true;
-    });
-
-    await runGuestTurn({
-      conversationId: "convo-fold-order",
-      phone: "+351920742845",
-      incomingMessage: "Is room 1 free?",
-      correlationId: "corr-fold-order",
-      traceAnchor: TEST_TRACE_ANCHOR,
-      step,
-    });
-
-    // Real call order through step.run — send-whatsapp-reply (the guest's
-    // actual delivery) strictly precedes fold-memory-summary.
-    const stepIds = step.run.mock.calls.map((call) => call[0]);
-    const sendIndex = stepIds.indexOf("send-whatsapp-reply");
-    const foldIndex = stepIds.indexOf("fold-memory-summary");
-    expect(sendIndex).toBeGreaterThanOrEqual(0);
-    expect(foldIndex).toBeGreaterThan(sendIndex);
-
-    // runGuestTurn's own returned promise only resolved after foldMemory's
-    // side effect actually ran — not a detached/orphaned promise.
-    expect(foldStarted).toBe(true);
-    expect(foldMemoryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: "convo-fold-order", phone: "+351920742845" }),
-    );
-  });
-
-  // Verifies foldMemory's anchor is parented under a real span descended
-  // from traceAnchor (the webhook root), NOT under the closed
-  // "braintrust.guest_turn" span — see run-turn.ts's foldGuestMemory comment
-  // for why it can't reuse that turn-scoped anchor anymore.
-  it("passes foldMemory a traceAnchor rooted at traceAnchor, not the closed braintrust.guest_turn span", async () => {
-    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
-
-    await runGuestTurn({
-      conversationId: "convo-fold-anchor",
-      phone: "+351920742845",
-      incomingMessage: "Is room 1 free?",
-      correlationId: "corr-fold-anchor",
-      traceAnchor: TEST_TRACE_ANCHOR,
-      step,
-    });
-
-    expect(foldMemoryMock).toHaveBeenCalledTimes(1);
-    const [foldCall] = foldMemoryMock.mock.calls[0] as [
-      { traceAnchor: { traceId: string; spanId: string } },
-    ];
-    expect(foldCall.traceAnchor.traceId).toBe(TEST_TRACE_ANCHOR.traceId);
-    // A real, distinct span id — the "fold-memory-summary" step's own span,
-    // not TEST_TRACE_ANCHOR.spanId (the webhook root itself) and not
-    // guestTurnSpanId (the closed "braintrust.guest_turn" marker).
-    expect(foldCall.traceAnchor.spanId).not.toBe(TEST_TRACE_ANCHOR.spanId);
-
-    const foldSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "fold-memory-summary");
-    expect(foldSpan).toBeDefined();
-    expect(foldCall.traceAnchor.spanId).toBe(foldSpan?.spanContext().spanId);
-  });
-
-  it("marks the fold-memory-summary span failed but does not throw or block delivery when foldMemory rejects", async () => {
-    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
-    foldMemoryMock.mockRejectedValueOnce(new Error("summarizer boom"));
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    // The guest already has their reply by the time fold runs — a fold
-    // failure must never surface as a thrown error out of runGuestTurn.
-    await expect(
-      runGuestTurn({
-        conversationId: "convo-fold-fail",
-        phone: "+351920742845",
-        incomingMessage: "Is room 1 free?",
-        correlationId: "corr-fold-fail",
-        traceAnchor: TEST_TRACE_ANCHOR,
-        step,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
-      "+351920742845",
-      "Yes, room 1 is available!",
-    );
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("foldMemory failed"),
-      expect.any(Error),
-    );
-    const foldSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "fold-memory-summary");
-    expect(foldSpan?.status.code).toBe(SpanStatusCode.ERROR);
-    consoleErrorSpy.mockRestore();
-  });
-
-  it("passes firedTags through to the result span's tags when the turn escalated via wants_human", async () => {
-    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
-    generateTextMock
-      .mockResolvedValueOnce(
-        toolCallResponse([
-          {
-            toolName: "wants_human",
-            input: { reason: "Guest wants a human" },
-            toolCallId: "call_esc",
-          },
-        ]),
-      )
-      .mockResolvedValueOnce(textResponse("Sure, the owner will reach out shortly."));
-
-    await runGuestTurn({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      incomingMessage: "I want to talk to a person",
-      correlationId: "corr-tags",
-      traceAnchor: TEST_TRACE_ANCHOR,
-      step,
-    });
-
-    const resultSpan = spanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === "braintrust.guest_turn.result");
-    expect(resultSpan?.attributes["braintrust.input"]).toBe("I want to talk to a person");
-    expect(resultSpan?.attributes["braintrust.output"]).toBe(
-      "Sure, the owner will reach out shortly.",
-    );
-    expect(resultSpan?.attributes["braintrust.tags"]).toEqual(["wants_human"]);
-  });
-
-  it("falls back to a generic apology reply when the turn's last message isn't a string assistant message", async () => {
-    // Model always responds with a tool call, so the loop never produces a
-    // final text reply — same step-cap shape as the runAgentTurn suite above.
-    generateTextMock.mockImplementation(() =>
-      toolCallResponse([
-        { toolName: "get_pricing", input: { room: "room1" }, toolCallId: "call_loop" },
-      ]),
-    );
-
-    await runGuestTurn({
-      conversationId: "convo-1",
-      phone: "+351920742845",
-      incomingMessage: "???",
-      correlationId: "corr-2",
-      traceAnchor: TEST_TRACE_ANCHOR,
-      step,
-    });
-
-    const expectedFallback = "Sorry, I couldn't process that — please try again shortly.";
-    expect(recordMessageMock).toHaveBeenCalledWith(
-      "convo-1",
-      "assistant",
-      expectedFallback,
-      expect.any(String),
-    );
-    expect(sendWhatsAppMessageMock).toHaveBeenCalledWith("+351920742845", expectedFallback);
-  });
-
-  it("logs but does not throw when sendWhatsAppMessage fails", async () => {
-    generateTextMock.mockResolvedValueOnce(textResponse("Hello!"));
-    sendWhatsAppMessageMock.mockResolvedValueOnce({
-      ok: false,
-      error: "Twilio rejected the number",
-    });
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await expect(
-      runGuestTurn({
-        conversationId: "convo-1",
-        phone: "+351920742845",
-        incomingMessage: "Hi",
-        correlationId: "corr-3",
-        traceAnchor: TEST_TRACE_ANCHOR,
-        step,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Twilio rejected the number"),
-    );
-    expect(updateMessageDeliveryStatusMock).toHaveBeenCalledWith("msg-assistant-1", "failed");
-    consoleErrorSpy.mockRestore();
   });
 });

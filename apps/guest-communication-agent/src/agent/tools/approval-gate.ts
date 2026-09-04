@@ -14,7 +14,7 @@ import { requestOwnerNudge } from "./owner-nudge";
 // boilerplate for sending a nudge and suspending until a decision or
 // timeout — shared by any tool that needs owner approval before dispatching.
 // Only knows the *mechanism*; which tools need approval and their
-// event/timeout is a policy choice at the call site (run-turn.ts's
+// event/timeout is a policy choice at the call site (run-agent-turn.ts's
 // NEEDS_APPROVAL/booking.ts).
 //
 // Not a fit for every suspend/resume flow: missing_info's suspend resolves
@@ -45,7 +45,7 @@ export interface HitlDecision<TPayload = undefined> {
  * matching decision arrives or `timeout` elapses. Returns whether approved.
  *
  * LANDMINE: must be called directly from an un-stepped loop body, never
- * nested inside another step.run() callback — see run-turn.ts's RULE
+ * nested inside another step.run() callback — see run-agent-turn.ts's RULE
  * comment. `event`/`timeout` are params, not constants, since which event
  * and how long to wait is a tool-specific policy choice at the call site.
  * Inngest's step.waitForEvent requires a bounded timeout string (no literal

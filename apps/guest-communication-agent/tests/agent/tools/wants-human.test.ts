@@ -16,7 +16,7 @@ trace.setGlobalTracerProvider(
 );
 
 // wants-human.ts's runWantsHuman is a deliberate exception to the "tool
-// files stay pure" rule (see run-turn.ts's comment near `tools` and this
+// files stay pure" rule (see run-tool.ts's comment near `tools` and this
 // app's CLAUDE.md) — it owns real step/span dispatch, same posture
 // approval-gate.test.ts already tests requestApprovalGate with. Mocks every
 // real external boundary: telegram-router (the owner nudge send) and

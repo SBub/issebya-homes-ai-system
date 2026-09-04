@@ -64,7 +64,7 @@ export const BOOKING_LINK_URL_PATTERN =
   /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
 // send_booking_link's "calls human" half: creates the hitl.send_booking_link
-// GATE span first (not gen_ai.tool.send_booking_link — see run-turn.ts's
+// GATE span first (not gen_ai.tool.send_booking_link — see run-agent-turn.ts's
 // RULE comment for why nesting the wait under a span literally named "the
 // tool call" would misrepresent the sequence), whose id becomes hitlAnchor,
 // passed to requestApprovalGate so its nudge/decision/timeout spans nest as

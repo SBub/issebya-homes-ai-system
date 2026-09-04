@@ -13,14 +13,14 @@ import { runWantsHuman, wantsHuman } from "@/agent/tools/wants-human";
 import { steppedSpan } from "@/lib/tracing";
 
 // The tool registry (`tools`, handed to generateText) + dispatcher
-// (`runTool`, called uniformly from run-turn.ts's loop for every tool,
+// (`runTool`, called uniformly from run-agent-turn.ts's loop for every tool,
 // gated or not). Kept together since runTool's "unknown tool name" fallback
 // needs `Object.keys(tools)`.
 //
 // Every registered tool's own gen_ai.tool.<name> execution span is created
-// inside that tool's own run<ToolName> (see run-turn.ts's RULE comment) —
-// this file wraps nothing except the "unknown tool name" fallback below,
-// which has no tool file of its own to own a span.
+// inside that tool's own run<ToolName> (see run-agent-turn.ts's RULE
+// comment) — this file wraps nothing except the "unknown tool name"
+// fallback below, which has no tool file of its own to own a span.
 
 // Model-facing tool names are snake_case; the TS identifiers stay camelCase.
 export const tools = {
@@ -34,15 +34,15 @@ export const tools = {
   missing_info: missingInfo,
 } satisfies ToolSet;
 
-// Derived from `tools`, the real source of truth — used by run-turn.ts to
-// type-check NEEDS_APPROVAL. NOT used for runTool's own `toolName` param
+// Derived from `tools`, the real source of truth — used by run-agent-turn.ts
+// to type-check NEEDS_APPROVAL. NOT used for runTool's own `toolName` param
 // below, which stays plain `string`: a model can hallucinate a name outside
 // this union, and runTool's `default` case is the real runtime handling for
 // that.
 export type ToolName = keyof typeof tools;
 
 // The single dispatcher every tool call goes through. For NEEDS_APPROVAL
-// tools, run-turn.ts's approval switch must have already resolved
+// tools, run-agent-turn.ts's approval switch must have already resolved
 // `approved: true` before this is reached — its HitlDecision carries
 // missing_info's answer as `payload`, this function's 4th param.
 export async function runTool(

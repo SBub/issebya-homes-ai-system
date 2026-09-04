@@ -266,7 +266,7 @@ function adaptSpan(s: SpanData, index: number): BraintrustSpanEvent {
 }
 
 // "braintrust.guest_turn.result" (not "braintrust.guest_turn") is where
-// run-turn.ts's "update-turn-trace-io" step sets the real final output —
+// run-guest-turn.ts's "update-turn-trace-io" step sets the real final output —
 // checkHitlCompliance needs turn.output for its leaked-link check, so this
 // must resolve to that span.
 async function getTurnAndEvents(input: string, output: string, trace: Trace | undefined) {

@@ -168,7 +168,7 @@ describe("loadMemory", () => {
   // The fast path never summarizes or writes, even when this turn's trim
   // drops rows past the existing watermark — that's foldMemory's job now
   // (see the "foldMemory" describe block below), called later by
-  // run-turn.ts, off this turn's own critical path.
+  // run-guest-turn.ts, off this turn's own critical path.
   it("returns the trimmed history without summarizing or writing, even when overflow drops rows past the watermark", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
@@ -483,12 +483,12 @@ describe("foldMemory", () => {
   // Regression test for the bug this fix addresses: summarizeConversation
   // used to call loadPrompt() BEFORE opening its withTurnSpan, so a
   // Braintrust failure there threw with no span open yet to record it on.
-  // Now loadPrompt() runs inside the span callback (matching run-turn.ts's
-  // loadSystemPromptText), so withTurnSpan's own catch (tracing.ts) marks
-  // the span ERROR before writeDiscreteFold's console.error-only catch
-  // swallows the exception. The swallow-and-continue behavior itself is
-  // unchanged and intentional (see writeDiscreteFold's own comment) — this
-  // only asserts the span is no longer silently unmarked.
+  // Now loadPrompt() runs inside the span callback (matching
+  // run-agent-turn.ts's loadSystemPromptText), so withTurnSpan's own catch
+  // (tracing.ts) marks the span ERROR before writeDiscreteFold's
+  // console.error-only catch swallows the exception. The swallow-and-continue
+  // behavior itself is unchanged and intentional (see writeDiscreteFold's
+  // own comment) — this only asserts the span is no longer silently unmarked.
   it("marks the gen_ai.chat span ERROR when loadPrompt rejects for the discrete-fold summarizer, even though writeDiscreteFold's own catch still swallows the error", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);

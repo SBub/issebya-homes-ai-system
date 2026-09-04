@@ -133,7 +133,7 @@ export async function requestMissingInfoApproval(
   // real children. This is the HITL gate span, not the execution span —
   // named hitl.missing_info (not gen_ai.tool.missing_info) so nesting the
   // approval wait under it doesn't misrepresent the wait as happening
-  // inside the tool call. See run-turn.ts's RULE comment.
+  // inside the tool call. See run-agent-turn.ts's RULE comment.
   const hitlSpanId = await steppedSpan(
     step,
     "hitl-missing_info",

@@ -44,7 +44,7 @@ function recordBestEffortFailure(helper: string, message: string): void {
 // already-known anchor). Call once per turn (the webhook route's first
 // span); thread the returned `anchor` downstream via withTurnSpan, including
 // across the webhook -> Inngest boundary via the event payload (see
-// run-turn.ts's GuestTurnRequestedEventData). Must be a real emitted span
+// run-guest-turn.ts's GuestTurnRequestedEventData). Must be a real emitted span
 // id, not a synthetic one — a fake parent leaves every span in the turn
 // pointing at a non-existent parent instead of each other.
 export async function startTraceRoot<T>(
@@ -82,7 +82,7 @@ export async function startTraceRoot<T>(
 // Deliberately never sets an explicit OK status on success — only ERROR, on
 // throw. An explicit OK would clobber markSpanFailed's ERROR status on a
 // soft-fail call site that catches its own error and returns normally
-// (e.g. run-turn.ts's send-whatsapp-reply) — an unset status already reads
+// (e.g. run-guest-turn.ts's send-whatsapp-reply) — an unset status already reads
 // as "not an error" everywhere OTel is consumed.
 export async function withTurnSpan<T>(
   anchor: TraceAnchor,
@@ -229,7 +229,7 @@ export async function updateSpanIO(
   // tags is omitted entirely (rather than sent as []) when empty, so a merge
   // patch with no tags to add never clobbers tags a span already has —
   // matching the "tags aggregate at the trace level" mechanism this exists
-  // for (see run-turn.ts's firedTags comment).
+  // for (see run-agent-turn.ts's firedTags comment).
   const { tags, ...rest } = fields;
   const patch = tags && tags.length > 0 ? { ...rest, tags } : rest;
 

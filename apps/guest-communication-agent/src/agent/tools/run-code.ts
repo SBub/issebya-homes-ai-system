@@ -10,7 +10,7 @@ import type { ToolContext } from "./config";
 
 // Lets the model write one small program instead of calling checkAvailability
 // 5+ times across separate reasoning rounds for something like "book the next
-// available weekend" (MAX_AGENT_STEPS in run-turn.ts is only 8). Executes in
+// available weekend" (MAX_AGENT_STEPS in run-agent-turn.ts is only 8). Executes in
 // Vercel Sandbox, not in-process — see sandbox.ts's top comment for the
 // cross-process bridging that follows from that.
 
@@ -30,7 +30,7 @@ const runCodeOutputSchema = z.union([
 //
 // LANDMINE: deliberately read-only/computational only — never add
 // sendBookingLink or anything that moves real state/money here. Booking
-// stays a normal, approval-gated tool call (run-turn.ts's NEEDS_APPROVAL),
+// stays a normal, approval-gated tool call (run-agent-turn.ts's NEEDS_APPROVAL),
 // never callable from inside an agent-authored sandbox program.
 const sandboxApi: SandboxApi = {
   checkAvailability: (args: Parameters<typeof computeCheckAvailability>[0]) =>

@@ -56,12 +56,12 @@ function toolDescription(name: string, t: { description?: string }): string {
   return t.description;
 }
 
-// Read live from the same tool objects run-turn.ts imports and registers in
-// its `tools` ToolSet (see that file's imports and the `tools = {...}`
-// declaration) — the exact text the model sees when deciding whether to
-// call a tool, not a hand-maintained copy of it. wants_human/missing_info
-// keyed in snake_case to match the literal tool names the model sees (same
-// as run-turn.ts's `tools` object).
+// Read live from the same tool objects run-tool.ts registers in its `tools`
+// ToolSet (see that file's imports and the `tools = {...}` declaration) —
+// the exact text the model sees when deciding whether to call a tool, not a
+// hand-maintained copy of it. wants_human/missing_info keyed in snake_case
+// to match the literal tool names the model sees (same as run-tool.ts's
+// `tools` object).
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_pricing: toolDescription("get_pricing", getPricing),
   check_availability: toolDescription("check_availability", checkAvailability),
@@ -271,7 +271,7 @@ async function scoreOneTurn(input: string, output: string, trace: Trace | undefi
   const spans = trace ? await trace.getSpans() : [];
   const allEvents = spans.map(adaptSpan);
   // "braintrust.guest_turn.result" (not the "braintrust.guest_turn" marker
-  // itself) is where run-turn.ts's "update-turn-trace-io" step sets real
+  // itself) is where run-guest-turn.ts's "update-turn-trace-io" step sets real
   // input/output/tags as attributes at span-creation time — see that step's
   // own comment for why this is a separate sibling span rather than a patch
   // on the marker.
@@ -301,7 +301,7 @@ project.scorers.create({
   handler: async ({ input, output, trace }) => {
     // Defensive guard, not required by current wiring: the online-scoring
     // automation targets only "braintrust.guest_turn.result" (see
-    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // run-guest-turn.ts's "update-turn-trace-io" step), a single-write span
     // created with real input/output already set, so these should always be
     // real strings. Kept as cheap insurance against a malformed/unexpected
     // row rather than assuming the automation config never changes — skip

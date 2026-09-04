@@ -7,8 +7,8 @@ import { createAdminClient } from "./supabase";
 //
 // - insertPendingOwnerDecision/resolvePendingOwnerDecisionByCorrelationId/
 //   markPendingOwnerDecisionRelayed are called from the guest-turn-critical
-//   dispatch path (approval-gate.ts's requestApprovalGate, run-turn.ts's
-//   runMissingInfo) and the owner-nudges answer/approve routes. Same
+//   dispatch path (approval-gate.ts's requestApprovalGate, missing-info.ts's
+//   requestMissingInfoApproval) and the owner-nudges answer/approve routes. Same
 //   best-effort posture as tracing.ts's recordMissingInfoTraceAnchor: never
 //   throw, only log — a failed write here must never break the real nudge-
 //   send/KB-embed/event-wake-up flow it's attached to, only degrade what an
@@ -56,8 +56,8 @@ function toRow(data: Record<string, unknown>): PendingOwnerDecisionRow {
 // --- Best-effort writes (never throw) --------------------------------------
 
 // Inserted right after a gated tool's/missing_info's nudge is confirmed
-// sent — see approval-gate.ts's requestApprovalGate and run-turn.ts's
-// runMissingInfo for the two call sites. `context` is only ever supplied by
+// sent — see approval-gate.ts's requestApprovalGate and missing-info.ts's
+// requestMissingInfoApproval for the two call sites. `context` is only ever supplied by
 // the send_booking_link gate (the tool call's real args, so the manual
 // resolve action can rebuild the booking URL later); missing_info has
 // nothing structured to capture yet at insert time.

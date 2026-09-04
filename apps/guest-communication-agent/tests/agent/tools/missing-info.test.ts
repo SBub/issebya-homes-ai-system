@@ -201,8 +201,8 @@ describe("requestMissingInfoApproval / runMissingInfo", () => {
   // The two halves of missing_info's dispatch — see missing-info.ts's own
   // comment on the split. Covers the HitlDecision shape directly; the
   // span/step-order assertions for the full approve-then-execute sequence
-  // (as run-tool.ts's runTool + run-turn.ts's loop actually drive it) live
-  // in tests/agent/run-turn.test.ts, not duplicated here.
+  // (as run-tool.ts's runTool + run-agent-turn.ts's loop actually drive it)
+  // live in tests/agent/run-agent-turn.test.ts, not duplicated here.
   let step: ReturnType<typeof makeStepMock>;
 
   beforeEach(() => {

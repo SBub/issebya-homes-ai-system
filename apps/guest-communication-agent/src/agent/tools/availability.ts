@@ -14,7 +14,7 @@ const checkAvailabilitySchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only — run-turn.ts dispatches to runCheckAvailability below by name.
+// Schema-only — run-tool.ts dispatches to runCheckAvailability below by name.
 export const checkAvailability = tool({
   description:
     "Check if a room is available for the requested dates. Use when the guest mentions specific check-in and check-out dates.",

@@ -24,7 +24,7 @@ no agent work and returns fast. A background Inngest function then runs the actu
 agent turn: load conversation context → model call → zero or more tool calls → final
 reply → send via Twilio.
 
-The agent loop itself (`src/agent/run-turn.ts`) is a plain async tool-calling loop, not
+The agent loop itself (`src/agent/run-agent-turn.ts`) is a plain async tool-calling loop, not
 a graph or state machine.
 
 ### Tools

@@ -27,12 +27,12 @@ import { type TraceAnchor, withTurnSpan } from "@/lib/tracing";
 // work, keeping that LLM round-trip (24-43s in real traces) off the guest's
 // reply-latency path.
 //
-// MODEL is duplicated locally (not imported from run-turn.ts) to avoid a
-// circular import — run-turn.ts imports from this file.
+// MODEL is duplicated locally (not imported from run-agent-turn.ts) to avoid
+// a circular import — run-agent-turn.ts imports from this file.
 const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 
-// Lives in Braintrust — see run-turn.ts's SYSTEM_PROMPT_SLUG comment for the
+// Lives in Braintrust — see run-agent-turn.ts's SYSTEM_PROMPT_SLUG comment for the
 // default-to-latest loadPrompt() behavior this shares.
 const SUMMARIZER_PROMPT_SLUG = "conversation-summarizer";
 
@@ -47,7 +47,7 @@ const MAX_RECENT_FOLDS = 1;
 
 export interface AgentMemory {
   historyMessages: ModelMessage[];
-  // Prepended ahead of historyMessages in run-turn.ts's `messages`, not
+  // Prepended ahead of historyMessages in run-agent-turn.ts's `messages`, not
   // substituted into the system prompt. `null` (never a placeholder) when
   // there's nothing to say — see buildMemoryMessage.
   memoryMessage: ModelMessage | null;
@@ -135,7 +135,7 @@ async function summarizeConversation(
   }
 
   // Not inside its own step.run — but only ever called from foldMemory,
-  // itself inside run-turn.ts's "fold-memory-summary" step.run, so this
+  // itself inside run-guest-turn.ts's "fold-memory-summary" step.run, so this
   // only executes once per real run; safe to wrap in a span for the same
   // reason.
   return withTurnSpan(
@@ -318,7 +318,7 @@ async function maintainFoldWindow(phone: string, traceAnchor: TraceAnchor): Prom
   }
 }
 
-// The fold path — called from run-turn.ts's "fold-memory-summary" step,
+// The fold path — called from run-guest-turn.ts's "fold-memory-summary" step,
 // after the guest already has their reply. A no-op when nothing new has
 // dropped out of the trimmed window since the last fold.
 export async function foldMemory(params: {

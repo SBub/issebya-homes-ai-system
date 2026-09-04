@@ -14,7 +14,7 @@ const wantsHumanSchema = z.object({
 });
 
 // A one-way alert with no decision to approve, so it has no entry in
-// run-turn.ts's NEEDS_APPROVAL set.
+// run-agent-turn.ts's NEEDS_APPROVAL set.
 export const wantsHuman = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person, or when they've made a request only the owner can act on or approve (e.g. early check-in, a special accommodation) that you can't resolve yourself.",
@@ -25,8 +25,9 @@ export const wantsHuman = tool({
 // missing_info/send_booking_link this resolves in one round trip: create
 // the gen_ai.tool.wants_human span FIRST (input already known), send the
 // nudge as its real child, then patch `output` once the nudge result is
-// known. Deliberate exception to "tool files stay pure" (run-turn.ts's RULE
-// comment) — real durability plumbing lives here, not in the dispatch loop.
+// known. Deliberate exception to "tool files stay pure" (run-agent-turn.ts's
+// RULE comment) — real durability plumbing lives here, not in the dispatch
+// loop.
 export async function runWantsHuman(
   args: { reason: string },
   context: ToolContext,

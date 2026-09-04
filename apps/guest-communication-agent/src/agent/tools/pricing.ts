@@ -9,7 +9,7 @@ const getPricingSchema = z.object({
   room: z.enum(["room1", "room2"]).describe("Which room"),
 });
 
-// Schema-only — run-turn.ts dispatches to runGetPricing below by name.
+// Schema-only — run-tool.ts dispatches to runGetPricing below by name.
 export const getPricing = tool({
   description: "Get the nightly price for a room. Use when the guest asks about price or cost.",
   inputSchema: getPricingSchema,

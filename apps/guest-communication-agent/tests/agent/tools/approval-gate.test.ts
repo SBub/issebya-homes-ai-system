@@ -61,7 +61,7 @@ function makeStepMock() {
   };
 }
 
-// Stand-in for what run-turn.ts's APPROVAL_GATES table would pass for
+// Stand-in for what run-agent-turn.ts's NEEDS_APPROVAL gate would pass for
 // send_booking_link — this file tests the generic mechanism, not any one
 // tool's policy, but needs some concrete values to call it with.
 const gateParamsBase = {

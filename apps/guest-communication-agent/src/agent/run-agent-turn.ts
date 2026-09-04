@@ -1,9 +1,7 @@
-import type { Span } from "@opentelemetry/api";
-import * as Sentry from "@sentry/nextjs";
 import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
-import { type AgentMemory, foldMemory, loadMemory } from "@/agent/memory";
+import { type AgentMemory, loadMemory } from "@/agent/memory";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { runTool, type ToolName } from "@/agent/run-tool";
 import { flushTracing } from "@/instrumentation";
@@ -11,17 +9,12 @@ import type { HitlDecision } from "@/agent/tools/approval-gate";
 import { requestSendBookingLinkApproval } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
 import { requestMissingInfoApproval } from "@/agent/tools/missing-info";
-import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
-import { sendWhatsAppMessage } from "@/lib/twilio-send";
+import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
 
 // GCA's reasoning loop: build the message list, then repeatedly call the
 // model and dispatch any tool calls it requested, until a final text reply
-// or the step cap fires. Also holds runGuestTurn, the delivery orchestrator
-// (records + sends the reply) that runGuestTurnFunction's Inngest adapter
-// wraps — kept as a plain function so tests can drive it with a hand-rolled
-// `step` mock.
+// or the step cap fires.
 
 // No pinned version — loadPrompt() with neither `version` nor `environment`
 // fetches the slug's latest Braintrust-saved version, so every save there is
@@ -33,8 +26,10 @@ const SYSTEM_PROMPT_SLUG = "gca-system";
 const MAX_AGENT_STEPS = 8;
 
 // Sending the model's raw "" straight to Twilio 400s (empty message body) —
-// this is the fallback for that and any other "no usable reply" case.
-const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again shortly.";
+// this is the fallback for that and any other "no usable reply" case. Also
+// used by run-guest-turn.ts when a turn ends with no final assistant message
+// at all (e.g. the step cap hit mid tool-call).
+export const FALLBACK_REPLY_TEXT = "Sorry, I couldn't process that — please try again shortly.";
 
 // RULE (canonical): every tool owns its own gen_ai.tool.<name> execution
 // span and any step/waitForEvent usage it needs, inside its own
@@ -126,8 +121,9 @@ export interface RunAgentTurnResult {
 
 // Loads context, then loops model -> tools -> model until a final text
 // reply or the step cap is hit. This function runs inside a run-guest-turn
-// Inngest function (see runGuestTurn below) so a genuine suspend (e.g.
-// missing_info's step.waitForEvent) is safe to sit inside the loop.
+// Inngest function (see run-guest-turn.ts's runGuestTurn) so a genuine
+// suspend (e.g. missing_info's step.waitForEvent) is safe to sit inside the
+// loop.
 export async function runAgentTurn(
   input: RunAgentTurnInput,
   config: RunAgentTurnConfig,
@@ -296,155 +292,3 @@ export async function runAgentTurn(
 
   return { messages, stepCount, guestTurnSpanId, firedTags };
 }
-
-// The event that triggers a guest turn — sent (fire-and-forget) by the
-// webhook route, consumed by runGuestTurnFunction below.
-export const GUEST_TURN_REQUESTED_EVENT = "gca/guest-turn.requested";
-
-interface GuestTurnRequestedEventData {
-  conversationId: string;
-  phone: string;
-  incomingMessage: string;
-  // Only set for real webhook calls.
-  triggerMessageId?: string;
-  // Set once in the webhook route, before request validation — lets
-  // step.waitForEvent (missing-info.ts) find this suspended run when the
-  // owner's reply arrives as a separate event. Not used for tracing.
-  correlationId: string;
-  // The webhook route's real trace root (startTraceRoot, tracing.ts),
-  // captured before request validation, so the whole interaction lands as
-  // one properly nested trace instead of spans sharing a synthetic parent.
-  traceAnchor: TraceAnchor;
-}
-
-export interface RunGuestTurnParams extends GuestTurnRequestedEventData {
-  step: GetStepTools<typeof inngest>;
-}
-
-// Delivery orchestrator: drives runAgentTurn, then records and sends the
-// reply. By the time this reaches those side effects — 200ms or, after a
-// missing_info suspend, hours later — the inbound webhook request has
-// already returned its ack, so every reply is delivered proactively.
-export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
-  const {
-    conversationId,
-    phone,
-    incomingMessage,
-    triggerMessageId,
-    correlationId,
-    traceAnchor,
-    step,
-  } = params;
-
-  const result = await runAgentTurn(
-    { conversationId, phone, incomingMessage },
-    { triggerMessageId, correlationId, traceAnchor, step },
-  );
-
-  // Deliberately back at traceAnchor, not runAgentTurn's turnAnchor — this
-  // and the following two spans are post-reasoning delivery/bookkeeping, so
-  // they sit as siblings of "braintrust.guest_turn" rather than its children.
-  const lastMessage = result.messages.at(-1);
-  const replyText =
-    lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
-      ? lastMessage.content
-      : FALLBACK_REPLY_TEXT;
-
-  // A real, single-write span rather than an updateSpanIO patch on
-  // "braintrust.guest_turn" — input/output are already known here, so a
-  // patch's write-ordering race (see updateSpanIO's doc comment, tracing.ts)
-  // doesn't apply. The online-scoring automation targets this span's name.
-  // Deduped: a turn can call missing_info more than once across rounds, but
-  // Braintrust's tags field is a set.
-  const dedupedTags = [...new Set(result.firedTags)];
-  await steppedSpan(
-    step,
-    "update-turn-trace-io",
-    traceAnchor,
-    "braintrust.guest_turn.result",
-    {
-      "braintrust.input": incomingMessage,
-      "braintrust.output": replyText,
-      ...(dedupedTags.length > 0 ? { "braintrust.tags": dedupedTags } : {}),
-    },
-    async () => {},
-  );
-
-  // traceAnchor.traceId is stored on the row so it doubles as a working
-  // pointer into Braintrust/Axiom for this turn.
-  const replyMessageId = await steppedSpan(
-    step,
-    "record-reply",
-    traceAnchor,
-    "record-reply",
-    { "gca.conversation_id": conversationId },
-    () => recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
-  );
-
-  async function sendGuestWhatsAppReply(span: Span) {
-    const sendResult = await sendWhatsAppMessage(phone, replyText);
-    if (!sendResult.ok) {
-      console.error(`[run-turn] sendWhatsAppMessage failed for ${phone}: ${sendResult.error}`);
-      markSpanFailed(span, sendResult.error ?? "sendWhatsAppMessage failed with no error message");
-    }
-    return sendResult;
-  }
-
-  const sendResult = await steppedSpan(
-    step,
-    "send-whatsapp-reply",
-    traceAnchor,
-    "send-whatsapp-reply",
-    { "gca.phone": phone },
-    sendGuestWhatsAppReply,
-  );
-
-  // Distinct from record-reply above — persists whether the send actually
-  // landed, so an admin recovery UI can find a reply that was generated but
-  // never delivered.
-  await step.run("update-message-delivery-status", () =>
-    updateMessageDeliveryStatus(replyMessageId, sendResult.ok ? "sent" : "failed"),
-  );
-
-  // Folds whatever this turn dropped out of the trimmed history window into
-  // guest_memory's rolling summary — moved here (out of loadMemory's inline
-  // path) so its LLM round-trip doesn't sit on the guest's reply-latency
-  // critical path. Passes this step's own span id (not traceAnchor) so
-  // foldMemory's internal "gen_ai.chat" span nests under "fold-memory-summary".
-  async function foldGuestMemory(span: Span): Promise<void> {
-    try {
-      await foldMemory({
-        conversationId,
-        phone,
-        traceAnchor: { traceId: traceAnchor.traceId, spanId: span.spanContext().spanId },
-      });
-    } catch (err) {
-      // The guest already has their reply by this point — a summarization
-      // failure must never crash an otherwise-successful turn. A lost fold
-      // is harmless (memory.ts's loadMemoryState watermark just sees a
-      // bigger backlog next time).
-      console.error(`[run-turn] foldMemory failed for conversation ${conversationId}:`, err);
-      markSpanFailed(span, err);
-      Sentry.captureException(err);
-    }
-  }
-
-  await steppedSpan(
-    step,
-    "fold-memory-summary",
-    traceAnchor,
-    "fold-memory-summary",
-    { "gca.conversation_id": conversationId },
-    foldGuestMemory,
-  );
-}
-
-// Thin adapter registered with /api/inngest — pulls the typed payload off
-// the triggering event and hands it to runGuestTurn above.
-export const runGuestTurnFunction = inngest.createFunction(
-  { id: "run-guest-turn", triggers: [{ event: GUEST_TURN_REQUESTED_EVENT }] },
-  async ({ event, step }) => {
-    const data = event.data as GuestTurnRequestedEventData;
-    await runGuestTurn({ ...data, step });
-  },
-);

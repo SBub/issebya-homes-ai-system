@@ -44,7 +44,7 @@ describe("estimateTokens", () => {
     const messages: ModelMessage[] = [{ role: "user", content } as unknown as ModelMessage];
     // Real tokenizer count of the JSON.stringify'd fallback text, not
     // chars/4 — this app's ModelMessage[] content is always plain text in
-    // practice (see run-turn.ts's comment on GCA never sending/receiving
+    // practice (see run-agent-turn.ts's comment on GCA never sending/receiving
     // file attachments), so this branch only exists to satisfy
     // ModelMessage's `string | Array<ContentPart>` type.
     expect(estimateTokens(messages)).toBe(11);

@@ -126,7 +126,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     if (decision.conversationId) {
       // Same two-step recordMessage-then-updateMessageDeliveryStatus
-      // sequence run-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
+      // sequence run-guest-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
       // is already confirmed true here (the !sendResult.ok branch above
       // already returned), so this always writes "sent", never "failed".
       const messageId = await recordMessage(decision.conversationId, "assistant", messageText);

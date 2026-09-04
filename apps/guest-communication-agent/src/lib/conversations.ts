@@ -91,7 +91,7 @@ export async function recordMessage(
 
 // Only ever set on a role="assistant" row (see the delivery_status column's
 // own migration comment for why a guest's own inbound row has no delivery
-// status) — called by run-turn.ts's runGuestTurn right after
+// status) — called by run-guest-turn.ts's runGuestTurn right after
 // sendGuestWhatsAppReply resolves, using recordMessage's own return value
 // (the row id) as `messageId`, so it's a plain follow-up update rather than
 // a change to recordMessage's insert shape itself.

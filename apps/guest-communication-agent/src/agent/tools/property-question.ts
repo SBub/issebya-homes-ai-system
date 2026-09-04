@@ -25,7 +25,7 @@ const answerPropertyQuestionSchema = z.object({
   query: z.string().describe("The search query based on what the guest is asking"),
 });
 
-// Schema-only — run-turn.ts dispatches to runAnswerPropertyQuestion below by
+// Schema-only — run-tool.ts dispatches to runAnswerPropertyQuestion below by
 // name.
 export const answerPropertyQuestion = tool({
   description:
