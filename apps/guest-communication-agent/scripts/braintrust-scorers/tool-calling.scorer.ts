@@ -73,17 +73,14 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   missing_info: toolDescription("missing_info", missingInfo),
 };
 
-// Tools whose gen_ai.tool.* span isn't guaranteed every time they fire (see
-// SELF_STEPPED_TOOLS in run-turn.ts), so a guest_turn span's `tags` array is
-// gatherToolsCalled's fallback signal for them: send_booking_link only gets
-// one on the approved path (a rejected/timed-out call has no span, only the
-// tag). missing_info and wants_human used to belong here too, but
-// run-turn.ts's runMissingInfo/dispatchWantsHuman now each wrap their final
-// result in a steppedSpan unconditionally — every exit path gets a real
-// gen_ai.tool.missing_info/gen_ai.tool.wants_human span, so their tag is
-// always redundant with a span gatherToolsCalled already found (defensive
-// dedup still applies below regardless).
-const TAG_ONLY_TOOLS = new Set(["send_booking_link"]);
+// The two NEEDS_APPROVAL-gated tools (run-agent-turn.ts): their
+// gen_ai.tool.* execution span only exists on the approved path — a
+// rejected/timed-out/nudge-failed call never executes, so it has no span,
+// only the turn's `tags` array (see missing-info.ts's/booking.ts's own
+// request<ToolName>Approval). gatherToolsCalled falls back to that tag for
+// these two. wants_human is NOT here — it always executes unconditionally
+// (no gate), so its gen_ai.tool.wants_human span is guaranteed every time.
+const TAG_ONLY_TOOLS = new Set(["send_booking_link", "missing_info"]);
 
 const RUBRIC_PROMPT = `You are evaluating whether the issebya.homes WhatsApp concierge agent (a guest house in Almoçageme, Portugal) called the right tool(s), if any, while handling one guest message.
 
@@ -170,9 +167,10 @@ interface ToolCallingResult {
 interface ToolCallInfo {
   name: string;
   // Present whenever a real gen_ai.tool.* span was found (the 5 non-gated
-  // tools, missing_info/wants_human unconditionally, and an approved
-  // send_booking_link). Undefined only for a rejected/timed-out
-  // send_booking_link, which is tag-only evidence — see TAG_ONLY_TOOLS above.
+  // tools, wants_human unconditionally, and an approved/answered
+  // send_booking_link or missing_info). Undefined only for a
+  // rejected/timed-out call to one of the two gated tools, which is
+  // tag-only evidence — see TAG_ONLY_TOOLS above.
   input?: string;
   output?: string;
 }
@@ -225,8 +223,8 @@ interface BraintrustSpanEvent {
 // Combines a guest_turn span's own tags with its sibling gen_ai.tool.*
 // spans (same root_span_id — see this file's module comment) into one
 // ToolCallInfo list. Tag-derived entries are deduped against span-derived
-// ones defensively, even though SELF_STEPPED_TOOLS/dispatchToolExecution
-// in run-turn.ts never actually emit both for the same tool name.
+// ones defensively, even though a tool never actually emits both for the
+// same name in practice.
 function gatherToolsCalled(
   turn: BraintrustSpanEvent,
   allEvents: BraintrustSpanEvent[],
