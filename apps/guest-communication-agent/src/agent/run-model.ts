@@ -73,15 +73,16 @@ export async function runModel(
       );
       // Same signal as the console.warn above, but attached to the span so
       // it's visible in the Axiom/Braintrust trace itself, not just server
-      // logs nobody is watching. reasoningText: real production instances of
-      // this (finishReason "stop", well under MAX_OUTPUT_TOKENS) show the
-      // model produced SOME tokens despite the empty text/no-tool-calls
-      // result — capturing what those were is the only way to diagnose why.
-      // reasoningText alone turned out empty on a real occurrence too, so
-      // content/warnings are captured alongside it — content is the raw
-      // generated parts (could hold a dropped tool-error part) and warnings
-      // surfaces a provider-level rejection generateText wouldn't otherwise
-      // report as an error.
+      // logs nobody is watching. reasoningText/content/warnings all turned
+      // out empty on a real occurrence, tracked to an OpenRouter backend
+      // (StreamLake, now excluded — see openrouter.ts) returning a
+      // degenerate completion. responseBody is the raw HTTP response
+      // (result.providerMetadata does NOT carry which backend served the
+      // request for this @ai-sdk/openai-over-OpenRouter setup — verified by
+      // reading its response-parsing source; the real signal lives in
+      // response.body.openrouter_metadata.endpoints instead, opted into via
+      // openrouter.ts's X-OpenRouter-Metadata header) — captured so a future
+      // bad-provider incident is diagnosable from the trace alone.
       span.addEvent("gen_ai.retry", {
         attempt,
         finishReason: result.finishReason,
@@ -91,6 +92,10 @@ export async function runModel(
           result.warnings && result.warnings.length > 0
             ? JSON.stringify(result.warnings)
             : "(none)",
+        responseBody:
+          result.response.body !== undefined
+            ? JSON.stringify(result.response.body)
+            : "(none captured)",
       });
     }
 
@@ -105,9 +110,9 @@ export async function runModel(
     // be visible.
     if (result.text.trim() === "" && result.toolCalls.length === 0) {
       // Set as real attributes (not just events) so they're visible without
-      // expanding events in Braintrust's UI — reasoningText/warnings only
-      // when non-empty, never unconditionally, since they can be large and
-      // have no diagnostic value on a normal turn (this whole block only
+      // expanding events in Braintrust's UI — reasoningText/warnings/raw_body
+      // only when non-empty, never unconditionally, since they can be large
+      // and have no diagnostic value on a normal turn (this whole block only
       // runs on failure already, so that guard doesn't apply to `content` —
       // an explicitly empty "[]" despite non-zero output tokens is itself
       // the finding, not noise).
@@ -117,6 +122,9 @@ export async function runModel(
       span.setAttribute("gen_ai.response.content", JSON.stringify(result.content));
       if (result.warnings && result.warnings.length > 0) {
         span.setAttribute("gen_ai.response.warnings", JSON.stringify(result.warnings));
+      }
+      if (result.response.body !== undefined) {
+        span.setAttribute("gen_ai.response.raw_body", JSON.stringify(result.response.body));
       }
       markSpanFailed(
         span,

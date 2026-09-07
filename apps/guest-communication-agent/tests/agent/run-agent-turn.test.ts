@@ -197,20 +197,22 @@ function toolCallResponse(
 
 // A round where the model produced neither text nor a tool call — the
 // degenerate response modelTurn's retry loop exists for. reasoningText/
-// content/warnings mirror generateText's real GenerateTextResult shape —
-// content defaults to [] (real generateText always returns an array, even
-// empty) since a real occurrence showed reasoningText alone doesn't explain
-// the empty result either.
+// content/warnings/responseBody mirror generateText's real GenerateTextResult
+// shape — content defaults to [] (real generateText always returns an array,
+// even empty) since a real occurrence showed reasoningText alone doesn't
+// explain the empty result either; responseBody defaults to undefined,
+// matching a real occurrence with no body captured.
 function emptyResponse(
   finishReason: string,
   reasoningText?: string,
   content: unknown[] = [],
   warnings?: unknown[],
+  responseBody?: unknown,
 ) {
   return {
     text: "",
     toolCalls: [] as unknown[],
-    response: { messages: [] as ModelMessage[] },
+    response: { messages: [] as ModelMessage[], body: responseBody },
     finishReason,
     reasoningText,
     content,
@@ -388,6 +390,7 @@ describe("runAgentTurn", () => {
           reasoningText: "Let me think about pets...",
           content: "[]",
           warnings: "(none)",
+          responseBody: "(none captured)",
         },
       }),
     );
@@ -415,6 +418,7 @@ describe("runAgentTurn", () => {
           reasoningText: "(none captured)",
           content: JSON.stringify([{ type: "tool-error", toolName: "get_pricing" }]),
           warnings: "(none)",
+          responseBody: "(none captured)",
         },
       }),
     );
@@ -442,6 +446,7 @@ describe("runAgentTurn", () => {
           reasoningText: "(none captured)",
           content: "[]",
           warnings: JSON.stringify([{ type: "unsupported-setting", setting: "tools" }]),
+          responseBody: "(none captured)",
         },
       }),
     );
@@ -467,18 +472,48 @@ describe("runAgentTurn", () => {
           reasoningText: "(none captured)",
           content: "[]",
           warnings: "(none)",
+          responseBody: "(none captured)",
         },
       }),
     );
   });
 
-  it("gives up after 3 empty attempts, falls back to the generic apology reply, marks the span failed, and captures the final attempt's reasoning text/content/warnings as real attributes", async () => {
+  it("captures the raw response body on a retry event when present", async () => {
+    const rawBody = { id: "gen-123", provider: "StreamLake", choices: [] };
+    generateTextMock
+      .mockResolvedValueOnce(emptyResponse("stop", undefined, [], undefined, rawBody))
+      .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-retry-body", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.events).toContainEqual(
+      expect.objectContaining({
+        name: "gen_ai.retry",
+        attributes: {
+          attempt: 1,
+          finishReason: "stop",
+          reasoningText: "(none captured)",
+          content: "[]",
+          warnings: "(none)",
+          responseBody: JSON.stringify(rawBody),
+        },
+      }),
+    );
+  });
+
+  it("gives up after 3 empty attempts, falls back to the generic apology reply, marks the span failed, and captures the final attempt's reasoning text/content/warnings/raw body as real attributes", async () => {
+    const rawBody = { id: "gen-123", provider: "StreamLake", choices: [] };
     generateTextMock.mockImplementation(() =>
       emptyResponse(
         "stop",
         "Still thinking about whether cats count as pets...",
         [{ type: "tool-error", toolName: "get_pricing" }],
         [{ type: "unsupported-setting", setting: "tools" }],
+        rawBody,
       ),
     );
 
@@ -504,9 +539,10 @@ describe("runAgentTurn", () => {
     expect(chatSpan?.attributes["gen_ai.response.warnings"]).toBe(
       JSON.stringify([{ type: "unsupported-setting", setting: "tools" }]),
     );
+    expect(chatSpan?.attributes["gen_ai.response.raw_body"]).toBe(JSON.stringify(rawBody));
   });
 
-  it("doesn't set the reasoning_text/warnings attributes when the final failed attempt captured none, but always sets content even when empty", async () => {
+  it("doesn't set the reasoning_text/warnings/raw_body attributes when the final failed attempt captured none, but always sets content even when empty", async () => {
     generateTextMock.mockImplementation(() => emptyResponse("stop"));
 
     await runAgentTurn(
@@ -517,6 +553,7 @@ describe("runAgentTurn", () => {
     const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
     expect(chatSpan?.attributes["gen_ai.response.reasoning_text"]).toBeUndefined();
     expect(chatSpan?.attributes["gen_ai.response.warnings"]).toBeUndefined();
+    expect(chatSpan?.attributes["gen_ai.response.raw_body"]).toBeUndefined();
     expect(chatSpan?.attributes["gen_ai.response.content"]).toBe("[]");
   });
 
