@@ -33,7 +33,7 @@
       ]
     }
   },
-  "ignoreBinaries": ["stripe", "pkill", "lsof"],
+  "ignoreBinaries": ["stripe", "pkill", "lsof", "ngrok"],
   "ignoreFiles": [
     "apps/website/src/app/(main)/booking/[type]/page-1.tsx",
     "apps/website/src/app/(main)/booking/[type]/store-1.tsx"
