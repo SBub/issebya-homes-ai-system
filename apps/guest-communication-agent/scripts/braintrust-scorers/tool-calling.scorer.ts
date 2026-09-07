@@ -80,7 +80,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 // request<ToolName>Approval). gatherToolsCalled falls back to that tag for
 // these two. wants_human is NOT here — it always executes unconditionally
 // (no gate), so its gen_ai.tool.wants_human span is guaranteed every time.
-const TAG_ONLY_TOOLS = new Set(["send_booking_link", "missing_info"]);
+export const TAG_ONLY_TOOLS = new Set(["send_booking_link", "missing_info"]);
 
 const RUBRIC_PROMPT = `You are evaluating whether the issebya.homes WhatsApp concierge agent (a guest house in Almoçageme, Portugal) called the right tool(s), if any, while handling one guest message.
 
@@ -117,7 +117,7 @@ Respond in exactly this format, nothing else:
 Reasoning: <step-by-step reasoning about the rubric above, written BEFORE you decide — walk through what tool(s), if any, the guest message called for and whether what actually fired matches, then commit to a choice>
 Choice: <A, B, or C>`;
 
-interface ClassifierResult {
+export interface ClassifierResult {
   choice: string;
   score: number;
   reasoning: string;
@@ -131,7 +131,7 @@ interface ClassifierResult {
 // preceding newline) before giving up and returning a mid-scale score with
 // the raw text as reasoning — keeps a malformed response visible instead of
 // throwing and losing the rest of the sample.
-function parseClassifierResponse(text: string): ClassifierResult {
+export function parseClassifierResponse(text: string): ClassifierResult {
   const strict = text.match(/Reasoning:\s*([\s\S]*?)\n\s*Choice:\s*([ABC])/i);
   if (strict) {
     const [, reasoning, choice] = strict;
@@ -164,7 +164,7 @@ interface ToolCallingResult {
   choice: string;
 }
 
-interface ToolCallInfo {
+export interface ToolCallInfo {
   name: string;
   // Present whenever a real gen_ai.tool.* span was found (the 5 non-gated
   // tools, wants_human unconditionally, and an approved/answered
@@ -175,7 +175,7 @@ interface ToolCallInfo {
   output?: string;
 }
 
-function formatToolsCalled(tools: ToolCallInfo[]): string {
+export function formatToolsCalled(tools: ToolCallInfo[]): string {
   if (tools.length === 0) {
     return "(none — no tool was called this turn)";
   }
@@ -210,7 +210,7 @@ async function scoreToolCalling(turn: {
   return { score, rationale: reasoning, choice };
 }
 
-interface BraintrustSpanEvent {
+export interface BraintrustSpanEvent {
   span_id: string;
   root_span_id: string;
   span_attributes?: { name?: string };
@@ -225,7 +225,7 @@ interface BraintrustSpanEvent {
 // ToolCallInfo list. Tag-derived entries are deduped against span-derived
 // ones defensively, even though a tool never actually emits both for the
 // same name in practice.
-function gatherToolsCalled(
+export function gatherToolsCalled(
   turn: BraintrustSpanEvent,
   allEvents: BraintrustSpanEvent[],
 ): ToolCallInfo[] {
