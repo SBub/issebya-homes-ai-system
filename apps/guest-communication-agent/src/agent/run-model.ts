@@ -77,10 +77,20 @@ export async function runModel(
       // this (finishReason "stop", well under MAX_OUTPUT_TOKENS) show the
       // model produced SOME tokens despite the empty text/no-tool-calls
       // result — capturing what those were is the only way to diagnose why.
+      // reasoningText alone turned out empty on a real occurrence too, so
+      // content/warnings are captured alongside it — content is the raw
+      // generated parts (could hold a dropped tool-error part) and warnings
+      // surfaces a provider-level rejection generateText wouldn't otherwise
+      // report as an error.
       span.addEvent("gen_ai.retry", {
         attempt,
         finishReason: result.finishReason,
         reasoningText: result.reasoningText ?? "(none captured)",
+        content: JSON.stringify(result.content),
+        warnings:
+          result.warnings && result.warnings.length > 0
+            ? JSON.stringify(result.warnings)
+            : "(none)",
       });
     }
 
@@ -94,12 +104,19 @@ export async function runModel(
     // markSpanFailed's own comment for why this doesn't need to throw to
     // be visible.
     if (result.text.trim() === "" && result.toolCalls.length === 0) {
-      // Set as a real attribute (not just an event) so it's visible without
-      // expanding events in Braintrust's UI — only on this failure path,
-      // never unconditionally, since a reasoning model's reasoningText on a
-      // normal turn can be large and has no diagnostic value there.
+      // Set as real attributes (not just events) so they're visible without
+      // expanding events in Braintrust's UI — reasoningText/warnings only
+      // when non-empty, never unconditionally, since they can be large and
+      // have no diagnostic value on a normal turn (this whole block only
+      // runs on failure already, so that guard doesn't apply to `content` —
+      // an explicitly empty "[]" despite non-zero output tokens is itself
+      // the finding, not noise).
       if (result.reasoningText) {
         span.setAttribute("gen_ai.response.reasoning_text", result.reasoningText);
+      }
+      span.setAttribute("gen_ai.response.content", JSON.stringify(result.content));
+      if (result.warnings && result.warnings.length > 0) {
+        span.setAttribute("gen_ai.response.warnings", JSON.stringify(result.warnings));
       }
       markSpanFailed(
         span,

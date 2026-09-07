@@ -196,17 +196,25 @@ function toolCallResponse(
 }
 
 // A round where the model produced neither text nor a tool call — the
-// degenerate response modelTurn's retry loop exists for. reasoningText
-// mirrors generateText's real GenerateTextResult shape — real production
-// instances of this show the model burned some tokens on reasoning despite
-// producing no usable text/tool-call.
-function emptyResponse(finishReason: string, reasoningText?: string) {
+// degenerate response modelTurn's retry loop exists for. reasoningText/
+// content/warnings mirror generateText's real GenerateTextResult shape —
+// content defaults to [] (real generateText always returns an array, even
+// empty) since a real occurrence showed reasoningText alone doesn't explain
+// the empty result either.
+function emptyResponse(
+  finishReason: string,
+  reasoningText?: string,
+  content: unknown[] = [],
+  warnings?: unknown[],
+) {
   return {
     text: "",
     toolCalls: [] as unknown[],
     response: { messages: [] as ModelMessage[] },
     finishReason,
     reasoningText,
+    content,
+    warnings,
   };
 }
 
@@ -378,6 +386,62 @@ describe("runAgentTurn", () => {
           attempt: 1,
           finishReason: "stop",
           reasoningText: "Let me think about pets...",
+          content: "[]",
+          warnings: "(none)",
+        },
+      }),
+    );
+  });
+
+  it("captures a non-empty content array on a retry event, even when reasoningText is also empty", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        emptyResponse("stop", undefined, [{ type: "tool-error", toolName: "get_pricing" }]),
+      )
+      .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-retry-content", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.events).toContainEqual(
+      expect.objectContaining({
+        name: "gen_ai.retry",
+        attributes: {
+          attempt: 1,
+          finishReason: "stop",
+          reasoningText: "(none captured)",
+          content: JSON.stringify([{ type: "tool-error", toolName: "get_pricing" }]),
+          warnings: "(none)",
+        },
+      }),
+    );
+  });
+
+  it("captures provider warnings on a retry event when present", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(
+        emptyResponse("stop", undefined, [], [{ type: "unsupported-setting", setting: "tools" }]),
+      )
+      .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-retry-warnings", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.events).toContainEqual(
+      expect.objectContaining({
+        name: "gen_ai.retry",
+        attributes: {
+          attempt: 1,
+          finishReason: "stop",
+          reasoningText: "(none captured)",
+          content: "[]",
+          warnings: JSON.stringify([{ type: "unsupported-setting", setting: "tools" }]),
         },
       }),
     );
@@ -397,14 +461,25 @@ describe("runAgentTurn", () => {
     expect(chatSpan?.events).toContainEqual(
       expect.objectContaining({
         name: "gen_ai.retry",
-        attributes: { attempt: 1, finishReason: "stop", reasoningText: "(none captured)" },
+        attributes: {
+          attempt: 1,
+          finishReason: "stop",
+          reasoningText: "(none captured)",
+          content: "[]",
+          warnings: "(none)",
+        },
       }),
     );
   });
 
-  it("gives up after 3 empty attempts, falls back to the generic apology reply, marks the span failed, and captures the final attempt's reasoning text as a real attribute", async () => {
+  it("gives up after 3 empty attempts, falls back to the generic apology reply, marks the span failed, and captures the final attempt's reasoning text/content/warnings as real attributes", async () => {
     generateTextMock.mockImplementation(() =>
-      emptyResponse("stop", "Still thinking about whether cats count as pets..."),
+      emptyResponse(
+        "stop",
+        "Still thinking about whether cats count as pets...",
+        [{ type: "tool-error", toolName: "get_pricing" }],
+        [{ type: "unsupported-setting", setting: "tools" }],
+      ),
     );
 
     const result = await runAgentTurn(
@@ -423,9 +498,15 @@ describe("runAgentTurn", () => {
     expect(chatSpan?.attributes["gen_ai.response.reasoning_text"]).toBe(
       "Still thinking about whether cats count as pets...",
     );
+    expect(chatSpan?.attributes["gen_ai.response.content"]).toBe(
+      JSON.stringify([{ type: "tool-error", toolName: "get_pricing" }]),
+    );
+    expect(chatSpan?.attributes["gen_ai.response.warnings"]).toBe(
+      JSON.stringify([{ type: "unsupported-setting", setting: "tools" }]),
+    );
   });
 
-  it("doesn't set the reasoning_text attribute when the final failed attempt captured none", async () => {
+  it("doesn't set the reasoning_text/warnings attributes when the final failed attempt captured none, but always sets content even when empty", async () => {
     generateTextMock.mockImplementation(() => emptyResponse("stop"));
 
     await runAgentTurn(
@@ -435,6 +516,8 @@ describe("runAgentTurn", () => {
 
     const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
     expect(chatSpan?.attributes["gen_ai.response.reasoning_text"]).toBeUndefined();
+    expect(chatSpan?.attributes["gen_ai.response.warnings"]).toBeUndefined();
+    expect(chatSpan?.attributes["gen_ai.response.content"]).toBe("[]");
   });
 
   it("does not retry a content-filter finish, even with attempts remaining", async () => {
