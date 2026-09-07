@@ -73,10 +73,14 @@ export async function runModel(
       );
       // Same signal as the console.warn above, but attached to the span so
       // it's visible in the Axiom/Braintrust trace itself, not just server
-      // logs nobody is watching.
+      // logs nobody is watching. reasoningText: real production instances of
+      // this (finishReason "stop", well under MAX_OUTPUT_TOKENS) show the
+      // model produced SOME tokens despite the empty text/no-tool-calls
+      // result — capturing what those were is the only way to diagnose why.
       span.addEvent("gen_ai.retry", {
         attempt,
         finishReason: result.finishReason,
+        reasoningText: result.reasoningText ?? "(none captured)",
       });
     }
 
@@ -90,6 +94,13 @@ export async function runModel(
     // markSpanFailed's own comment for why this doesn't need to throw to
     // be visible.
     if (result.text.trim() === "" && result.toolCalls.length === 0) {
+      // Set as a real attribute (not just an event) so it's visible without
+      // expanding events in Braintrust's UI — only on this failure path,
+      // never unconditionally, since a reasoning model's reasoningText on a
+      // normal turn can be large and has no diagnostic value there.
+      if (result.reasoningText) {
+        span.setAttribute("gen_ai.response.reasoning_text", result.reasoningText);
+      }
       markSpanFailed(
         span,
         `model returned empty text and no tool calls after ${attempt} attempt(s) (finishReason: ${result.finishReason}, outputTokens: ${result.usage?.outputTokens ?? "unknown"})`,

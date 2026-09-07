@@ -196,13 +196,17 @@ function toolCallResponse(
 }
 
 // A round where the model produced neither text nor a tool call — the
-// degenerate response modelTurn's retry loop exists for.
-function emptyResponse(finishReason: string) {
+// degenerate response modelTurn's retry loop exists for. reasoningText
+// mirrors generateText's real GenerateTextResult shape — real production
+// instances of this show the model burned some tokens on reasoning despite
+// producing no usable text/tool-call.
+function emptyResponse(finishReason: string, reasoningText?: string) {
   return {
     text: "",
     toolCalls: [] as unknown[],
     response: { messages: [] as ModelMessage[] },
     finishReason,
+    reasoningText,
   };
 }
 
@@ -347,7 +351,7 @@ describe("runAgentTurn", () => {
 
   it("retries a model round that returns empty text and no tool calls, using the retry's reply once it succeeds", async () => {
     generateTextMock
-      .mockResolvedValueOnce(emptyResponse("stop"))
+      .mockResolvedValueOnce(emptyResponse("stop", "Let me think about pets..."))
       .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
 
     const result = await runAgentTurn(
@@ -370,13 +374,38 @@ describe("runAgentTurn", () => {
     expect(chatSpan?.events).toContainEqual(
       expect.objectContaining({
         name: "gen_ai.retry",
-        attributes: { attempt: 1, finishReason: "stop" },
+        attributes: {
+          attempt: 1,
+          finishReason: "stop",
+          reasoningText: "Let me think about pets...",
+        },
       }),
     );
   });
 
-  it("gives up after 3 empty attempts, falls back to the generic apology reply, and marks the span failed", async () => {
-    generateTextMock.mockImplementation(() => emptyResponse("stop"));
+  it("falls back to a placeholder retry event value when the empty attempt captured no reasoning text", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(emptyResponse("stop"))
+      .mockResolvedValueOnce(textResponse("Sure, small pets are welcome!"));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-retry-no-reasoning", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.events).toContainEqual(
+      expect.objectContaining({
+        name: "gen_ai.retry",
+        attributes: { attempt: 1, finishReason: "stop", reasoningText: "(none captured)" },
+      }),
+    );
+  });
+
+  it("gives up after 3 empty attempts, falls back to the generic apology reply, marks the span failed, and captures the final attempt's reasoning text as a real attribute", async () => {
+    generateTextMock.mockImplementation(() =>
+      emptyResponse("stop", "Still thinking about whether cats count as pets..."),
+    );
 
     const result = await runAgentTurn(
       { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
@@ -391,6 +420,21 @@ describe("runAgentTurn", () => {
 
     const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
     expect(chatSpan?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(chatSpan?.attributes["gen_ai.response.reasoning_text"]).toBe(
+      "Still thinking about whether cats count as pets...",
+    );
+  });
+
+  it("doesn't set the reasoning_text attribute when the final failed attempt captured none", async () => {
+    generateTextMock.mockImplementation(() => emptyResponse("stop"));
+
+    await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "Can I bring a cat?" },
+      { correlationId: "corr-empty-no-reasoning", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    const chatSpan = spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.chat");
+    expect(chatSpan?.attributes["gen_ai.response.reasoning_text"]).toBeUndefined();
   });
 
   it("does not retry a content-filter finish, even with attempts remaining", async () => {
