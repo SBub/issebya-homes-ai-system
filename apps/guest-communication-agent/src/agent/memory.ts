@@ -60,12 +60,24 @@ export interface AgentMemory {
 const URL_PATTERN = /https?:\/\/\S*[^\s.,!?;:)\]}'"]/g;
 const URL_PLACEHOLDER = "[link]";
 
+// LANDMINE: never redact the most recent rows. The model reads its own
+// history as-is — a redacted prior reply reads as "I already said [link]",
+// and the model then reproduces that literal placeholder in a fresh reply
+// instead of a real URL from that turn's own send_booking_link call
+// (confirmed via real production traces). Redaction only exists to save
+// tokens on messages old enough that exact recall no longer matters, so it
+// must never touch the tail the model is actively working from. 8 covers
+// the shortest real failure chain observed (real-link reply, a follow-up
+// question, its answer, the guest's next booking confirmation — 4 rows)
+// with headroom for a longer exchange before a repeat booking.
+const RECENT_MESSAGES_KEPT_UNREDACTED = 8;
+
 function redactUrls(content: string): string {
   return content.replace(URL_PATTERN, URL_PLACEHOLDER);
 }
 
-function toModelMessage(row: MessageRow): ModelMessage {
-  const content = redactUrls(row.content);
+function toModelMessage(row: MessageRow, redact: boolean): ModelMessage {
+  const content = redact ? redactUrls(row.content) : row.content;
   return row.role === "user" ? { role: "user", content } : { role: "assistant", content };
 }
 
@@ -199,7 +211,12 @@ async function loadMemoryState(
   const watermarkIndex = watermarkId ? rows.findIndex((r) => r.id === watermarkId) : -1;
   const unfoldedRows = watermarkIndex === -1 ? rows : rows.slice(watermarkIndex + 1);
 
-  const mapped = unfoldedRows.map(toModelMessage);
+  // unfoldedRows is oldest-first (loadRecentMessages' own ordering), so the
+  // last RECENT_MESSAGES_KEPT_UNREDACTED rows are the most recent ones —
+  // see that constant's own comment for why those must stay unredacted.
+  const mapped = unfoldedRows.map((row, i) =>
+    toModelMessage(row, unfoldedRows.length - i > RECENT_MESSAGES_KEPT_UNREDACTED),
+  );
   const historyMessages = trimToTokenBudget(mapped);
 
   // trimToTokenBudget only peels off the front (oldest first), so dropped
@@ -330,7 +347,10 @@ export async function foldMemory(params: {
   const { newlyDroppedRows } = await loadMemoryState(conversationId, phone);
   if (newlyDroppedRows.length === 0) return;
 
-  const newlyDroppedMessages = newlyDroppedRows.map(toModelMessage);
+  // Always redacted — these rows are, by definition, old enough to be
+  // dropped from active history and summarized, so the recent-window
+  // exemption above doesn't apply.
+  const newlyDroppedMessages = newlyDroppedRows.map((row) => toModelMessage(row, true));
   const oldestDroppedId = newlyDroppedRows[0].id;
   const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
 
