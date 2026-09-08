@@ -13,7 +13,7 @@ export function InstagramLink() {
         src="/instagram.webp"
         alt="Instagram"
         width={24}
-        height={24}
+        height={18}
         className="hover:opacity-70 transition-opacity"
       />
     </a>
