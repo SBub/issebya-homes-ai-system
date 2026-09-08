@@ -2,22 +2,21 @@ name: GCA Eval Gate
 
 # Separate from ci.yml on purpose: this runs real Braintrust experiments
 # against real model calls (real API spend), on a different trigger/cadence
-# than lint/typecheck/test. Only `develop`/`master`, and only when this
-# app's own files change (see `paths:` below), to avoid spending real API
-# budget on pushes that can't have touched the eval-gated behavior.
+# than lint/typecheck/test. Only when this app's own files change (see
+# `paths:` below), to avoid spending real API budget on pushes that can't
+# have touched the eval-gated behavior.
 #
-# The `pull_request` trigger targeting `master` is what actually gates a
-# develop -> master promotion: it runs the same two score gates
-# (scripts/ci-gate-evals.ts) as a check on the PR itself, before merge, not
-# just after. It still isn't a REQUIRED check that blocks the merge button
-# — that needs a branch protection rule, which needs a GitHub plan upgrade
-# on this private repo (see ENGINEERING.md's "Known limitations" section)
-# — but the pass/fail is visible on the PR before anyone approves it.
+# pull_request-only, deliberately NOT also on push: a repository ruleset
+# requires this check ("eval-gate") to pass before any PR can merge into
+# `master` — that's the only place this suite is actually enforced (the
+# `develop` ruleset only requires ci.yml's `check`). A push trigger here
+# would re-run the identical suite against the identical commit for free:
+# once when it lands on `develop` (push), again when the develop -> master
+# PR opens (pull_request) against that same commit, and a third time when
+# that PR merges (merging into a ref still fires a push event even though
+# direct pushes are blocked). One pull_request run against the promotion
+# PR's head commit is the only one that's ever actually load-bearing.
 on:
-  push:
-    branches: [develop, master]
-    paths:
-      - "apps/guest-communication-agent/**"
   pull_request:
     branches: [master]
     paths:
