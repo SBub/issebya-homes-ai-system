@@ -1,6 +1,6 @@
 import { serve } from "inngest/next";
 import { after } from "next/server";
-import { runGuestTurnFunction } from "@/agent/run-turn";
+import { runGuestTurnFunction } from "@/agent/run-guest-turn";
 import { flushTracing } from "@/instrumentation";
 import { inngest } from "@/lib/inngest";
 

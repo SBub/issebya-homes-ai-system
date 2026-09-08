@@ -178,8 +178,9 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
   });
 
   // Covers the actual trace-anchor threading this route now does: when
-  // consumeMissingInfoTraceAnchor finds a real anchor (run-turn.ts's
-  // runMissingInfo wrote one for this correlationId), the embedding step's
+  // consumeMissingInfoTraceAnchor finds a real anchor (missing-info.ts's
+  // requestMissingInfoApproval wrote one for this correlationId), the
+  // embedding step's
   // span must nest as a real child of it — not start its own disconnected
   // trace root — and carry real input/output attributes.
   describe("gen_ai.embed.missing_info_answer span", () => {
@@ -191,9 +192,9 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
       return span;
     }
 
-    it("nests under the real toolAnchor when consumeMissingInfoTraceAnchor finds one", async () => {
-      const toolAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
-      consumeMissingInfoTraceAnchorMock.mockResolvedValueOnce(toolAnchor);
+    it("nests under the real hitlAnchor when consumeMissingInfoTraceAnchor finds one", async () => {
+      const hitlAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
+      consumeMissingInfoTraceAnchorMock.mockResolvedValueOnce(hitlAnchor);
 
       await POST(makeRequest({ answer: "The AC is above the bed" }), makeParams("corr-abc-123"));
 
@@ -202,7 +203,7 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
       // returned — see this describe block's own comment for why this is
       // the strongest same-harness proof of correct threading available.
       expect(withTurnSpanSpy).toHaveBeenCalledWith(
-        toolAnchor,
+        hitlAnchor,
         "gen_ai.embed.missing_info_answer",
         expect.any(Object),
         expect.any(Function),
@@ -234,8 +235,9 @@ describe("POST /api/owner-nudges/[correlationId]/answer", () => {
     });
 
     // Confirmed against the real, installed @braintrust/otel package (same
-    // BraintrustSpanProcessor/_spanProcessor/filterAISpans setup run-turn.
-    // test.ts's own real-filter block uses), not assumed — this span's name
+    // BraintrustSpanProcessor/_spanProcessor/filterAISpans setup
+    // run-agent-turn.test.ts's own real-filter block uses), not assumed —
+    // this span's name
     // already starts with "gen_ai." (one of @braintrust/otel's own
     // FILTER_PREFIXES), so it should clear the real export filter on that
     // alone, whether nested under a real toolAnchor or not.

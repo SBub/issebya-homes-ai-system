@@ -61,7 +61,7 @@ function makeStepMock() {
   };
 }
 
-// Stand-in for what run-turn.ts's APPROVAL_GATES table would pass for
+// Stand-in for what run-agent-turn.ts's NEEDS_APPROVAL gate would pass for
 // send_booking_link — this file tests the generic mechanism, not any one
 // tool's policy, but needs some concrete values to call it with.
 const gateParamsBase = {
@@ -109,7 +109,7 @@ describe("requestApprovalGate", () => {
 
     const nudgeSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link");
+      .find((span) => span.name === "hitl.send_booking_link.nudge");
     expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
   });
 
@@ -140,7 +140,7 @@ describe("requestApprovalGate", () => {
 
     const decisionSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .find((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
   });
 
@@ -159,7 +159,7 @@ describe("requestApprovalGate", () => {
 
     const decisionSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.decision");
+      .find((span) => span.name === "hitl.send_booking_link.decision");
     expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("rejected");
   });
 
@@ -182,12 +182,12 @@ describe("requestApprovalGate", () => {
 
     const timeoutSpan = spanExporter
       .getFinishedSpans()
-      .find((span) => span.name === "owner_nudge.send_booking_link.no_reply");
+      .find((span) => span.name === "hitl.send_booking_link.no_reply");
     expect(timeoutSpan?.attributes["gca.approval.decision"]).toBe("timeout");
     expect(
       spanExporter
         .getFinishedSpans()
-        .find((span) => span.name === "owner_nudge.send_booking_link.decision"),
+        .find((span) => span.name === "hitl.send_booking_link.decision"),
     ).toBeUndefined();
   });
 
@@ -354,7 +354,7 @@ describe("requestApprovalGate spans pass the real @braintrust/otel export filter
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
     await requestApprovalGate({ ...gateParamsBase, step });
 
-    braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link.decision"));
+    braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.decision"));
 
     expect(captured).toHaveLength(1);
   });
@@ -363,7 +363,7 @@ describe("requestApprovalGate spans pass the real @braintrust/otel export filter
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
     await requestApprovalGate({ ...gateParamsBase, step });
 
-    braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link.decision"));
+    braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.decision"));
 
     expect(captured).toHaveLength(1);
   });
@@ -373,7 +373,7 @@ describe("requestApprovalGate spans pass the real @braintrust/otel export filter
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await requestApprovalGate({ ...gateParamsBase, step });
 
-    braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link.no_reply"));
+    braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.no_reply"));
 
     expect(captured).toHaveLength(1);
   });
@@ -382,7 +382,7 @@ describe("requestApprovalGate spans pass the real @braintrust/otel export filter
     step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
     await requestApprovalGate({ ...gateParamsBase, step });
 
-    braintrustProcessor.onEnd(findSpan("owner_nudge.send_booking_link"));
+    braintrustProcessor.onEnd(findSpan("hitl.send_booking_link.nudge"));
 
     expect(captured).toHaveLength(1);
   });

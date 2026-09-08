@@ -56,12 +56,12 @@ function toolDescription(name: string, t: { description?: string }): string {
   return t.description;
 }
 
-// Read live from the same tool objects run-turn.ts imports and registers in
-// its `tools` ToolSet (see that file's imports and the `tools = {...}`
-// declaration) — the exact text the model sees when deciding whether to
-// call a tool, not a hand-maintained copy of it. wants_human/missing_info
-// keyed in snake_case to match the literal tool names the model sees (same
-// as run-turn.ts's `tools` object).
+// Read live from the same tool objects run-tool.ts registers in its `tools`
+// ToolSet (see that file's imports and the `tools = {...}` declaration) —
+// the exact text the model sees when deciding whether to call a tool, not a
+// hand-maintained copy of it. wants_human/missing_info keyed in snake_case
+// to match the literal tool names the model sees (same as run-tool.ts's
+// `tools` object).
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_pricing: toolDescription("get_pricing", getPricing),
   check_availability: toolDescription("check_availability", checkAvailability),
@@ -73,17 +73,14 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   missing_info: toolDescription("missing_info", missingInfo),
 };
 
-// Tools whose gen_ai.tool.* span isn't guaranteed every time they fire (see
-// SELF_STEPPED_TOOLS in run-turn.ts), so a guest_turn span's `tags` array is
-// gatherToolsCalled's fallback signal for them: send_booking_link only gets
-// one on the approved path (a rejected/timed-out call has no span, only the
-// tag). missing_info and wants_human used to belong here too, but
-// run-turn.ts's runMissingInfo/dispatchWantsHuman now each wrap their final
-// result in a steppedSpan unconditionally — every exit path gets a real
-// gen_ai.tool.missing_info/gen_ai.tool.wants_human span, so their tag is
-// always redundant with a span gatherToolsCalled already found (defensive
-// dedup still applies below regardless).
-const TAG_ONLY_TOOLS = new Set(["send_booking_link"]);
+// The two NEEDS_APPROVAL-gated tools (run-agent-turn.ts): their
+// gen_ai.tool.* execution span only exists on the approved path — a
+// rejected/timed-out/nudge-failed call never executes, so it has no span,
+// only the turn's `tags` array (see missing-info.ts's/booking.ts's own
+// request<ToolName>Approval). gatherToolsCalled falls back to that tag for
+// these two. wants_human is NOT here — it always executes unconditionally
+// (no gate), so its gen_ai.tool.wants_human span is guaranteed every time.
+export const TAG_ONLY_TOOLS = new Set(["send_booking_link", "missing_info"]);
 
 const RUBRIC_PROMPT = `You are evaluating whether the issebya.homes WhatsApp concierge agent (a guest house in Almoçageme, Portugal) called the right tool(s), if any, while handling one guest message.
 
@@ -120,7 +117,7 @@ Respond in exactly this format, nothing else:
 Reasoning: <step-by-step reasoning about the rubric above, written BEFORE you decide — walk through what tool(s), if any, the guest message called for and whether what actually fired matches, then commit to a choice>
 Choice: <A, B, or C>`;
 
-interface ClassifierResult {
+export interface ClassifierResult {
   choice: string;
   score: number;
   reasoning: string;
@@ -134,7 +131,7 @@ interface ClassifierResult {
 // preceding newline) before giving up and returning a mid-scale score with
 // the raw text as reasoning — keeps a malformed response visible instead of
 // throwing and losing the rest of the sample.
-function parseClassifierResponse(text: string): ClassifierResult {
+export function parseClassifierResponse(text: string): ClassifierResult {
   const strict = text.match(/Reasoning:\s*([\s\S]*?)\n\s*Choice:\s*([ABC])/i);
   if (strict) {
     const [, reasoning, choice] = strict;
@@ -167,17 +164,18 @@ interface ToolCallingResult {
   choice: string;
 }
 
-interface ToolCallInfo {
+export interface ToolCallInfo {
   name: string;
   // Present whenever a real gen_ai.tool.* span was found (the 5 non-gated
-  // tools, missing_info/wants_human unconditionally, and an approved
-  // send_booking_link). Undefined only for a rejected/timed-out
-  // send_booking_link, which is tag-only evidence — see TAG_ONLY_TOOLS above.
+  // tools, wants_human unconditionally, and an approved/answered
+  // send_booking_link or missing_info). Undefined only for a
+  // rejected/timed-out call to one of the two gated tools, which is
+  // tag-only evidence — see TAG_ONLY_TOOLS above.
   input?: string;
   output?: string;
 }
 
-function formatToolsCalled(tools: ToolCallInfo[]): string {
+export function formatToolsCalled(tools: ToolCallInfo[]): string {
   if (tools.length === 0) {
     return "(none — no tool was called this turn)";
   }
@@ -212,7 +210,7 @@ async function scoreToolCalling(turn: {
   return { score, rationale: reasoning, choice };
 }
 
-interface BraintrustSpanEvent {
+export interface BraintrustSpanEvent {
   span_id: string;
   root_span_id: string;
   span_attributes?: { name?: string };
@@ -225,9 +223,9 @@ interface BraintrustSpanEvent {
 // Combines a guest_turn span's own tags with its sibling gen_ai.tool.*
 // spans (same root_span_id — see this file's module comment) into one
 // ToolCallInfo list. Tag-derived entries are deduped against span-derived
-// ones defensively, even though SELF_STEPPED_TOOLS/dispatchToolExecution
-// in run-turn.ts never actually emit both for the same tool name.
-function gatherToolsCalled(
+// ones defensively, even though a tool never actually emits both for the
+// same name in practice.
+export function gatherToolsCalled(
   turn: BraintrustSpanEvent,
   allEvents: BraintrustSpanEvent[],
 ): ToolCallInfo[] {
@@ -271,7 +269,7 @@ async function scoreOneTurn(input: string, output: string, trace: Trace | undefi
   const spans = trace ? await trace.getSpans() : [];
   const allEvents = spans.map(adaptSpan);
   // "braintrust.guest_turn.result" (not the "braintrust.guest_turn" marker
-  // itself) is where run-turn.ts's "update-turn-trace-io" step sets real
+  // itself) is where run-guest-turn.ts's "update-turn-trace-io" step sets real
   // input/output/tags as attributes at span-creation time — see that step's
   // own comment for why this is a separate sibling span rather than a patch
   // on the marker.
@@ -301,7 +299,7 @@ project.scorers.create({
   handler: async ({ input, output, trace }) => {
     // Defensive guard, not required by current wiring: the online-scoring
     // automation targets only "braintrust.guest_turn.result" (see
-    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // run-guest-turn.ts's "update-turn-trace-io" step), a single-write span
     // created with real input/output already set, so these should always be
     // real strings. Kept as cheap insurance against a malformed/unexpected
     // row rather than assuming the automation config never changes — skip

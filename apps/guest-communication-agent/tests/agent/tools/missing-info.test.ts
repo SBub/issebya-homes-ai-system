@@ -1,29 +1,49 @@
+import { trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import type { GetStepTools } from "inngest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { inngest } from "@/lib/inngest";
 
-// missing-info.ts is now the pure remainder of the missing_info flow: the
-// tool schema/declaration, the shared event/timeout constants, and both
-// non-step branches of what happens once a nudge is settled. The real
-// suspend/wait (nudge-send step, step.waitForEvent, no-reply-timeout
-// fallback step) moved into run-turn.ts's private runMissingInfo — see
-// run-turn.test.ts's "missing_info" coverage for that behavior now (it can
-// only be exercised indirectly through runAgentTurn, since runMissingInfo
-// isn't exported from run-turn.ts).
+// missing-info.ts holds the full missing_info flow: the tool schema/
+// declaration, the shared event/timeout constants, the real suspend/resume
+// dispatch (requestMissingInfoApproval — this app's run<ToolName>
+// convention, see wants-human.test.ts for the sibling coverage this
+// mirrors), the post-approval execution half (runMissingInfo — a genuine
+// one-shot dispatch, same shape a plain tool's own run<ToolName> has), and
+// both non-step branches of what happens once a nudge is settled — reply
+// arrives (handleMissingInfoReplyReceived) or doesn't
+// (handleMissingInfoNoReply).
 //
-// Mocks every real external boundary this file still touches: Postgres (the
-// documents insert), the embedding call, and inngest.send — there's no more
-// `step` here at all, so no hand-rolled step mock is needed.
-//
-// The insert chain is insert().select("id").single() (see conversations.ts's
-// getOrCreateActiveConversation for the same pattern elsewhere in this app)
-// — handleMissingInfoReplyReceived needs the real inserted row id back so
-// its own caller (the owner-nudges answer route) can attach it as the
-// gen_ai.embed.missing_info_answer span's real output.
+// Same in-memory OTel wiring as wants-human.test.ts/approval-gate.test.ts,
+// so requestMissingInfoApproval's span assertions below inspect a real
+// span's attributes instead of a no-op.
+const spanExporter = new InMemorySpanExporter();
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
+);
+
+// Mocks every real external boundary this file touches: Postgres (the
+// documents insert AND runMissingInfo's own missing_info_trace_anchors
+// insert — see recordMissingInfoTraceAnchor's own best-effort/try-catch
+// doc comment in tracing.ts for why an unhandled table would otherwise only
+// log, not throw, but stubbing it keeps this suite's output clean), the
+// embedding call, inngest.send, telegram-router (the owner nudge send),
+// pending_owner_decisions bookkeeping, and tracing.ts's updateSpanIO (a real
+// fetch() to Braintrust's REST API) — everything else in tracing.ts (like
+// steppedSpan, recordMissingInfoTraceAnchor's own span-side calls) stays
+// real.
 const mockSingle = vi.fn();
 const mockSelect = vi.fn(() => ({ single: mockSingle }));
 const mockDocInsert = vi.fn(() => ({ select: mockSelect }));
+const mockTraceAnchorInsert = vi.fn(() => Promise.resolve({ error: null }));
 
 const mockFrom = vi.fn((table: string) => {
   if (table === "documents") return { insert: mockDocInsert };
+  if (table === "missing_info_trace_anchors") return { insert: mockTraceAnchorInsert };
   throw new Error(`missing-info.test.ts mockFrom: unexpected table "${table}"`);
 });
 
@@ -45,10 +65,50 @@ vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
 }));
 
-const { handleMissingInfoNoReply, handleMissingInfoReplyReceived, OWNER_NUDGE_ANSWERED_EVENT } =
-  await import("@/agent/tools/missing-info.js");
+const sendOwnerNudgeMock = vi.fn();
+vi.mock("@/lib/telegram-router.js", () => ({
+  sendOwnerNudge: sendOwnerNudgeMock,
+}));
+
+const insertPendingOwnerDecisionMock = vi.fn();
+const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
+vi.mock("@/lib/pending-owner-decisions.js", () => ({
+  insertPendingOwnerDecision: insertPendingOwnerDecisionMock,
+  resolvePendingOwnerDecisionByCorrelationId: resolvePendingOwnerDecisionByCorrelationIdMock,
+}));
+
+const updateSpanIOMock = vi.fn();
+vi.mock("@/lib/tracing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
+  return { ...actual, updateSpanIO: updateSpanIOMock };
+});
+
+const {
+  handleMissingInfoNoReply,
+  handleMissingInfoReplyReceived,
+  OWNER_NUDGE_ANSWERED_EVENT,
+  requestMissingInfoApproval,
+  runMissingInfo,
+} = await import("@/agent/tools/missing-info.js");
 
 const MISSING_INFO_REPLY_TIMEOUT = "24h";
+const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
+type StepTools = GetStepTools<typeof inngest>;
+
+// Only `run`/`waitForEvent` are exercised by real code here — see
+// approval-gate.test.ts's own makeStepMock comment for why the rest of the
+// real StepTools surface is cast away rather than stubbed out. Shared by
+// every describe block below that drives requestMissingInfoApproval.
+function makeStepMock() {
+  return {
+    run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    waitForEvent: vi.fn(),
+  } as unknown as StepTools & {
+    run: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+  };
+}
 
 describe("handleMissingInfoNoReply", () => {
   afterEach(() => {
@@ -134,5 +194,157 @@ describe("handleMissingInfoReplyReceived", () => {
         answer: "The AC is above the bed",
       }),
     ).rejects.toThrow("connection reset");
+  });
+});
+
+describe("requestMissingInfoApproval / runMissingInfo", () => {
+  // The two halves of missing_info's dispatch — see missing-info.ts's own
+  // comment on the split. Covers the HitlDecision shape directly; the
+  // span/step-order assertions for the full approve-then-execute sequence
+  // (as run-tool.ts's runTool + run-agent-turn.ts's loop actually drive it)
+  // live in tests/agent/run-agent-turn.test.ts, not duplicated here.
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spanExporter.reset();
+    step = makeStepMock();
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
+    insertPendingOwnerDecisionMock.mockResolvedValue(undefined);
+    resolvePendingOwnerDecisionByCorrelationIdMock.mockResolvedValue(undefined);
+    mockTraceAnchorInsert.mockResolvedValue({ error: null });
+  });
+
+  it("resolves approved: true with the owner's answer as payload when it arrives in time", async () => {
+    step.waitForEvent.mockResolvedValueOnce({
+      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
+    });
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(true);
+    expect(decision.payload).toBe("The AC is above the bed");
+    expect(decision.hitlSpanId).toEqual(expect.any(String));
+    expect(decision.notApprovedOutput).toBeUndefined();
+  });
+
+  it("resolves approved: false with the honest not-reached fallback when the nudge fails to send", async () => {
+    sendOwnerNudgeMock.mockResolvedValue({ ok: false, error: "telegram-router down" });
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(false);
+    expect(decision.payload).toBeUndefined();
+    expect(decision.notApprovedOutput).toEqual({
+      escalated: true,
+      message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+    });
+  });
+
+  it("resolves approved: false with the owner-notified fallback (not the not-reached one) on a timeout", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
+
+    const decision = await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(decision.approved).toBe(false);
+    expect(decision.notApprovedOutput).toEqual({
+      escalated: true,
+      message: "The owner has been notified and will be in touch shortly.",
+    });
+  });
+
+  it("creates the hitl.missing_info gate span first, as the nudge/answer-received spans' real parent — no gen_ai.tool.missing_info span exists on this path", async () => {
+    step.waitForEvent.mockResolvedValueOnce({
+      data: { correlationId: "corr-1", answer: "The AC is above the bed" },
+    });
+
+    await requestMissingInfoApproval(
+      { reason: "Where is the AC unit?" },
+      {
+        conversationId: "convo-1",
+        phone: "+3519",
+        correlationId: "corr-1",
+        traceAnchor: TEST_TRACE_ANCHOR,
+        step,
+      },
+    );
+
+    expect(step.run.mock.calls.map((c) => c[0])[0]).toBe("hitl-missing_info");
+    const hitlSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.missing_info");
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(
+      JSON.stringify({ reason: "Where is the AC unit?" }),
+    );
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "hitl.missing_info.nudge"),
+    ).toBeDefined();
+    expect(
+      spanExporter
+        .getFinishedSpans()
+        .find((span) => span.name === "hitl.missing_info.answer_received"),
+    ).toBeDefined();
+    // The real execution span only gets created by runMissingInfo, once
+    // run-tool.ts's runTool is actually called with the approved decision —
+    // requestMissingInfoApproval on its own never creates one.
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.missing_info"),
+    ).toBeUndefined();
+  });
+
+  it("runMissingInfo embeds the approval's payload into its result — args unused, only the answer matters", async () => {
+    await expect(
+      runMissingInfo(
+        { reason: "Where is the AC unit?" },
+        { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
+        "The AC is above the bed",
+      ),
+    ).resolves.toEqual({
+      escalated: true,
+      answer: "The AC is above the bed",
+    });
+  });
+
+  it("runMissingInfo creates its own fresh gen_ai.tool.missing_info execution span with real output known at creation, no updateSpanIO patch", async () => {
+    const result = await runMissingInfo(
+      { reason: "Where is the AC unit?" },
+      { conversationId: "convo-1", phone: "+3519", traceAnchor: TEST_TRACE_ANCHOR, step },
+      "The AC is above the bed",
+    );
+
+    const execSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.missing_info");
+    expect(execSpan).toBeDefined();
+    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("missing_info");
+    expect(execSpan?.attributes["gca.tool.output"]).toBe(JSON.stringify(result));
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
   });
 });

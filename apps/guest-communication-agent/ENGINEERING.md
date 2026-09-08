@@ -24,7 +24,7 @@ no agent work and returns fast. A background Inngest function then runs the actu
 agent turn: load conversation context → model call → zero or more tool calls → final
 reply → send via Twilio.
 
-The agent loop itself (`src/agent/run-turn.ts`) is a plain async tool-calling loop, not
+The agent loop itself (`src/agent/run-agent-turn.ts`) is a plain async tool-calling loop, not
 a graph or state machine.
 
 ### Tools
@@ -317,6 +317,13 @@ tradeoff is explicit rather than accidental.
 
 ## 10. Known limitations / in progress
 
+- **No branch protection on `develop`/`master`**: the repo is private on a GitHub plan
+  that doesn't support classic branch protection or rulesets (`gh api
+.../branches/master/protection` returns a 403 asking for a Pro upgrade or a public
+  repo). The eval gate (`.github/workflows/eval-golden.yml`) now runs as a
+  `pull_request` check against `master`, so a failing gate is visible on the PR before
+  merge, but nothing currently stops a direct push or a merge with a red check — that
+  needs the plan upgrade, not more code.
 - **`missing_info` no-reply timeout**: currently just logs rather than re-nudging the
   owner. Acceptable for a low-volume single-property agent, would need a retry/
   escalation policy at higher volume.

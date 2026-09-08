@@ -37,13 +37,13 @@ vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
 }));
 
-// run-turn.ts pulls in generateText/braintrust/openrouter — heavy,
-// unrelated dependencies this route doesn't need. Mocked wholesale (down to
-// a single marker constant), matching how the DBOS-era version of this test
-// mocked runGuestTurnWorkflow as a plain marker value rather than importing
-// the real module.
+// run-guest-turn.ts transitively pulls in run-agent-turn.ts's
+// generateText/braintrust/openrouter deps — heavy, unrelated to this route.
+// Mocked wholesale (down to a single marker constant), matching how the
+// DBOS-era version of this test mocked runGuestTurnWorkflow as a plain
+// marker value rather than importing the real module.
 const GUEST_TURN_REQUESTED_EVENT = "gca/guest-turn.requested";
-vi.mock("@/agent/run-turn.js", () => ({
+vi.mock("@/agent/run-guest-turn.js", () => ({
   GUEST_TURN_REQUESTED_EVENT,
 }));
 

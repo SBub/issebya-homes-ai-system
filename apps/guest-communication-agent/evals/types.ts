@@ -24,13 +24,9 @@ export interface SingleTurnResult {
   text: string;
 }
 
-// Mirrors docs/braintrust-online-eval-testing.md section 19's
-// SendBookingLinkGoldenRow["expected"] shape (also
-// scripts/push-golden-dataset.ts's SendBookingLinkGoldenRow interface) —
-// this dataset's real `expected` field, one to one. Pure oracle data only —
+// This dataset's real `expected` field, one to one. Pure oracle data only —
 // no prose; the row's human-readable summary lives in dataset metadata's
-// `description` instead (set by push-golden-dataset.ts, not part of
-// `expected`).
+// `description` instead, not part of `expected`.
 export interface ExpectedShape {
   toolCall: { name: string; args?: Record<string, unknown> } | null;
   expectedAlternative: string | null;

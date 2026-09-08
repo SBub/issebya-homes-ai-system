@@ -9,19 +9,18 @@
  * is an OFFLINE eval, run locally/in CI against the dataset, not wired into
  * Braintrust's online-scoring automation at all.
  *
- * There is exactly ONE golden dataset and this is the SOLE eval file for it
- * — one dataset, one push script (scripts/push-golden-dataset.ts), one eval
- * file. This dataset's 29 rows cover all four tool-selection decisions
- * (send_booking_link, get_pricing, missing_info, answer_property_question),
- * namespaced by id prefix (`booking-`, `pricing-`, `missing-info-`,
- * `property-question-` — see push-golden-dataset.ts for the full scheme).
+ * There is exactly ONE golden dataset and this is the SOLE eval file for it.
+ * Rows cover all four tool-selection decisions (send_booking_link,
+ * get_pricing, missing_info, answer_property_question), namespaced by id
+ * prefix (`booking-`, `pricing-`, `missing-info-`, `property-question-`).
  * An earlier version of this setup also kept four standalone per-segment
- * datasets and per-segment eval/push-script files alongside this merged
- * one — a confusing double-tracking pattern that's gone now: the standalone
- * datasets were deleted, and their push scripts/eval files were deleted or
- * consolidated into this one file and push-golden-dataset.ts. Any new
- * segment's rows go directly into push-golden-dataset.ts's row arrays with
- * a new namespace prefix, not a new standalone dataset/script/eval file.
+ * datasets and per-segment eval files alongside this merged one — a
+ * confusing double-tracking pattern that's gone now: the standalone
+ * datasets were deleted, and their eval files were deleted or consolidated
+ * into this one file. There is no push script — rows are added directly to
+ * the live Braintrust Dataset (UI, or the Braintrust MCP's
+ * edit_dataset_rows). Any new segment's rows go there with a new namespace
+ * prefix, not a new standalone dataset/eval file.
  *
  * The dataset itself is the sole source of truth for these rows — there is
  * deliberately no local JSON mirror under evals/data/ (unlike the
