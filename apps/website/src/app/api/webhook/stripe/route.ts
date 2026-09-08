@@ -1,4 +1,5 @@
 import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "@sentry/nextjs";
+import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { sendBookingConfirmationEmail, sendBookingNotificationEmail } from "@/lib/resend";
@@ -188,6 +189,14 @@ export async function POST(request: NextRequest) {
         );
 
         if (booking) {
+          // The just-confirmed booking's dates are no longer available —
+          // invalidate the cached availability so the next read reflects
+          // this booking instead of serving the stale pre-confirmation
+          // snapshot (up to `cacheLife("hours")` old otherwise). Mirrors
+          // the same call in booking/[type]/actions.ts's dates-unavailable
+          // path.
+          revalidateTag(`availability-${roomType}`, { expire: 0 });
+
           const origin = new URL(request.url).origin;
           const bookingEmailData = {
             stripe_session_id: session.id,

@@ -4209,24 +4209,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/query-core@npm:5.101.4":
-  version: 5.101.4
-  resolution: "@tanstack/query-core@npm:5.101.4"
-  checksum: 10c0/a407960303431e6498c6518cf6f8cc7283d3e4a95dbdc5e9fa42c217b9dd7afaffb82a4f2d36b38f578f745e8cf69ff8551abb947f5abcc0a290f3e3e75dc654
-  languageName: node
-  linkType: hard
-
-"@tanstack/react-query@npm:^5.81.2":
-  version: 5.101.4
-  resolution: "@tanstack/react-query@npm:5.101.4"
-  dependencies:
-    "@tanstack/query-core": "npm:5.101.4"
-  peerDependencies:
-    react: ^18 || ^19
-  checksum: 10c0/92e7c5b44740e753b05a6a19c166ea1a000df64c1bf5edb315d08a5b555a9f16a9d35288ac38f650bd38fc3015b135c392749fd6db24d09db42bfaf758d119fa
-  languageName: node
-  linkType: hard
-
 "@traceloop/ai-semantic-conventions@npm:0.20.0":
   version: 0.20.0
   resolution: "@traceloop/ai-semantic-conventions@npm:0.20.0"
@@ -11903,12 +11885,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "website@workspace:apps/website"
   dependencies:
+    "@mswjs/interceptors": "npm:^0.41.3"
     "@playwright/test": "npm:^1.58.2"
     "@sentry/nextjs": "npm:^10"
     "@supabase/supabase-js": "npm:^2.49.8"
     "@tailwindcss/postcss": "npm:^4"
     "@tailwindcss/vite": "npm:^4.1.18"
-    "@tanstack/react-query": "npm:^5.81.2"
     "@types/node": "npm:^20"
     "@types/react": "npm:^19"
     "@types/react-dom": "npm:^19"

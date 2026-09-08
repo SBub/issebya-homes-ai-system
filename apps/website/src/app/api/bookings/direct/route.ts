@@ -1,4 +1,5 @@
 import { addBreadcrumb, setTag, startSpan } from "@sentry/nextjs";
+import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
@@ -6,9 +7,9 @@ import { stripe } from "@/lib/stripe";
 
 // bookings no longer stores email directly (see
 // 20260821160000_link_bookings_to_guest_contacts.sql) — it's joined through
-// guest_contact_id and flattened back onto a top-level `email` key so
-// BookingConfirmationDetails.tsx's existing `booking.email` usage keeps
-// working unchanged.
+// guest_contact_id and flattened back onto a top-level `email` key so the
+// booking confirmation page's (page.tsx) existing `booking.email` usage
+// keeps working unchanged.
 type EmbeddedGuestContact =
   { email: string | null } | { email: string | null }[] | null | undefined;
 
@@ -101,6 +102,14 @@ export async function GET(request: NextRequest) {
                       error: "Failed to confirm booking",
                     };
                   }
+
+                  // Webhook-driven invalidation (api/webhook/stripe/route.ts)
+                  // never runs on this recovery path, so the cached
+                  // availability snapshot would otherwise stay stale until
+                  // it expires on its own (cacheLife("hours")) — invalidate
+                  // it here too, same tag/shape as the webhook and the
+                  // dates_unavailable path in booking/[type]/actions.ts.
+                  revalidateTag(`availability-${booking.room_type}`, { expire: 0 });
 
                   addBreadcrumb({
                     category: "booking",

@@ -80,6 +80,9 @@ export default function Gallery({ images, roomType }: Props) {
           alt={images[imageIndex].label}
           fill
           className="object-contain"
+          preload
+          loading="eager"
+          sizes="(min-width: 768px) 50vw, 100vw"
         />
       </div>
       <div className="text-center font-hand text-lg break-words my-2 md:my-4 px-4">
@@ -95,7 +98,13 @@ export default function Gallery({ images, roomType }: Props) {
               index === imageIndex ? "opacity-100" : "opacity-40 hover:opacity-70"
             }`}
           >
-            <Image src={image.src} alt={image.label} fill className="object-cover" />
+            <Image
+              src={image.src}
+              alt={image.label}
+              fill
+              className="object-cover"
+              sizes="(min-width: 768px) 64px, 48px"
+            />
           </button>
         ))}
       </div>
