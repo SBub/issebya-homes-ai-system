@@ -1,4 +1,5 @@
 import { addBreadcrumb, setTag, startSpan } from "@sentry/nextjs";
+import { revalidateTag } from "next/cache";
 import { type NextRequest, NextResponse } from "next/server";
 import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
@@ -101,6 +102,14 @@ export async function GET(request: NextRequest) {
                       error: "Failed to confirm booking",
                     };
                   }
+
+                  // Webhook-driven invalidation (api/webhook/stripe/route.ts)
+                  // never runs on this recovery path, so the cached
+                  // availability snapshot would otherwise stay stale until
+                  // it expires on its own (cacheLife("hours")) — invalidate
+                  // it here too, same tag/shape as the webhook and the
+                  // dates_unavailable path in booking/[type]/actions.ts.
+                  revalidateTag(`availability-${booking.room_type}`, { expire: 0 });
 
                   addBreadcrumb({
                     category: "booking",
