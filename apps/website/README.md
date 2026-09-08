@@ -90,6 +90,6 @@ cp .env.example .env.development
 
 ## Stack
 
-Next.js 16, React 19, TypeScript, Tailwind CSS 4, Stripe, Supabase (PostgreSQL), Resend, React Query, date-fns, ical.js, Zod, Sentry.
+Next.js 16, React 19, TypeScript, Tailwind CSS 4, Stripe, Supabase (PostgreSQL), Resend, date-fns, ical.js, Zod, Sentry, PostHog.
 
 See `ENGINEERING.md` for the project structure (directory layout, what lives where).

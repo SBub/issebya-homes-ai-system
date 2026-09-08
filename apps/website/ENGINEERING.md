@@ -2,26 +2,7 @@
 
 Guest-facing booking site for issebya.homes. Two rooms, private event space, Stripe checkout, iCal availability sync. Deployed on Vercel.
 
-## Rendering strategy
-
-| Page                   | Strategy                                                     | Why                                                     |
-| ---------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
-| Room listing / booking | Partial Prerender (PPR): static shell + dynamic availability | SEO for room content, real-time availability streams in |
-| Booking confirmation   | Server component, server-side fetch                          | No client JS needed, booking data fetched securely      |
-| Guest info             | Static (SSG)                                                 | Pure content, no dynamic data                           |
-| Contact                | Static (SSG)                                                 | Just a WhatsApp link                                    |
-| API routes             | Server-only                                                  | Stripe, Supabase, email (never reach the client)        |
-
-## Caching
-
-| Layer                              | Strategy                                             | TTL                                    |
-| ---------------------------------- | ---------------------------------------------------- | -------------------------------------- |
-| Booking pages (PPR static shell)   | Build-time prerender (room content, layout)          | Indefinite (redeployed on code change) |
-| `/api/availability`                | In-memory `Map` per room (server-side, per instance) | 1 hour; bypass with `?fresh=true`      |
-| Static pages (guest-info, contact) | Full SSG (no runtime cache needed)                   | Build time                             |
-| All other API routes               | No cache (always fresh)                              | n/a                                    |
-
-No `unstable_cache`, no `revalidate` headers in use. Availability is the only route with explicit caching logic (`src/app/api/availability/route.ts`).
+See `README.md` for the rendering strategy and caching reference tables.
 
 ## Project structure
 
@@ -29,25 +10,34 @@ No `unstable_cache`, no `revalidate` headers in use. Availability is the only ro
 src/
 ├── app/
 │   ├── (main)/             # Guest-facing pages
-│   │   ├── booking/        # Room booking flow + confirmation
+│   │   ├── booking/        # Room booking flow + confirmation (checkout is a
+│   │   │                   # Server Action here, actions.ts, not an API route)
 │   │   ├── contact/        # WhatsApp contact
-│   │   └── guest-info/     # Arrival, parking, house rules, local tips
+│   │   ├── guest-info/     # Arrival, parking, house rules, local tips
+│   │   ├── privacy-policy/
+│   │   ├── terms-and-conditions/
+│   │   └── not-found/
 │   ├── api/                # API routes
-│   │   ├── checkout/       # Stripe checkout session creation
-│   │   ├── availability/   # iCal feed aggregation + own bookings
+│   │   ├── availability/   # iCal feed aggregation + own bookings (also called
+│   │   │                   # cross-repo by the guest communication agent)
 │   │   ├── bookings/       # Direct booking lookup and creation
 │   │   ├── webhook/        # Stripe webhook handler
-│   │   └── ical/           # iCal feed export
+│   │   ├── ical/           # iCal feed export
+│   │   └── e2e-ical-mock/  # Mock iCal feed for E2E tests
+│   ├── checkin/            # Static, noindex per-guest check-in instructions
+│   │                       # (room1/hendrik, room2/{didi,fernando}), shared
+│   │                       # CheckinTemplate
 │   ├── emails/             # React Email templates
 │   └── ui/                 # Shared UI components (Header, Footer, Tabs, ReviewSlider)
 ├── lib/                    # Utilities (pricing, dates, ical, stripe, analytics, sentry)
+│   └── shared/             # Schemas/types shared with other consumers
 ├── data/                   # Static data (Airbnb reviews)
 └── utils/                  # Helpers (image lists)
 public/                     # Static assets (room images, dev iCal files)
 e2e/                        # Playwright integration tests
 app_docs/                   # Internal guides, read before coding (see below)
 specs/                      # Feature implementation specifications
-scripts/                    # Dev utility scripts (start.py)
+scripts/                    # Dev utility scripts (start.ts)
 ```
 
 ## Testing
@@ -71,18 +61,20 @@ yarn test:integration # Playwright E2E
 Local: `apps/website/.env.development` (gitignored), copy from `.env.example`.
 Production: Vercel dashboard. Build-time vars must be listed in root `turbo.json` under `env`; runtime-only vars under `passThroughEnv`.
 
-| Variable                        | Type       | Description                                                                |
-| ------------------------------- | ---------- | -------------------------------------------------------------------------- |
-| `SUPABASE_URL`                  | runtime    | Supabase project URL                                                       |
-| `SUPABASE_ANON_KEY`             | runtime    | Guest-facing DB queries (RLS-scoped)                                       |
-| `SUPABASE_SERVICE_ROLE_KEY`     | runtime    | Server-side admin DB access                                                |
-| `STRIPE_SECRET_KEY`             | runtime    | Checkout session creation                                                  |
-| `STRIPE_WEBHOOK_SECRET`         | runtime    | Webhook signature verification                                             |
-| `RESEND_API_KEY`                | runtime    | Transactional emails                                                       |
-| `RESEND_FROM_EMAIL`             | runtime    | Sender address                                                             |
-| `ADMIN_NOTIFICATION_EMAIL`      | runtime    | Booking alert recipient                                                    |
-| `ROOM1_ICAL_*` / `ROOM2_ICAL_*` | runtime    | iCal feed URLs (Airbnb, VRBO, Booking.com)                                 |
-| `SENTRY_AUTH_TOKEN`             | build-time | Source map upload at build time (must be in root `turbo.json` build `env`) |
+| Variable                            | Type       | Description                                                                |
+| ----------------------------------- | ---------- | -------------------------------------------------------------------------- |
+| `SUPABASE_URL`                      | runtime    | Supabase project URL                                                       |
+| `SUPABASE_ANON_KEY`                 | runtime    | Guest-facing DB queries (RLS-scoped)                                       |
+| `SUPABASE_SERVICE_ROLE_KEY`         | runtime    | Server-side admin DB access                                                |
+| `STRIPE_SECRET_KEY`                 | runtime    | Checkout session creation                                                  |
+| `STRIPE_WEBHOOK_SECRET`             | runtime    | Webhook signature verification                                             |
+| `RESEND_API_KEY`                    | runtime    | Transactional emails                                                       |
+| `RESEND_FROM_EMAIL`                 | runtime    | Sender address                                                             |
+| `ADMIN_NOTIFICATION_EMAIL`          | runtime    | Booking alert recipient                                                    |
+| `ROOM1_ICAL_*` / `ROOM2_ICAL_*`     | runtime    | iCal feed URLs (Airbnb, VRBO, Booking.com)                                 |
+| `SENTRY_AUTH_TOKEN`                 | build-time | Source map upload at build time (must be in root `turbo.json` build `env`) |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | build-time | PostHog analytics project token                                            |
+| `NEXT_PUBLIC_POSTHOG_HOST`          | build-time | PostHog ingestion host                                                     |
 
 ## Deploy
 
