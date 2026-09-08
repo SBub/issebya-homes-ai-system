@@ -11,6 +11,22 @@ import { fileURLToPath } from "node:url";
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO_ROOT = path.dirname(path.dirname(PROJECT_ROOT));
 
+/**
+ * Load apps/website/.env.development into this process's own `process.env`.
+ *
+ * `next dev` loads `.env.development` itself, but that only applies inside
+ * the Next.js child process — it never reaches this orchestrator script or
+ * its other children. The Stripe webhook listener (`yarn webhook`, spawned
+ * below) needs `STRIPE_SECRET_KEY` from that file so it can pin `stripe
+ * listen` to the right Stripe account via `--api-key`. Loading it here means
+ * it's inherited by every child process spawned after this point, per
+ * default Node `child_process` behavior.
+ */
+function loadDevEnv(): void {
+  const envPath = path.join(PROJECT_ROOT, ".env.development");
+  if (existsSync(envPath)) process.loadEnvFile(envPath);
+}
+
 const pids: number[] = [];
 let shuttingDown = false;
 
@@ -83,6 +99,8 @@ function cleanup(): void {
 function main(): void {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
+
+  loadDevEnv();
 
   if (!existsSync(path.join(REPO_ROOT, "supabase", "config.toml"))) {
     console.error(
