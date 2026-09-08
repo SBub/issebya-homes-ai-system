@@ -1,150 +1,142 @@
-# Client-Side Data Fetching Guide
+# Data Fetching Guide
 
-This guide covers patterns for fetching data in client components.
-
----
-
-## Prefer React Query over useState + useEffect
-
-For client-side data fetching, use React Query (TanStack Query) instead of manual useState + useEffect patterns.
-
-### Why?
-
-- Built-in caching, deduplication, and background refetching
-- Automatic loading/error states
-- Easy cache invalidation
-- No stale closure bugs from effect dependencies
-- Optimistic updates support
+This guide covers how data is fetched and mutated in this app: Server Components read data, Server Actions write it. There is no client-side data-fetching library (no React Query, no SWR) anywhere in this codebase.
 
 ---
 
-## Avoid: Manual useState + useEffect
+## Fetch data in Server Components, not client components
+
+Reads happen in an async Server Component that calls a cached helper directly. There is no client-side loading state to manage because the data is already resolved by the time the component renders.
+
+### Example: `BookingEngine`
 
 ```tsx
-// Don't do this
-function useBookingDates({ roomType }) {
-  const [data, setData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+// src/app/(main)/booking/[type]/ui/BookingEngine.tsx
 
-  useEffect(() => {
-    fetch(`/api/availability?room=${roomType}`)
-      .then((res) => res.json())
-      .then(setData)
-      .catch(setError)
-      .finally(() => setIsLoading(false));
-  }, [roomType]);
+import { getAvailability } from "@/lib/availability";
+import { mergeDateRanges } from "@/lib/date-utils";
+import { BookingClient } from "./BookingClient";
+import { BookingPricing } from "./BookingPricing";
 
-  return { data, isLoading, error };
+// Server Component (getAvailability is "use cache"-tagged, cacheLife("hours")),
+// so calling it here is a cached function call, not an uncached runtime read.
+export async function BookingEngine({ roomType }: BookingEngineProps) {
+  const { bookings, firstAvailable, error } = await getAvailability(roomType);
+  const blockedDates = mergeDateRanges(bookings);
+
+  return (
+    <BookingClient
+      roomType={roomType}
+      blockedDates={blockedDates}
+      defaultCheckIn={firstAvailable?.start ?? null}
+      defaultCheckOut={firstAvailable?.end ?? null}
+      error={error ?? null}
+      pricing={<BookingPricing />}
+    />
+  );
 }
 ```
 
-Problems with this approach:
+The `getAvailability` helper itself declares its own cache scope with `"use cache"`, `cacheLife(...)`, and `cacheTag(...)` (in `src/lib/availability.ts`). A mutation that invalidates the read later calls `revalidateTag` with the same tag; see `actions.ts` below.
 
-- Manual state management is error-prone
-- No caching - fetches on every mount
-- No automatic refetching when data goes stale
-- Race conditions if roomType changes quickly
+The caller (`src/app/(main)/booking/[type]/page.tsx`) wraps this Server Component in `<Suspense>` and an `<ErrorBoundary>` so a slow or failing read degrades gracefully without blocking the rest of the page.
+
+### Why this instead of a client-side query library?
+
+- No client bundle cost for fetching or caching logic
+- No loading/error state to wire up in the component. By the time it renders, the data is there
+- Caching is handled once, at the source (the helper), instead of per-consumer
+- No request waterfalls from the client re-fetching after hydration
 
 ---
 
-## Prefer: React Query
+## Mutations go through Server Actions
+
+Writes (creating a booking, starting a Stripe checkout) are `"use server"` functions, not client-side `fetch` calls to a route handler.
+
+### Example: `submitBooking`
 
 ```tsx
-// Do this
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+// src/app/(main)/booking/[type]/actions.ts
+"use server";
 
-export function useAvailabilityQuery(roomType: "room1" | "room2") {
-  const queryClient = useQueryClient();
-
-  const query = useQuery({
-    queryKey: ["availability", roomType],
-    queryFn: async () => {
-      const response = await fetch(`/api/availability?room=${roomType}`);
-      if (!response.ok) throw new Error("Failed to fetch");
-      return response.json();
-    },
-  });
-
-  return {
-    data: query.data,
-    isLoading: query.isLoading,
-    error: query.error?.message ?? null,
-  };
+export async function submitBooking(
+  roomType: "room1" | "room2",
+  checkInDate: Date | null,
+  checkOutDate: Date | null,
+  source: "direct" | "gca",
+  prevState: BookingFormState,
+  formData: FormData,
+): Promise<BookingFormState> {
+  // validates input, checks availability, upserts the guest contact,
+  // creates the Stripe Checkout Session, inserts a pending booking row
+  // ...
 }
 ```
 
----
+On a stale-availability conflict, the action calls `revalidateTag(\`availability-${roomType}\`, { expire: 0 })` and re-reads `getAvailability` itself, returning the fresh `blockedDates` in its result so the client can update without a separate round trip.
 
-## Setup: Providers at Feature Level
+### Wiring a Server Action to a form
 
-When using React Query, add the provider at the **feature layout level**, not app root. This keeps the dependency scoped to features that need it.
-
-### Create providers.tsx in your feature folder
+The client component that owns the form calls the Server Action through `useActionState`, not a mutation hook:
 
 ```tsx
-// src/app/(main)/booking/providers.tsx
+// src/app/(main)/booking/[type]/ui/BookingEngineExpanded.tsx
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, ReactNode } from "react";
+import { useActionState } from "react";
+import { submitBooking } from "../actions";
 
-export function Providers({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 5 * 60 * 1000, // 5 minutes
-            gcTime: 30 * 60 * 1000, // 30 minutes (formerly cacheTime)
-          },
-        },
-      }),
-  );
+const runSubmitBooking = async (prevState: BookingFormState, formData: FormData) => {
+  const result = await submitBooking(roomType, checkInDate, checkOutDate, source, prevState, formData);
+  // client-only follow-up: update local availability state, fire analytics,
+  // redirect to the returned Stripe URL
+  return result;
+};
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-}
+const [state, formAction, isPending] = useActionState(runSubmitBooking, initialState);
 ```
 
-### Wrap in your feature layout
-
-```tsx
-// src/app/(main)/booking/layout.tsx
-import { Providers } from "./providers";
-
-export default function BookingLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <Providers>
-      <div className="booking-wrapper">{children}</div>
-    </Providers>
-  );
-}
-```
+`<form action={formAction}>` is the only submission path (no `onSubmit` handler calling `fetch`). See `app_docs/client-form-guide.md` for the general `useActionState` form-handling conventions.
 
 ---
 
-## Updating Query Data Locally
+## Passing Server Component output into Client Components
 
-Use `queryClient.setQueryData` to update cached data without refetching:
+A Client Component can receive the *result* of a Server Component as a prop (the "interleaving" pattern), instead of fetching that data itself:
 
 ```tsx
-const setCheckIn = useCallback(
-  (checkIn: Date | null) => {
-    queryClient.setQueryData(["availability", roomType], (old) =>
-      old ? { ...old, checkInDate: checkIn } : old,
-    );
-  },
-  [queryClient, roomType],
-);
+// BookingEngine (Server Component) renders BookingPricing (Server Component)
+// and hands it to BookingClient (Client Component) as a `pricing` prop.
+<BookingClient
+  roomType={roomType}
+  blockedDates={blockedDates}
+  pricing={<BookingPricing />}
+  // ...
+/>
 ```
+
+`BookingPricing` still renders server-side and is passed down as already-resolved `ReactNode` output. It never joins the client bundle, and `BookingClient` never has to fetch or know how to render it.
+
+---
+
+## Client components hold UI state only, no data fetching
+
+`BookingClient` and `BookingEngineExpanded` are `"use client"` components, but they never fetch data. All server-sourced data (`blockedDates`, `defaultCheckIn`, `defaultCheckOut`, `error`, `pricing`) arrives as props from the Server Component above them. The `useState`/`useCallback` inside these components is for interaction state only: which dates are currently selected, whether the calendar is expanded, the pending/submitting state of the form.
+
+There is no `useEffect` fetching on mount, and no client-side cache to invalidate: when a Server Action returns fresh `blockedDates` (e.g. after a `dates_unavailable` conflict), the client component just calls `setBlockedDates` directly with the value the action already returned.
+
+If a future feature genuinely needs to fetch on the client (something outside a Server Component's render, e.g. in response to a user event with no matching Server Action), reach for a plain `fetch` inside an event handler first. Don't reintroduce a client-side query library for it without a concrete reason: as of this writing, nothing in this app needs one, and `react-query`/`@tanstack/react-query` is not a dependency.
 
 ---
 
 ## Summary
 
-| Pattern                 | Use When                                |
-| ----------------------- | --------------------------------------- |
-| React Query             | Client components that fetch data       |
-| useState + useEffect    | Only for non-data-fetching side effects |
-| Feature-level providers | Scoping React Query to specific routes  |
-| setQueryData            | Updating cache without refetch          |
+| Pattern                                | Use When                                                          |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| Async Server Component + cached helper  | Reading data for a page or a component's initial render            |
+| `"use cache"` / `cacheLife` / `cacheTag` on the helper | Scoping and invalidating a cached read                |
+| Server Action (`"use server"`)          | Any mutation (creating a booking, checkout, DB writes)              |
+| `useActionState` + `<form action={...}>` | Wiring a Server Action to a form from a client component           |
+| Passing Server Component output as a prop | Rendering server-only content inside a client component's tree   |
+| `useState` in a client component        | UI/interaction state only (selection, expanded/collapsed, pending) |
