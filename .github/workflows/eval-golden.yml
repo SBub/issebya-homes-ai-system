@@ -2,13 +2,24 @@ name: GCA Eval Gate
 
 # Separate from ci.yml on purpose: this runs real Braintrust experiments
 # against real model calls (real API spend), on a different trigger/cadence
-# than lint/typecheck/test. Deliberately NOT on `pull_request` or
-# `push: [main]` — only `develop`, and only when this app's own files
-# change (see `paths:` below), to avoid spending real API budget on pushes
-# that can't have touched the eval-gated behavior.
+# than lint/typecheck/test. Only `develop`/`master`, and only when this
+# app's own files change (see `paths:` below), to avoid spending real API
+# budget on pushes that can't have touched the eval-gated behavior.
+#
+# The `pull_request` trigger targeting `master` is what actually gates a
+# develop -> master promotion: it runs the same two score gates
+# (scripts/ci-gate-evals.ts) as a check on the PR itself, before merge, not
+# just after. It still isn't a REQUIRED check that blocks the merge button
+# — that needs a branch protection rule, which needs a GitHub plan upgrade
+# on this private repo (see ENGINEERING.md's "Known limitations" section)
+# — but the pass/fail is visible on the PR before anyone approves it.
 on:
   push:
-    branches: [develop]
+    branches: [develop, master]
+    paths:
+      - "apps/guest-communication-agent/**"
+  pull_request:
+    branches: [master]
     paths:
       - "apps/guest-communication-agent/**"
 

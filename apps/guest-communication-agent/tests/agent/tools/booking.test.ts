@@ -1,23 +1,79 @@
+import { trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import type { GetStepTools } from "inngest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolContext } from "@/agent/tools/config";
+import type { inngest } from "@/lib/inngest";
 
-// booking.ts is a pure URL builder + reason-string builder now — the real
-// approve/reject HITL mechanism moved to approval-gate.ts (see
-// approval-gate.test.ts) and the policy decision of WHETHER sendBookingLink
-// needs approval moved to run-turn.ts's APPROVAL_GATES table (see
-// run-turn.test.ts). The only external boundary left in this file is
-// handleBookingLinkApprovalReceived's inngest.send() relay, so that's the
-// only thing mocked here.
+// booking.ts's runSendBookingLink/buildBookingApprovalReason stay pure URL/
+// reason-string builders — but requestSendBookingLinkApproval (this app's
+// run<ToolName> "calls human" half, see missing-info.ts's
+// requestMissingInfoApproval for the model this follows) is a deliberate
+// exception to that purity, reusing the real approve/reject HITL mechanism
+// in approval-gate.ts (see approval-gate.test.ts for that mechanism's own
+// coverage — kept real here, not mocked, since it's genuinely reused, not
+// reimplemented). Same in-memory OTel wiring as missing-info.test.ts/
+// wants-human.test.ts, so its span assertions inspect a real span's
+// attributes instead of a no-op.
+const spanExporter = new InMemorySpanExporter();
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
+);
+
 const inngestSendMock = vi.fn();
 vi.mock("@/lib/inngest.js", () => ({
   inngest: { send: inngestSendMock },
 }));
 
+const sendOwnerNudgeMock = vi.fn();
+vi.mock("@/lib/telegram-router.js", () => ({
+  sendOwnerNudge: sendOwnerNudgeMock,
+}));
+
+// updateSpanIO is a real fetch() to Braintrust's REST API — mocked the same
+// way missing-info.test.ts/run-turn.test.ts mock it, everything else in
+// tracing.ts (steppedSpan, etc.) stays real. Needed now that
+// requestSendBookingLinkApproval/runSendBookingLink each patch their own
+// span directly.
+const updateSpanIOMock = vi.fn();
+vi.mock("@/lib/tracing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tracing.js")>();
+  return { ...actual, updateSpanIO: updateSpanIOMock };
+});
+
+const insertPendingOwnerDecisionMock = vi.fn();
+const resolvePendingOwnerDecisionByCorrelationIdMock = vi.fn();
+vi.mock("@/lib/pending-owner-decisions.js", () => ({
+  insertPendingOwnerDecision: insertPendingOwnerDecisionMock,
+  resolvePendingOwnerDecisionByCorrelationId: resolvePendingOwnerDecisionByCorrelationIdMock,
+}));
+
 const {
   runSendBookingLink,
+  computeSendBookingLink,
   buildBookingApprovalReason,
   handleBookingLinkApprovalReceived,
+  requestSendBookingLinkApproval,
   BOOKING_LINK_APPROVAL_EVENT,
 } = await import("@/agent/tools/booking.js");
+
+const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+
+// Minimal real ToolContext for runSendBookingLink's own tests below — only
+// phone/step are actually read by that function's body, the rest just
+// satisfies the type.
+function bookingToolContext(step: GetStepTools<typeof inngest>): ToolContext {
+  return {
+    conversationId: "convo-1",
+    phone: "+15551234567",
+    traceAnchor: TEST_TRACE_ANCHOR,
+    step,
+  };
+}
 
 const bookingArgs = {
   guestName: "Ana",
@@ -41,44 +97,85 @@ describe("buildBookingApprovalReason", () => {
   });
 });
 
-describe("runSendBookingLink", () => {
-  it("returns { url } built from room/checkIn/checkOut, with no nudge/approval logic of its own", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+describe("computeSendBookingLink", () => {
+  it("returns { url } built from room/checkIn/checkOut, with no nudge/approval/tracing logic of its own", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result).toEqual({ url: expect.stringContaining("/booking/room1?") });
     expect(result.url).toContain("checkIn=2026-09-01");
     expect(result.url).toContain("checkOut=2026-09-05");
   });
 
-  it("threads the guest's phone and source=gca so the website can prefill/attribute the booking", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's phone and source=gca so the website can prefill/attribute the booking", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`phone=${encodeURIComponent("+15551234567")}`);
     expect(result.url).toContain("source=gca");
   });
 
-  it("threads the guest's name so the website can prefill it too", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's name so the website can prefill it too", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`guestName=${encodeURIComponent("Ana")}`);
   });
 
-  it("threads the guest's email so the website can prefill it too", async () => {
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+  it("threads the guest's email so the website can prefill it too", () => {
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
 
     expect(result.url).toContain(`email=${encodeURIComponent("ana@example.com")}`);
   });
 
-  it("defaults the site origin when NEXT_PUBLIC_SITE_URL isn't set", async () => {
+  it("defaults the site origin when NEXT_PUBLIC_SITE_URL isn't set", () => {
     const original = process.env.NEXT_PUBLIC_SITE_URL;
     delete process.env.NEXT_PUBLIC_SITE_URL;
 
-    const result = await runSendBookingLink(bookingArgs, { phone: "+15551234567" });
+    const result = computeSendBookingLink(bookingArgs, "+15551234567");
     expect(result.url).toContain("https://issebya.com/booking");
 
     if (original !== undefined) {
       process.env.NEXT_PUBLIC_SITE_URL = original;
     }
+  });
+});
+
+describe("runSendBookingLink", () => {
+  type StepTools = GetStepTools<typeof inngest>;
+
+  function makeStepMock() {
+    return {
+      run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+    } as unknown as StepTools & { run: ReturnType<typeof vi.fn> };
+  }
+
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    step = makeStepMock();
+  });
+
+  it("returns the same { url } computeSendBookingLink would, wrapped in real step tracing", async () => {
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step));
+
+    expect(result).toEqual(computeSendBookingLink(bookingArgs, "+15551234567"));
+  });
+
+  it("creates its own fresh gen_ai.tool.send_booking_link execution span with real output known at creation, no updateSpanIO patch", async () => {
+    const result = await runSendBookingLink(bookingArgs, bookingToolContext(step));
+
+    const execSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "gen_ai.tool.send_booking_link");
+    expect(execSpan).toBeDefined();
+    expect(execSpan?.attributes["gen_ai.tool.name"]).toBe("send_booking_link");
+    expect(execSpan?.attributes["gca.tool.output"]).toBe(JSON.stringify(result));
+    expect(updateSpanIOMock).not.toHaveBeenCalled();
+  });
+
+  it("memoizes the compute+span-creation under a single tool-send_booking_link step", async () => {
+    await runSendBookingLink(bookingArgs, bookingToolContext(step));
+
+    expect(step.run.mock.calls.map((c) => c[0])).toEqual(["tool-send_booking_link"]);
   });
 });
 
@@ -104,5 +201,151 @@ describe("handleBookingLinkApprovalReceived", () => {
       name: BOOKING_LINK_APPROVAL_EVENT,
       data: { correlationId: "corr-abc-123", approved: false },
     });
+  });
+});
+
+describe("requestSendBookingLinkApproval", () => {
+  type StepTools = GetStepTools<typeof inngest>;
+
+  // Only `run`/`waitForEvent` are exercised by real code here — see
+  // approval-gate.test.ts's own makeStepMock comment for why the rest of the
+  // real StepTools surface is cast away rather than stubbed out.
+  function makeStepMock() {
+    return {
+      run: vi.fn((_id: string, fn: () => unknown) => Promise.resolve(fn())),
+      waitForEvent: vi.fn(),
+    } as unknown as StepTools & {
+      run: ReturnType<typeof vi.fn>;
+      waitForEvent: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  const call = {
+    toolCallId: "call-1",
+    toolName: "send_booking_link",
+    input: bookingArgs as unknown as Record<string, unknown>,
+  };
+
+  let step: ReturnType<typeof makeStepMock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spanExporter.reset();
+    step = makeStepMock();
+    sendOwnerNudgeMock.mockResolvedValue({ ok: true });
+    insertPendingOwnerDecisionMock.mockResolvedValue(undefined);
+    resolvePendingOwnerDecisionByCorrelationIdMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the owner nudge with buildBookingApprovalReason's text under reasonCategory 'send_booking_link'", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+    await requestSendBookingLinkApproval(call, "corr-1", {
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(sendOwnerNudgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "convo-1",
+        phone: "+3519",
+        reason: buildBookingApprovalReason(bookingArgs),
+        reasonCategory: "send_booking_link",
+        correlationId: "corr-1",
+      }),
+    );
+  });
+
+  it("resolves approved: true, with no payload, when the owner approves", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+    const decision = await requestSendBookingLinkApproval(call, "corr-1", {
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(decision.approved).toBe(true);
+    expect(decision.payload).toBeUndefined();
+    expect(decision.notApprovedOutput).toBeUndefined();
+    expect(decision.hitlSpanId).toEqual(expect.any(String));
+  });
+
+  it("resolves approved: false with the standard not-approved message on a rejection", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: false } });
+
+    const decision = await requestSendBookingLinkApproval(call, "corr-1", {
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(decision.approved).toBe(false);
+    expect(decision.notApprovedOutput).toEqual({
+      approved: false,
+      message: "This action was not approved. Do not retry it automatically.",
+    });
+  });
+
+  it("resolves approved: false the same way on a timeout (no decision arrives)", async () => {
+    step.waitForEvent.mockResolvedValueOnce(null);
+
+    const decision = await requestSendBookingLinkApproval(call, "corr-1", {
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(decision.approved).toBe(false);
+    expect(decision.notApprovedOutput).toEqual({
+      approved: false,
+      message: "This action was not approved. Do not retry it automatically.",
+    });
+  });
+
+  it("creates the hitl.send_booking_link gate span first, as the nudge/decision spans' real parent — no gen_ai.tool.send_booking_link span exists on this path", async () => {
+    step.waitForEvent.mockResolvedValueOnce({ data: { approved: true } });
+
+    await requestSendBookingLinkApproval(call, "corr-1", {
+      conversationId: "convo-1",
+      phone: "+3519",
+      correlationId: "corr-1",
+      traceAnchor: TEST_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(step.run.mock.calls.map((c) => c[0])[0]).toBe("hitl-send_booking_link");
+
+    const hitlSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.send_booking_link");
+    expect(hitlSpan?.attributes["gca.tool.input"]).toBe(JSON.stringify(call.input));
+    expect(hitlSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
+
+    const nudgeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.send_booking_link.nudge");
+    expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["send_booking_link"]);
+
+    const decisionSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "hitl.send_booking_link.decision");
+    expect(decisionSpan?.attributes["gca.approval.decision"]).toBe("approved");
+
+    // The real execution span only gets created by runSendBookingLink, once
+    // run-tool.ts's runTool is actually called with the approved decision —
+    // requestSendBookingLinkApproval on its own never creates one.
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "gen_ai.tool.send_booking_link"),
+    ).toBeUndefined();
   });
 });

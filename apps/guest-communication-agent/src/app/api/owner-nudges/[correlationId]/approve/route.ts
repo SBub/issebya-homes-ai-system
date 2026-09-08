@@ -35,12 +35,12 @@ import {
  * this deliberately never touches). This handler can't join the original
  * guest turn's trace via Inngest's event.data (it only ever receives a plain
  * correlationId string, often much later, from a separate process, possibly
- * a different server instance) — approval-gate.ts's requestApprovalGate
- * works around this by writing the real gen_ai.tool.<toolName> execution
- * span's {traceId, spanId} to that table right when the gate is invoked, key
+ * a different server instance) — booking.ts's requestSendBookingLinkApproval
+ * works around this by writing the real hitl.<toolName> GATE span's
+ * {traceId, spanId} to that table right when the gate is invoked, key
  * by this same correlationId. consumeApprovalGateTraceAnchor below reads
  * (and deletes) that row. If found, the approval-decision handling nests as
- * a real child of the original gen_ai.tool.<toolName> span via withTurnSpan.
+ * a real child of the original hitl.<toolName> span via withTurnSpan.
  * If not found (write failed, row already consumed by a duplicate call, or
  * the anchor's best-effort write simply never landed), this falls back to
  * its own small disconnected trace root (startTraceRoot) instead, tagged
@@ -83,10 +83,10 @@ export async function POST(
   }
 
   try {
-    const toolAnchor = await consumeApprovalGateTraceAnchor(correlationId);
-    if (toolAnchor) {
+    const hitlAnchor = await consumeApprovalGateTraceAnchor(correlationId);
+    if (hitlAnchor) {
       await withTurnSpan(
-        toolAnchor,
+        hitlAnchor,
         "owner_nudges.handle_approval",
         { "gca.correlation_id": correlationId },
         () => handleBookingLinkApprovalReceived({ correlationId, approved }),

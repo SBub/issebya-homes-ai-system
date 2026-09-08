@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "python3 scripts/start.py",
+    "dev": "tsx scripts/start.ts",
     "dev:next": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
@@ -14,7 +14,10 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "webhook": "stripe listen --forward-to localhost:3000/api/webhook/stripe",
+    "webhook": "stripe listen --api-key $STRIPE_SECRET_KEY --forward-to localhost:3000/api/webhook/stripe",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:status": "supabase status",
     "test:unit": "vitest --project unit",
     "test:browser": "vitest --project browser",
     "test:integration": "playwright test"
@@ -22,10 +25,10 @@
   "dependencies": {
     "@sentry/nextjs": "^10",
     "@supabase/supabase-js": "^2.49.8",
-    "@tanstack/react-query": "^5.81.2",
     "date-fns": "^4.1.0",
     "ical.js": "^2.2.1",
     "next": "^16.2.1",
+    "posthog-js": "^1.422.5",
     "pricing": "workspace:*",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -34,6 +37,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@mswjs/interceptors": "^0.41.3",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/vite": "^4.1.18",
@@ -50,7 +54,9 @@
     "msw": "^2.12.14",
     "playwright": "^1.58.2",
     "prettier": "^3.8.1",
+    "supabase": "^2.116.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5",
     "vite": "^7",
     "vite-tsconfig-paths": "^6.1.1",

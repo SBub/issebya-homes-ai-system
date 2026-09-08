@@ -1,6 +1,10 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { resolveToolApproval } from "./approval-gate";
+import { dispatchToolExecution } from "@/agent/tool-execution";
+import { flushTracing } from "@/instrumentation";
+import { steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
+import { type HitlDecision, requestApprovalGate, resolveToolApproval } from "./approval-gate";
+import type { ToolContext } from "./config";
 
 // TODO: this trusts the model already called checkAvailability and got
 // "available" — it does not independently re-verify before creating the
@@ -10,15 +14,13 @@ import { resolveToolApproval } from "./approval-gate";
 // GET /api/availability?room= and return a structured error if unavailable.
 
 // sendBookingLink is approve/reject-gated before the model ever sees a
-// result — the real Telegram-nudge-then-suspend HITL mechanism lives in the
-// generic, reusable approval-gate.ts (see that file's module comment), and
-// the decision of WHETHER this tool needs approval (plus which event/timeout
-// it uses) is made visible in run-turn.ts's APPROVAL_GATES table, not hidden
-// in this file. By the time runSendBookingLink below is ever called, the
-// gate has already run and approved the call — this file is left with only
-// the parts that are genuinely booking-specific: the tool's schema, the
-// human-readable approval-reason text, the event/timeout policy constants,
-// and the actual URL-building logic.
+// result: requestSendBookingLinkApproval ("calls human") creates the
+// hitl.send_booking_link GATE span, then reuses approval-gate.ts's generic
+// requestApprovalGate (this tool genuinely IS approve/reject-shaped, unlike
+// missing_info); runSendBookingLink ("tool call") builds the URL, run only
+// once approved, in its own fresh gen_ai.tool.send_booking_link EXECUTION
+// span. Two different spans, not one shared span — see each function's own
+// comment.
 
 const sendBookingLinkSchema = z.object({
   guestName: z.string().describe("Guest full name"),
@@ -28,91 +30,138 @@ const sendBookingLinkSchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runSendBookingLink below by name, after its own APPROVAL_GATES check has
-// approved the call.
 export const sendBookingLink = tool({
   description:
     "Send a booking link to the guest. Call this when the guest has confirmed they want to book a specific room and dates. Collect their name and email first if not known.",
   inputSchema: sendBookingLinkSchema,
 });
 
-// The event a suspended run-turn.ts approval-gate wait resolves on, and that
-// handleBookingLinkApprovalReceived below sends — shared as a constant so the
-// two ends can't drift apart, same reasoning as missing-info.ts's
-// OWNER_NUDGE_ANSWERED_EVENT. Exported for run-turn.ts's APPROVAL_GATES
-// table — the gate's caller, not this file, is what actually waits on it
-// (see approval-gate.ts's requestApprovalGate).
+// Shared so requestApprovalGate's wait and handleBookingLinkApprovalReceived's
+// send can't drift apart.
 export const BOOKING_LINK_APPROVAL_EVENT = "gca/booking-link.approval";
 
-// Inngest's step.waitForEvent requires a bounded `timeout` string (see
-// approval-gate.ts's requestApprovalGate doc comment for the full
-// constraint). The app owner wants this wait to effectively never time out —
-// the owner must be able to approve/reject whenever they get to it, not lose
-// the request after a fixed window like missing_info's 24h. "52w" (~1 year)
-// is the longest practical stand-in for "forever" this constraint allows.
-// Exported for run-turn.ts's APPROVAL_GATES table — still a booking-specific
-// policy value, just consumed by the runtime dispatch loop instead of used
-// internally here.
-export const BOOKING_LINK_APPROVAL_TIMEOUT = "52w";
+// Inngest's step.waitForEvent requires a bounded timeout (see
+// requestApprovalGate's doc comment) — the owner must be able to
+// approve/reject whenever they get to it, so "52w" (~1 year) stands in for
+// "forever".
+const BOOKING_LINK_APPROVAL_TIMEOUT = "52w";
 
-// Renders an ISO YYYY-MM-DD date as European DD-MM-YYYY for human display —
-// the owner-facing Telegram nudge text, never the tool's own args/URL, which
-// stay ISO (checkIn/checkOut round-trip through checkAvailability and the
-// booking URL as YYYY-MM-DD, unaffected by this).
+// Owner-facing Telegram text only — the tool's own args/URL stay ISO.
 function toEuropeanDate(isoDate: string): string {
   const [year, month, day] = isoDate.split("-");
   return year && month && day ? `${day}-${month}-${year}` : isoDate;
 }
 
-// Human-readable reason string for the owner to see in Telegram — the nudge
-// text itself, not re-parsed downstream (see telegram-router's owner-nudges
-// route, which composes the approve/reject message straight from this
-// string). Dates rendered European-style for display. Called by
-// run-turn.ts's APPROVAL_GATES table (buildReason) before the gate
-// dispatches the nudge — this file doesn't send the nudge itself.
 export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkSchema>): string {
   const { guestName, room, checkIn, checkOut } = args;
   return `${guestName} wants to book ${room} from ${toEuropeanDate(checkIn)} to ${toEuropeanDate(checkOut)}.`;
 }
 
-// Path+query shape of the URL built below, factored out as a shared
-// constant so braintrust-scorers/hitl-compliance.scorer.ts's
-// bypass-detection logic (a booking-shaped link reaching the guest with no
-// real sendBookingLink execution span behind it) derives from this file's
-// real format instead of a hand-guessed copy elsewhere. Domain-agnostic on
-// purpose — siteUrl varies by env — so it matches on the
-// `/booking/{room}?checkIn=...&checkOut=...` path+query shape only. Room is
-// a path segment (the site's real route is `/booking/[type]`, not a `room=`
-// query param) — keep this in sync with the template literal in
-// runSendBookingLink below if that format ever changes.
+// Shared so hitl-compliance.scorer.ts's bypass-detection logic derives from
+// this file's real URL format instead of a hand-guessed copy. Keep in sync
+// with the template literal in computeSendBookingLink below.
 export const BOOKING_LINK_URL_PATTERN =
   /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
-// Pure URL builder — no nudge, no suspend/wait. By the time run-turn.ts calls
-// this, its own APPROVAL_GATES check (backed by approval-gate.ts's
-// requestApprovalGate) has already run and approved the call. Takes the
-// guest's phone from ToolContext (already known — it's the WhatsApp
-// conversation's own number) so the website booking form can prefill it
-// instead of asking the guest to type it again.
-export async function runSendBookingLink(
+// send_booking_link's "calls human" half: creates the hitl.send_booking_link
+// GATE span first (not gen_ai.tool.send_booking_link — see run-agent-turn.ts's
+// RULE comment for why nesting the wait under a span literally named "the
+// tool call" would misrepresent the sequence), whose id becomes hitlAnchor,
+// passed to requestApprovalGate so its nudge/decision/timeout spans nest as
+// this gate span's real children. Patches its own span with the
+// not-approved fallback on reject/timeout only — never on approval, since
+// that result belongs to runSendBookingLink's own separate execution span.
+// `payload` stays undefined: unlike missing_info's answer, `call.input`
+// already has everything runSendBookingLink needs.
+export async function requestSendBookingLinkApproval(
+  call: { toolName: string; input: Record<string, unknown> },
+  correlationId: string,
+  context: ToolContext,
+): Promise<HitlDecision> {
+  const { conversationId, phone, step, traceAnchor } = context;
+
+  const hitlSpanId = await steppedSpan(
+    step,
+    `hitl-${call.toolName}`,
+    traceAnchor,
+    `hitl.${call.toolName}`,
+    {
+      "gca.tool.input": JSON.stringify(call.input),
+      "braintrust.input": JSON.stringify(call.input),
+      "braintrust.tags": [call.toolName],
+    },
+    async (span) => span.spanContext().spanId,
+  );
+  // See updateSpanIO's doc comment (tracing.ts) for why this flush is needed.
+  await flushTracing();
+  const hitlAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: hitlSpanId };
+
+  const approved = await requestApprovalGate({
+    toolName: call.toolName,
+    event: BOOKING_LINK_APPROVAL_EVENT,
+    timeout: BOOKING_LINK_APPROVAL_TIMEOUT,
+    reason: buildBookingApprovalReason(call.input as z.infer<typeof sendBookingLinkSchema>),
+    reasonCategory: "send_booking_link",
+    conversationId,
+    phone,
+    correlationId,
+    step,
+    traceAnchor: hitlAnchor,
+    // Captured on the pending_owner_decisions row so a later manual-resolve
+    // action can rebuild this call without re-parsing the reason's prose.
+    context: call.input,
+  });
+
+  // requestApprovalGate doesn't distinguish rejection from timeout (both
+  // resolve `approved: false`), so neither does this.
+  if (!approved) {
+    const notApprovedOutput = {
+      approved: false,
+      message: "This action was not approved. Do not retry it automatically.",
+    };
+    await step.run("update-send_booking_link-trace-io", () =>
+      updateSpanIO(hitlSpanId, { output: notApprovedOutput }),
+    );
+    return { approved: false, notApprovedOutput, hitlSpanId, hitlAnchor };
+  }
+
+  return { approved: true, hitlSpanId, hitlAnchor };
+}
+
+// Pure URL builder, no tracing — kept separate from runSendBookingLink so
+// src/app/api/admin/pending-decisions/[id]/actions/resolve/route.ts can
+// rebuild the same URL to resend a stuck booking link, outside any live run.
+export function computeSendBookingLink(
   args: z.infer<typeof sendBookingLinkSchema>,
-  context: { phone: string },
-) {
+  phone: string,
+): { url: string } {
   const { guestName, email, room, checkIn, checkOut } = args;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
-  const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(context.phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
+  const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
   return { url };
 }
 
-// Thin wrapper around approval-gate.ts's generic resolveToolApproval, kept
-// under this existing name so
-// src/app/api/owner-nudges/[correlationId]/approve/route.ts (which imports
-// handleBookingLinkApprovalReceived by name) doesn't need to change at all.
-// correlationId comes straight from the Telegram button's callback_data (see
-// apps/telegram-router's webhook route/owner-nudges route) — no DB lookup
-// involved, and unlike missing_info's reply handler there's no KB/embedding
-// write on this branch: the event just carries a plain approved boolean.
+// send_booking_link's "tool call" half — only reached once approved. A
+// one-shot dispatch, the same shape any plain tool's run<ToolName> has: no
+// pre-created span, unlike the GATE span above.
+export async function runSendBookingLink(
+  args: z.infer<typeof sendBookingLinkSchema>,
+  context: ToolContext,
+) {
+  return steppedSpan(
+    context.step,
+    "tool-send_booking_link",
+    context.traceAnchor,
+    "gen_ai.tool.send_booking_link",
+    { "gen_ai.tool.name": "send_booking_link", "gen_ai.operation.name": "execute_tool" },
+    (span) =>
+      dispatchToolExecution(span, args, async () => computeSendBookingLink(args, context.phone)),
+  );
+}
+
+// Thin wrapper around approval-gate.ts's generic resolveToolApproval. Unlike
+// missing_info's reply handler, there's no KB/embedding write here — the
+// event just carries a plain approved boolean.
 export async function handleBookingLinkApprovalReceived(params: {
   correlationId: string;
   approved: boolean;

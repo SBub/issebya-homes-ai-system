@@ -1,5 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
+import { steppedSpan } from "@/lib/tracing";
+import type { ToolContext } from "./config";
 
 function datesOverlap(reqStart: Date, reqEnd: Date, bookedStart: Date, bookedEnd: Date): boolean {
   return reqStart < bookedEnd && reqEnd > bookedStart;
@@ -11,18 +14,17 @@ const checkAvailabilitySchema = z.object({
   checkOut: z.string().describe("Check-out date in YYYY-MM-DD format"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runCheckAvailability below by name.
+// Schema-only — run-tool.ts dispatches to runCheckAvailability below by name.
 export const checkAvailability = tool({
   description:
     "Check if a room is available for the requested dates. Use when the guest mentions specific check-in and check-out dates.",
   inputSchema: checkAvailabilitySchema,
 });
 
-// Calls the live GET /api/availability?room= endpoint (which has its own
-// 1-hour in-memory cache server-side) rather than duplicating apps/website's
-// iCal/availability parsing here.
-export async function runCheckAvailability(args: z.infer<typeof checkAvailabilitySchema>) {
+// Calls the live GET /api/availability?room= endpoint (its own 1h in-memory
+// cache) rather than duplicating apps/website's iCal parsing here. Also
+// called directly by run-code.ts's sandboxApi as an internal helper.
+export async function computeCheckAvailability(args: z.infer<typeof checkAvailabilitySchema>) {
   const { room, checkIn, checkOut } = args;
   const reqStart = new Date(checkIn);
   const reqEnd = new Date(checkOut);
@@ -45,4 +47,18 @@ export async function runCheckAvailability(args: z.infer<typeof checkAvailabilit
   );
 
   return { available: !conflict, room, checkIn, checkOut };
+}
+
+export async function runCheckAvailability(
+  args: z.infer<typeof checkAvailabilitySchema>,
+  context: ToolContext,
+) {
+  return steppedSpan(
+    context.step,
+    "tool-check_availability",
+    context.traceAnchor,
+    "gen_ai.tool.check_availability",
+    { "gen_ai.tool.name": "check_availability", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, args, () => computeCheckAvailability(args)),
+  );
 }

@@ -1,8 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { ROOM_PRICING } from "pricing";
+import type { BookingFormState } from "../actions";
 
 // Mock BookingCalendar — child component, not our responsibility
 vi.mock("./BookingCalendar", () => ({
@@ -16,24 +16,33 @@ vi.mock("@sentry/nextjs", () => ({
   startSpan: (_opts: unknown, fn: (span?: undefined) => unknown) => fn(undefined),
 }));
 
+// BookingEngineExpanded reads phone/guestName/email/source off the URL via
+// useSearchParams — an empty URLSearchParams by default so tests exercise
+// the "direct visitor" path unless a test overrides it.
+const mockSearchParams = new URLSearchParams();
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => mockSearchParams,
+}));
+
 vi.mock("../../../../../lib/sentry-booking", () => ({
   setBookingContext: vi.fn(),
   addBookingBreadcrumb: vi.fn(),
   captureBookingError: vi.fn(),
 }));
 
+// The form's `action` is a real Server Function reference (`submitBooking`),
+// not a plain client callback — mock the module the same way the old
+// suite mocked `window.fetch`, since that's now the seam between this
+// component and "the server".
+const mockSubmitBooking = vi.fn();
+vi.mock("../actions", () => ({
+  submitBooking: (...args: unknown[]) => mockSubmitBooking(...args),
+}));
+
 import { BookingEngineExpanded } from "./BookingEngineExpanded";
 
 const checkIn = new Date("2025-08-01");
 const checkOut = new Date("2025-08-04");
-const originalFetch = window.fetch;
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
-}
 
 const defaultProps = {
   blockedDates: [],
@@ -43,19 +52,30 @@ const defaultProps = {
   onClose: vi.fn(),
   roomType: "room1" as const,
   error: null,
+  updateAvailability: vi.fn(),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.fetch = vi.fn() as typeof window.fetch;
 });
 
 afterEach(() => {
-  window.fetch = originalFetch;
+  mockSubmitBooking.mockReset();
 });
 
+// Fills every contact field the way a real guest would before booking. Not
+// required to enable the "Confirm booking" button (it's disabled only while
+// pending — see below), just realistic test setup for the submission tests.
+async function fillContactFields(
+  getByLabelText: Awaited<ReturnType<typeof render>>["getByLabelText"],
+) {
+  await userEvent.fill(getByLabelText(/^name/i), "Guest Example");
+  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
+  await userEvent.fill(getByLabelText(/whatsapp number/i), "920742845");
+}
+
 test("user sees pricing summary when dates are provided", async () => {
-  const { getByText } = await renderWithQuery(<BookingEngineExpanded {...defaultProps} />);
+  const { getByText } = await render(<BookingEngineExpanded {...defaultProps} />);
 
   const expectedBase = 3 * ROOM_PRICING.basePrice;
   const expectedTax = Math.min(3, ROOM_PRICING.touristTaxNights) * ROOM_PRICING.touristTax;
@@ -66,7 +86,7 @@ test("user sees pricing summary when dates are provided", async () => {
 });
 
 test("user sees dashes when no dates are provided", async () => {
-  const { getByText } = await renderWithQuery(
+  const { getByText } = await render(
     <BookingEngineExpanded {...defaultProps} checkInDate={null} checkOutDate={null} />,
   );
 
@@ -75,7 +95,7 @@ test("user sees dashes when no dates are provided", async () => {
 });
 
 test("user can increment person count to 2 and decrement back to 1", async () => {
-  const { getByLabelText } = await renderWithQuery(<BookingEngineExpanded {...defaultProps} />);
+  const { getByLabelText } = await render(<BookingEngineExpanded {...defaultProps} />);
 
   const decrement = getByLabelText("Decrease number of persons");
   const increment = getByLabelText("Increase number of persons");
@@ -94,95 +114,123 @@ test("user can increment person count to 2 and decrement back to 1", async () =>
   await expect.element(decrement).toBeDisabled();
 });
 
-test("user sees email validation error after leaving invalid email", async () => {
-  const { getByLabelText, getByText } = await renderWithQuery(
-    <BookingEngineExpanded {...defaultProps} />,
-  );
-
-  await userEvent.fill(getByLabelText(/email/i), "not-an-email");
-  await userEvent.tab();
-
-  await expect.element(getByText(/please enter a valid email/i)).toBeInTheDocument();
-  await expect.element(getByLabelText(/email/i)).toHaveAttribute("aria-invalid", "true");
-});
-
-test("email error disappears when user starts typing again", async () => {
-  const { getByLabelText, getByText } = await renderWithQuery(
-    <BookingEngineExpanded {...defaultProps} />,
-  );
-
-  await userEvent.fill(getByLabelText(/email/i), "bad");
-  await userEvent.tab();
-  await expect.element(getByText(/please enter a valid email/i)).toBeInTheDocument();
-
-  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
-  await expect.element(page.getByText(/please enter a valid email/i)).not.toBeInTheDocument();
-});
-
-test("book button is disabled until email and dates are provided", async () => {
-  const { getByLabelText } = await renderWithQuery(<BookingEngineExpanded {...defaultProps} />);
-
-  // No email — disabled
-  await expect.element(getByLabelText("Confirm booking")).toBeDisabled();
-
-  // With email — enabled
-  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
-  await expect.element(getByLabelText("Confirm booking")).toBeEnabled();
-});
-
-test("book button is disabled when dates are missing", async () => {
-  const { getByLabelText } = await renderWithQuery(
+test("book button starts enabled, with no fields filled and no dates selected", async () => {
+  // No client-side gating on field content or dates anymore — the server
+  // action is the sole source of truth for validation (it returns a
+  // friendly "Please select check-in and check-out dates." generalError
+  // when dates are missing, rather than the button pre-blocking the click).
+  const { getByLabelText } = await render(
     <BookingEngineExpanded {...defaultProps} checkInDate={null} checkOutDate={null} />,
   );
 
-  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
-  await expect.element(getByLabelText("Confirm booking")).toBeDisabled();
+  await expect.element(getByLabelText("Confirm booking")).toBeEnabled();
 });
 
-test('user sees "booking..." while API call is in progress', async () => {
-  // Fetch that never resolves
-  vi.mocked(window.fetch).mockReturnValue(new Promise(() => {}));
+test("user sees the server's friendly message when submitting without dates", async () => {
+  mockSubmitBooking.mockResolvedValue({
+    attempt: 1,
+    errors: {},
+    generalError: "Please select check-in and check-out dates.",
+    values: {
+      guestName: "Guest Example",
+      email: "guest@example.com",
+      countryId: "PT",
+      localNumber: "920742845",
+      whatsappOptIn: false,
+    },
+    blockedDates: null,
+    success: false,
+    url: null,
+    guestContactId: null,
+  } satisfies BookingFormState);
 
-  const { getByLabelText, getByText } = await renderWithQuery(
-    <BookingEngineExpanded {...defaultProps} />,
+  const { getByLabelText, getByText } = await render(
+    <BookingEngineExpanded {...defaultProps} checkInDate={null} checkOutDate={null} />,
   );
 
-  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
+  await fillContactFields(getByLabelText);
+  await userEvent.click(getByLabelText("Confirm booking"));
+
+  await expect
+    .element(getByText(/please select check-in and check-out dates/i))
+    .toBeInTheDocument();
+});
+
+test('user sees "booking..." while the action is in progress', async () => {
+  let resolveAction!: (value: unknown) => void;
+  mockSubmitBooking.mockReturnValue(
+    new Promise((resolve) => {
+      resolveAction = resolve;
+    }),
+  );
+
+  const { getByLabelText, getByText } = await render(<BookingEngineExpanded {...defaultProps} />);
+
+  await expect.element(getByLabelText("Confirm booking")).toBeEnabled();
+
+  await fillContactFields(getByLabelText);
   await userEvent.click(getByLabelText("Confirm booking"));
 
   await expect.element(getByText("booking...")).toBeInTheDocument();
   await expect.element(getByLabelText("Confirm booking")).toBeDisabled();
+
+  // Settle the pending action before the test ends — leaving a Server
+  // Function call permanently unresolved bleeds into later tests (React's
+  // pending-transition bookkeeping doesn't seem to fully let go otherwise).
+  resolveAction({
+    attempt: 1,
+    errors: {},
+    generalError: "",
+    values: {
+      guestName: "Guest Example",
+      email: "guest@example.com",
+      countryId: "PT",
+      localNumber: "920742845",
+      whatsappOptIn: false,
+    },
+    blockedDates: null,
+    success: false,
+    url: null,
+    guestContactId: null,
+  } satisfies BookingFormState);
 });
 
-test("user sees error message when booking API fails", async () => {
-  vi.mocked(window.fetch)
-    .mockResolvedValueOnce({
-      ok: false,
-      json: () =>
-        Promise.resolve({
-          error: "dates_unavailable",
-          message: "Dates no longer available",
-        }),
-    } as Response)
-    .mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ bookings: [] }),
-    } as Response);
+test("user sees error message and refreshed calendar when dates are no longer available", async () => {
+  mockSubmitBooking.mockResolvedValue({
+    attempt: 1,
+    errors: {},
+    generalError:
+      "Sorry, these dates were just booked by someone else. The calendar has been refreshed. Please select new dates.",
+    values: {
+      guestName: "Guest Example",
+      email: "guest@example.com",
+      countryId: "PT",
+      localNumber: "920742845",
+      whatsappOptIn: false,
+    },
+    blockedDates: [],
+    success: false,
+    url: null,
+    guestContactId: null,
+  } satisfies BookingFormState);
 
-  const { getByLabelText, getByText } = await renderWithQuery(
-    <BookingEngineExpanded {...defaultProps} />,
-  );
+  const { getByLabelText, getByText } = await render(<BookingEngineExpanded {...defaultProps} />);
 
-  await userEvent.fill(getByLabelText(/email/i), "guest@example.com");
+  await fillContactFields(getByLabelText);
   await userEvent.click(getByLabelText("Confirm booking"));
 
   await expect
     .element(getByText(/these dates were just booked by someone else/i))
     .toBeInTheDocument();
+
+  // updateAvailability is called inline inside the action wrapper before
+  // the resolved state (and thus this error text) ever commits, so this
+  // is safe to assert directly — no waiting needed.
+  expect(defaultProps.updateAvailability).toHaveBeenCalledWith([]);
 });
 
 test("user sees error message passed from parent", async () => {
-  const { getByText } = await renderWithQuery(
+  const { getByText } = await render(
     <BookingEngineExpanded {...defaultProps} error="Something went wrong" />,
   );
 
@@ -190,7 +238,7 @@ test("user sees error message passed from parent", async () => {
 });
 
 test("tourist tax info link is present", async () => {
-  const { getByRole } = await renderWithQuery(<BookingEngineExpanded {...defaultProps} />);
+  const { getByRole } = await render(<BookingEngineExpanded {...defaultProps} />);
 
   const link = getByRole("link", { name: /tourist tax/i });
   await expect.element(link).toBeInTheDocument();

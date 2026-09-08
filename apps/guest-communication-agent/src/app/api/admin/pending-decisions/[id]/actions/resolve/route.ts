@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { runSendBookingLink } from "@/agent/tools/booking";
+import { computeSendBookingLink } from "@/agent/tools/booking";
 import { requireApiKey } from "@/lib/auth";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import {
@@ -9,9 +9,10 @@ import {
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // send_booking_link's context is written at insert time by
-// approval-gate.ts's requestApprovalGate (run-turn.ts's dispatchGatedToolCall
-// passes the model's own tool-call args straight through) — the exact same
-// shape sendBookingLinkSchema declares (see booking.ts).
+// approval-gate.ts's requestApprovalGate (booking.ts's
+// requestSendBookingLinkApproval passes the model's own tool-call args
+// straight through) — the exact same shape sendBookingLinkSchema declares
+// (see booking.ts).
 interface BookingContext {
   guestName?: string;
   email?: string;
@@ -35,7 +36,7 @@ interface MissingInfoContext {
  *
  * Branches on tool_name:
  * - send_booking_link: rebuilds the same deterministic booking URL
- *   runSendBookingLink would have produced, from the row's own `context`
+ *   computeSendBookingLink would have produced, from the row's own `context`
  *   (guestName/email/room/checkIn/checkOut, captured at insert time — see
  *   BookingContext above).
  * - missing_info: sends a short plain-text message containing the owner's
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           { status: 400 },
         );
       }
-      const { url } = await runSendBookingLink(
+      const { url } = computeSendBookingLink(
         {
           guestName: context.guestName ?? "Guest",
           email: context.email ?? "unknown@example.com",
@@ -101,7 +102,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           checkIn: context.checkIn,
           checkOut: context.checkOut,
         },
-        { phone: decision.phone },
+        decision.phone,
       );
       messageText = url;
     } else {
@@ -125,7 +126,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     if (decision.conversationId) {
       // Same two-step recordMessage-then-updateMessageDeliveryStatus
-      // sequence run-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
+      // sequence run-guest-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
       // is already confirmed true here (the !sendResult.ok branch above
       // already returned), so this always writes "sent", never "failed".
       const messageId = await recordMessage(decision.conversationId, "assistant", messageText);

@@ -13,7 +13,7 @@ import { encode } from "gpt-tokenizer";
 export const MAX_CONTEXT_TOKENS = 1600;
 export const KEEP_CONTEXT_TOKENS = 800;
 
-// DeepSeek (this app's model, see memory.ts/run-turn.ts's MODEL) has no
+// DeepSeek (this app's model, see run-model.ts's MODEL) has no
 // maintained JS/TS tokenizer binding, so this counts via gpt-tokenizer's
 // default o200k_base BPE encoding (OpenAI's, not DeepSeek's) as the
 // closest well-maintained approximation — real subword counts, not an

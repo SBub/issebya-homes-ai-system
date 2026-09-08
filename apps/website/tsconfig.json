@@ -35,6 +35,8 @@
     "trees",
     "vitest.config.ts",
     "vitest.browser.setup.ts",
-    "supabase"
+    "supabase",
+    "src/app/(main)/booking/[type]/page-1.tsx",
+    "src/app/(main)/booking/[type]/store-1.tsx"
   ]
 }
