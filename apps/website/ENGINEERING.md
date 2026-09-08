@@ -82,14 +82,14 @@ Vercel, root directory set to `apps/website`. All vars used during build must be
 
 ## Further reading
 
-| Guide                                  | What it covers                                        |
-| -------------------------------------- | ----------------------------------------------------- |
-| `app_docs/nextjs-patterns-guide.md`    | Server vs client component patterns, data fetching    |
-| `app_docs/component-patterns-guide.md` | Component structure and composition rules             |
-| `app_docs/client-form-guide.md`        | Form handling in client components                    |
-| `app_docs/zod-validation-guide.md`     | Validation patterns at API boundaries                 |
-| `app_docs/data-fetching-client.md`     | Client-side data fetching with React Query            |
-| `app_docs/testing/`                    | Unit, browser, and E2E test spec formats and examples |
-| `app_docs/database/`                   | DB interaction rules, production migration process    |
-| `app_docs/branding-guidelines.md`      | Colors, typography, tone of voice                     |
-| `app_docs/import-patterns-guide.md`    | Import ordering and aliasing conventions              |
+| Guide                                  | What it covers                                             |
+| -------------------------------------- | ---------------------------------------------------------- |
+| `app_docs/nextjs-patterns-guide.md`    | Server vs client component patterns, data fetching         |
+| `app_docs/component-patterns-guide.md` | Component structure and composition rules                  |
+| `app_docs/client-form-guide.md`        | Form handling in client components                         |
+| `app_docs/zod-validation-guide.md`     | Validation patterns at API boundaries                      |
+| `app_docs/data-fetching-client.md`     | Server Component data fetching and Server Action mutations |
+| `app_docs/testing/`                    | Unit, browser, and E2E test spec formats and examples      |
+| `app_docs/database/`                   | DB interaction rules, production migration process         |
+| `app_docs/branding-guidelines.md`      | Colors, typography, tone of voice                          |
+| `app_docs/import-patterns-guide.md`    | Import ordering and aliasing conventions                   |
