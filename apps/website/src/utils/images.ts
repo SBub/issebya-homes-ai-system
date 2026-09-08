@@ -71,19 +71,3 @@ export const room2Images = [
   },
   { src: "/frontyard.webp", label: "Front yard and garden entrance" },
 ];
-
-export const eventImages = [
-  { src: "/living_room.webp", label: "Ground floor living room (floor 0)" },
-  {
-    src: "/entrance.webp",
-    label: "Front entrance to the living room (floor 0)",
-  },
-  { src: "/dining_area.webp", label: "Dining area (floor 1)" },
-  { src: "/terrace.webp", label: "Terrace with distant ocean views (floor 1)" },
-  { src: "/kitchen.webp", label: "Open kitchen with bar counter (floor 1)" },
-  {
-    src: "/kitchen_living_room.webp",
-    label: "Living area near the kitchen (floor 1)",
-  },
-  { src: "/frontyard.webp", label: "Front yard with firepit" },
-];
