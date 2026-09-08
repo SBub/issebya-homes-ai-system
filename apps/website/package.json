@@ -25,7 +25,6 @@
   "dependencies": {
     "@sentry/nextjs": "^10",
     "@supabase/supabase-js": "^2.49.8",
-    "@tanstack/react-query": "^5.81.2",
     "date-fns": "^4.1.0",
     "ical.js": "^2.2.1",
     "next": "^16.2.1",

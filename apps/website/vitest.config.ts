@@ -28,10 +28,11 @@ export default defineConfig({
             "react",
             "react-dom",
             "date-fns",
-            "@tanstack/react-query",
             "@sentry/nextjs",
             "zod",
             "next/image",
+            "next/navigation",
+            "posthog-js",
           ],
         },
         test: {
