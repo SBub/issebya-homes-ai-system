@@ -6,17 +6,27 @@ name: GCA Eval Gate
 # `paths:` below), to avoid spending real API budget on pushes that can't
 # have touched the eval-gated behavior.
 #
-# pull_request-only, deliberately NOT also on push: a repository ruleset
-# requires this check ("eval-gate") to pass before any PR can merge into
-# `master` — that's the only place this suite is actually enforced (the
-# `develop` ruleset only requires ci.yml's `check`). A push trigger here
-# would re-run the identical suite against the identical commit for free:
-# once when it lands on `develop` (push), again when the develop -> master
-# PR opens (pull_request) against that same commit, and a third time when
-# that PR merges (merging into a ref still fires a push event even though
-# direct pushes are blocked). One pull_request run against the promotion
-# PR's head commit is the only one that's ever actually load-bearing.
+# Two triggers, two different jobs:
+#
+# - `push` to `develop`: informational, non-blocking early warning. A
+#   repository ruleset on `develop` only requires ci.yml's `check`, not
+#   this — so this run can never gate a develop merge, it just surfaces a
+#   regression as soon as it lands instead of only at promotion time.
+# - `pull_request` into `master`: the real gate. A repository ruleset on
+#   `master` requires this check ("eval-gate") to pass before any PR can
+#   merge. This is the one that's actually load-bearing.
+#
+# Deliberately NOT also `push` to `master`: merging into a protected ref
+# still fires a push event even though direct pushes are blocked, so a
+# push-to-master trigger would just re-run this same suite a second time
+# against the exact commit the pull_request run already just checked —
+# pure duplicate spend with no gating benefit, since by the time that push
+# happens the merge has already gone through.
 on:
+  push:
+    branches: [develop]
+    paths:
+      - "apps/guest-communication-agent/**"
   pull_request:
     branches: [master]
     paths:
