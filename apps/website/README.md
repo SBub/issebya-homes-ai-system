@@ -37,13 +37,13 @@ Guest-facing website for [issebya.homes](https://issebya.homes), a guest house i
 
 ## Rendering strategy
 
-| Page                   | Strategy                                                      | Why                                                     |
-| ---------------------- | ------------------------------------------------------------- | ------------------------------------------------------- |
-| Room listing / booking | Partial Prerender (PPR) — static shell + dynamic availability | SEO for room content, real-time availability streams in |
-| Booking confirmation   | Server component, server-side fetch                           | No client JS needed, booking data fetched securely      |
-| Guest info             | Static (SSG)                                                  | Pure content, no dynamic data                           |
-| Contact                | Static (SSG)                                                  | Just a WhatsApp link                                    |
-| API routes             | Server-only                                                   | Stripe, Supabase, email — never reach the client        |
+| Page                   | Strategy                                                     | Why                                                     |
+| ---------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| Room listing / booking | Partial Prerender (PPR): static shell + dynamic availability | SEO for room content, real-time availability streams in |
+| Booking confirmation   | Server component, server-side fetch                          | No client JS needed, booking data fetched securely      |
+| Guest info             | Static (SSG)                                                 | Pure content, no dynamic data                           |
+| Contact                | Static (SSG)                                                 | Just a WhatsApp link                                    |
+| API routes             | Server-only                                                  | Stripe, Supabase, email (never reach the client)        |
 
 `next.config.ts` sets `cacheComponents: true`, so PPR and `"use cache"` are the
 Cache Components model in use throughout the app, not the older experimental
@@ -53,14 +53,14 @@ PPR flag.
 
 | Layer                              | Strategy                                                                                                                                               | TTL                                                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Booking pages (PPR static shell)   | Build-time prerender — room content, layout                                                                                                            | Indefinite (redeployed on code change)                                                               |
+| Booking pages (PPR static shell)   | Build-time prerender: room content, layout                                                                                                             | Indefinite (redeployed on code change)                                                               |
 | `/api/availability`                | `"use cache"` directive on the `getAvailability(room)` helper (`cacheLife("hours")`); tagged with `cacheTag("availability", \`availability-${room}\`)` | stale 5m / revalidate 1h / expire 1d, plus on-demand invalidation from `checkout/create` (see below) |
-| Static pages (guest-info, contact) | Full SSG — no runtime cache needed                                                                                                                     | Build time                                                                                           |
-| All other API routes               | No cache — always fresh                                                                                                                                | —                                                                                                    |
+| Static pages (guest-info, contact) | Full SSG: no runtime cache needed                                                                                                                      | Build time                                                                                           |
+| All other API routes               | No cache: always fresh                                                                                                                                 | N/A                                                                                                  |
 
 No `unstable_cache`, no `revalidate` headers in use. `/api/availability`
 (`src/app/api/availability/route.ts`) is the only route with explicit caching
-logic — it replaced a hand-rolled in-memory `Map`/TTL cache (and the old
+logic: it replaced a hand-rolled in-memory `Map`/TTL cache (and the old
 `?fresh=true` bypass query param) with the native `"use cache"` directive.
 
 On-demand invalidation now happens on the write side instead: when
@@ -71,7 +71,7 @@ returning, so the client's follow-up availability fetch after that error
 reads back genuinely fresh data.
 
 **Known limitation:** `revalidateTag` here only invalidates the cache in the
-serverless instance that called it, not across all instances — Next.js's
+serverless instance that called it, not across all instances: Next.js's
 default `"use cache"` handler is in-memory and per-process, and this app has
 no custom `cacheHandlers` configured in `next.config.ts`. A retry that lands
 on a different instance may briefly see stale data until that instance's own
