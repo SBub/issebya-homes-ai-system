@@ -30,10 +30,12 @@ Guest-facing website for [issebya.homes](https://issebya.homes), a guest house i
 | Route                  | Method     | What it does                                                                                                   |
 | ---------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
 | `/api/availability`    | GET        | Aggregates iCal feeds (Airbnb, VRBO, Booking.com) + own bookings; cached via `"use cache"` (see Caching below) |
-| `/api/checkout/create` | POST       | Creates Stripe Checkout session                                                                                |
 | `/api/bookings/direct` | GET / POST | Direct booking lookup and creation                                                                             |
 | `/api/webhook/stripe`  | POST       | Handles Stripe events (payment confirmation, email triggers)                                                   |
 | `/api/ical/[room]`     | GET        | Exports room bookings as iCal feed                                                                             |
+| `/api/e2e-ical-mock`   | GET        | Mock iCal feed for E2E tests                                                                                   |
+
+Checkout no longer goes through an API route: `submitBooking` (`src/app/(main)/booking/[type]/actions.ts`) is a Server Action that creates the Stripe Checkout session directly, server-side.
 
 ## Rendering strategy
 
