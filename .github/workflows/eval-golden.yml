@@ -2,20 +2,29 @@ name: GCA Eval Gate
 
 # Separate from ci.yml on purpose: this runs real Braintrust experiments
 # against real model calls (real API spend), on a different trigger/cadence
-# than lint/typecheck/test. Only `develop`/`master`, and only when this
-# app's own files change (see `paths:` below), to avoid spending real API
-# budget on pushes that can't have touched the eval-gated behavior.
+# than lint/typecheck/test. Only when this app's own files change (see
+# `paths:` below), to avoid spending real API budget on pushes that can't
+# have touched the eval-gated behavior.
 #
-# The `pull_request` trigger targeting `master` is what actually gates a
-# develop -> master promotion: it runs the same two score gates
-# (scripts/ci-gate-evals.ts) as a check on the PR itself, before merge, not
-# just after. It still isn't a REQUIRED check that blocks the merge button
-# — that needs a branch protection rule, which needs a GitHub plan upgrade
-# on this private repo (see ENGINEERING.md's "Known limitations" section)
-# — but the pass/fail is visible on the PR before anyone approves it.
+# Two triggers, two different jobs:
+#
+# - `push` to `develop`: informational, non-blocking early warning. A
+#   repository ruleset on `develop` only requires ci.yml's `check`, not
+#   this — so this run can never gate a develop merge, it just surfaces a
+#   regression as soon as it lands instead of only at promotion time.
+# - `pull_request` into `master`: the real gate. A repository ruleset on
+#   `master` requires this check ("eval-gate") to pass before any PR can
+#   merge. This is the one that's actually load-bearing.
+#
+# Deliberately NOT also `push` to `master`: merging into a protected ref
+# still fires a push event even though direct pushes are blocked, so a
+# push-to-master trigger would just re-run this same suite a second time
+# against the exact commit the pull_request run already just checked —
+# pure duplicate spend with no gating benefit, since by the time that push
+# happens the merge has already gone through.
 on:
   push:
-    branches: [develop, master]
+    branches: [develop]
     paths:
       - "apps/guest-communication-agent/**"
   pull_request:
