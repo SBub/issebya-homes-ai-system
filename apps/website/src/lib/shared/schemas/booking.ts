@@ -1,16 +1,30 @@
 import { z } from "zod";
+import { fromCalendarDay } from "@/lib/date-utils";
 
 const CHECKOUT_ROOM_TYPES = ["room1", "room2"] as const;
+
+// The check-in/check-out days now arrive from the browser as strings (the
+// guest's own calendar is the only correct reference for the day they
+// clicked), so this is a real trust boundary rather than a formality: the
+// server must not re-derive the day, only verify it. The regex pins the shape
+// and the refine rejects well-shaped nonsense the regex alone lets through,
+// e.g. "2026-02-31" or "2026-13-01".
+function calendarDaySchema(label: string) {
+  return z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, `${label} date must be in YYYY-MM-DD format`)
+    .refine((day) => !Number.isNaN(fromCalendarDay(day).getTime()), {
+      message: `${label} date is not a real calendar date`,
+    });
+}
 
 export const checkoutSchema = z
   .object({
     roomType: z.enum(CHECKOUT_ROOM_TYPES, {
       message: "Please select a valid room type",
     }),
-    checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Check-in date must be in YYYY-MM-DD format"),
-    checkOut: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "Check-out date must be in YYYY-MM-DD format"),
+    checkIn: calendarDaySchema("Check-in"),
+    checkOut: calendarDaySchema("Check-out"),
     personCount: z
       .number()
       .int()
@@ -30,7 +44,7 @@ export const checkoutSchema = z
     whatsappOptIn: z.boolean().default(false),
     source: z.enum(["direct", "gca"]).default("direct"),
   })
-  .refine((data) => new Date(data.checkOut) > new Date(data.checkIn), {
+  .refine((data) => fromCalendarDay(data.checkOut) > fromCalendarDay(data.checkIn), {
     message: "Check-out date must be after check-in date",
     path: ["checkOut"],
   });

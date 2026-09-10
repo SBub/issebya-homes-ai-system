@@ -1,6 +1,6 @@
 import { addBreadcrumb, startSpan } from "@sentry/nextjs";
 import { cacheLife, cacheTag } from "next/cache";
-import { findFirstAvailableNights, mergeDateRanges } from "@/lib/date-utils";
+import { findFirstAvailableNights, fromCalendarDay, mergeDateRanges } from "@/lib/date-utils";
 import { mergeMultipleFeeds } from "@/lib/ical-parser";
 import { createClient } from "@/lib/shared/supabase";
 import type { DateRange } from "@/lib/shared/types/booking";
@@ -32,9 +32,13 @@ async function getOwnBookings(room: string): Promise<DateRange[]> {
 
   if (error || !bookings) return [];
 
+  // check_in/check_out are date-only Postgres columns, i.e. calendar days.
+  // A bare `new Date("2026-09-21")` would parse them as UTC midnight, while
+  // every consumer here (isDateBlocked, mergeDateRanges) normalises with
+  // startOfDay, which is local — off-UTC that is a day's worth of drift.
   return bookings.map((b) => ({
-    start: new Date(b.check_in),
-    end: new Date(b.check_out),
+    start: fromCalendarDay(b.check_in),
+    end: fromCalendarDay(b.check_out),
   }));
 }
 

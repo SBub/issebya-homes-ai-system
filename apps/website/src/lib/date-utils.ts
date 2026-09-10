@@ -1,5 +1,50 @@
-import { addDays, differenceInDays, isAfter, isBefore, isSameDay, startOfDay } from "date-fns";
+import {
+  addDays,
+  differenceInDays,
+  format,
+  isAfter,
+  isBefore,
+  isSameDay,
+  parseISO,
+  startOfDay,
+} from "date-fns";
 import type { DateRange, ICalEvent } from "@/lib/shared/types/booking";
+
+/**
+ * A calendar day is a label, like a date written on paper, not a moment in
+ * time. It travels as a "yyyy-MM-dd" string across every boundary between the
+ * browser and the server (Server Action arguments, Server Component props, URL
+ * query params, Stripe metadata, Postgres columns), and only becomes a `Date`
+ * inside code that actually does date arithmetic. These two functions are the
+ * single place that conversion is defined.
+ *
+ * Both directions use the LOCAL calendar, which is the part that is not
+ * obvious:
+ *
+ * - `toCalendarDay` runs in the browser, where "local" is the guest's own
+ *   calendar. The guest clicked a cell labelled 21 Sep, so 21 Sep is the day
+ *   that has to be recorded. Formatting the same instant in UTC instead would
+ *   record the 20th for every guest whose timezone is ahead of UTC (all of
+ *   continental Europe, and Portugal on summer time), because their local
+ *   midnight is still the previous day in UTC.
+ * - `fromCalendarDay` returns local midnight because that is the anchor the
+ *   rest of this module already uses: `isDateBlocked` and friends normalise
+ *   with `startOfDay`, which is local, and ical.js hands us all-day event
+ *   boundaries as local midnight too (see ical-parser.ts). Parsing with a bare
+ *   `new Date("2026-09-21")` instead yields UTC midnight, a different instant
+ *   everywhere except UTC, which silently shifts those comparisons by a day.
+ *
+ * An unparseable string yields an Invalid Date rather than throwing, so
+ * untrusted input (URL params, Server Action arguments) can be checked with
+ * `Number.isNaN(date.getTime())` at the boundary.
+ */
+export function toCalendarDay(date: Date): string {
+  return format(date, "yyyy-MM-dd");
+}
+
+export function fromCalendarDay(day: string): Date {
+  return parseISO(day);
+}
 
 /**
  * Check if a date falls within any blocked range

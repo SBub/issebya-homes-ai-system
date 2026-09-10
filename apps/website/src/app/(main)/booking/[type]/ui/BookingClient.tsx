@@ -1,11 +1,11 @@
 "use client";
 
-import { format, parseISO } from "date-fns";
+import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isValidDateRange } from "@/lib/date-utils";
+import { fromCalendarDay, isValidDateRange } from "@/lib/date-utils";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
 import type { DateRange } from "@/lib/shared/types/booking";
 import { BookingEngineExpanded } from "./BookingEngineExpanded";
@@ -13,8 +13,12 @@ import { BookingEngineExpanded } from "./BookingEngineExpanded";
 type BookingClientProps = {
   roomType: "room1" | "room2";
   blockedDates: DateRange[];
-  defaultCheckIn: Date | null;
-  defaultCheckOut: Date | null;
+  // Calendar days ("yyyy-MM-dd"), not `Date`s: these are computed on the
+  // server and rendered in the browser, so shipping instants would have the
+  // browser re-read the server's midnight in the guest's timezone and show
+  // (and submit) the previous day for anyone behind UTC.
+  defaultCheckIn: string | null;
+  defaultCheckOut: string | null;
   error: string | null;
   // Server Component passed down from BookingEngine (async Server Component)
   // via the Next.js "interleaving" pattern: it renders server-side and is
@@ -24,19 +28,21 @@ type BookingClientProps = {
 };
 
 // Reconciles the URL-provided ?checkIn=&checkOut= (from a GCA sendBookingLink)
-// against the server-computed default first-available-nights selection. Pure
-// calculation from props + searchParams — safe to run via a useState lazy
-// initializer, no side effects.
+// against the server-computed default first-available-nights selection. Both
+// sources are calendar-day strings, and both are parsed the same way, into
+// browser-local midnight, so the day the guest is shown is the day the label
+// names. Pure calculation from props + searchParams — safe to run via a
+// useState lazy initializer, no side effects.
 function resolveInitialCheckDates(
   urlCheckIn: string | null,
   urlCheckOut: string | null,
-  defaultCheckIn: Date | null,
-  defaultCheckOut: Date | null,
+  defaultCheckIn: string | null,
+  defaultCheckOut: string | null,
   blockedDates: DateRange[],
 ): { checkIn: Date | null; checkOut: Date | null } {
   if (urlCheckIn && urlCheckOut) {
-    const parsedCheckIn = parseISO(urlCheckIn);
-    const parsedCheckOut = parseISO(urlCheckOut);
+    const parsedCheckIn = fromCalendarDay(urlCheckIn);
+    const parsedCheckOut = fromCalendarDay(urlCheckOut);
     if (
       !Number.isNaN(parsedCheckIn.getTime()) &&
       !Number.isNaN(parsedCheckOut.getTime()) &&
@@ -46,7 +52,10 @@ function resolveInitialCheckDates(
       return { checkIn: parsedCheckIn, checkOut: parsedCheckOut };
     }
   }
-  return { checkIn: defaultCheckIn, checkOut: defaultCheckOut };
+  return {
+    checkIn: defaultCheckIn ? fromCalendarDay(defaultCheckIn) : null,
+    checkOut: defaultCheckOut ? fromCalendarDay(defaultCheckOut) : null,
+  };
 }
 
 export function BookingClient({

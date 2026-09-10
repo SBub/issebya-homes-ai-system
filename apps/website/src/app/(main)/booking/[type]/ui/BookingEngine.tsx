@@ -1,5 +1,5 @@
 import { getAvailability } from "@/lib/availability";
-import { mergeDateRanges } from "@/lib/date-utils";
+import { mergeDateRanges, toCalendarDay } from "@/lib/date-utils";
 import { BookingClient } from "./BookingClient";
 import { BookingPricing } from "./BookingPricing";
 
@@ -19,8 +19,8 @@ export async function BookingEngine({ roomType }: BookingEngineProps) {
     <BookingClient
       roomType={roomType}
       blockedDates={blockedDates}
-      defaultCheckIn={firstAvailable?.start ?? null}
-      defaultCheckOut={firstAvailable?.end ?? null}
+      defaultCheckIn={firstAvailable ? toCalendarDay(firstAvailable.start) : null}
+      defaultCheckOut={firstAvailable ? toCalendarDay(firstAvailable.end) : null}
       error={error ?? null}
       pricing={<BookingPricing />}
     />

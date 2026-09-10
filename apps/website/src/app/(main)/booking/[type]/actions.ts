@@ -1,11 +1,10 @@
 "use server";
 
 import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "@sentry/nextjs";
-import { format } from "date-fns";
 import { revalidateTag } from "next/cache";
 import { headers } from "next/headers";
 import { getAvailability } from "@/lib/availability";
-import { isValidDateRange, mergeDateRanges } from "@/lib/date-utils";
+import { fromCalendarDay, isValidDateRange, mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice } from "@/lib/price-utils";
 import { captureBookingError } from "@/lib/sentry-booking";
 import { combinePhoneNumber } from "@/lib/shared/country-codes";
@@ -146,7 +145,7 @@ async function checkAvailability(
 
   // Same predicate the calendar classifies dates with, fed the same merged
   // ranges, so the server and the UI can never disagree about a range.
-  if (!isValidDateRange(new Date(checkIn), new Date(checkOut), blockedRanges)) {
+  if (!isValidDateRange(fromCalendarDay(checkIn), fromCalendarDay(checkOut), blockedRanges)) {
     addBreadcrumb({
       category: "booking",
       message: "Availability check rejected by merged calendar (iCal feeds or own bookings)",
@@ -165,10 +164,17 @@ async function checkAvailability(
   return { ok: true };
 }
 
+// `checkIn`/`checkOut` are calendar days ("yyyy-MM-dd"), not `Date`s, and the
+// browser formats them (see BookingEngineExpanded's runSubmitBooking). A
+// `Date` here would be an instant the browser built at the guest's local
+// midnight, and formatting it server-side would re-read it in the server's
+// timezone (UTC on Vercel), recording the previous day for every guest ahead
+// of UTC. Server Function arguments are untrusted client input, so the shape
+// is verified below by checkoutSchema rather than trusted.
 export async function submitBooking(
   roomType: "room1" | "room2",
-  checkInDate: Date | null,
-  checkOutDate: Date | null,
+  checkIn: string | null,
+  checkOut: string | null,
   source: "direct" | "gca",
   prevState: BookingFormState,
   formData: FormData,
@@ -183,7 +189,7 @@ export async function submitBooking(
 
   const values: BookingFormValues = { guestName, email, countryId, localNumber, whatsappOptIn };
 
-  if (!checkInDate || !checkOutDate) {
+  if (!checkIn || !checkOut) {
     const generalError = "Please select check-in and check-out dates.";
     captureBookingError(new Error(generalError), { roomType }, { step: "checkout_creation" });
     return {
@@ -227,8 +233,6 @@ export async function submitBooking(
   }
 
   const phone = combinePhoneNumber(countryId, localNumber);
-  const checkIn = format(checkInDate, "yyyy-MM-dd");
-  const checkOut = format(checkOutDate, "yyyy-MM-dd");
 
   addBreadcrumb({
     category: "booking",
@@ -281,8 +285,8 @@ export async function submitBooking(
 
       setContext("booking", { roomType, checkIn, checkOut, personCount, email });
 
-      const checkInDateOnly = new Date(checkIn);
-      const checkOutDateOnly = new Date(checkOut);
+      const checkInDateOnly = fromCalendarDay(checkIn);
+      const checkOutDateOnly = fromCalendarDay(checkOut);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -376,7 +380,7 @@ export async function submitBooking(
         const imageUrl = `https://issebya.com${ROOM_IMAGES[roomType]}`;
 
         const formatDate = (dateStr: string) => {
-          const date = new Date(dateStr);
+          const date = fromCalendarDay(dateStr);
           return date.toLocaleDateString("en-GB", {
             day: "numeric",
             month: "short",

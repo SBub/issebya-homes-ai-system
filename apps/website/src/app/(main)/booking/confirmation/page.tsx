@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { fromCalendarDay } from "@/lib/date-utils";
 
 export const metadata: Metadata = {
   title: "Booking Confirmed – Issebya Homes",
@@ -33,7 +34,10 @@ const roomLabels: Record<string, string> = {
 };
 
 function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString("en-GB", {
+  // A stored calendar day ("yyyy-MM-dd"), not an instant: parse it at local
+  // midnight so the guest is shown the day they picked, whatever timezone
+  // this renders in.
+  return fromCalendarDay(dateString).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
     year: "numeric",
