@@ -324,6 +324,13 @@ body {
   );
 }
 
+/* A check-out-only day that is clickable right now (a legal check-out for the
+   selected check-in): keep the hatched fill, but restore the pointer and hover
+   border so the guest can tell it really is clickable. */
+.calendar-date-checkout-boundary.calendar-date-clickable {
+  @apply cursor-pointer border border-transparent hover:border-foreground transition-colors;
+}
+
 .calendar-date-selected {
   @apply bg-foreground text-background font-semibold;
 }

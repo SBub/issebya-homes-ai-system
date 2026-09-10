@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import { useActionState, useCallback, useMemo, useState } from "react";
+import { toCalendarDay } from "@/lib/date-utils";
 import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
 import { ROOM_PRICING } from "pricing";
 import { addBookingBreadcrumb } from "@/lib/sentry-booking";
@@ -66,10 +67,14 @@ export function BookingEngineExpanded({
     prevState: BookingFormState,
     formData: FormData,
   ): Promise<BookingFormState> => {
+    // The picked dates become calendar-day labels HERE, in the browser, where
+    // "local" is the guest's own calendar. Handing the server the raw `Date`s
+    // instead let it re-read the guest's local midnight in its own timezone
+    // (UTC on Vercel) and record the previous day for anyone ahead of UTC.
     const result = await submitBooking(
       roomType,
-      checkInDate,
-      checkOutDate,
+      checkInDate ? toCalendarDay(checkInDate) : null,
+      checkOutDate ? toCalendarDay(checkOutDate) : null,
       source,
       prevState,
       formData,

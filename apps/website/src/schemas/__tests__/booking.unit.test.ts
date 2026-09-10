@@ -43,6 +43,29 @@ describe("checkoutSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // These now arrive from the browser rather than being formatted by the
+  // server, so the shape check is a trust boundary. A regex alone would let
+  // the well-shaped ones through.
+  it.each([
+    ["a day that is not on the calendar", "2025-02-31"],
+    ["a month that does not exist", "2025-13-01"],
+    ["a non-leap 29 February", "2025-02-29"],
+    ["an instant rather than a day", "2025-07-01T00:00:00.000Z"],
+    ["an empty string", ""],
+  ])("rejects check-in that is %s", (_label, checkIn) => {
+    const result = checkoutSchema.safeParse({ ...validData, checkIn });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a real leap day", () => {
+    const result = checkoutSchema.safeParse({
+      ...validData,
+      checkIn: "2024-02-29",
+      checkOut: "2024-03-02",
+    });
+    expect(result.success).toBe(true);
+  });
+
   // personCount
   it("rejects 0 persons", () => {
     const result = checkoutSchema.safeParse({ ...validData, personCount: 0 });
