@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
                   // Webhook-driven invalidation (api/webhook/stripe/route.ts)
                   // never runs on this recovery path, so the cached
                   // availability snapshot would otherwise stay stale until
-                  // it expires on its own (cacheLife("hours")) — invalidate
+                  // it expires on its own (cacheLife("minutes")) — invalidate
                   // it here too, same tag/shape as the webhook and the
                   // dates_unavailable path in booking/[type]/actions.ts.
                   revalidateTag(`availability-${booking.room_type}`, { expire: 0 });

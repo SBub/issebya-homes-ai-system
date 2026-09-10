@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
           // The just-confirmed booking's dates are no longer available —
           // invalidate the cached availability so the next read reflects
           // this booking instead of serving the stale pre-confirmation
-          // snapshot (up to `cacheLife("hours")` old otherwise). Mirrors
+          // snapshot (up to `cacheLife("minutes")` old otherwise). Mirrors
           // the same call in booking/[type]/actions.ts's dates-unavailable
           // path.
           revalidateTag(`availability-${roomType}`, { expire: 0 });

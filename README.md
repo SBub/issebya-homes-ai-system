@@ -1,130 +1,79 @@
 # issebya-homes-ai-system
 
-Turborepo/yarn-workspaces monorepo for the issebya.homes automation system. See
-`docs/monorepo-migration-plan.md` for how this got structured this way.
+Turborepo/yarn-workspaces monorepo for issebya.homes, a real short-term rental
+business. Three apps, one flow: a guest books on the **website**, then talks to
+the **guest communication agent** over WhatsApp, which escalates to the owner
+through the **Telegram router** whenever a decision needs a human.
 
-## apps/telegram-router
+## Flow
 
-Owns all Telegram I/O for the whole system (the one webhook a bot token allows,
-registered once). Parses incoming commands/callbacks and dispatches to plain logic APIs
-in other apps, which have zero Telegram awareness of their own:
+```
+guest -> apps/website (booking, payment)
+guest -> apps/guest-communication-agent (WhatsApp Q&A, booking links)
+                |
+                v  needs owner input (approval, missing info)
+         apps/telegram-router -> owner -> back into the agent
+```
 
-- Inline Approve/Reject button callbacks -> resolves owner-nudge approvals for
-  `apps/guest-communication-agent`'s HITL gates (booking-link approval, missing-info
-  answers) via `POST /api/owner-nudges`
+## Projects
 
-Sends every reply itself, retrying once on failure.
+### apps/website
 
-> **2026-08-21: crm/finance/social-media extracted to `issebya-homes-internal-tools`.**
-> This app's former `/social` command and `POST /api/campaign-drafts` route
-> (promo-code nudge approve/reject) — dead code once `apps/crm`/`apps/social-media`
-> stopped living in this repo — have since been trimmed out entirely.
+Guest-facing booking site. Guest picks a room, pays via Stripe Checkout, gets
+a confirmation, and issebya's own bookings re-export as an iCal feed back to
+the listing sites.
 
-**2026-08-07: the `telegram_delivery_failures` durable-fallback table removed**, along with `src/lib/telegram/delivery-failures.ts` and `src/lib/telegram/db.ts`
-(the `pg` pool that existed only for this). Delivery-failure monitoring will be
-handled via OTel instead, not a DB table. The table itself was dropped: see
-`supabase/migrations/20260807110000_drop_telegram_delivery_failures.sql`.
+Architecture: Next.js, server-side rendered booking pages. Availability
+merges external iCal feeds (Airbnb/VRBO/Booking.com) with the site's own
+bookings table at request time, so pages never serve stale availability.
 
-**2026-08-07: the health-monitor feature removed entirely**: the `/heartbeat`
-command, `POST /api/cron/check-health`, `src/lib/telegram/health-monitor.ts` and
-`health-targets.ts`, and both `apps/finance`'s and
-`apps/guest-communication-agent`'s own `GET /api/health` routes. It was the
-`HEALTH` node in `docs/agent-architecture.mmd`. The `health_check_state` table
-(created by `supabase/migrations/20260720140000_create_health_check_state.sql`)
-has since been dropped entirely: see
-`supabase/migrations/20260807100000_drop_dead_tables.sql`.
+### apps/guest-communication-agent (GCA)
 
-Framed as a "calling system" for now; the plan is for it to grow into an actual
-orchestrator (deciding which agent to delegate to) once the systems it calls become
-real agents, reactive instead of scheduled.
+WhatsApp agent for guest questions, pricing, availability, and booking links,
+live since 2026-07-21. See `ENGINEERING.md` in that app for the full
+technical walkthrough.
 
-> **Note:** only registered against a temporary ngrok tunnel used for testing, with no
-> permanent public URL yet (same open deployment/hosting question as the rest of this
-> repo).
+Architecture, the core agentic harness:
 
-**2026-08-07: `apps/notifications` removed**, along with its `apps/telegram-router`
-integration (the reminder "✅ Done" button, `POST /api/cron/check-reminders`, and the
-`notifications` liveness target). It was Notification Center (`NOTIF` in
-`docs/agent-architecture.mmd`): reminders that nag until acknowledged. Its
-`reminders` table (created by
-`supabase/migrations/20260720120000_create_reminders.sql`) has since been
-dropped entirely: see
-`supabase/migrations/20260807100000_drop_dead_tables.sql`.
+- human-in-the-loop gates: booking-link approval and missing-info questions
+  suspend a turn and route to the owner instead of guessing
+- tool calling: pricing, availability, knowledge-base lookup, booking links,
+  sandboxed code execution
+- a single agentic tool-calling loop
+- durable execution via Inngest, so a turn can sit suspended for hours
+  waiting on a human without holding a request open
+- sandboxing for the `run_code` tool, so multi-step lookups don't run
+  arbitrary code directly in the app process
+- online evals plus a CI eval gate (Braintrust), so prompt/model changes are
+  checked against a golden dataset before they reach guests
+- full instrumentation: OpenTelemetry traces every guest turn to both
+  Braintrust (AI-call observability) and Axiom (general app health), plus
+  Sentry error tracking in production
 
-## apps/guest-communication-agent
+### apps/telegram-router
 
-Guest-Comms Agent (`GCA` in `docs/agent-architecture.mmd`), **live** since 2026-07-21
-via the Twilio WhatsApp Sandbox. Originally ported (2026-07-20) from
-`issebya-homes-website` as a LangGraph.js `StateGraph`; simplified 2026-08-03 to a
-single plain async tool-calling loop (`src/agent/run-turn.ts`'s `runAgentTurn`) once it
-was clear GCA is, and is staying, a single agent with no multi-agent
-routing/supervision, so the graph machinery wasn't earning its keep (see
-`docs/agent-architecture-details.md`'s GCA section for the full history, and this app's
-own `ENGINEERING.md` for a full technical walkthrough).
+Owns all Telegram I/O for the system and resolves owner Approve/Reject
+callbacks back into GCA's HITL gates.
 
-Tools: `get_pricing`, `check_availability`, `answer_property_question` (pgvector
-similarity search), `send_booking_link` (gated behind owner Telegram approval),
-`get_current_date`, `run_code` (sandboxed, for multi-step lookups in one tool call),
-`wants_human` (one-way owner escalation), `missing_info` (suspends the turn and asks
-the owner, writing their answer back into the knowledge base).
+Architecture: thin I/O layer, one webhook, dispatches to plain APIs on the
+other apps. Not much to it by design; it stays dumb so the agent stays the
+one place with actual logic.
 
-Durable execution is via **Inngest**, not DBOS (replaced) or a LangGraph checkpointer:
-`POST /api/webhook/whatsapp` validates a real `X-Twilio-Signature`
-(`src/lib/twilio.ts`, hand-implemented HMAC-SHA1, no `twilio` SDK dependency) and fires
-an Inngest event rather than running the turn inline, so the webhook returns
-immediately and a turn can suspend for hours (owner approval, missing-info answer)
-without holding the request open.
+### Cross-cutting
 
-> **Known gaps, not yet resolved:**
->
-> - `guest_contacts` has no committed migration anywhere in the source repo's history
->   despite being referenced as real by its own docs: `supabase/migrations/20260720150002_create_guest_contacts_reconstructed.sql`
->   here is a hand-reconstructed minimal version (columns the ported code actually reads,
->   plus what source docs describe), not a verified copy of a real schema.
-> - `check_availability`/`send_booking_link` call the live `issebya.com/api/availability`
->   directly (`NEXT_PUBLIC_SITE_URL`): a cross-repo runtime dependency the port never
->   removed.
-> - The AI SDK migration (away from LangChain) lost automatic LangSmith tracing;
->   `whatsapp_messages.langsmith_run_id` is still generated/stored but no longer
->   corresponds to a real trace. Unresolved: either bridge OTel to LangSmith, or drop
->   the feedback-correlation feature that depends on it.
-
-Package manager: **yarn** (Berry, pinned via `packageManager` in package.json + corepack; always use yarn, not npm, in this repo).
-
-## apps/website
-
-The guest-facing booking site (issebya.homes), brought in from the formerly-separate
-`issebya-homes-website` repo on 2026-08-21 (plain copy, fresh history — its
-`packages/shared` got inlined into `src/lib/shared`, no new root shared-package
-convention added). Runs on its own, still-separate Supabase project
-(`apps/website/supabase/`) — not yet consolidated with this repo's shared project.
-
-Guest flow: a room's booking page (`/booking/[type]`) queries `GET /api/availability`
-(merges Airbnb/VRBO/Booking.com iCal feeds with the site's own `bookings` table) ->
-guest submits -> `POST /api/checkout/create` opens a Stripe Checkout session ->
-`POST /api/webhook/stripe` confirms payment and writes the `bookings` row -> the
-confirmation page looks it up via `GET /api/bookings/direct` -> `GET /api/ical/[room]`
-re-exports issebya's own bookings as an iCal feed for the reverse sync back to
-Airbnb/VRBO/Booking.com. Confirmation/notification emails go out via Resend.
-
-> **Known gap:** GCA's `send_booking_link`/`check_availability` tools call this
-> site's live `issebya.com/api/availability` directly over the network rather than
-> through anything in this repo — a cross-repo runtime dependency the original port
-> never removed (see the `apps/guest-communication-agent` section above). Updating
-> GCA's booking tool to work against this in-repo copy instead is separate, unstarted
-> work.
+Every app is left-shift audited with static analysis (lint, typecheck, knip,
+format) as a required CI gate on every merge to `develop`.
 
 ## Setup
 
 ```bash
 corepack enable   # one-time, if not already done, makes `yarn` resolve to the pinned version
-yarn install
-yarn lefthook install
+yarn install           # also installs the lefthook git hooks (postinstall)
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET
 cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
-                       # `supabase status`, Publishable/Secret on newer CLI versions),
+                       # `yarn supabase status`, Publishable/Secret on newer CLI versions),
                        # OPENROUTER_API_KEY,
                        # BRAINTRUST_API_KEY/BRAINTRUST_PROJECT_ID (AI observability +
                        # prompt management, see that app's own .env.example comment),
@@ -133,8 +82,8 @@ cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.e
                        # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (same bot every app
                        # uses), NEXT_PUBLIC_SITE_URL
 cp apps/website/.env.example apps/website/.env  # fill in SUPABASE_URL/SUPABASE_ANON_KEY/
-                       # SUPABASE_SERVICE_ROLE_KEY (its own, separate Supabase project —
-                       # `supabase start` from apps/website/, not the repo root), STRIPE_*,
+                       # SUPABASE_SERVICE_ROLE_KEY (its own, separate Supabase project,
+                       # `yarn supabase start` from apps/website/, not the repo root), STRIPE_*,
                        # RESEND_*, ROOM1_ICAL_*/ROOM2_ICAL_*, see the file's own comments
 ```
 
@@ -144,13 +93,32 @@ cp apps/website/.env.example apps/website/.env  # fill in SUPABASE_URL/SUPABASE_
 yarn dev              # starts every app's dev server in parallel (turbo run dev):
                        # apps/telegram-router :3003, apps/guest-communication-agent (tsx watch),
                        # apps/website :3000.
-                       # Bring up Supabase yourself first (`supabase start`,
+                       # Bring up Supabase yourself first (`yarn supabase start`,
                        # applying supabase/migrations); Ctrl+C stops the dev
                        # servers; Supabase's containers keep running in the
-                       # background (docker ps); `supabase stop` to stop them.
-                       # apps/website runs its own separate Supabase project — bring that
-                       # up separately too (`cd apps/website && supabase start`).
+                       # background (docker ps); `yarn supabase stop` to stop them.
+                       # apps/website runs its own separate Supabase project, bring that
+                       # up separately too (`cd apps/website && yarn supabase start`).
 ```
+
+### Local webhook testing (Twilio + Telegram over one ngrok tunnel)
+
+This repo has exactly one reserved ngrok domain, which can only forward to
+one local port at a time: a second simultaneous tunnel on the same domain
+fails with `ERR_NGROK_334`. Twilio's WhatsApp webhook needs
+`apps/guest-communication-agent` (:3005) and Telegram's bot webhook needs
+`apps/telegram-router` (:3003): two different local services, one shared
+public hostname.
+
+`scripts/dev-webhook-gateway.ts` (run via `yarn dev:webhook-gateway` from the repo root)
+exists to solve exactly this: a plain path-based HTTP proxy listening on :3010, forwarding
+`/api/webhook/whatsapp` -> :3005 and `/api/telegram/webhook` -> :3003. Point ngrok at the
+gateway port (`ngrok http 3010`), not at either app's own port directly. Pointing ngrok
+straight at one app's port silently breaks the other's webhook (both Twilio's
+`TWILIO_WEBHOOK_URL` and Telegram's registered webhook already use this domain + their own
+path, so nothing needs re-registering when you do this correctly). See the script's own doc
+comment for the full mechanics before touching ngrok in this repo, or
+`docs/ngrok-webhook-gateway-sop.md` for the step-by-step SOP.
 
 ## Checks
 

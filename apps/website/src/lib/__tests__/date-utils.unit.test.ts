@@ -4,11 +4,13 @@ import type { DateRange, ICalEvent } from "@/lib/shared/types/booking";
 import {
   findFirstAvailableNights,
   findFirstMonthWithAvailability,
+  fromCalendarDay,
   getBlockedDates,
   isDateBlocked,
   isPastDate,
   isValidDateRange,
   mergeDateRanges,
+  toCalendarDay,
 } from "../date-utils";
 
 /** Helper to create a DateRange from date strings */
@@ -260,5 +262,97 @@ describe("findFirstMonthWithAvailability", () => {
     const blocked = [range("2025-06-01", "2027-01-01")];
     const result = findFirstMonthWithAvailability(blocked);
     expect(result).toEqual(startOfDay(new Date("2025-06-01")));
+  });
+});
+
+// A calendar day is a label, not a moment, so these conversions are only ever
+// wrong in a timezone the test process does not happen to be in. Pinning TZ
+// explicitly is what makes the bug visible: Node re-reads process.env.TZ on
+// the next Date operation, so mutating it really does move the process's
+// local calendar.
+function withTimezone<T>(timeZone: string, fn: () => T): T {
+  const original = process.env.TZ;
+  process.env.TZ = timeZone;
+  try {
+    return fn();
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+}
+
+// Europe/Lisbon and Europe/Berlin are ahead of UTC in September, Pacific/Auckland
+// far ahead, America/New_York behind. Only the ahead-of-UTC ones ever shifted.
+const TIMEZONES = ["UTC", "Europe/Lisbon", "Europe/Berlin", "Pacific/Auckland", "America/New_York"];
+
+describe("toCalendarDay", () => {
+  it.each(TIMEZONES)("labels a picked date with the local calendar day in %s", (timeZone) => {
+    withTimezone(timeZone, () => {
+      // What a browser builds when the guest clicks the cell for 21 Sep 2026.
+      const picked = new Date(2026, 8, 21);
+      expect(toCalendarDay(picked)).toBe("2026-09-21");
+    });
+  });
+
+  // The exact worked example from the bug report: a guest in Portugal on
+  // summer time (UTC+1) clicks 21 Sep, and their browser's instant is already
+  // the 20th in UTC. Reading that instant in UTC, which is what Vercel does,
+  // is what recorded the wrong day.
+  it("keeps the guest's day even when their local midnight is the previous UTC day", () => {
+    withTimezone("Europe/Lisbon", () => {
+      const picked = new Date(2026, 8, 21);
+      expect(picked.toISOString()).toBe("2026-09-20T23:00:00.000Z");
+      expect(picked.toISOString().slice(0, 10)).toBe("2026-09-20");
+      expect(toCalendarDay(picked)).toBe("2026-09-21");
+    });
+  });
+
+  it("labels a date picked late in the day as that same day", () => {
+    withTimezone("Europe/Berlin", () => {
+      expect(toCalendarDay(new Date(2026, 8, 21, 23, 59, 59))).toBe("2026-09-21");
+    });
+  });
+});
+
+describe("fromCalendarDay", () => {
+  it.each(TIMEZONES)("parses a calendar day to local midnight in %s", (timeZone) => {
+    withTimezone(timeZone, () => {
+      const parsed = fromCalendarDay("2026-09-21");
+      expect(parsed.getFullYear()).toBe(2026);
+      expect(parsed.getMonth()).toBe(8);
+      expect(parsed.getDate()).toBe(21);
+      expect(parsed.getHours()).toBe(0);
+    });
+  });
+
+  it.each(TIMEZONES)("round-trips a calendar day unchanged in %s", (timeZone) => {
+    withTimezone(timeZone, () => {
+      for (const day of ["2026-01-01", "2026-06-15", "2026-09-21", "2026-12-31", "2024-02-29"]) {
+        expect(toCalendarDay(fromCalendarDay(day))).toBe(day);
+      }
+    });
+  });
+
+  it("returns an Invalid Date for input that is not a calendar day", () => {
+    for (const bad of ["", "21-09-2026", "2026-13-01", "2026-02-31", "not-a-date"]) {
+      expect(Number.isNaN(fromCalendarDay(bad).getTime())).toBe(true);
+    }
+  });
+
+  // The reason local midnight is the right anchor: isDateBlocked and friends
+  // normalise with startOfDay, which is local, and ical.js hands us all-day
+  // event boundaries as local midnight too. A UTC-midnight parse disagrees
+  // with both everywhere except UTC.
+  it.each(TIMEZONES)("agrees with the blocked-range predicate in %s", (timeZone) => {
+    withTimezone(timeZone, () => {
+      const blocked = [
+        { start: fromCalendarDay("2026-09-21"), end: fromCalendarDay("2026-09-24") },
+      ];
+      expect(isDateBlocked(fromCalendarDay("2026-09-20"), blocked)).toBe(false);
+      expect(isDateBlocked(fromCalendarDay("2026-09-21"), blocked)).toBe(true);
+      expect(isDateBlocked(fromCalendarDay("2026-09-23"), blocked)).toBe(true);
+      // Check-out day is available again.
+      expect(isDateBlocked(fromCalendarDay("2026-09-24"), blocked)).toBe(false);
+    });
   });
 });

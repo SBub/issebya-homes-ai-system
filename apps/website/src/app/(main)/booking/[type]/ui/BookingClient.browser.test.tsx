@@ -40,8 +40,11 @@ import { BookingClient } from "./BookingClient";
 const defaultProps = {
   roomType: "room1" as const,
   blockedDates: [],
-  defaultCheckIn: new Date("2025-07-17"),
-  defaultCheckOut: new Date("2025-07-19"),
+  // Calendar days, not instants: BookingClient parses them at browser-local
+  // midnight, so the label the server sent is the day the guest is shown, in
+  // every timezone the browser might be in.
+  defaultCheckIn: "2025-07-17",
+  defaultCheckOut: "2025-07-19",
   error: null,
   // Simulates the Server Component handed down from BookingEngine via the
   // "interleaving" pattern — BookingClient never imports BookingPricing.
@@ -146,4 +149,21 @@ test("calendar auto-expands when arriving via a GCA link", async () => {
   const { getByTestId } = await render(<BookingClient {...defaultProps} />);
 
   await expect.element(getByTestId("mock-expanded")).toBeInTheDocument();
+});
+
+// The GCA sends links shaped
+// https://issebya.com/booking/room1?checkIn=2026-09-01&checkOut=2026-09-05.
+// Those params are calendar-day labels, so the guest has to be shown the days
+// they name, not the days a UTC-midnight parse happens to land on in the
+// browser's timezone.
+test("user sees the exact days named by a GCA booking link", async () => {
+  mockSearchParams = new URLSearchParams({
+    checkIn: "2027-07-21",
+    checkOut: "2027-07-24",
+  });
+
+  const { getByText } = await render(<BookingClient {...defaultProps} />);
+
+  await expect.element(getByText("21 Jul 2027")).toBeInTheDocument();
+  await expect.element(getByText("24 Jul 2027")).toBeInTheDocument();
 });
