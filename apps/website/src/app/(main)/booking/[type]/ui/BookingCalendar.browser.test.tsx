@@ -1,4 +1,4 @@
-import { startOfDay } from "date-fns";
+import { addDays, addMonths, format, startOfDay, startOfMonth } from "date-fns";
 import { beforeEach, expect, test, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -20,6 +20,18 @@ import { BookingCalendar } from "./BookingCalendar";
 const TODAY = startOfDay(new Date("2025-07-15"));
 
 const blockedRanges: DateRange[] = [{ start: new Date("2025-07-20"), end: new Date("2025-07-23") }];
+
+// isValidDateRange checks the check-in against the real system clock, not the mocked
+// isPastDate above, so any test that exercises check-out selection has to use dates
+// that are genuinely in the future. Offsets are days from the 1st of that month.
+const FUTURE_MONTH = startOfMonth(addMonths(startOfDay(new Date()), 2));
+const futureDay = (offset: number) => addDays(FUTURE_MONTH, offset);
+const futureLabel = (offset: number) => format(futureDay(offset), "MMMM d, yyyy");
+
+// Nights on the 13th, 14th, 15th and 16th are taken. With a check-in on the 10th the
+// 13th is the first blocked day, so it is a legal same-day-turnover check-out.
+const futureBlocked: DateRange[] = [{ start: futureDay(12), end: futureDay(16) }];
+const FUTURE_CHECK_IN = futureDay(9);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -142,24 +154,66 @@ test("user can activate a date with keyboard Enter", async () => {
 });
 
 test("first blocked date after selected check-in becomes clickable as check-out", async () => {
-  // Blocked range: Jul 23–26. Check-in selected: Jul 20.
-  // Jul 23 is the first blocked date — should be enabled as valid check-out.
-  const blocked: DateRange[] = [{ start: new Date("2025-07-23"), end: new Date("2025-07-26") }];
-  const onDateSelect = vi.fn();
+  vi.mocked(findFirstMonthWithAvailability).mockReturnValue(FUTURE_MONTH);
 
   const { getByLabelText } = await render(
     <BookingCalendar
-      blockedDates={blocked}
-      selectedCheckIn={new Date("2025-07-20")}
+      blockedDates={futureBlocked}
+      selectedCheckIn={FUTURE_CHECK_IN}
       selectedCheckOut={null}
-      onDateSelect={onDateSelect}
+      onDateSelect={vi.fn()}
     />,
   );
 
-  // Jul 23 is blocked but should be enabled (valid check-out — all nights Jul 20–22 are free)
-  await expect.element(getByLabelText("July 23, 2025")).toBeEnabled();
-  // Jul 24 is inside the blocked range — nights 20–23 include blocked night 23, invalid
-  await expect.element(getByLabelText("July 24, 2025")).toBeDisabled();
+  // The 13th is blocked but enabled: nights 10, 11 and 12 are all free.
+  await expect.element(getByLabelText(futureLabel(12))).toBeEnabled();
+  // The 14th is inside the blocked range: nights 10 to 13 include blocked night 13.
+  await expect.element(getByLabelText(futureLabel(13))).toBeDisabled();
+});
+
+test("blocked check-out candidate renders as check-out only, never as available", async () => {
+  // Regression guard. Being a legal check-out used to make a blocked day skip the
+  // blocked branch entirely, so it fell through and rendered as a free night.
+  vi.mocked(findFirstMonthWithAvailability).mockReturnValue(FUTURE_MONTH);
+
+  const { getByLabelText } = await render(
+    <BookingCalendar
+      blockedDates={futureBlocked}
+      selectedCheckIn={FUTURE_CHECK_IN}
+      selectedCheckOut={null}
+      onDateSelect={vi.fn()}
+    />,
+  );
+
+  const checkOutCandidate = getByLabelText(futureLabel(12));
+  await expect.element(checkOutCandidate).toHaveClass("calendar-date-checkout-boundary");
+  await expect.element(checkOutCandidate).not.toHaveClass("calendar-date-available");
+  // It really is clickable, so it keeps the pointer and hover affordance.
+  await expect.element(checkOutCandidate).toHaveClass("calendar-date-clickable");
+
+  // A mid-block day stays fully unavailable and gets no affordance.
+  const midBlock = getByLabelText(futureLabel(13));
+  await expect.element(midBlock).toHaveClass("calendar-date-blocked");
+  await expect.element(midBlock).not.toHaveClass("calendar-date-available");
+  await expect.element(midBlock).not.toHaveClass("calendar-date-clickable");
+});
+
+test("blocked date chosen as check-out renders as selected, not hatched or available", async () => {
+  vi.mocked(findFirstMonthWithAvailability).mockReturnValue(FUTURE_MONTH);
+
+  const { getByLabelText } = await render(
+    <BookingCalendar
+      blockedDates={futureBlocked}
+      selectedCheckIn={FUTURE_CHECK_IN}
+      selectedCheckOut={futureDay(12)}
+      onDateSelect={vi.fn()}
+    />,
+  );
+
+  const selectedCheckOut = getByLabelText(futureLabel(12));
+  await expect.element(selectedCheckOut).toHaveClass("calendar-date-selected");
+  await expect.element(selectedCheckOut).not.toHaveClass("calendar-date-checkout-boundary");
+  await expect.element(selectedCheckOut).not.toHaveClass("calendar-date-available");
 });
 
 test("first blocked date gets checkout-boundary style, mid-block dates stay fully blocked", async () => {

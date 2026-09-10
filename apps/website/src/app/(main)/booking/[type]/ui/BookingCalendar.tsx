@@ -72,6 +72,14 @@ export function BookingCalendar({
     setCurrentMonth(addMonths(currentMonth, 1));
   };
 
+  // A blocked day is only ever usable as a check-out: the guest leaves the morning
+  // the next booking arrives (same-day turnover). Shared by the class logic and the
+  // click logic so the two cannot drift apart again.
+  const isValidCheckOut = (date: Date): boolean =>
+    selectedCheckIn !== null &&
+    isAfter(date, selectedCheckIn) &&
+    isValidDateRange(selectedCheckIn, date, blockedDates);
+
   // Get CSS classes for a date
   const getDateClasses = (date: Date, monthContext: Date): string => {
     const classes = ["calendar-date"];
@@ -89,23 +97,32 @@ export function BookingCalendar({
       return classes.join(" ");
     }
 
-    // Blocked date — unless it's a valid check-out on the first blocked day after check-in
-    const isBlocked = isDateBlocked(date, blockedDates);
-    const isValidCheckOut =
-      isBlocked &&
-      selectedCheckIn !== null &&
-      isAfter(date, selectedCheckIn) &&
-      isValidDateRange(selectedCheckIn, date, blockedDates);
+    // Blocked date. It never renders as available: it is either the selected check-out,
+    // a check-out-only day, or fully unavailable. Whether it can be clicked is a separate
+    // question, answered by isDateClickable.
+    if (isDateBlocked(date, blockedDates)) {
+      // A blocked day picked as the check-out still reads as part of the selection.
+      if (selectedCheckOut && isSameDay(date, selectedCheckOut)) {
+        classes.push("calendar-date-selected");
+        return classes.join(" ");
+      }
 
-    if (isBlocked && !isValidCheckOut) {
-      // Checkout boundary: first day of a blocked range immediately after available days.
-      // Show diagonal stripe instead of full strikethrough to hint guest can check out here.
+      // Checkout boundary: a legal check-out for the current check-in, or the first day
+      // of a blocked range immediately after available days. Show diagonal stripe instead
+      // of full strikethrough to hint guest can check out here.
       const prevDay = addDays(date, -1);
-      const isCheckoutBoundary = !isPastDate(prevDay) && !isDateBlocked(prevDay, blockedDates);
+      const canCheckOutHere = isValidCheckOut(date);
+      const isCheckoutBoundary =
+        canCheckOutHere || (!isPastDate(prevDay) && !isDateBlocked(prevDay, blockedDates));
 
       classes.push(
         isCheckoutBoundary ? "calendar-date-checkout-boundary" : "calendar-date-blocked",
       );
+      // Only a legal check-out is actually clickable, so only that one gets the pointer
+      // and hover affordance back.
+      if (canCheckOutHere) {
+        classes.push("calendar-date-clickable");
+      }
       return classes.join(" ");
     }
 
@@ -134,11 +151,7 @@ export function BookingCalendar({
     if (isPastDate(date)) return false;
     if (isDateBlocked(date, blockedDates)) {
       // Allow clicking a blocked date as check-out if all preceding nights are free
-      return (
-        selectedCheckIn !== null &&
-        isAfter(date, selectedCheckIn) &&
-        isValidDateRange(selectedCheckIn, date, blockedDates)
-      );
+      return isValidCheckOut(date);
     }
     return true;
   };
