@@ -44,7 +44,7 @@ export async function getAvailability(room: string): Promise<{
   error?: string;
 }> {
   "use cache";
-  cacheLife("hours");
+  cacheLife("minutes");
   cacheTag("availability", `availability-${room}`);
 
   return startSpan(

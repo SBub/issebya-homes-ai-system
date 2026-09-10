@@ -7,7 +7,7 @@ type BookingEngineProps = {
   roomType: "room1" | "room2";
 };
 
-// Server Component — getAvailability is "use cache"-tagged (cacheLife("hours")),
+// Server Component — getAvailability is "use cache"-tagged (cacheLife("minutes")),
 // so calling it here is a cached function call, not an uncached runtime read.
 // It does not force dynamic rendering and needs no Suspense boundary of its
 // own; this component stays part of the static shell.

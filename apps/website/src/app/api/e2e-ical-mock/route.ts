@@ -11,7 +11,7 @@ import { NextResponse } from "next/server";
  *
  * Also revalidates `getAvailability`'s "use cache" tag for room1
  * (src/lib/availability.ts's `cacheTag("availability", "availability-room1")`,
- * `cacheLife("hours")`) every time this flips. Confirmed by hand: Next's
+ * `cacheLife("minutes")`) every time this flips. Confirmed by hand: Next's
  * `generateStaticParams` on the booking page (src/app/(main)/booking/[type]/
  * page.tsx) triggers one background prewarm call to `getAvailability` shortly
  * after the dev server boots — before this route can ever run — and that

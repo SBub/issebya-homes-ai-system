@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import { revalidateTag } from "next/cache";
 import { headers } from "next/headers";
 import { getAvailability } from "@/lib/availability";
-import { mergeDateRanges } from "@/lib/date-utils";
+import { isValidDateRange, mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice } from "@/lib/price-utils";
 import { captureBookingError } from "@/lib/sentry-booking";
 import { combinePhoneNumber } from "@/lib/shared/country-codes";
@@ -62,11 +62,21 @@ function toFieldErrors(error: Parameters<typeof formatZodErrors>[0]): Record<str
   return errors;
 }
 
+// The last server-side gate before money moves. It has to agree with the
+// calendar the guest actually picked from, which is built by
+// `getAvailability` (iCal feeds for Airbnb/VRBO/Booking.com merged with our
+// own confirmed bookings). A `bookings`-table query alone is blind to every
+// OTA reservation, so a night blocked purely by an Airbnb stay used to sail
+// straight through here into a Stripe session and a `pending` row, i.e. a
+// double booking.
+type AvailabilityVerdict =
+  { ok: true } | { ok: false; reason: "conflict" | "unverifiable"; blockedDates: DateRange[] };
+
 async function checkAvailability(
   roomType: string,
   checkIn: string,
   checkOut: string,
-): Promise<boolean> {
+): Promise<AvailabilityVerdict> {
   const supabase = createAdminClient();
 
   const { data: conflicts } = await supabase
@@ -78,7 +88,81 @@ async function checkAvailability(
     .gt("check_out", checkIn) // existing ends after requested starts
     .limit(1);
 
-  return !conflicts || conflicts.length === 0;
+  // Read the cached snapshot BEFORE expiring the tag. If the fresh read below
+  // comes back with a failed feed, this is our last known good picture of that
+  // feed, at most one cacheLife("minutes") window old.
+  const lastKnownGood = await getAvailability(roomType);
+
+  if (conflicts && conflicts.length > 0) {
+    addBreadcrumb({
+      category: "booking",
+      message: "Availability check rejected by own confirmed bookings",
+      data: { roomType, checkIn, checkOut },
+      level: "warning",
+    });
+    return {
+      ok: false,
+      reason: "conflict",
+      blockedDates: mergeDateRanges(lastKnownGood.bookings),
+    };
+  }
+
+  // Second gate: the merged calendar. A cached read would still miss an OTA
+  // reservation made minutes ago, which is exactly the race this check exists
+  // to close, so expire the tag first and read current feed state.
+  revalidateTag(`availability-${roomType}`, { expire: 0 });
+  const fresh = await getAvailability(roomType);
+
+  // A feed that did not answer leaves `fresh.bookings` incomplete, so it would
+  // under-block. Union it with the last known good snapshot instead: a night
+  // counts as taken if EITHER picture says so. That keeps an outage from
+  // opening a double-booking hole without turning paying guests away on
+  // dates we already know are free. Over-blocking is possible only for a stay
+  // cancelled on an OTA inside the last cache window, which is rare and safe.
+  let blockedRanges: DateRange[];
+  if (fresh.error) {
+    if (lastKnownGood.error) {
+      // Neither read produced a complete picture, so we cannot verify this
+      // stay at all. Refuse rather than gamble on a double booking.
+      addBreadcrumb({
+        category: "ical",
+        message: "Availability unverifiable: no complete feed data, refusing booking",
+        data: { roomType, checkIn, checkOut, freshError: fresh.error },
+        level: "error",
+      });
+      return { ok: false, reason: "unverifiable", blockedDates: mergeDateRanges(fresh.bookings) };
+    }
+
+    addBreadcrumb({
+      category: "ical",
+      message: "Feed failed on re-check, falling back to union with last known good snapshot",
+      data: { roomType, checkIn, checkOut, freshError: fresh.error },
+      level: "warning",
+    });
+    blockedRanges = mergeDateRanges([...fresh.bookings, ...lastKnownGood.bookings]);
+  } else {
+    blockedRanges = mergeDateRanges(fresh.bookings);
+  }
+
+  // Same predicate the calendar classifies dates with, fed the same merged
+  // ranges, so the server and the UI can never disagree about a range.
+  if (!isValidDateRange(new Date(checkIn), new Date(checkOut), blockedRanges)) {
+    addBreadcrumb({
+      category: "booking",
+      message: "Availability check rejected by merged calendar (iCal feeds or own bookings)",
+      data: {
+        roomType,
+        checkIn,
+        checkOut,
+        blockedRangeCount: blockedRanges.length,
+        degraded: Boolean(fresh.error),
+      },
+      level: "warning",
+    });
+    return { ok: false, reason: "conflict", blockedDates: blockedRanges };
+  }
+
+  return { ok: true };
 }
 
 export async function submitBooking(
@@ -222,19 +306,15 @@ export async function submitBooking(
         };
       }
 
-      const isAvailable = await checkAvailability(roomType, checkIn, checkOut);
-      if (!isAvailable) {
+      const verdict = await checkAvailability(roomType, checkIn, checkOut);
+      if (!verdict.ok) {
         parentSpan?.setStatus({ code: 2, message: "Dates unavailable" });
-        // Expire the cached tag now so the fresh read below (and any later
-        // read) comes back genuinely fresh instead of the stale data that
-        // caused this conflict in the first place.
-        revalidateTag(`availability-${roomType}`, { expire: 0 });
-
-        const fresh = await getAvailability(roomType);
-        const blockedDates = mergeDateRanges(fresh.bookings);
 
         const generalError =
-          "Sorry, these dates were just booked by someone else. The calendar has been refreshed. Please select new dates.";
+          verdict.reason === "unverifiable"
+            ? "We could not confirm availability for these dates just now, so we have not taken any payment. Please try again in a few minutes, or message us and we will confirm by hand."
+            : "Sorry, these dates were just booked by someone else. The calendar has been refreshed. Please select new dates.";
+
         captureBookingError(
           new Error(generalError),
           { roomType, checkIn, checkOut, personCount },
@@ -245,7 +325,7 @@ export async function submitBooking(
           errors: {},
           generalError,
           values,
-          blockedDates,
+          blockedDates: verdict.blockedDates,
           success: false,
           url: null,
           guestContactId: null,

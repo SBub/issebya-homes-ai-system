@@ -40,8 +40,10 @@ vi.mock("next/headers", () => ({
   headers: async () => new Map([["host", "issebya.com"]]),
 }));
 
+const mockRevalidateTag = vi.fn();
+
 vi.mock("next/cache", () => ({
-  revalidateTag: vi.fn(),
+  revalidateTag: mockRevalidateTag,
 }));
 
 const mockGetAvailability = vi.fn();
@@ -95,6 +97,10 @@ describe("submitBooking", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.clearAllMocks();
+    // checkAvailability now re-checks the merged iCal + own-bookings calendar
+    // on every submit, so every test needs this to resolve. Default is
+    // "nothing blocked"; the tests that care override it.
+    mockGetAvailability.mockResolvedValue({ bookings: [], firstAvailable: null });
   });
 
   afterEach(() => {
@@ -179,6 +185,205 @@ describe("submitBooking", () => {
     expect(result.blockedDates).toEqual([
       { start: new Date("2025-07-01"), end: new Date("2025-07-03") },
     ]);
+  });
+
+  // The `bookings` table only ever holds our own rows, so this is the
+  // regression guard for the double-booking hole: a night blocked purely by an
+  // Airbnb/VRBO/Booking.com reservation used to pass the server check and get a
+  // Stripe session created against it.
+  it("rejects a range blocked only by an iCal feed, with no conflicting own booking", async () => {
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    });
+    // Overlaps the requested 2025-07-01 -> 2025-07-04 stay.
+    mockGetAvailability.mockResolvedValue({
+      bookings: [{ start: new Date("2025-07-02"), end: new Date("2025-07-05") }],
+      firstAvailable: null,
+    });
+
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDate,
+      checkOutDate,
+      "direct",
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.generalError).toMatch(/just booked by someone else/i);
+    expect(result.blockedDates).toEqual([
+      { start: new Date("2025-07-02"), end: new Date("2025-07-05") },
+    ]);
+    expect(mockStripeSessionCreate).not.toHaveBeenCalled();
+  });
+
+  // A cached read could still miss an OTA booking made minutes ago, which is
+  // the race the iCal re-check exists to close.
+  it("expires the availability cache tag before re-reading it at submit time", async () => {
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    });
+    mockStripeSessionCreate.mockResolvedValue({
+      id: "cs_test_789",
+      url: "https://checkout.stripe.com/pay/cs_test_789",
+    });
+
+    const { submitBooking } = await import("../actions");
+    await submitBooking(
+      "room1",
+      checkInDate,
+      checkOutDate,
+      "direct",
+      initialState,
+      validFormData(),
+    );
+
+    expect(mockRevalidateTag).toHaveBeenCalledWith("availability-room1", { expire: 0 });
+    expect(mockGetAvailability).toHaveBeenCalledWith("room1");
+  });
+
+  // Outage policy: a feed that did not answer must never open a
+  // double-booking hole. Fall back to the last known good snapshot, and
+  // refuse outright only when no complete picture exists at all.
+  it("refuses the booking when no complete feed data is available at all", async () => {
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    });
+    mockGetAvailability.mockResolvedValue({
+      bookings: [],
+      firstAvailable: null,
+      error: "Some availability data could not be fetched: 1 feed(s) failed.",
+    });
+
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDate,
+      checkOutDate,
+      "direct",
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.generalError).toContain("could not confirm availability");
+    expect(mockStripeSessionCreate).not.toHaveBeenCalled();
+  });
+
+  it("blocks a stay the failed feed no longer reports but the last known good snapshot does", async () => {
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    });
+    // Cached read (last known good) is complete and shows the stay blocked.
+    mockGetAvailability.mockResolvedValueOnce({
+      bookings: [{ start: new Date("2025-07-02"), end: new Date("2025-07-05") }],
+      firstAvailable: null,
+    });
+    // Fresh read lost that feed, so it looks free.
+    mockGetAvailability.mockResolvedValueOnce({
+      bookings: [],
+      firstAvailable: null,
+      error: "Some availability data could not be fetched: 1 feed(s) failed.",
+    });
+
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDate,
+      checkOutDate,
+      "direct",
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.generalError).toContain("just booked by someone else");
+    expect(mockStripeSessionCreate).not.toHaveBeenCalled();
+  });
+
+  it("proceeds when a feed failed but the last known good snapshot leaves the stay free", async () => {
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    });
+    mockGetAvailability.mockResolvedValueOnce({ bookings: [], firstAvailable: null });
+    mockGetAvailability.mockResolvedValueOnce({
+      bookings: [],
+      firstAvailable: null,
+      error: "Some availability data could not be fetched: 1 feed(s) failed.",
+    });
+    mockStripeSessionCreate.mockResolvedValue({
+      id: "cs_test_degraded",
+      url: "https://checkout.stripe.com/pay/cs_test_degraded",
+    });
+
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDate,
+      checkOutDate,
+      "direct",
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.url).toBe("https://checkout.stripe.com/pay/cs_test_degraded");
   });
 
   it("returns a checkout URL on success", async () => {
