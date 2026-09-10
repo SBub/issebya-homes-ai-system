@@ -14,11 +14,11 @@ Reads happen in an async Server Component that calls a cached helper directly. T
 // src/app/(main)/booking/[type]/ui/BookingEngine.tsx
 
 import { getAvailability } from "@/lib/availability";
-import { mergeDateRanges } from "@/lib/date-utils";
+import { mergeDateRanges, toCalendarDay } from "@/lib/date-utils";
 import { BookingClient } from "./BookingClient";
 import { BookingPricing } from "./BookingPricing";
 
-// Server Component (getAvailability is "use cache"-tagged, cacheLife("hours")),
+// Server Component (getAvailability is "use cache"-tagged, cacheLife("minutes")),
 // so calling it here is a cached function call, not an uncached runtime read.
 export async function BookingEngine({ roomType }: BookingEngineProps) {
   const { bookings, firstAvailable, error } = await getAvailability(roomType);
@@ -28,8 +28,8 @@ export async function BookingEngine({ roomType }: BookingEngineProps) {
     <BookingClient
       roomType={roomType}
       blockedDates={blockedDates}
-      defaultCheckIn={firstAvailable?.start ?? null}
-      defaultCheckOut={firstAvailable?.end ?? null}
+      defaultCheckIn={firstAvailable ? toCalendarDay(firstAvailable.start) : null}
+      defaultCheckOut={firstAvailable ? toCalendarDay(firstAvailable.end) : null}
       error={error ?? null}
       pricing={<BookingPricing />}
     />
@@ -38,6 +38,8 @@ export async function BookingEngine({ roomType }: BookingEngineProps) {
 ```
 
 The `getAvailability` helper itself declares its own cache scope with `"use cache"`, `cacheLife(...)`, and `cacheTag(...)` (in `src/lib/availability.ts`). A mutation that invalidates the read later calls `revalidateTag` with the same tag; see `actions.ts` below.
+
+Note the `defaultCheckIn`/`defaultCheckOut` props: a calendar day crossing a server/client boundary travels as a `"yyyy-MM-dd"` string, never as a `Date`. Passing the server-built `Date` down would let the browser re-read a server instant in the guest's timezone and shift the default day. See `AGENTS.md` for the rule and `src/lib/date-utils.ts` for the two conversion helpers.
 
 The caller (`src/app/(main)/booking/[type]/page.tsx`) wraps this Server Component in `<Suspense>` and an `<ErrorBoundary>` so a slow or failing read degrades gracefully without blocking the rest of the page.
 
@@ -62,19 +64,21 @@ Writes (creating a booking, starting a Stripe checkout) are `"use server"` funct
 
 export async function submitBooking(
   roomType: "room1" | "room2",
-  checkInDate: Date | null,
-  checkOutDate: Date | null,
+  checkIn: string | null, // "yyyy-MM-dd", labelled in the browser
+  checkOut: string | null,
   source: "direct" | "gca",
   prevState: BookingFormState,
   formData: FormData,
 ): Promise<BookingFormState> {
-  // validates input, checks availability, upserts the guest contact,
+  // validates input, re-checks availability, upserts the guest contact,
   // creates the Stripe Checkout Session, inserts a pending booking row
   // ...
 }
 ```
 
-On a stale-availability conflict, the action calls `revalidateTag(\`availability-${roomType}\`, { expire: 0 })` and re-reads `getAvailability` itself, returning the fresh `blockedDates` in its result so the client can update without a separate round trip.
+Server Action arguments are untrusted client input, so the calendar-day strings are validated for shape and real-date-ness at the boundary rather than trusted.
+
+Before creating the Checkout Session the action re-checks availability against the merged calendar (iCal feeds plus own bookings), not just the `bookings` table. It calls ``revalidateTag(`availability-${roomType}`, { expire: 0 })`` and re-reads `getAvailability` so the verdict is based on current feed state, and returns the fresh `blockedDates` in its result so the client can redraw the calendar without a separate round trip. If a feed is down, the fresh read is unioned with the last known good cached snapshot (a night is taken if either says so); if neither read is complete the booking is refused with a distinct "could not confirm availability, no payment taken" message rather than the misleading "just booked by someone else" one.
 
 ### Wiring a Server Action to a form
 
@@ -86,9 +90,19 @@ The client component that owns the form calls the Server Action through `useActi
 
 import { useActionState } from "react";
 import { submitBooking } from "../actions";
+import { toCalendarDay } from "@/lib/date-utils";
 
 const runSubmitBooking = async (prevState: BookingFormState, formData: FormData) => {
-  const result = await submitBooking(roomType, checkInDate, checkOutDate, source, prevState, formData);
+  // The picked dates become calendar-day labels here, in the browser, where
+  // "local" is the guest's own calendar.
+  const result = await submitBooking(
+    roomType,
+    checkInDate ? toCalendarDay(checkInDate) : null,
+    checkOutDate ? toCalendarDay(checkOutDate) : null,
+    source,
+    prevState,
+    formData,
+  );
   // client-only follow-up: update local availability state, fire analytics,
   // redirect to the returned Stripe URL
   return result;

@@ -76,6 +76,15 @@ Production: Vercel dashboard. Build-time vars must be listed in root `turbo.json
 | `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | build-time | PostHog analytics project token                                            |
 | `NEXT_PUBLIC_POSTHOG_HOST`          | build-time | PostHog ingestion host                                                     |
 
+`ROOM1_ICAL_*` / `ROOM2_ICAL_*` expand to `_AIRBNB`, `_VRBO` and `_BOOKING`.
+Each is optional and an unset one is skipped without an error, which is correct
+for Room 1 (it has no VRBO listing) but hides a real misconfiguration: a room
+with none of the three set looks exactly the same. `getAvailability` then falls
+back to the site's own bookings alone, so OTA reservations for that room stop
+blocking the calendar and the pre-checkout re-check has nothing to catch them
+with. The only signal is a `No iCal feeds configured for <room>` warning in the
+server logs, so check it after changing these.
+
 ## Deploy
 
 Vercel, root directory set to `apps/website`. All vars used during build must be declared in root `turbo.json`.
