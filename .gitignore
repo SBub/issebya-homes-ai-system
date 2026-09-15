@@ -22,3 +22,16 @@ coverage/
 .agents/
 .claude/
 skills-lock.json
+
+# personal, not project artifacts
+/Sviatlana Buben.md
+
+# ADW toolkit — symlinked in from a private repo, never committed here
+adws
+agents/
+trees/
+# `.claude/` above only matches a directory; inside a worktree .claude is a
+# SYMLINK, which that rule does not match. This one catches both.
+.claude
+# written into each worktree by worktree_ops.setup_worktree_environment()
+.ports.env
