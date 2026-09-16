@@ -12,6 +12,7 @@
     "build": "turbo run build",
     "start": "turbo run start",
     "dev:webhook-gateway": "tsx scripts/dev-webhook-gateway.ts",
+    "dev:adw": "./scripts/dev-adw.sh",
     "lint": "turbo run lint && prettier --check .",
     "lint:fix": "turbo run lint:fix && prettier --write .",
     "typecheck": "turbo run typecheck",
