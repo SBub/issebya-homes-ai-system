@@ -35,3 +35,6 @@ trees/
 .claude
 # written into each worktree by worktree_ops.setup_worktree_environment()
 .ports.env
+# scratch output (snapshots, traces) written by the Playwright MCP server into
+# whatever directory it is launched from — see .mcp.json
+.playwright-mcp/
