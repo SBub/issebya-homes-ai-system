@@ -114,6 +114,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding a Playwright spec under `apps/website/e2e/`
     - Note: `apps/website/app_docs/testing/e2e_runner.md` describes an agent-driven MCP browser flow that this repo does not currently use — prefer the code-based Playwright specs
 
+- `apps/website/app_docs/feature-83f21219-airbnb-link-replaces-review-carousel.md`
+  - Conditions:
+    - When touching the booking page's `ROOM_CONTENT` map or per-room outbound links
+    - When adding another simple outbound `"use client"` link component with a PostHog click capture (follow `AirbnbLink.tsx`/`WhatsAppLink.tsx`, not a new pattern)
+    - When tempted to reintroduce hardcoded review/testimonial content on the website
+
 ---
 
 ## apps/guest-communication-agent
