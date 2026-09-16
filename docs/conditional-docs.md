@@ -114,6 +114,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding a Playwright spec under `apps/website/e2e/`
     - Note: `apps/website/app_docs/testing/e2e_runner.md` describes an agent-driven MCP browser flow that this repo does not currently use — prefer the code-based Playwright specs
 
+- `apps/website/app_docs/feature-2365c303-drop-hardcoded-reviews.md`
+  - Conditions:
+    - When touching the booking type page's review/testimonial section
+    - When tempted to re-add a reviews carousel or hardcoded review data for a room
+    - When adding a new outbound listing link and looking for the established inline-anchor style
+
 ---
 
 ## apps/guest-communication-agent
