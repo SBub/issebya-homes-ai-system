@@ -120,6 +120,12 @@ procedures, not code documentation) and anything gitignored.
     - When tempted to re-add a reviews carousel or hardcoded review data for a room
     - When adding a new outbound listing link and looking for the established inline-anchor style
 
+- `apps/website/app_docs/feature-94ccaa09-restore-booking-skeleton.md`
+  - Conditions:
+    - When changing the Suspense fallback for `BookingEngine` in the booking type page
+    - When editing `BookingClient`'s collapsed-state DOM and needing to keep the skeleton's markup in sync
+    - When tempted to give `BookingEngineSkeleton` a test — see why the spec excluded one first
+
 ---
 
 ## apps/guest-communication-agent
