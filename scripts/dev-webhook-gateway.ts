@@ -7,10 +7,11 @@
  * (kerchief-coveted-remorse.ngrok-free.dev) can only forward to one local
  * port at a time on this plan (confirmed: a second simultaneous tunnel on
  * the same domain fails with ERR_NGROK_334). Twilio's WhatsApp webhook needs
- * to reach apps/guest-communication-agent (port 3005) and Telegram's bot
- * webhook needs to reach apps/telegram-router (port 3003) — two different
- * local services, one shared public hostname. Manually re-pointing the
- * tunnel back and forth between them whenever you need the other one is
+ * to reach apps/guest-communication-agent (port 3005), Telegram's bot webhook
+ * needs to reach apps/telegram-router (port 3003), and GitHub's issue webhook
+ * needs to reach the ADW trigger (port 8001) — three different local
+ * services, one shared public hostname. Manually re-pointing the
+ * tunnel back and forth between them whenever you need another one is
  * exactly the kind of thing that's easy to forget mid-session and silently
  * breaks whichever webhook isn't currently pointed at — this file exists so
  * that never has to happen again.
@@ -18,20 +19,26 @@
  * How it works: a plain byte-for-byte HTTP proxy (no body parsing, no new
  * dependency — just node:http) listening on GATEWAY_PORT, routing by URL
  * path prefix to the right upstream app. Twilio's request signature
- * (X-Twilio-Signature) is computed over the exact raw request body, so this
- * must never parse/reserialize it — req.pipe(proxyReq) forwards the
- * original bytes untouched, and `headers: req.headers` forwards
- * X-Twilio-Signature/X-Telegram-Bot-Api-Secret-Token as-is so each app's own
- * signature/secret check still passes.
+ * (X-Twilio-Signature) and GitHub's HMAC (X-Hub-Signature-256) are both
+ * computed over the exact raw request body, so this must never
+ * parse/reserialize it — req.pipe(proxyReq) forwards the original bytes
+ * untouched, and `headers: req.headers` forwards
+ * X-Twilio-Signature/X-Telegram-Bot-Api-Secret-Token/X-Hub-Signature-256 and
+ * X-GitHub-Event as-is so each app's own signature/secret check still passes.
+ * Anything added here that reads or rewrites the body breaks all three
+ * verifications at once, and the resulting 401s look like wrong secrets
+ * rather than a proxy bug.
  *
  * Usage: point ngrok at GATEWAY_PORT instead of any individual app's port
  * (`ngrok http 3010`, same reserved domain as always) — Twilio's
  * TWILIO_WEBHOOK_URL and Telegram's registered webhook URL both stay
  * exactly what they already are (same hostname, same paths); only which
- * local port ngrok forwards to changes. Run both apps' own `yarn dev`
- * first, then `yarn dev:webhook-gateway` from the repo root.
+ * local port ngrok forwards to changes. Start whichever upstreams you need
+ * first — `yarn dev` for the two apps, `uv run adws/adw_triggers/trigger_webhook.py`
+ * for the ADW trigger — then `yarn dev:webhook-gateway` from the repo root.
+ * An upstream that is not running answers 502; the others keep working.
  *
- * Adding a third inbound webhook later: add one more entry to ROUTES below.
+ * Adding a fourth inbound webhook later: add one more entry to ROUTES below.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -51,6 +58,12 @@ const ROUTES: { prefix: string; host: string; port: number; label: string }[] = 
     host: "localhost",
     port: 3003,
     label: "Telegram -> telegram-router",
+  },
+  {
+    prefix: "/gh-webhook",
+    host: "localhost",
+    port: 8001,
+    label: "GitHub -> ADW webhook trigger",
   },
 ];
 
