@@ -8,6 +8,7 @@ import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
 import { room1Images, room2Images } from "@/utils/images";
 import { BookingEngine } from "./ui/BookingEngine";
+import { BookingEngineSkeleton } from "./ui/BookingEngineSkeleton";
 import Gallery from "./ui/Gallery";
 
 const bookingTabs = [
@@ -93,7 +94,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
               </div>
             }
           >
-            <Suspense fallback={null}>
+            <Suspense fallback={<BookingEngineSkeleton />}>
               <BookingEngine roomType={roomType} />
             </Suspense>
           </ErrorBoundary>
