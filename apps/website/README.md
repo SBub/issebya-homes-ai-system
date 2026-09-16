@@ -53,34 +53,40 @@ PPR flag.
 
 ## Caching
 
-| Layer                              | Strategy                                                                                                                                               | TTL                                                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Booking pages (PPR static shell)   | Build-time prerender: room content, layout                                                                                                             | Indefinite (redeployed on code change)                                                               |
-| `/api/availability`                | `"use cache"` directive on the `getAvailability(room)` helper (`cacheLife("hours")`); tagged with `cacheTag("availability", \`availability-${room}\`)` | stale 5m / revalidate 1h / expire 1d, plus on-demand invalidation from `checkout/create` (see below) |
-| Static pages (guest-info, contact) | Full SSG: no runtime cache needed                                                                                                                      | Build time                                                                                           |
-| All other API routes               | No cache: always fresh                                                                                                                                 | N/A                                                                                                  |
+| Layer                              | Strategy                                                                                                                                                 | TTL                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Booking pages (PPR static shell)   | Build-time prerender: room content, layout                                                                                                               | Indefinite (redeployed on code change)                                                             |
+| `/api/availability`                | `"use cache"` directive on the `getAvailability(room)` helper (`cacheLife("minutes")`); tagged with `cacheTag("availability", \`availability-${room}\`)` | stale 5m / revalidate 1m / expire 1h, plus on-demand invalidation from `submitBooking` (see below) |
+| Static pages (guest-info, contact) | Full SSG: no runtime cache needed                                                                                                                        | Build time                                                                                         |
+| All other API routes               | No cache: always fresh                                                                                                                                   | N/A                                                                                                |
 
 No `unstable_cache`, no `revalidate` headers in use. `/api/availability`
 (`src/app/api/availability/route.ts`) is the only route with explicit caching
 logic: it replaced a hand-rolled in-memory `Map`/TTL cache (and the old
 `?fresh=true` bypass query param) with the native `"use cache"` directive.
 
-On-demand invalidation now happens on the write side instead: when
-`/api/checkout/create` (`src/app/api/checkout/create/route.ts`) detects a real
-booking conflict (the `dates_unavailable` 409), it calls
-`revalidateTag(\`availability-${roomType}\`, { expire: 0 })` right before
-returning, so the client's follow-up availability fetch after that error
-reads back genuinely fresh data.
+The profile is `minutes` rather than `hours` because `hours` revalidates after
+an hour but only expires after a day. On a low-traffic site, where nothing
+arrives to trigger that revalidation for long stretches, the calendar could
+serve day-old availability. `minutes` caps the worst case at an hour.
+
+On-demand invalidation happens on the write side: `submitBooking`
+(`src/app/(main)/booking/[type]/actions.ts`) calls
+``revalidateTag(`availability-${roomType}`, { expire: 0 })`` as part of its
+pre-checkout availability re-check, so that re-check judges the stay against
+current feed state rather than a cached snapshot. The fresh `blockedDates`
+it returns on a conflict also let the client redraw the calendar without a
+separate round trip.
 
 **Known limitation:** `revalidateTag` here only invalidates the cache in the
 serverless instance that called it, not across all instances: Next.js's
 default `"use cache"` handler is in-memory and per-process, and this app has
 no custom `cacheHandlers` configured in `next.config.ts`. A retry that lands
 on a different instance may briefly see stale data until that instance's own
-5-minute stale window (`cacheLife("hours")`) passes on its own. This is not a
-correctness risk: the actual conflict check in `checkout/create` queries
-Supabase directly, never the cache, so double-booking isn't possible either
-way. It's only a possible stale-calendar UX edge case on retry.
+5-minute stale window passes on its own. That is a stale-calendar UX edge
+case rather than a double-booking risk: the pre-checkout re-check expires the
+tag and re-reads within the same invocation, so the picture it judges the
+stay against is the one it just refreshed.
 
 ## Environment setup
 
