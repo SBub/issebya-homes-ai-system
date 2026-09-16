@@ -13,6 +13,7 @@ apps/website/trees
 apps/website/public
 apps/website/app_docs
 apps/website/specs
+apps/website/test-results
 apps/*/supabase/migrations
 supabase/migrations
 skills-lock.json
