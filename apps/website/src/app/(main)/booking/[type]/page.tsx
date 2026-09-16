@@ -1,12 +1,11 @@
 import { Suspense } from "react";
 import { ErrorBoundary } from "@sentry/nextjs";
 import { redirect } from "next/navigation";
-import { AirbnbReviewSlider } from "@/app/ui/AirbnbReviewSlider";
+import { AirbnbLink } from "@/app/ui/AirbnbLink";
 import { Callout } from "@/app/ui/Callout";
 import { TabsDesktop } from "@/app/ui/TabsDesktop";
 import { TabsMobile } from "@/app/ui/TabsMobile";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
-import { room1Reviews, room2Reviews } from "@/data/airbnb-reviews";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
 import { room1Images, room2Images } from "@/utils/images";
 import { BookingEngine } from "./ui/BookingEngine";
@@ -25,7 +24,7 @@ const bookingTabs = [
   },
 ];
 
-const ROOM_CONTENT: Record<string, { title: string; description: string[] }> = {
+const ROOM_CONTENT: Record<string, { title: string; description: string[]; airbnbUrl: string }> = {
   room1: {
     title: "private room 1",
     description: [
@@ -33,6 +32,7 @@ const ROOM_CONTENT: Record<string, { title: string; description: string[] }> = {
       "Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic.",
       "All spaces, except for the guest bedroom and bathroom, are shared.",
     ],
+    airbnbUrl: "https://www.airbnb.com/rooms/1424633715489915166",
   },
   room2: {
     title: "private room 2",
@@ -41,6 +41,7 @@ const ROOM_CONTENT: Record<string, { title: string; description: string[] }> = {
       "Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic.",
       "All spaces, except for the guest bedroom and bathroom, are shared.",
     ],
+    airbnbUrl: "https://www.airbnb.com/rooms/1507883205063503481",
   },
 };
 
@@ -58,7 +59,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
   }
 
   const roomType = type === "room1" ? BookingType.room1 : BookingType.room2;
-  const { title, description } = ROOM_CONTENT[type];
+  const { title, description, airbnbUrl } = ROOM_CONTENT[type];
 
   return (
     <>
@@ -118,10 +119,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
             </p>
           ))}
 
-          <AirbnbReviewSlider
-            key={roomType}
-            reviews={roomType === BookingType.room1 ? room1Reviews : room2Reviews}
-          />
+          <AirbnbLink href={airbnbUrl} />
 
           <div className="mt-4">
             <Callout>
