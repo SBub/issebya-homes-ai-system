@@ -166,7 +166,8 @@ procedures, not code documentation) and anything gitignored.
 - `scripts/dev-webhook-gateway.ts` (read the file header)
   - Conditions:
     - IMPORTANT: before changing any app's port, or adding an inbound webhook
-    - One reserved ngrok hostname fronts the gateway on 3010 and routes by path prefix to 3005 and 3003. Ports 3000, 3003 and 3005 are a contract with Twilio and Telegram and must not move
+    - One reserved ngrok hostname fronts the gateway on 3010 and routes by path prefix to 3005 and 3003. Ports 3003 and 3005 are a contract with Twilio and Telegram and must not move
+    - `apps/website` (3000) is NOT part of that contract — the gateway has no route to it. It defaults to 3000 but follows `PORT`, so an ADW run can give each worktree its own server instead of sharing the developer's. See `apps/website/playwright.config.ts`
 
 - `supabase/config.toml`
   - Conditions:
