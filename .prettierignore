@@ -16,3 +16,4 @@ apps/website/specs
 apps/*/supabase/migrations
 supabase/migrations
 skills-lock.json
+*.py

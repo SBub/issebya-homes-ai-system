@@ -1,0 +1,11 @@
+[tool.turbo]
+name = "issebya-homes-ai-system-py"
+
+[tool.uv.workspace]
+members = ["apps/*", "packages/*"]
+exclude = [
+  "apps/guest-communication-agent",
+  "apps/telegram-router",
+  "apps/website",
+  "packages/pricing",
+]

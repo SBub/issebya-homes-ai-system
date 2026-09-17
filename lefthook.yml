@@ -14,6 +14,16 @@ pre-commit:
     knip:
       glob: "*.{ts,js,json}"
       run: yarn knip
+    format-py:
+      glob: "*.py"
+      run: uv run ruff format {staged_files}
+      stage_fixed: true
+    lint-py:
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+    typecheck-py:
+      glob: "*.py"
+      run: uv run mypy {staged_files}
 
 pre-push:
   commands:

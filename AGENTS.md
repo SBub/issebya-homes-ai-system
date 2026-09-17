@@ -63,3 +63,29 @@ hardcode a port there, and don't assume 3000 is the one under test.
 
 The repository runs a single shared local Supabase instance. Never reset it as
 part of a task.
+
+## Python workspaces
+
+Python apps are uv workspace members under `apps/*`, declared via a
+`pyproject.toml` in the app directory. The root `pyproject.toml` is a virtual
+workspace root (no `[project]` table of its own) — it only declares
+`[tool.uv.workspace]` membership and a `[tool.turbo].name` that doesn't
+collide with anything.
+
+They are linted and typechecked with ruff/mypy, not eslint/tsc.
+
+`uv` auto-registers `build`/`test`/`lint`/`check`/`format` turbo tasks for a
+Python workspace member; it does **not** register `dev`, `start`,
+`typecheck`, or `format:check` — those are this repo's own task vocabulary.
+A Python app therefore keeps a thin `package.json` declaring only those four
+scripts, each shelling out to `uv run`.
+
+IMPORTANT: that thin `package.json`'s `"name"` must differ from the app's own
+`[project].name` in its `pyproject.toml` — reusing the same name for both
+collides (uv/turbo refuse to register two workspace members at the same path
+under one name). Suffixing the `package.json` name (e.g. `<app-name>-tasks`)
+avoids this.
+
+The root `.python-version` pins the interpreter for the whole workspace; an
+individual app's own `pyproject.toml` still declares its own
+`requires-python`.

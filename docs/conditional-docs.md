@@ -179,3 +179,7 @@ procedures, not code documentation) and anything gitignored.
   - Conditions:
     - When changing local database configuration
     - The repository runs a single shared local database. Never plan a reset
+
+- `AGENTS.md` ("Python workspaces" section)
+  - Conditions:
+    - Before adding a Python app, or changing the root `pyproject.toml`/`turbo.json` Python wiring
