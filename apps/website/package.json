@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/start.ts",
-    "dev:next": "next dev --port 3000",
+    "dev:next": "next dev",
     "build": "next build",
-    "start": "next start --port 3000",
+    "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "lint": "eslint .",
