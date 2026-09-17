@@ -120,6 +120,12 @@ procedures, not code documentation) and anything gitignored.
     - When tempted to re-add a reviews carousel or hardcoded review data for a room
     - When adding a new outbound listing link and looking for the established inline-anchor style
 
+- `apps/website/app_docs/feature-675f0da1-restore-booking-engine-skeleton.md`
+  - Conditions:
+    - When changing the `<Suspense>` boundary or fallback around `BookingEngine` in `booking/[type]/page.tsx`
+    - When changing `BookingClient`'s collapsed-state DOM/classes and needing to know what else must stay visually in sync
+    - When tempted to skeleton `BookingPricing` or use interactive elements for a loading placeholder
+
 ---
 
 ## apps/guest-communication-agent
