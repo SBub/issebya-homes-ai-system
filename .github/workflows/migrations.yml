@@ -4,39 +4,182 @@ name: Supabase Migrations
 # distinct concern with its own trigger shape, not folded into the
 # lint/typecheck/test job.
 #
-# Two jobs, two different jobs entirely:
+# Four jobs. Three do real work; the fourth only exists to tell the first
+# one whether it should:
+#   - changes: every PR into develop or master. Cheap. Reports whether the
+#     PR touches supabase/migrations/** — see the trigger note below for
+#     why that question can no longer be answered by a `paths:` filter.
 #   - dry-run: PRs into develop OR master that touch supabase/migrations/**.
 #     Applies the full migration history to a fresh ephemeral local Postgres
 #     (via `supabase start`) — catches broken SQL early, at both the
 #     feature->develop stage and the develop->master promotion stage. Needs
 #     no secrets, never touches a real hosted project.
-#   - push: only on push to master, only when supabase/migrations/** changed.
-#     Applies pending migrations to the real hosted prod project via
-#     `supabase db push`. Requires SUPABASE_ACCESS_TOKEN and
-#     SUPABASE_PROJECT_REF repo secrets — neither exists yet (no real prod
-#     Supabase project stood up yet), so this job will fail until those are
-#     added. Expected for now, not a bug.
+#   - push: on push to master when supabase/migrations/** changed, or on a
+#     manual dispatch with job=push. Applies pending migrations to the real
+#     hosted prod project via `supabase db push`.
+#   - drift-check: on every PR into master, and on a manual dispatch with
+#     job=drift-check. Read-only. Answers the one question nothing else
+#     here answers: does prod actually hold the migrations master says it
+#     should?
+#
+# Why drift-check exists at all. The push job runs *after* merge, so a
+# failing push blocks nothing — the migration is already in git and the PR
+# is already green. Worse, a red X on master is effectively invisible
+# because develop is this repo's GitHub default branch, so that is not the
+# branch anyone is looking at. The failure mode this creates is silent: a
+# migration lands in git, never reaches prod, and local history diverges
+# from prod's supabase_migrations.schema_migrations with no signal at all.
+# drift-check is the signal. It is deliberately indifferent to *why* the
+# two sides disagree — a failed push, a hand-run statement in the SQL
+# editor, a repaired history — because the thing worth alerting on is the
+# disagreement, not its cause.
+#
+# Why drift-check runs on the promotion PR and not on a daily cron. A cron
+# was the first instinct and it was the wrong one:
+#   - It would fail every single day until the unresolved `supabase link`
+#     403 below is fixed. A daily red that everyone learns to scroll past
+#     is worse than no alarm at all, and alert fatigue is precisely the
+#     disease this job was written to treat.
+#   - Drift can only be *introduced* when a migration merges to master. The
+#     last one was 2026-08-28. Daily would mean roughly thirty runs per
+#     real event — the wrong cadence for the thing being watched.
+#   - This repo has already found Actions' native `schedule:` unreliable (a
+#     ~14h delay before first fire), which is why a Cloudflare Worker cron
+#     is used elsewhere in this project. Founding a guard on a trigger the
+#     project already distrusts is a poor footing.
+#   - Above all: the push job *did* detect the 2026-09-10 breakage. It went
+#     red and stayed red. Nobody looked. The problem is visibility, not
+#     detection, and a second detector on a branch nobody watches fixes
+#     nothing. The develop->master promotion PR is the one screen someone
+#     actually reads before shipping, so that is where the signal belongs.
+#
+# Secrets: push and drift-check both need SUPABASE_ACCESS_TOKEN and
+# SUPABASE_PROJECT_REF repo secrets. Both exist, and both predate the last
+# successful push on 2026-08-28. Since 2026-09-10 every push run has failed
+# at `supabase link` with "Authorization failed for the access token and
+# project ref pair" — but the obvious reading of that message, a dead
+# token, is not what is happening:
+#   - the token is valid until 2026-11-25, and its "last used" stamp moved
+#     on 2026-09-10, so Supabase accepted it and identified the account;
+#   - the failure is a 403 on privileges ("Your account does not have the
+#     necessary privileges to access this endpoint"), not a 401 on identity;
+#   - `supabase projects list` on that account still returns project
+#     gqoeyqvwgmkyxasqknss (issebya-homes-ai-system, org issebya), so the
+#     project ref is right and the account's access to it is intact.
+# Nothing on our side changed either: this workflow has exactly one commit
+# in its history (d266b7e). The cause is still unresolved. The leading
+# suspect is the CLI version, see the next paragraph. Until it is found,
+# push and drift-check will both fail at the link step — a real outstanding
+# problem, not a quirk of these jobs.
+#
+# CLI version: pinned to 2.116.0 below rather than `latest`. `latest` is an
+# unpinned external input, and it is how a green pipeline here broke itself
+# without a single commit in this repo. The stable releases either side of
+# the break are v2.116.0 (2026-08-26) and v2.117.0 (2026-09-07), so the last
+# successful push ran 2.116.0 and the first failure ran 2.117.0. That is
+# inferred from release dates, not observed: supabase/setup-cli does not log
+# the version it installs. v2.117.0 rewrote the CLI auth layer
+# (legacy-platform-api.layer.ts, legacy-credentials.service.ts,
+# legacy-platform-api-factory.*, access_token.go) and its notes mention
+# ProjectConfig gaining hosted-field configuration, so `link` may now call
+# endpoints wanting a higher org role than this account holds. Ruled out:
+# the sbp_v0 token-format change in v2.117.0 is purely additive
+# (^sbp_(oauth_)?[a-f0-9]{40}$ -> ^sbp_(oauth_|v0_)?[a-f0-9]{40}$), so the
+# existing old-format token still matches. The pin therefore does two jobs:
+# it makes these runs reproducible, and it is the experiment for this
+# specific failure — dispatch job=push with the pin in place and see whether
+# the unchanged token goes green on 2.116.0.
+#
+# One workflow_dispatch serves both jobs rather than two near-identical
+# workflows; the `job` input picks which one runs. It defaults to
+# drift-check because that is the read-only one — writing to prod is opt-in,
+# never something you get by hitting "Run workflow" without reading it.
 
+# Trigger note: the pull_request trigger deliberately has no `paths:`
+# filter, and that is the one non-obvious thing in this file.
+#
+# dry-run and drift-check both key off pull_request but want different
+# shapes of it. dry-run wants PRs that touch supabase/migrations/**.
+# drift-check wants every PR into master *regardless* of what it touches —
+# the whole point is catching drift that exists independently of the PR's
+# own contents, and a promotion PR that changes only TypeScript is exactly
+# when you would most want to know prod is behind.
+#
+# Actions allows one entry per event type, so those two shapes cannot both
+# be expressed as triggers. The filter therefore moves down into the jobs:
+# the trigger fires on any PR into develop or master, drift-check gates on
+# github.base_ref, and dry-run gates on the `changes` job's verdict. The
+# cost is that the cheap `changes` job now runs on every PR into either
+# branch; the expensive local-Postgres spin-up still does not.
 on:
   pull_request:
     branches: [develop, master]
-    paths:
-      - "supabase/migrations/**"
   push:
     branches: [master]
     paths:
       - "supabase/migrations/**"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which job to run"
+        type: choice
+        default: drift-check
+        options:
+          - drift-check
+          - push
 
 jobs:
-  dry-run:
+  changes:
+    # Stands in for the `paths:` filter the pull_request trigger gave up.
+    # No checkout: asking the API for the PR's file list is faster than
+    # cloning to diff it, and needs no fetch-depth games to get a merge base.
     if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      # Stated rather than inherited: if the repo's default GITHUB_TOKEN
+      # scope is ever tightened, `gh pr diff` should keep working instead of
+      # failing in a way that looks like "this PR has no migrations".
+      contents: read
+      pull-requests: read
+    outputs:
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - name: Does this PR touch supabase/migrations/**?
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Assigned first, not piped straight into grep, so that a failure
+          # of `gh` itself kills the step (errexit) instead of being read as
+          # "no migration files". Silently skipping dry-run is exactly the
+          # kind of invisible non-event this whole workflow exists to stop.
+          files="$(gh pr diff "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --name-only)"
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+
+          if echo "$files" | grep -q '^supabase/migrations/'; then
+            echo "migrations=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "migrations=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  dry-run:
+    # PRs that actually touch migrations. Deliberately not wired to
+    # workflow_dispatch: spinning up a full local stack tells you nothing
+    # you want from a manual run, and the PR that introduced the migration
+    # already ran it.
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned deliberately, not `latest` — see the CLI version note in
+          # the header block. Bump this on purpose, never by drift.
+          version: 2.116.0
 
       - name: Apply migrations to a fresh local Postgres
         run: supabase start
@@ -46,19 +189,151 @@ jobs:
         run: supabase stop
 
   push:
-    if: github.event_name == 'push'
+    # The dispatch arm is the retry path: when a push run fails for a
+    # reason outside the migrations themselves (a credentials or privileges
+    # error, a Supabase outage, a bad CLI release), re-running it should not
+    # require fabricating a commit on master just to re-fire the push
+    # trigger. It is also how the CLI pin gets tested — see the header.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.job == 'push')
     runs-on: ubuntu-latest
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pinned, not left to default. A manual dispatch runs against
+          # whatever branch the UI picked, and that box defaults to develop
+          # — which would push develop's unpromoted migrations straight to
+          # prod. Prod is deployed from master, so master is the only branch
+          # whose migrations may be applied to it.
+          ref: master
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned deliberately, not `latest` — see the CLI version note in
+          # the header block. Bump this on purpose, never by drift.
+          version: 2.116.0
 
       - name: Link to prod project
         run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
 
       - name: Push pending migrations to prod
         run: supabase db push
+
+  drift-check:
+    # Every PR into master, plus dispatch. Two things this does NOT gate on,
+    # both on purpose:
+    #   - the PR's file list. It does not consult `changes`. Drift is a
+    #     property of prod, not of the diff in front of you, so the PRs
+    #     worth catching include the ones that touch no SQL at all.
+    #   - base_ref develop. A feature PR into develop is nowhere near prod;
+    #     failing it over prod's state would be noise on the wrong screen.
+    #     master is the promotion gate, so master is where this belongs.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'master') ||
+      (github.event_name == 'workflow_dispatch' && inputs.job == 'drift-check')
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Must be master, and the PR trigger makes this more important
+          # rather than less. On a pull_request event checkout defaults to
+          # the PR's merge commit — i.e. develop's migrations, including the
+          # ones this very PR is proposing to promote. Comparing those
+          # against prod would flag the PR's own contents as "drift" and the
+          # job would fail on every promotion PR that carries a migration,
+          # which is the one case it must not cry wolf on. Prod is deployed
+          # from master, so the question is only ever whether prod matches
+          # master *as it stands now*, before this PR lands.
+          ref: master
+
+      - uses: supabase/setup-cli@v1
+        with:
+          # Pinned deliberately, not `latest` — see the CLI version note in
+          # the header block. Bump this on purpose, never by drift.
+          version: 2.116.0
+
+      - name: Link to prod project
+        run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Compare master's migration history against prod
+        run: |
+          set -uo pipefail
+          # Actions' default shell is `bash -eo pipefail`. Errexit is turned
+          # off on purpose: both CLI calls are inspected by hand below, and a
+          # non-zero exit from one of them should reach the reporting code
+          # rather than killing the step with no explanation.
+          set +e
+
+          # Both CLI commands below exit 0 whether or not there is drift, so
+          # neither can be used as a bare assertion — the output has to be
+          # captured and inspected. The two shapes below were verified by
+          # hand against CLI 2.75.0; this job runs the pinned 2.116.0, where
+          # they are believed unchanged but were not observed directly.
+          #
+          # Assumption A (`supabase db push --dry-run`): prints the literal
+          # line "Remote database is up to date." when nothing is pending,
+          # and "Would push these migrations:" followed by one " • <file>"
+          # bullet per migration when something is. We match on those two
+          # sentinel phrases.
+          #
+          # Assumption B (`supabase migration list --linked`): prints a
+          # pipe-delimited table with Local | Remote | Time (UTC) columns,
+          # blanking the Local cell for a version that exists on prod but
+          # has no file in this repo. We treat "column 1 empty, column 2 is
+          # a bare number" as a remote-only row, which also skips the header
+          # and the ---- separator without needing to match them.
+          #
+          # If a future CLI version changes either shape, this job goes
+          # quiet (A) or noisy (B) rather than erroring, so that is the
+          # first thing to check if it ever starts disagreeing with reality.
+
+          drift=0
+
+          echo "::group::supabase db push --dry-run"
+          push_out="$(supabase db push --dry-run 2>&1)"
+          echo "$push_out"
+          echo "::endgroup::"
+
+          if echo "$push_out" | grep -qF "Would push these migrations:"; then
+            drift=1
+            echo "::error::Migrations exist in master but have NOT been applied to prod:"
+            echo "$push_out" | sed -n '/Would push these migrations:/,$p' | grep -F '•' || true
+          elif ! echo "$push_out" | grep -qF "Remote database is up to date."; then
+            drift=1
+            echo "::error::Could not determine push status from the CLI output above. Neither 'Would push these migrations:' nor 'Remote database is up to date.' was present — the CLI output format may have changed."
+          fi
+
+          echo "::group::supabase migration list --linked"
+          list_out="$(supabase migration list --linked 2>&1)"
+          echo "$list_out"
+          echo "::endgroup::"
+
+          remote_only="$(
+            echo "$list_out" | awk -F'|' 'NF >= 3 {
+              local_col = $1; remote_col = $2
+              gsub(/[[:space:]]/, "", local_col)
+              gsub(/[[:space:]]/, "", remote_col)
+              if (local_col == "" && remote_col ~ /^[0-9]+$/) print remote_col
+            }'
+          )"
+
+          if [ -n "$remote_only" ]; then
+            drift=1
+            echo "::error::Prod has migration versions with no corresponding file in master. Someone applied or repaired history outside this repo:"
+            echo "$remote_only" | sed 's/^/  /'
+          fi
+
+          if [ "$drift" -ne 0 ]; then
+            echo
+            echo "Migration drift detected between master and the prod Supabase project."
+            echo "Local history and prod's supabase_migrations.schema_migrations disagree."
+            echo "To apply what is missing: re-run this workflow via Run workflow with job=push."
+            exit 1
+          fi
+
+          echo "No drift: master's migration history matches prod."
