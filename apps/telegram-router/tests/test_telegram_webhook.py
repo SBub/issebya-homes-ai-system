@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from app import gca
+from app import gca, main
 from app.routers import telegram_webhook
 
 WEBHOOK_URL = "/api/telegram/webhook"
@@ -275,3 +275,18 @@ class TestAuth:
             headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
         )
         assert res.status_code == 401
+
+    async def test_missing_secret_header_still_401s_and_still_flushes(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The fail-closed auth must stay in front of everything, and the
+        # flush middleware must wrap rejected requests too — the rejection
+        # itself emits a webhook.telegram_update.rejected span that would
+        # otherwise never leave the instance.
+        flush = AsyncMock()
+        monkeypatch.setattr(main, "flush_tracing", flush)
+
+        res = await client.post(WEBHOOK_URL, json=_reply_body("hi"))
+
+        assert res.status_code == 401
+        flush.assert_awaited_once()
