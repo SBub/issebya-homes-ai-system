@@ -39,15 +39,21 @@ in-band, no DB lookups:
 
 See the root `README.md`'s Setup and Run sections for the full monorepo
 picture (env vars to copy, `yarn dev`, the shared ngrok webhook gateway for
-local Telegram + Twilio testing). This app itself runs on port 3003. Copy
+local Telegram + Twilio testing). This app itself runs on port 3003, on
+`uv run uvicorn` (a FastAPI/Python app, not Next.js). Copy
 `apps/telegram-router/.env.example` to `.env` and fill in the values, each
 one documented inline in that file (Telegram bot token/chat id/webhook
 secret, the shared key with GCA, Axiom/Sentry observability config).
 
 ## Checks
 
+This workspace is a Python uv member, so a bare `yarn lint`/`yarn typecheck`/
+`yarn test` run from inside the app directory doesn't resolve the right
+turbo package once the workspace splits in two (see root `AGENTS.md`'s
+Python section). Use the path-filtered form instead:
+
 ```bash
-yarn lint
-yarn typecheck
-yarn test
+yarn turbo run lint --filter=./apps/telegram-router
+yarn turbo run typecheck --filter=./apps/telegram-router
+yarn turbo run test --filter=./apps/telegram-router
 ```
