@@ -78,3 +78,21 @@ call in `with_span` from `app/tracing.py` (see the existing call sites in
 `gca.py` and `telegram.py`) and use `mark_span_failed` on the caught
 exception instead of only printing it, so failures show up in Axiom the same
 way existing ones do.
+
+Every request force-flushes the tracer provider through the HTTP middleware
+in `app/main.py`. A new route gets that for free — don't give it its own
+flush call.
+
+A flush must never change a response. Both `flush_tracing` and the
+middleware that calls it swallow and log; if you touch either, keep that
+contract. A raising flush on the webhook would turn a 200 into a 500 and
+make Telegram retry the update.
+
+There is no heartbeat span any more, and no heartbeat task to re-add. It fed
+an Axiom dead-man's-switch monitor, but this app runs as a request-driven
+Vercel Function, so a timer-driven task can't fire reliably and the monitor
+would alarm on a healthy system. `GET /api/health` is the daemon-free
+replacement.
+
+`GET /api/health` is unauthenticated and uninstrumented on purpose — it
+exposes nothing and it's polled on a schedule. Don't wrap it in `with_span`.

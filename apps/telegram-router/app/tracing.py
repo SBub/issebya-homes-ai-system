@@ -1,7 +1,20 @@
+import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 
 from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Status, StatusCode
+
+# The per-request budget for flush_tracing below. Generous enough for one
+# Axiom round trip, short enough that a stalled exporter can't hold a
+# Telegram webhook response open until Telegram gives up and retries it.
+REQUEST_FLUSH_TIMEOUT_MS = 2_000
+
+# Vercel documents a 500ms window between SIGTERM and the instance being
+# killed; staying under it means the shutdown flush either finishes or is
+# abandoned on our terms rather than mid-write.
+SHUTDOWN_FLUSH_TIMEOUT_MS = 400
 
 # Unlike guest-communication-agent's tracing.py, this app has no Inngest
 # steps and no cross-process replay to guard against — every request is
@@ -48,3 +61,33 @@ def mark_span_failed(span: Span, message_or_error: object) -> None:
     message = str(message_or_error)
     span.record_exception(Exception(message))
     span.set_status(Status(StatusCode.ERROR, message))
+
+
+# The counterpart of guest-communication-agent's flushTracing() (see that
+# app's src/instrumentation.ts), for the same reason and with the same
+# contract. This app's spans go through a BatchSpanProcessor, which buffers
+# them and exports on its own internal timer. On a Vercel Function nothing
+# guarantees that timer fires before the instance goes away, so buffered
+# spans are silently dropped; forcing a flush makes export a property of the
+# request rather than of how long the instance happens to live.
+#
+# Best-effort, exactly like GCA's: a flush failure is swallowed and logged,
+# never re-raised. It must not turn an otherwise-successful request into a
+# failed HTTP response.
+async def flush_tracing(timeout_millis: int = REQUEST_FLUSH_TIMEOUT_MS) -> None:
+    provider = trace.get_tracer_provider()
+    # GCA's `if (!globalProvider) return`, restated: without a lifespan there
+    # is no SDK provider, only the API's no-op one, which has nothing to
+    # flush. tests/conftest.py's ASGITransport never runs the lifespan, so
+    # this is the branch every existing test takes. isinstance rather than
+    # hasattr/getattr — getattr returns Any and mypy --strict rejects calling
+    # it.
+    if not isinstance(provider, TracerProvider):
+        return
+    try:
+        # force_flush is synchronous and blocks on the exporter's HTTP round
+        # trip; calling it bare here would stall the event loop, and with it
+        # every concurrent request, for that whole duration.
+        await asyncio.to_thread(provider.force_flush, timeout_millis)
+    except Exception as err:  # noqa: BLE001
+        print(f"[tracing] flush_tracing failed: {err}", file=sys.stderr)
