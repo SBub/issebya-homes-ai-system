@@ -79,6 +79,16 @@ field 'members'` — is expected and non-fatal while there are zero Python
   output when the workspace has none. It disappears once the first real
   Python app exists. Its own remediation text ("run `uv lock` and commit
   uv.lock") is wrong in this state — the lockfile is already committed.
+- Do **not** add a `required-version` floor under `[tool.uv]` in the root
+  `pyproject.toml`. It gates every `uv` invocation, including the one inside
+  Vercel's build image — which ships its own uv (0.10.11 at the time of
+  writing) and cannot be pinned from here, so a floor above it fails the
+  deployment outright with `Required uv version >=X does not match the running
+version`. Pin uv where it can actually be pinned: CI passes an explicit
+  `version:` to `astral-sh/setup-uv`. Note that turbo's Python task caching
+  wants a uv new enough for `uv workspace metadata --frozen`, which 0.10.11 is
+  not — so Vercel builds fall back to conservative Python hashing. That is a
+  warning, not an error, and not worth breaking the deploy over.
 
 ## Environment files
 
