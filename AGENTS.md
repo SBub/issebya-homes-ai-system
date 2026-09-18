@@ -39,6 +39,47 @@ workspace's own `AGENTS.md` as well.
 
 When you add documentation, add an entry for it there.
 
+## Python workspaces
+
+The repo root is a virtual [uv](https://docs.astral.sh/uv/) workspace
+(`pyproject.toml`, `.python-version`, `uv.lock`), and turbo's
+`experimentalPythonWorkspaces` future flag is on. A Python app is a uv
+workspace member under `apps/*` with its own `pyproject.toml`.
+
+- A Python member must declare `ruff`, `mypy`, and `pytest` in its
+  `[dependency-groups] dev` list. Turbo only synthesizes a `lint` task when
+  `ruff` is present and a `test` task when `pytest` is present — omit either
+  and that member silently drops out of the corresponding gate with no
+  error.
+- The member's thin `package.json` carries only the scripts turbo does
+  _not_ synthesize for a uv package: `dev`/`start`/`typecheck`/`format:check`.
+  Don't add `lint` or `test` scripts there; turbo already provides them from
+  the dev group.
+- That thin `package.json`'s `"name"` must differ from the app's
+  `[project].name` in its `pyproject.toml` — turbo (not uv) refuses to run
+  if they match. Convention: suffix the package.json name with `-tasks`.
+- Consequence: once a Python app lands, two turbo packages exist at one
+  directory, and the task set divides between them. `--filter=<app-name>`
+  resolves only the `pyproject.toml` package, so e.g.
+  `turbo run typecheck --filter=probe-svc` reports `No tasks were executed`
+  and exits 0 even with a live type error. Filter by path instead:
+  `--filter=./apps/<dir>`.
+- A Python app's thin `package.json` is still a yarn workspace, so it needs
+  a `yarn.lock` entry — run `yarn install` after adding it, or every yarn
+  command on it fails with `This package doesn't seem to be present in your
+lockfile`.
+- Every new **Node** app added under `apps/` or `packages/` must also be
+  added to the root `pyproject.toml`'s `[tool.uv.workspace] exclude` list,
+  or `uv sync` breaks (`missing a pyproject.toml`). This is dormant with
+  zero Python members and springs later, on an unrelated PR.
+- A turbo warning — `Unable to resolve uv.lock; using conservative Python
+task hashing. failed to parse 'uv workspace metadata' output: missing
+field 'members'` — is expected and non-fatal while there are zero Python
+  workspace members; uv omits `members` from its own workspace-metadata
+  output when the workspace has none. It disappears once the first real
+  Python app exists. Its own remediation text ("run `uv lock` and commit
+  uv.lock") is wrong in this state — the lockfile is already committed.
+
 ## Environment files
 
 - Root `.env.development` holds AI Developer Workflow (ADW) configuration only.
