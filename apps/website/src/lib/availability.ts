@@ -1,6 +1,7 @@
 import { addBreadcrumb, startSpan } from "@sentry/nextjs";
 import { cacheLife, cacheTag } from "next/cache";
 import { findFirstAvailableNights, fromCalendarDay, mergeDateRanges } from "@/lib/date-utils";
+import { resolveIcalFeedUrl } from "@/lib/ical-feed-url";
 import { mergeMultipleFeeds } from "@/lib/ical-parser";
 import { createClient } from "@/lib/shared/supabase";
 import type { DateRange } from "@/lib/shared/types/booking";
@@ -16,9 +17,9 @@ function getRoomICalFeeds(room: string): string[] {
   const vrbo = process.env[`${prefix}_ICAL_VRBO`];
   const booking = process.env[`${prefix}_ICAL_BOOKING`];
 
-  if (airbnb) feeds.push(airbnb);
-  if (vrbo) feeds.push(vrbo);
-  if (booking) feeds.push(booking);
+  if (airbnb) feeds.push(resolveIcalFeedUrl(airbnb));
+  if (vrbo) feeds.push(resolveIcalFeedUrl(vrbo));
+  if (booking) feeds.push(resolveIcalFeedUrl(booking));
 
   return feeds;
 }

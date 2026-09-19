@@ -126,6 +126,13 @@ procedures, not code documentation) and anything gitignored.
     - When changing `BookingClient`'s collapsed-state DOM/classes and needing to know what else must stay visually in sync
     - When tempted to skeleton `BookingPricing` or use interactive elements for a loading placeholder
 
+- `apps/website/app_docs/feature-fe1ca663-blog-with-booking-widget.md`
+  - Conditions:
+    - When adding, editing or removing a blog post under `apps/website/src/content/blog/`
+    - When changing `BookingWidget`, `RoomSwitcher`, or anything that renders `BookingEngine` outside `/booking/[type]`
+    - When a blog route stops prerendering, or `sitemap.ts`/`robots.ts`/`SITE_URL` needs changing
+    - When a local or E2E iCal feed fetch fails on a non-3000 port
+
 ---
 
 ## apps/guest-communication-agent

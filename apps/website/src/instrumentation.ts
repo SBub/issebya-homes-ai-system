@@ -1,4 +1,5 @@
 import { captureRequestError } from "@sentry/nextjs";
+import { resolveIcalFeedUrl } from "@/lib/ical-feed-url";
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
@@ -126,8 +127,11 @@ async function registerE2EMocks(): Promise<void> {
   }
 
   if (mockIcalFailure && process.env.ROOM1_ICAL_AIRBNB) {
+    // Matched against the same resolved URL getRoomICalFeeds actually
+    // fetches, not the raw env value — locally that's a root-relative path
+    // this server serves itself, resolved against this run's PORT.
     handlers.push(
-      http.get(process.env.ROOM1_ICAL_AIRBNB, () =>
+      http.get(resolveIcalFeedUrl(process.env.ROOM1_ICAL_AIRBNB), () =>
         (globalThis as { __e2eIcalShouldFail?: boolean }).__e2eIcalShouldFail
           ? HttpResponse.error()
           : passthrough(),

@@ -44,6 +44,21 @@ const BASE_URL = `http://localhost:${PORT}`;
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30000,
+  // One worker, deliberately. Tests within a file already run serially, but
+  // Playwright runs separate *files* in parallel by default — and every spec
+  // here drives the same three pieces of global state: one dev server, one
+  // shared local Supabase (see the repo's AGENTS.md), and the process-global
+  // `__e2eIcalShouldFail` toggle in src/instrumentation.ts. Two concrete
+  // collisions, both observed: the dates-unavailable test in
+  // booking-flow.integration.spec.ts seeds a *confirmed* room1 booking for
+  // days +10..+13, which is the same room and the same window the booking
+  // test in blog-booking-flow.integration.spec.ts tries to book — so it got
+  // the conflict message instead of Stripe; and while the iCal-failure test
+  // has its toggle on, any concurrent room1 booking elsewhere fails
+  // checkAvailability's "unverifiable" gate. Both are artifacts of the
+  // scheduling, not of the app. Staggering fixture dates per file would only
+  // paper over the first of the two.
+  workers: 1,
   use: {
     baseURL: BASE_URL,
     headless: true,

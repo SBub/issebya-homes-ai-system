@@ -2,7 +2,11 @@ pre-commit:
   parallel: true
   commands:
     format:
-      glob: "*.{ts,tsx,js,jsx,json,md,css}"
+      # `mdx` is here because blog posts under apps/website/src/content/blog
+      # are .mdx. Prettier's mdx parser round-trips them without touching the
+      # `export const meta = {...}` frontmatter block, so they are formatted
+      # like everything else rather than ignored.
+      glob: "*.{ts,tsx,js,jsx,json,md,mdx,css}"
       run: yarn prettier --write --ignore-unknown {staged_files}
       stage_fixed: true
     lint:
