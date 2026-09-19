@@ -1,4 +1,5 @@
 import path from "node:path";
+import createMDX from "@next/mdx";
 import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
 
@@ -12,7 +13,15 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
 };
 
-export default withSentryConfig(nextConfig, {
+// Blog posts are `.mdx` modules imported by src/lib/blog/posts.ts, not routed
+// `page.mdx` files, so `pageExtensions` is deliberately left alone: widening
+// it would widen the app-directory routing surface for no gain. No remark or
+// rehype plugins either: Next 16 builds with Turbopack, which only accepts
+// plugins by serialisable name, and this blog needs none.
+const withMDX = createMDX({});
+
+// Order matters: MDX wraps the plain config, Sentry wraps the result.
+export default withSentryConfig(withMDX(nextConfig), {
   // For all available options, see:
   // https://www.npmjs.com/package/@sentry/webpack-plugin#options
 

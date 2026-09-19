@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { SITE_URL } from "@/lib/site";
 
 import "./globals.css";
 
@@ -14,6 +15,7 @@ const nothing = Nothing_You_Could_Do({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "issebya.homes – a private room or intimate event space",
   description:
     "We offer two private rooms with shared spaces, or the full house for intimate gatherings — nestled in Almoçageme within the Sintra-Cascais Natural Park.",
@@ -21,11 +23,11 @@ export const metadata: Metadata = {
     title: "issebya.homes – a private room or intimate event space",
     description:
       "We offer two private rooms with shared spaces, or the full house for intimate gatherings — nestled in Almoçageme within the Sintra-Cascais Natural Park.",
-    url: "https://issebya.com",
+    url: SITE_URL,
     type: "website",
     images: [
       {
-        url: "https://issebya.com/living_room.webp",
+        url: `${SITE_URL}/living_room.webp`,
         alt: "issebya.homes",
       },
     ],
@@ -35,7 +37,7 @@ export const metadata: Metadata = {
     title: "issebya.homes – a private room or intimate event space",
     description:
       "We offer two private rooms with shared spaces, or the full house for intimate gatherings — nestled in Almoçageme within the Sintra-Cascais Natural Park.",
-    images: ["https://issebya.com/living_room.webp"],
+    images: [`${SITE_URL}/living_room.webp`],
   },
 };
 
