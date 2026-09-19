@@ -315,7 +315,16 @@ else
   # PORT comes from the gateway's route table, so the trigger cannot end up on a
   # port the gateway is not proxying to. python-dotenv does not override an
   # exported variable, so this wins over .env.development.
-  spawn adw "$C_ADW" env PORT="$ADW_PORT" uv run "$TRIGGER_SRC"
+  # caffeinate -i holds an idle-sleep assertion for as long as the listener
+  # runs, and workflow runs are spawned as its children, so a long run cannot
+  # be interrupted by the Mac idling while you are away from the keyboard.
+  #
+  # It does NOT cover closing the lid: -i is idle sleep only, and -s (full
+  # system sleep) is documented as "valid only when system is running on AC
+  # power". A shut lid on battery still sleeps. In practice that has been
+  # survivable — macOS suspends the run and it resumes on wake — but a sleep
+  # long enough to drop the API socket mid-stream will fail the phase.
+  spawn adw "$C_ADW" caffeinate -i env PORT="$ADW_PORT" uv run "$TRIGGER_SRC"
   wait_for_port "$ADW_PORT" "ADW webhook trigger"
 fi
 
