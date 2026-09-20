@@ -5,6 +5,8 @@ import { addDays, format, startOfDay } from "date-fns";
 const today = startOfDay(new Date());
 const checkInLabel = format(addDays(today, 10), "MMMM d, yyyy");
 const checkOutLabel = format(addDays(today, 13), "MMMM d, yyyy");
+// The same day as checkInLabel, in the format the collapsed engine displays it.
+const checkInDisplayText = format(addDays(today, 10), "d MMM yyyy");
 
 const WIDGET_POST = "/blog/a-weekend-in-almocageme";
 const NEWER_POST_TITLE = "A weekend in Almoçageme";
@@ -85,5 +87,35 @@ test.describe("Blog with an inline booking widget", () => {
 
     expect(requests.filter((url) => url.includes("/api/availability"))).toEqual([]);
     expect(requests.filter((url) => url.includes("_rsc="))).toEqual([]);
+  });
+
+  // This spec asserts the remount rather than the two rooms' blocked days
+  // differing, on purpose. getAvailability is a `"use cache"` function with
+  // cacheLife("minutes"), prewarmed at dev-server boot, so making the rooms'
+  // availability genuinely differ end to end would mean seeding the shared
+  // local database and adding an E2E-only cache-busting route. The blocked-date
+  // property is proved deterministically one layer down, in
+  // src/app/(main)/blog/ui/RoomSwitcher.browser.test.tsx, against the real
+  // calendar with per-room fixtures.
+  test("switching rooms resets the engine instead of carrying room 1's state over", async ({
+    page,
+  }) => {
+    await page.goto(WIDGET_POST);
+
+    await page.getByLabel("Book selected dates").click();
+    await expect(page.getByLabel("Confirm booking")).toBeVisible();
+
+    await page.locator(`button:not([disabled])[aria-label="${checkInLabel}"]`).click();
+    await page.locator(`button:not([disabled])[aria-label="${checkOutLabel}"]`).click();
+
+    const checkInDisplay = page.getByLabel("Select check-in date");
+    await expect(checkInDisplay).toHaveText(checkInDisplayText);
+
+    await page.getByRole("tab", { name: "room 2" }).click();
+
+    // Room 2's engine mounted fresh: collapsed, with room 2's own server
+    // defaults, and none of the selection made on room 1.
+    await expect(page.getByLabel("Confirm booking")).not.toBeVisible();
+    await expect(checkInDisplay).not.toHaveText(checkInDisplayText);
   });
 });
