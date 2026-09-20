@@ -86,4 +86,23 @@ test.describe("Blog with an inline booking widget", () => {
     expect(requests.filter((url) => url.includes("/api/availability"))).toEqual([]);
     expect(requests.filter((url) => url.includes("_rsc="))).toEqual([]);
   });
+
+  test("switching rooms remounts the engine and drops the selection", async ({ page }) => {
+    // A room switch has to remount the engine, not just re-render it: the
+    // engine reads its blocked dates and its default nights from props on
+    // mount only, so a re-render alone leaves the guest looking at the
+    // previous room's availability with the previous room's dates picked.
+    await page.goto(WIDGET_POST);
+
+    await page.getByLabel("Book selected dates").click();
+    await expect(page.getByLabel("Confirm booking")).toBeVisible();
+
+    await page.locator(`button:not([disabled])[aria-label="${checkInLabel}"]`).click();
+    await page.locator(`button:not([disabled])[aria-label="${checkOutLabel}"]`).click();
+
+    await page.getByRole("tab", { name: "room 2" }).click();
+
+    await expect(page.getByLabel("Confirm booking")).toBeHidden();
+    await expect(page.getByLabel("Book selected dates")).toBeVisible();
+  });
 });

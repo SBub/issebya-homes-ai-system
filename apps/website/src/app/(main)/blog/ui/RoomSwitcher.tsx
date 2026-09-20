@@ -33,6 +33,14 @@ type RoomId = (typeof ROOMS)[number]["id"];
  * readers alike. The cost is that unmounting drops any date selection, which
  * is also the behaviour we want: blocked dates differ per room, so carrying a
  * selection across could show the guest a range that is not bookable.
+ *
+ * The panel is keyed on the active room, and that key is what makes the line
+ * above true. Both rooms' nodes are the same component type in the same
+ * position, so without a key React treats them as one instance and updates its
+ * props instead of unmounting it. The engine seeds its blocked dates, its
+ * default nights and its expanded flag from props on mount only, so a guest
+ * who switched rooms would keep looking at the previous room's availability
+ * and the previous room's selection.
  */
 export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
   const [activeRoom, setActiveRoom] = useState<RoomId>("room1");
@@ -68,6 +76,7 @@ export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
       </div>
 
       <div
+        key={activeRoom}
         id="blog-room-panel"
         role="tabpanel"
         aria-labelledby={`blog-room-tab-${activeRoom}`}
