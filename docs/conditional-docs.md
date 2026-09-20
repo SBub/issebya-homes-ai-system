@@ -133,6 +133,13 @@ procedures, not code documentation) and anything gitignored.
     - When a blog route stops prerendering, or `sitemap.ts`/`robots.ts`/`SITE_URL` needs changing
     - When a local or E2E iCal feed fetch fails on a non-3000 port
 
+- `apps/website/app_docs/feature-e259222e-room-switcher-calendar-reset.md`
+  - Conditions:
+    - When changing how `RoomSwitcher` renders or swaps its tab panel, or when tempted to drop the `key` on it
+    - When a UI control changes `aria-selected` or a label but the component underneath keeps showing the previous selection's data
+    - When adding state to `BookingClient` or `BookingCalendar` that is seeded from props on mount only
+    - When writing a browser test that needs the real `BookingClient` without pulling in the `submitBooking` Server Function
+
 ---
 
 ## apps/guest-communication-agent
