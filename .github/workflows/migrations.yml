@@ -191,9 +191,15 @@ name: Supabase Migrations
 # Outstanding, and it needs a human. SUPABASE_DB_URL does not exist yet.
 # Creating it needs the prod database password, which only a Supabase org
 # owner can read, so it could not be done from this branch. Until the
-# secret exists those three jobs fail at their first CLI call for a missing
-# credential instead of a revoked one, which is why prod-migration-sync
-# must still stay off the protect-master ruleset. That ruleset has
+# secret exists those three jobs fail at a missing credential instead of a
+# revoked one, which is why prod-migration-sync must still stay off the
+# protect-master ruleset. Dispatched drift-check run 35607046865 is that
+# state on the record, and it also bought a guard: with the secret absent,
+# `--db-url ""` did not error, it fell back to libpq's defaults and dialled
+# the runner's own Postgres socket. Each of the three jobs therefore checks
+# the variable is non-empty before its first CLI call, so an unset or
+# misnamed secret fails as itself rather than as a migration pointed at the
+# wrong database. That ruleset has
 # `bypass_actors: []`, so requiring a check that cannot go green would lock
 # master for everyone with no admin override. The order is: create the
 # secret, dispatch job=drift-check, confirm it is green against master, and
@@ -372,6 +378,22 @@ jobs:
           # the header block. Bump this on purpose, never by drift.
           version: 2.116.0
 
+      - name: Require SUPABASE_DB_URL
+        # Fail closed, and this guard is not decoration. An unset or
+        # misnamed secret expands to the empty string, and `--db-url ""` is
+        # not an error to the CLI: it falls back to libpq's defaults and
+        # tries the *runner's own* local Postgres socket. Observed directly
+        # in run 35607046865, which reported `host=/var/run/postgresql
+        # user=runner database=runner` rather than anything about a missing
+        # credential. That is merely confusing in the read-only jobs; in
+        # push it is a migration aimed at the wrong database. Checking here
+        # turns it back into one obvious line.
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. This repo secret holds the prod session-pooler connection string; see the Secrets paragraph in this workflow's header for its required shape. Refusing to run against an unspecified database."
+            exit 1
+          fi
+
       - name: Push pending migrations to prod
         # --db-url, not --linked. There is no `Link to prod project` step
         # above this one any more: `supabase link` cannot complete on this
@@ -417,6 +439,22 @@ jobs:
           # Pinned deliberately, not `latest` — see the CLI version note in
           # the header block. Bump this on purpose, never by drift.
           version: 2.116.0
+
+      - name: Require SUPABASE_DB_URL
+        # Fail closed, and this guard is not decoration. An unset or
+        # misnamed secret expands to the empty string, and `--db-url ""` is
+        # not an error to the CLI: it falls back to libpq's defaults and
+        # tries the *runner's own* local Postgres socket. Observed directly
+        # in run 35607046865, which reported `host=/var/run/postgresql
+        # user=runner database=runner` rather than anything about a missing
+        # credential. That is merely confusing in the read-only jobs; in
+        # push it is a migration aimed at the wrong database. Checking here
+        # turns it back into one obvious line.
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. This repo secret holds the prod session-pooler connection string; see the Secrets paragraph in this workflow's header for its required shape. Refusing to run against an unspecified database."
+            exit 1
+          fi
 
       - name: Compare master's migration history against prod
         run: |
@@ -557,6 +595,22 @@ jobs:
         # below would read master as having zero migrations and pass
         # vacuously, which is the one way a gate fails silently.
         run: git fetch --no-tags origin "+refs/heads/master:refs/remotes/origin/master"
+
+      - name: Require SUPABASE_DB_URL
+        # Fail closed, and this guard is not decoration. An unset or
+        # misnamed secret expands to the empty string, and `--db-url ""` is
+        # not an error to the CLI: it falls back to libpq's defaults and
+        # tries the *runner's own* local Postgres socket. Observed directly
+        # in run 35607046865, which reported `host=/var/run/postgresql
+        # user=runner database=runner` rather than anything about a missing
+        # credential. That is merely confusing in the read-only jobs; in
+        # push it is a migration aimed at the wrong database. Checking here
+        # turns it back into one obvious line.
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. This repo secret holds the prod session-pooler connection string; see the Secrets paragraph in this workflow's header for its required shape. Refusing to run against an unspecified database."
+            exit 1
+          fi
 
       - name: Compare prod, master and this PR
         run: |
