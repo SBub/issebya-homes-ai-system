@@ -119,3 +119,36 @@ test.describe("Blog with an inline booking widget", () => {
     await expect(checkInDisplay).not.toHaveText(checkInDisplayText);
   });
 });
+
+test.describe("Blog breadcrumb trail", () => {
+  test("a post links back to the index through a breadcrumb trail", async ({ page }) => {
+    await page.goto(WIDGET_POST);
+
+    const trail = page.getByRole("navigation", { name: "Breadcrumb" });
+    await expect(trail).toBeVisible();
+
+    await expect(trail.getByRole("link", { name: "blog" })).toHaveAttribute("href", "/blog");
+
+    // The post's own title is the second and last item: marked aria-current,
+    // and deliberately not a link.
+    const current = trail.getByRole("listitem").nth(1);
+    await expect(current).toHaveAttribute("aria-current", "page");
+    await expect(current).toContainText(NEWER_POST_TITLE);
+    await expect(trail.getByRole("link", { name: NEWER_POST_TITLE })).toHaveCount(0);
+
+    await trail.getByRole("link", { name: "blog" }).click();
+    await page.waitForURL("**/blog");
+
+    await expect(page.getByRole("heading", { name: NEWER_POST_TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: OLDER_POST_TITLE })).toBeVisible();
+  });
+
+  // The index is the root of the trail, so it shows none. This also proves the
+  // selector above is specific enough: the site header is a <nav> too, but an
+  // unnamed one, so filtering on the accessible name keeps this at zero.
+  test("the index shows no breadcrumb", async ({ page }) => {
+    await page.goto("/blog");
+
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toHaveCount(0);
+  });
+});

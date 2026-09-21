@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { fromCalendarDay } from "@/lib/date-utils";
 import { allPosts, getPostBySlug } from "@/lib/blog/posts";
 import { SITE_URL } from "@/lib/site";
+import { Breadcrumb } from "../ui/Breadcrumb";
 
 export function generateStaticParams() {
   return allPosts.map(({ slug }) => ({ slug }));
@@ -50,6 +51,8 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
 
   return (
     <article className="max-w-2xl mx-auto px-6 md:px-12 py-8">
+      <Breadcrumb title={title} />
+
       <h1 className="text-4xl font-hand font-bold">{title}</h1>
       <p className="text-xs text-gray-600 mt-1 mb-6">
         {format(fromCalendarDay(date), "d MMMM yyyy")}
