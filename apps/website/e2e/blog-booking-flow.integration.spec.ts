@@ -11,8 +11,7 @@ const checkOutLabel = format(addDays(today, 13), "MMMM d, yyyy");
 const checkInDisplayText = format(addDays(today, 10), "d MMM yyyy");
 
 const WIDGET_POST = "/blog/welcome-to-issebya-homes";
-const POST_TITLE =
-  "Welcome to issebya.homes: a house for rest between the Sintra forest and the Atlantic";
+const POST_TITLE = "A house for rest between the Sintra forest and the Atlantic";
 
 test.describe("Blog with an inline booking widget", () => {
   test("index lists the post and links to it", async ({ page }) => {

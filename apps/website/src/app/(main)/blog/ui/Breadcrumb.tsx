@@ -15,17 +15,22 @@ import Link from "next/link";
  * span rather than being a third list item. That way the `<ol>` exposes
  * exactly two entries to assistive tech, and the separator never lands in the
  * current item's accessible name.
+ *
+ * The current item is clamped to one line with an ellipsis. The full title is
+ * still in the DOM and in the accessible name; the clamp only stops the trail
+ * from repeating the H1 that sits directly under it, at full length, when the
+ * title is long.
  */
 export function Breadcrumb({ title }: { title: string }) {
   return (
     <nav aria-label="Breadcrumb" className="mb-2">
-      <ol className="flex flex-wrap items-center text-xs text-gray-600">
-        <li>
+      <ol className="flex items-center text-xs text-gray-600">
+        <li className="shrink-0">
           <Link href="/blog" className="underline hover:text-black">
             blog
           </Link>
         </li>
-        <li aria-current="page">
+        <li aria-current="page" className="min-w-0 truncate">
           <span aria-hidden="true" className="mx-2">
             ›
           </span>
