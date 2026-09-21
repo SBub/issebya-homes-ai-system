@@ -147,7 +147,7 @@ function parseSandboxOutput(stdout: string): SandboxResult | null {
 // (see this file's top comment for why these are mirrors, not real
 // closures), followed by the agent-authored `code` as an async function
 // body.
-async function buildScript(code: string, api: SandboxApi): Promise<string> {
+export async function buildScript(code: string, api: SandboxApi): Promise<string> {
   const requested = new Set(Object.keys(api));
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
 
@@ -156,6 +156,11 @@ async function buildScript(code: string, api: SandboxApi): Promise<string> {
 
   if (requested.has("checkAvailability")) {
     preambleParts.push(`const SITE_URL = ${JSON.stringify(siteUrl)};`);
+    // LANDMINE: every shim below is written inside an untagged template
+    // literal, where a backslash escape JS doesn't know (\d, \s, \w) silently
+    // collapses to the bare letter in the emitted script. Any pattern here is
+    // spelled without backslashes ([0-9] rather than \d) so there is nothing
+    // to lose; a genuinely needed backslash has to be doubled.
     toolMethods.push(`
   async checkAvailability({ room, checkIn, checkOut }) {
     const today = new Date().toISOString().slice(0, 10);
@@ -163,7 +168,7 @@ async function buildScript(code: string, api: SandboxApi): Promise<string> {
       return { available: false, reason: reason, room: room, checkIn: checkIn, checkOut: checkOut, today: today };
     };
     const isCalendarDate = function (value) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return false;
       const parsed = new Date(value);
       return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
     };
