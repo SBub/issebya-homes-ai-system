@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value      | Last Updated                  |
 | ----------------- | ---------- | ----------------------------- |
-| Current Streak    | 6          | Mon Sep 21 11:22:13 WEST 2026 |
-| Longest Streak    | 6          | Mon Sep 21 11:22:13 WEST 2026 |
-| Total Plan Size   | 1765 lines | Mon Sep 21 11:22:13 WEST 2026 |
-| Largest Plan Size | 424 lines  | Mon Sep 21 11:22:13 WEST 2026 |
-| Total Diff Size   | 5821 lines | Mon Sep 21 11:22:13 WEST 2026 |
-| Largest Diff Size | 2629 lines | Mon Sep 21 11:22:13 WEST 2026 |
-| Average Presence  | 1.0        | Mon Sep 21 11:22:13 WEST 2026 |
+| Current Streak    | 7          | Mon Sep 21 12:14:44 WEST 2026 |
+| Longest Streak    | 7          | Mon Sep 21 12:14:44 WEST 2026 |
+| Total Plan Size   | 2463 lines | Mon Sep 21 12:14:44 WEST 2026 |
+| Largest Plan Size | 698 lines  | Mon Sep 21 12:14:44 WEST 2026 |
+| Total Diff Size   | 7287 lines | Mon Sep 21 12:14:44 WEST 2026 |
+| Largest Diff Size | 2629 lines | Mon Sep 21 12:14:44 WEST 2026 |
+| Average Presence  | 1.0        | Mon Sep 21 12:14:44 WEST 2026 |
 
 ## ADW KPIs
 
@@ -28,3 +28,4 @@ Detailed metrics for individual ADW workflow runs.
 | Sun Sep 20 21:59:20 WEST 2026 | e259222e | 79           | /bug        | 1        | 397               | 733/4/7                         | Sun Sep 20 21:59:20 WEST 2026 | Sun Sep 20 21:59:20 WEST 2026 |
 | Mon Sep 21 10:27:47 WEST 2026 | 9e5b865a | 90           | /bug        | 1        | 377               | 752/55/6                        | Mon Sep 21 10:27:47 WEST 2026 | Mon Sep 21 10:27:47 WEST 2026 |
 | Mon Sep 21 11:22:13 WEST 2026 | 437bcd03 | 93           | /feature    | 1        | 424               | 682/0/7                         | Mon Sep 21 11:22:13 WEST 2026 | Mon Sep 21 11:22:13 WEST 2026 |
+| Mon Sep 21 12:14:44 WEST 2026 | 4d0d9d75 | 94           | /feature    | 1        | 698               | 1457/9/13                       | Mon Sep 21 12:14:44 WEST 2026 | Mon Sep 21 12:14:44 WEST 2026 |
