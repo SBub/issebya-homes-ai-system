@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Image from "next/image";
+import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay } from "@/lib/date-utils";
 
 export const metadata: Metadata = {
@@ -47,13 +49,20 @@ function formatDate(dateString: string): string {
 export default async function BookingConfirmationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ session?: string }>;
+  searchParams: Promise<{ session?: string; return?: string }>;
 }) {
-  const { session } = await searchParams;
+  // `return` is a reserved word, hence the alias. It came back through Stripe
+  // and anyone can type it by hand, so it is revalidated here from scratch
+  // rather than trusted because submitBooking already checked it once.
+  const { session, return: returnParam } = await searchParams;
 
   if (!session) {
     notFound();
   }
+
+  // Resolved off the in-process post registry, so the link costs no fetch and
+  // cannot delay or gate the booking lookup below.
+  const blogReturn = resolveBlogReturn(returnParam);
 
   const headersList = await headers();
   const host = headersList.get("host") || "localhost:3000";
@@ -138,6 +147,18 @@ export default async function BookingConfirmationPage({
               48 hours before your arrival, we&apos;ll send you the exact address, parking details,
               and all essential information for your stay.
             </p>
+
+            {/* `block` so the surrounding space-y-4 rhythm applies: vertical
+                margin does nothing to an inline <a>. */}
+            {blogReturn && (
+              <Link
+                href={blogReturn.href}
+                data-testid="return-to-post"
+                className="block text-sm underline hover:text-gray-600"
+              >
+                ← back to {blogReturn.title}
+              </Link>
+            )}
           </div>
         </div>
 

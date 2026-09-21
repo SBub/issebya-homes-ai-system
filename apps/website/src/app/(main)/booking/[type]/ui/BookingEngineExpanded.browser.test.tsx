@@ -20,8 +20,15 @@ vi.mock("@sentry/nextjs", () => ({
 // useSearchParams — an empty URLSearchParams by default so tests exercise
 // the "direct visitor" path unless a test overrides it.
 const mockSearchParams = new URLSearchParams();
+// usePathname is what tells the component whether it is rendering on
+// /booking/[type] or inline in a blog post, so it has to be mocked too:
+// without it every test in this file throws the moment the component renders.
+// Mutable, and reset in beforeEach, so one test can move the component onto a
+// post without leaking that into the rest.
+let mockPathname = "/booking/room1";
 vi.mock("next/navigation", () => ({
   useSearchParams: () => mockSearchParams,
+  usePathname: () => mockPathname,
 }));
 
 vi.mock("../../../../../lib/sentry-booking", () => ({
@@ -57,6 +64,7 @@ const defaultProps = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPathname = "/booking/room1";
 });
 
 afterEach(() => {
@@ -227,6 +235,57 @@ test("user sees error message and refreshed calendar when dates are no longer av
   // the resolved state (and thus this error text) ever commits, so this
   // is safe to assert directly — no waiting needed.
   expect(defaultProps.updateAvailability).toHaveBeenCalledWith([]);
+});
+
+// The client half of the blog-return feature: the component is the only
+// thing that knows where it is rendering, so the pathname it hands the action
+// is only observable here. Two tests rather than one, because both renders
+// would otherwise sit in the same document and every locator below would
+// match twice.
+const resolvedState = {
+  attempt: 1,
+  errors: {},
+  generalError: "",
+  values: {
+    guestName: "Guest Example",
+    email: "guest@example.com",
+    countryId: "PT",
+    localNumber: "920742845",
+    whatsappOptIn: false,
+  },
+  blockedDates: null,
+  success: false,
+  url: null,
+  guestContactId: null,
+} satisfies BookingFormState;
+
+// Positional, because that is the contract: roomType, checkIn, checkOut,
+// source, returnTo, prevState, formData.
+const RETURN_TO_ARG = 4;
+
+test("booking from inside a post sends the post's path to the action", async () => {
+  mockPathname = "/blog/a-weekend-in-almocageme";
+  mockSubmitBooking.mockResolvedValue(resolvedState);
+
+  const { getByLabelText } = await render(<BookingEngineExpanded {...defaultProps} />);
+
+  await fillContactFields(getByLabelText);
+  await userEvent.click(getByLabelText("Confirm booking"));
+
+  await vi.waitFor(() => expect(mockSubmitBooking).toHaveBeenCalledOnce());
+  expect(mockSubmitBooking.mock.calls[0][RETURN_TO_ARG]).toBe("/blog/a-weekend-in-almocageme");
+});
+
+test("booking from the booking page sends no return path", async () => {
+  mockSubmitBooking.mockResolvedValue(resolvedState);
+
+  const { getByLabelText } = await render(<BookingEngineExpanded {...defaultProps} />);
+
+  await fillContactFields(getByLabelText);
+  await userEvent.click(getByLabelText("Confirm booking"));
+
+  await vi.waitFor(() => expect(mockSubmitBooking).toHaveBeenCalledOnce());
+  expect(mockSubmitBooking.mock.calls[0][RETURN_TO_ARG]).toBeNull();
 });
 
 test("user sees error message passed from parent", async () => {

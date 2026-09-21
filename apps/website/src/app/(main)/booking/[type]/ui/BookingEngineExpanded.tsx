@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import { useActionState, useCallback, useMemo, useState } from "react";
 import { toCalendarDay } from "@/lib/date-utils";
@@ -8,6 +8,7 @@ import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
 import { ROOM_PRICING } from "pricing";
 import { addBookingBreadcrumb } from "@/lib/sentry-booking";
 import { COUNTRY_CODES, splitPhoneNumber } from "@/lib/shared/country-codes";
+import { blogReturnPathSchema } from "@/lib/shared/schemas/booking";
 import type { DateRange } from "@/lib/shared/types/booking";
 import type { BookingFormState } from "../actions";
 import { submitBooking } from "../actions";
@@ -42,6 +43,15 @@ export function BookingEngineExpanded({
   const initialGuestName = searchParams.get("guestName") ?? "";
   const initialEmail = searchParams.get("email") ?? "";
   const source = searchParams.get("source") === "gca" ? "gca" : "direct";
+  // The engine renders both on /booking/[type] and inline in a blog post (see
+  // blog/ui/BookingWidget.tsx), and the pathname is the only thing that tells
+  // the two apart. Shape-checked here only, with the same schema the action
+  // uses: the client has no business importing the post registry, and this is
+  // a hint anyway — the server revalidates it and checks the slug exists
+  // before it reaches Stripe. On /booking/room1 this is null, so that flow is
+  // unchanged.
+  const pathname = usePathname();
+  const returnTo = blogReturnPathSchema.safeParse(pathname).success ? pathname : null;
   // initialPhone arrives pre-combined as E.164 — split back into a country
   // selection + local digits to match the two-part UI below.
   const { countryId: initialCountryId, localNumber: initialLocalNumber } = useMemo(
@@ -76,6 +86,7 @@ export function BookingEngineExpanded({
       checkInDate ? toCalendarDay(checkInDate) : null,
       checkOutDate ? toCalendarDay(checkOutDate) : null,
       source,
+      returnTo,
       prevState,
       formData,
     );

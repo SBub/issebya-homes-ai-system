@@ -52,6 +52,18 @@ vi.mock("@/lib/availability", () => ({
   getAvailability: (...args: unknown[]) => mockGetAvailability(...args),
 }));
 
+// The action resolves a blog return target through the post registry, and
+// `posts.ts` imports `.mdx` files the node pool has no transform for. The
+// fixture knows exactly one slug, which is what gives "/blog/does-not-exist"
+// below its meaning.
+const KNOWN_POST_SLUG = "a-weekend-in-almocageme";
+vi.mock("@/lib/blog/posts", () => ({
+  getPostBySlug: (slug: string) =>
+    slug === "a-weekend-in-almocageme"
+      ? { title: "A weekend in Almo\u00e7ageme", slug, description: "", date: "2026-08-14" }
+      : undefined,
+}));
+
 // --- Helpers ---
 
 // Pinned "now" for these tests, so the "valid" fixture's dates stay valid
@@ -124,6 +136,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       fd,
     );
@@ -144,6 +157,7 @@ describe("submitBooking", () => {
       past,
       pastOut,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -179,6 +193,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -220,6 +235,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -255,7 +271,15 @@ describe("submitBooking", () => {
     });
 
     const { submitBooking } = await import("../actions");
-    await submitBooking("room1", checkInDay, checkOutDay, "direct", initialState, validFormData());
+    await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      null,
+      initialState,
+      validFormData(),
+    );
 
     expect(mockRevalidateTag).toHaveBeenCalledWith("availability-room1", { expire: 0 });
     expect(mockGetAvailability).toHaveBeenCalledWith("room1");
@@ -291,6 +315,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -333,6 +358,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -374,6 +400,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -412,6 +439,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -462,7 +490,15 @@ describe("submitBooking", () => {
     });
 
     const { submitBooking } = await import("../actions");
-    await submitBooking("room1", checkInDay, checkOutDay, "direct", initialState, validFormData());
+    await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      null,
+      initialState,
+      validFormData(),
+    );
 
     expect(mockInsert).toHaveBeenCalledOnce();
     const insertData = mockInsert.mock.calls[0][0];
@@ -495,6 +531,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
@@ -517,6 +554,7 @@ describe("submitBooking", () => {
       checkInDay,
       checkOutDay,
       "direct",
+      null,
       initialState,
       fd,
     );
@@ -530,8 +568,151 @@ describe("submitBooking", () => {
       whatsappOptIn: false,
     });
 
-    const second = await submitBooking("room1", checkInDay, checkOutDay, "direct", result, fd);
+    const second = await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      null,
+      result,
+      fd,
+    );
     expect(second.attempt).toBe(2);
+  });
+});
+
+// The Stripe URLs are the whole contract for the blog-return feature, and
+// they are the one part of it the E2E layer structurally cannot see: the MSW
+// mock that stands in for Stripe ignores the request body entirely. So the
+// exact strings are pinned here.
+//
+// `headers()` is mocked above to a host of issebya.com and NODE_ENV is not
+// "production" under vitest, so the action's own origin handling produces
+// http://issebya.com.
+describe("submitBooking threads the originating blog post through checkout", () => {
+  const ORIGIN = "http://issebya.com";
+  // eslint-disable-next-line no-secrets/no-secrets -- Stripe URL template placeholder, not a secret
+  const BASE_SUCCESS_URL = `${ORIGIN}/booking/confirmation?session={CHECKOUT_SESSION_ID}`;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    vi.clearAllMocks();
+    mockGetAvailability.mockResolvedValue({ bookings: [], firstAvailable: null });
+
+    mockSupabaseFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            lt: vi.fn().mockReturnValue({
+              gt: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({ data: [] }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    });
+
+    mockStripeSessionCreate.mockResolvedValue({
+      id: "cs_test_return",
+      url: "https://checkout.stripe.com/pay/cs_test_return",
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("carries the post path into success_url and anchors cancel_url at the widget", async () => {
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      `/blog/${KNOWN_POST_SLUG}`,
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(true);
+
+    const stripeArgs = mockStripeSessionCreate.mock.calls[0][0];
+    // The session placeholder is load-bearing: Stripe substitutes it, and the
+    // confirmation page has nothing to fetch without it.
+    expect(stripeArgs.success_url).toContain("session={CHECKOUT_SESSION_ID}");
+    expect(stripeArgs.success_url).toBe(`${BASE_SUCCESS_URL}&return=%2Fblog%2F${KNOWN_POST_SLUG}`);
+    expect(stripeArgs.cancel_url).toBe(`${ORIGIN}/blog/${KNOWN_POST_SLUG}#book`);
+  });
+
+  it("leaves both URLs byte-identical to a booking-page booking when there is no return path", async () => {
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      null,
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(true);
+
+    const stripeArgs = mockStripeSessionCreate.mock.calls[0][0];
+    // Equality, not toContain: a stray "&return=" leaking into a
+    // /booking/[type] booking has to fail this.
+    expect(stripeArgs.success_url).toBe(BASE_SUCCESS_URL);
+    expect(stripeArgs.cancel_url).toBe(`${ORIGIN}/booking/room1`);
+  });
+
+  // A hostile or stale return target costs the reader the link back, never
+  // the booking.
+  it.each([
+    ["an absolute URL", "https://evil.example/"],
+    ["a protocol-relative URL", "//evil.example"],
+    ["a slug that names no post", "/blog/does-not-exist"],
+    ["a non-blog internal path", "/booking/room1"],
+  ])("drops %s without failing the booking", async (_label, returnTo) => {
+    const { submitBooking } = await import("../actions");
+    const result = await submitBooking(
+      "room1",
+      checkInDay,
+      checkOutDay,
+      "direct",
+      returnTo,
+      initialState,
+      validFormData(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.url).toBe("https://checkout.stripe.com/pay/cs_test_return");
+
+    const stripeArgs = mockStripeSessionCreate.mock.calls[0][0];
+    expect(stripeArgs.success_url).toBe(BASE_SUCCESS_URL);
+    expect(stripeArgs.cancel_url).toBe(`${ORIGIN}/booking/room1`);
+  });
+
+  // source and returnTo are independent: a GCA link keeps its analytics
+  // meaning whether or not the booking started in a post.
+  it("keeps source intact alongside a resolved return path", async () => {
+    const { submitBooking } = await import("../actions");
+    await submitBooking(
+      "room2",
+      checkInDay,
+      checkOutDay,
+      "gca",
+      `/blog/${KNOWN_POST_SLUG}`,
+      initialState,
+      validFormData(),
+    );
+
+    const stripeArgs = mockStripeSessionCreate.mock.calls[0][0];
+    expect(stripeArgs.metadata.source).toBe("gca");
+    expect(stripeArgs.metadata).not.toHaveProperty("returnTo");
+    expect(stripeArgs.cancel_url).toBe(`${ORIGIN}/blog/${KNOWN_POST_SLUG}#book`);
   });
 });
 
@@ -659,6 +840,7 @@ describe("submitBooking records the guest's own calendar day", () => {
           checkIn.label,
           checkOut.label,
           "direct",
+          null,
           initialState,
           validFormData(),
         ),
@@ -692,6 +874,7 @@ describe("submitBooking records the guest's own calendar day", () => {
           CHECK_IN_DAY,
           CHECK_OUT_DAY,
           "direct",
+          null,
           initialState,
           validFormData(),
         ),
@@ -715,6 +898,7 @@ describe("submitBooking records the guest's own calendar day", () => {
       badDay,
       CHECK_OUT_DAY,
       "direct",
+      null,
       initialState,
       validFormData(),
     );
