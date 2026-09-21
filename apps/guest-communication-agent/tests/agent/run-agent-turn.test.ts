@@ -9,7 +9,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { ModelMessage } from "ai";
 import type { GetStepTools } from "inngest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { inngest } from "@/lib/inngest";
 
 // tracing.ts's real withTurnSpan/tracer stay real in this suite (see the
@@ -217,12 +217,26 @@ function emptyResponse(
   };
 }
 
+// send_booking_link re-verifies the model's own dates against
+// GET /api/availability?room= before the owner is nudged (see booking.ts), so
+// every booking round below needs a clock to be in the future of and a
+// fetch to answer — hence the pinned date and the "nothing booked" stub.
+const TODAY = new Date("2026-09-21T10:00:00.000Z");
+
 describe("runAgentTurn", () => {
   let step: ReturnType<typeof makeStepMock>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     spanExporter.reset();
+    vi.useFakeTimers();
+    vi.setSystemTime(TODAY);
+    // A fresh Response per call — a single shared one throws "Body is
+    // unusable" on the second read (two booking calls in one round).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ bookings: [] })))),
+    );
     step = makeStepMock();
     // waitForEvent defaults to resolving null (a timeout), driving
     // requestMissingInfoApproval's real "owner has been notified" fallback
@@ -247,6 +261,11 @@ describe("runAgentTurn", () => {
       runCommand: vi.fn().mockRejectedValue(new Error("sandbox unavailable in test")),
       stop: vi.fn().mockResolvedValue(undefined),
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("builds the model call's system prompt string, then uses historyMessages as-is with no extra append", async () => {
@@ -605,8 +624,8 @@ describe("runAgentTurn", () => {
               guestName: "Ana",
               email: "ana@example.com",
               room: "room1",
-              checkIn: "2026-09-01",
-              checkOut: "2026-09-05",
+              checkIn: "2026-10-01",
+              checkOut: "2026-10-05",
             },
             toolCallId: "call_book",
           },
@@ -618,7 +637,7 @@ describe("runAgentTurn", () => {
       {
         conversationId: "convo-1",
         phone: "+3519",
-        incomingMessage: "Book room 1 for Ana, Sep 1-5",
+        incomingMessage: "Book room 1 for Ana, Oct 1-5",
       },
       { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
     );
@@ -684,8 +703,8 @@ describe("runAgentTurn", () => {
         guestName: "Ana",
         email: "ana@example.com",
         room: "room1",
-        checkIn: "2026-09-01",
-        checkOut: "2026-09-05",
+        checkIn: "2026-10-01",
+        checkOut: "2026-10-05",
       }),
     );
     expect(hitlSpan?.attributes["braintrust.input"]).toBe(hitlSpan?.attributes["gca.tool.input"]);
@@ -751,8 +770,8 @@ describe("runAgentTurn", () => {
         guestName: "Ana",
         email: "ana@example.com",
         room: "room1",
-        checkIn: "2026-09-01",
-        checkOut: "2026-09-05",
+        checkIn: "2026-10-01",
+        checkOut: "2026-10-05",
       },
     });
     expect(resolvePendingOwnerDecisionByCorrelationIdMock).toHaveBeenCalledWith(
@@ -1172,8 +1191,8 @@ describe("runAgentTurn", () => {
               guestName: "Ana",
               email: "ana@example.com",
               room: "room1",
-              checkIn: "2026-09-01",
-              checkOut: "2026-09-05",
+              checkIn: "2026-10-01",
+              checkOut: "2026-10-05",
             },
             toolCallId: "call_book",
           },
@@ -1231,8 +1250,8 @@ describe("runAgentTurn", () => {
               guestName: "Ana",
               email: "ana@example.com",
               room: "room1",
-              checkIn: "2026-09-01",
-              checkOut: "2026-09-05",
+              checkIn: "2026-10-01",
+              checkOut: "2026-10-05",
             },
             toolCallId: "call_book",
           },
@@ -1324,8 +1343,8 @@ describe("runAgentTurn", () => {
               guestName: "Ana",
               email: "ana@example.com",
               room: "room1",
-              checkIn: "2026-09-01",
-              checkOut: "2026-09-05",
+              checkIn: "2026-10-01",
+              checkOut: "2026-10-05",
             },
             toolCallId: "call_book",
           },
@@ -1390,8 +1409,8 @@ describe("runAgentTurn", () => {
               guestName: "Ana",
               email: "ana@example.com",
               room: "room1",
-              checkIn: "2026-09-01",
-              checkOut: "2026-09-05",
+              checkIn: "2026-10-01",
+              checkOut: "2026-10-05",
             },
             toolCallId: "call_room1",
           },
@@ -1401,8 +1420,8 @@ describe("runAgentTurn", () => {
               guestName: "Ben",
               email: "ben@example.com",
               room: "room2",
-              checkIn: "2026-09-10",
-              checkOut: "2026-09-12",
+              checkIn: "2026-10-10",
+              checkOut: "2026-10-12",
             },
             toolCallId: "call_room2",
           },
@@ -1866,8 +1885,8 @@ describe("runAgentTurn", () => {
                 guestName: "Ana",
                 email: "ana@example.com",
                 room: "room1",
-                checkIn: "2026-09-01",
-                checkOut: "2026-09-05",
+                checkIn: "2026-10-01",
+                checkOut: "2026-10-05",
               },
               toolCallId: "call_book",
             },
@@ -1879,7 +1898,7 @@ describe("runAgentTurn", () => {
         {
           conversationId: "convo-booking-filter",
           phone: "+351900000040",
-          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+          incomingMessage: "Book room 1 for Ana, Oct 1-5",
         },
         { correlationId: "corr-booking-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
@@ -1900,8 +1919,8 @@ describe("runAgentTurn", () => {
                 guestName: "Ana",
                 email: "ana@example.com",
                 room: "room1",
-                checkIn: "2026-09-01",
-                checkOut: "2026-09-05",
+                checkIn: "2026-10-01",
+                checkOut: "2026-10-05",
               },
               toolCallId: "call_book",
             },
@@ -1913,7 +1932,7 @@ describe("runAgentTurn", () => {
         {
           conversationId: "convo-booking-exec-filter",
           phone: "+351900000041",
-          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+          incomingMessage: "Book room 1 for Ana, Oct 1-5",
         },
         { correlationId: "corr-booking-exec-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
@@ -1934,8 +1953,8 @@ describe("runAgentTurn", () => {
                 guestName: "Ana",
                 email: "ana@example.com",
                 room: "room1",
-                checkIn: "2026-09-01",
-                checkOut: "2026-09-05",
+                checkIn: "2026-10-01",
+                checkOut: "2026-10-05",
               },
               toolCallId: "call_book",
             },
@@ -1947,7 +1966,7 @@ describe("runAgentTurn", () => {
         {
           conversationId: "convo-booking-decision-filter",
           phone: "+351900000042",
-          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+          incomingMessage: "Book room 1 for Ana, Oct 1-5",
         },
         { correlationId: "corr-booking-decision-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );
@@ -1969,8 +1988,8 @@ describe("runAgentTurn", () => {
                 guestName: "Ana",
                 email: "ana@example.com",
                 room: "room1",
-                checkIn: "2026-09-01",
-                checkOut: "2026-09-05",
+                checkIn: "2026-10-01",
+                checkOut: "2026-10-05",
               },
               toolCallId: "call_book",
             },
@@ -1982,7 +2001,7 @@ describe("runAgentTurn", () => {
         {
           conversationId: "convo-booking-timeout-filter",
           phone: "+351900000043",
-          incomingMessage: "Book room 1 for Ana, Sep 1-5",
+          incomingMessage: "Book room 1 for Ana, Oct 1-5",
         },
         { correlationId: "corr-booking-timeout-filter", traceAnchor: TEST_TRACE_ANCHOR, step },
       );

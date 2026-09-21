@@ -4,14 +4,10 @@ import { dispatchToolExecution } from "@/agent/tool-execution";
 import { flushTracing } from "@/instrumentation";
 import { steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
 import { type HitlDecision, requestApprovalGate, resolveToolApproval } from "./approval-gate";
+import { computeCheckAvailability } from "./availability";
 import type { ToolContext } from "./config";
-
-// TODO: this trusts the model already called checkAvailability and got
-// "available" — it does not independently re-verify before creating the
-// link. The model can confidently answer an availability question without
-// ever calling checkAvailability, so this could send a link for a room
-// that's actually taken. Should defensively re-check against
-// GET /api/availability?room= and return a structured error if unavailable.
+import { computeCurrentDate } from "./current-date";
+import { type StayRangeProblem, validateStayRange } from "./stay-range";
 
 // sendBookingLink is approve/reject-gated before the model ever sees a
 // result: requestSendBookingLinkApproval ("calls human") creates the
@@ -63,6 +59,46 @@ export function buildBookingApprovalReason(args: z.infer<typeof sendBookingLinkS
 export const BOOKING_LINK_URL_PATTERN =
   /\/booking\/(?:room1|room2)\?checkIn=\d{4}-\d{2}-\d{2}&checkOut=\d{4}-\d{2}-\d{2}/;
 
+type BookingRefusal = "not_available" | StayRangeProblem;
+
+// Model-facing, guest-agnostic: names the dates that failed and today's
+// date, so the model can correct itself without another tool round trip.
+function describeBookingRefusal(
+  reason: BookingRefusal,
+  args: z.infer<typeof sendBookingLinkSchema>,
+  today: string,
+): string {
+  const { room, checkIn, checkOut } = args;
+  switch (reason) {
+    case "invalid_date":
+      return `Cannot build a booking link: ${checkIn} to ${checkOut} is not a valid YYYY-MM-DD range (today is ${today}).`;
+    case "past_date":
+      return `Cannot build a booking link: check-in ${checkIn} is in the past (today is ${today}).`;
+    case "invalid_range":
+      return `Cannot build a booking link: check-out ${checkOut} is not after check-in ${checkIn}.`;
+    case "not_available":
+      return `Cannot build a booking link: ${room} is not available from ${checkIn} to ${checkOut}.`;
+  }
+}
+
+// Independent re-verification of the model's own args: one computeCheckAvailability
+// call covers both the date guard and the live availability re-check, so this
+// tool and check_availability can never disagree about the same range. Returns
+// null when the link may be built. An availability-endpoint outage still throws,
+// the same failure mode check_availability already has in the same turn.
+async function verifyBookingRequest(
+  args: z.infer<typeof sendBookingLinkSchema>,
+): Promise<{ approved: false; error: string; reason: BookingRefusal } | null> {
+  const { room, checkIn, checkOut } = args;
+  const availability = await computeCheckAvailability({ room, checkIn, checkOut });
+  if (availability.available) {
+    return null;
+  }
+  const reason: BookingRefusal = "reason" in availability ? availability.reason : "not_available";
+  const today = "today" in availability ? availability.today : computeCurrentDate().date;
+  return { approved: false, error: describeBookingRefusal(reason, args, today), reason };
+}
+
 // send_booking_link's "calls human" half: creates the hitl.send_booking_link
 // GATE span first (not gen_ai.tool.send_booking_link — see run-agent-turn.ts's
 // RULE comment for why nesting the wait under a span literally named "the
@@ -96,6 +132,19 @@ export async function requestSendBookingLinkApproval(
   await flushTracing();
   const hitlAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: hitlSpanId };
 
+  // After the gate span (so hitlSpanId/hitlAnchor are honest and the refusal
+  // shows up as the gate's own output), before requestApprovalGate — the
+  // owner is never nudged about a link that could not be built anyway.
+  const refusal = await step.run("verify-send_booking_link-availability", () =>
+    verifyBookingRequest(call.input as z.infer<typeof sendBookingLinkSchema>),
+  );
+  if (refusal) {
+    await step.run("update-send_booking_link-refusal-trace-io", () =>
+      updateSpanIO(hitlSpanId, { output: refusal }),
+    );
+    return { approved: false, notApprovedOutput: refusal, hitlSpanId, hitlAnchor };
+  }
+
   const approved = await requestApprovalGate({
     toolName: call.toolName,
     event: BOOKING_LINK_APPROVAL_EVENT,
@@ -128,14 +177,23 @@ export async function requestSendBookingLinkApproval(
   return { approved: true, hitlSpanId, hitlAnchor };
 }
 
-// Pure URL builder, no tracing — kept separate from runSendBookingLink so
+// Guarded URL builder, no tracing — kept separate from runSendBookingLink so
 // src/app/api/admin/pending-decisions/[id]/actions/resolve/route.ts can
 // rebuild the same URL to resend a stuck booking link, outside any live run.
 export function computeSendBookingLink(
   args: z.infer<typeof sendBookingLinkSchema>,
   phone: string,
-): { url: string } {
+): { url: string } | { error: string; reason: StayRangeProblem } {
   const { guestName, email, room, checkIn, checkOut } = args;
+
+  // Same guard check_availability runs, so no call path (including the admin
+  // resend route) can turn an unusable range into a URL.
+  const today = computeCurrentDate().date;
+  const problem = validateStayRange(checkIn, checkOut, today);
+  if (problem) {
+    return { error: describeBookingRefusal(problem, args, today), reason: problem };
+  }
+
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
   const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
   return { url };

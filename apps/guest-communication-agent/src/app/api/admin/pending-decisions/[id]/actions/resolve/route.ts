@@ -38,7 +38,8 @@ interface MissingInfoContext {
  * - send_booking_link: rebuilds the same deterministic booking URL
  *   computeSendBookingLink would have produced, from the row's own `context`
  *   (guestName/email/room/checkIn/checkOut, captured at insert time — see
- *   BookingContext above).
+ *   BookingContext above). Inherits that function's date guard, so a row
+ *   whose stay has since started or passed is refused rather than resent.
  * - missing_info: sends a short plain-text message containing the owner's
  *   actual answer, from the row's own `context.answer` (captured once the
  *   owner-nudges answer route received it — see MissingInfoContext above).
@@ -56,7 +57,8 @@ interface MissingInfoContext {
  * - 404 if no row exists for this id.
  * - 409 if the row is already resolved (idempotent-safe: a second resolve
  *   attempt is rejected rather than double-sending).
- * - 400 if the row's tool_name-specific context needed to act is missing
+ * - 400 if the row's tool_name-specific context needed to act is missing, or
+ *   if its stored dates no longer pass computeSendBookingLink's date guard
  *   (an unexpected state for a real row, but not something to 500 over).
  * - 502 if the WhatsApp send itself fails — the row is left unresolved so
  *   this action can be retried.
@@ -94,7 +96,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           { status: 400 },
         );
       }
-      const { url } = computeSendBookingLink(
+      const result = computeSendBookingLink(
         {
           guestName: context.guestName ?? "Guest",
           email: context.email ?? "unknown@example.com",
@@ -104,7 +106,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         },
         decision.phone,
       );
-      messageText = url;
+      if ("error" in result) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      messageText = result.url;
     } else {
       const answer = (decision.context as MissingInfoContext | null)?.answer;
       if (!answer) {
