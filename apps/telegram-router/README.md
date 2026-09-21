@@ -34,6 +34,9 @@ in-band, no DB lookups:
   (`missing_info`, `wants_human`, `send_booking_link`), the last one with
   inline Approve/Reject buttons. Guarded by `X-API-Key` against
   `TELEGRAM_ROUTER_API_KEY`.
+- `GET /api/health`: returns `{"ok": true}`. Unauthenticated and
+  uninstrumented, the target for the external uptime check that watches this
+  app's liveness.
 
 ## Setup and running
 
@@ -44,6 +47,39 @@ local Telegram + Twilio testing). This app itself runs on port 3003, on
 `apps/telegram-router/.env.example` to `.env` and fill in the values, each
 one documented inline in that file (Telegram bot token/chat id/webhook
 secret, the shared key with GCA, Axiom/Sentry observability config).
+
+## Deployment
+
+Deployed on Vercel as the project `ihas-telegram-router`, with Root Directory
+`apps/telegram-router` and framework preset `Other` (there is no framework to
+build, this is a plain ASGI app). It runs as a single Vercel Function with
+Fluid compute. The entrypoint is declared as `app.main:app` under
+`[tool.vercel]` in `pyproject.toml`; Vercel's own filename detection would
+find `app/main.py` anyway, but stating it is Vercel's recommendation for new
+projects.
+
+Dependencies come from `pyproject.toml`, resolved with uv against the
+repo-root `uv.lock` when the build context includes files outside the Root
+Directory. There is deliberately no `requirements.txt` (it would be a second
+source of truth for the same dependency list) and no `vercel.json` (nothing
+here needs `maxDuration` or `excludeFiles` yet).
+
+The registered Telegram webhook URL is a contract. Telegram holds the
+deployed domain plus `/api/telegram/webhook`; change either and every inbound
+update stops arriving, silently, with no error anywhere.
+
+### Telemetry on a Function
+
+A Vercel Function only runs while it is serving a request, which breaks two
+things a long-lived uvicorn process gets for free:
+
+- Spans are force-flushed once per request by an HTTP middleware in
+  `app/main.py`, because `BatchSpanProcessor`'s own timer isn't guaranteed to
+  fire before the instance goes away. Without that, spans are silently
+  dropped.
+- There is no heartbeat task. Liveness is an external uptime ping against
+  `GET /api/health` instead of an Axiom dead-man's-switch monitor on
+  heartbeat spans, which a request-driven function cannot keep fed.
 
 ## Checks
 
