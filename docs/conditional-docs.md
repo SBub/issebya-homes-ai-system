@@ -140,6 +140,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding state to `BookingClient` or `BookingCalendar` that is seeded from props on mount only
     - When writing a browser test that needs the real `BookingClient` without pulling in the `submitBooking` Server Function
 
+- `apps/website/app_docs/feature-437bcd03-blog-breadcrumb-trail.md`
+  - Conditions:
+    - When changing the breadcrumb on `/blog/[slug]`, or adding one to another route
+    - When adding navigation UI that is tempted to read the current URL with `usePathname()` inside a prerendered route
+    - When a `*.browser.test.tsx` fails at import time on `next/link` (`process is not defined`)
+
 ---
 
 ## apps/guest-communication-agent
