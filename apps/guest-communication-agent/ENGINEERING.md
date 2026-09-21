@@ -156,10 +156,17 @@ Evaluation runs at two layers, both on Braintrust.
 
 **Offline evals**, run against a golden dataset before merging:
 
-- A **golden dataset** (29 hand-built cases) covering the agent's four key
-  tool-selection decisions (`send_booking_link`, `get_pricing`, `missing_info`,
-  `answer_property_question`), scored with a **Tool Call Match** scorer, run at
-  3 trials per case since the model is non-deterministic.
+- A **golden dataset** of hand-built cases covering the agent's key tool-selection
+  decisions (`send_booking_link`, `get_pricing`, `missing_info`,
+  `answer_property_question`, `check_availability`), scored with a **Tool Call
+  Match** scorer, run at 3 trials per case since the model is non-deterministic.
+  The live Braintrust dataset "GCA — Golden Dataset" is the source of truth for
+  the rows (no copy lives in this repo; `scripts/push-date-resolution-rows.ts`
+  upserts one reviewed batch into it and nothing else). For `send_booking_link`
+  and `check_availability` the scorer also deep-compares the call's args against
+  the expected ones, because a wrong year in `check_availability` is a silent
+  failure: the tool reports the past as available and a stale-year booking link
+  follows.
 - A **prompt-injection dataset** (10 cases) with adversarial guest messages, scored on
   both Tool Call Match and a **Security Invariant Held** scorer: an LLM judge that
   checks, per case, whether a specific stated security invariant held or was violated,

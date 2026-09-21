@@ -3,7 +3,8 @@
  * `##` headers, embeds via OpenRouter, and upserts into this app's
  * `documents` pgvector table.
  *
- * Usage: yarn embed (from apps/guest-communication-agent/)
+ * Usage: yarn embed (from apps/guest-communication-agent/). Loads
+ * .env.development, so it targets the local Supabase stack by default.
  *
  * Ported from issebya-homes-website's
  * packages/agent-concierge/scripts/embed.ts (that package was later removed
@@ -70,7 +71,8 @@
  *    means one fewer API call per new/changed chunk (no GPT-4o-mini round
  *    trip), so embedding runs faster.
  *
- * Requires in .env: OPENROUTER_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ * Requires in .env.development: OPENROUTER_API_KEY, SUPABASE_URL,
+ * SUPABASE_SERVICE_ROLE_KEY
  */
 
 import { createHash } from "node:crypto";
