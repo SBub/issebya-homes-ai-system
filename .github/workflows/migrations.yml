@@ -22,12 +22,14 @@ name: Supabase Migrations
 #     job=drift-check. Read-only. Answers the one question nothing else
 #     here answers: does prod actually hold the migrations master says it
 #     should?
-#   - prod-migration-sync: every PR into master. A required status check on
-#     the protect-master ruleset. Read-only. Compares the state *after this
-#     PR lands* against prod: nothing already on master may be missing from
-#     prod, and prod may hold no version this PR's tree lacks a file for.
-#     This is the job that makes a broken delivery pipeline block the next
-#     promotion instead of surfacing months later.
+#   - prod-migration-sync: every PR into master. Read-only. Compares the
+#     state *after this PR lands* against prod: nothing already on master
+#     may be missing from prod, and prod may hold no version this PR's
+#     tree lacks a file for. This is the job that makes a broken delivery
+#     pipeline block the next promotion instead of surfacing months later.
+#     It is meant to become a required status check on the protect-master
+#     ruleset and is not one yet; the diagnose verdict below says what is
+#     still in the way.
 #   - diagnose: manual dispatch only. A read-only credentials probe against
 #     the Supabase Management API, for working out why `link` fails without
 #     extracting a repo secret onto a laptop.
@@ -93,28 +95,72 @@ name: Supabase Migrations
 # commit since has changed what these jobs check, not how they
 # authenticate.
 #
-# The leading hypothesis, and how it gets tested. `supabase link` does not
+# The leading hypothesis, and how it was tested. `supabase link` does not
 # make one Management API call, it makes two: GET /v1/projects/{ref} to
 # resolve the project, then GET /v1/projects/{ref}/api-keys to fetch the
-# anon and service-role keys it caches locally. The second is the one that
-# would plausibly start demanding a higher org role, and a 403 scoped to it
-# alone accounts for every observation above at once: the token
-# authenticates (a dead token gives 401 on identity, this is 403 on
-# privileges), the account still sees the project (`projects list` works),
-# and link still fails. The diagnose job below probes exactly those two
-# endpoints and prints only their status codes, which separates "the token
-# is dead" from "this one endpoint is now gated" without anyone having to
-# copy a repo secret onto a laptop to curl by hand. Until diagnose has run,
-# push and drift-check both fail at the link step: a real outstanding
-# problem, not a quirk of these jobs.
+# anon and service-role keys it caches locally. The second was the one
+# that would plausibly have started demanding a higher org role, and a 403
+# scoped to it alone would have accounted for every observation above at
+# once: the token authenticates (a dead token gives 401 on identity, this
+# is 403 on privileges), the account still sees the project (`projects
+# list` works), and link still fails. The diagnose job below probes
+# exactly those two endpoints and prints only their status codes, which
+# separates "the token is dead" from "this one endpoint is now gated"
+# without anyone having to copy a repo secret onto a laptop to curl by
+# hand.
+#
+# Verdict: falsified. diagnose run 35604160586 (2026-09-21, dispatched
+# from this chore branch) observed, in order: CLI 2.116.0, so the pin
+# below resolves as written; `supabase projects list` returning the
+# project with its reference id rendered `***`, which is GitHub telling us
+# the listed ref is character-for-character SUPABASE_PROJECT_REF and kills
+# "wrong project ref" outright; 200 on GET /v1/projects/{ref}; and 200 on
+# GET /v1/projects/{ref}/api-keys. Both endpoints the hypothesis named
+# answer this token. `supabase link --project-ref` failed anyway, later in
+# the same run, carrying the 2026-09-10 message word for word: "Your
+# account does not have the necessary privileges to access this endpoint."
+#
+# So the 403 is raised by a call `link` makes that the probe did not
+# replicate: a third endpoint, or one of these two with parameters the
+# probe omitted. The likeliest candidate is the second one in its
+# `?reveal=true` form, since link caches the key *values* and revealing
+# them is privileged where listing them is not. What it is not is a
+# version regression. By release dates 2.116.0 is what the green
+# 2026-08-28 push ran, and 2.116.0 is what run 35604160586 just failed on,
+# same project, same token, so whatever changed between green and red sits
+# on Supabase's side of the call rather than in this repo or in the pin.
+#
+# Nothing was remediated on the strength of that, deliberately. The fix
+# drafted in advance (a SUPABASE_DB_URL secret and `--db-url` in place of
+# link plus `--linked`, taking the Management API off the critical path)
+# was written for a 200-then-403 result, and that is not what came back.
+# Applying it here would mean swapping the connection mechanism of three
+# prod-touching jobs without knowing which call breaks, which is a guess
+# dressed as a remedy. The next move is one more probe and a fresh
+# decision, not an edit. Until then push, drift-check and
+# prod-migration-sync all still fail at the link step: a real outstanding
+# problem, not a quirk of these jobs, and the reason prod-migration-sync
+# must stay off the protect-master ruleset. That ruleset has
+# `bypass_actors: []`, so requiring a check that cannot go green would
+# lock master for everyone with no admin override.
+#
+# The probe that narrows it: give diagnose a third arm on
+# /v1/projects/{ref}/api-keys?reveal=true, and separately bump the pin to
+# 2.117.0 on a throwaway branch and dispatch diagnose again to compare.
+# Both results belong on https://github.com/supabase/cli/issues/6392,
+# which already reproduces this message on 2.116.0 and on 2.107.0.
 #
 # CLI version: pinned to 2.116.0 below rather than `latest`. `latest` is an
 # unpinned external input, and it is how a green pipeline here broke itself
 # without a single commit in this repo. The stable releases either side of
 # the break are v2.116.0 (2026-08-26) and v2.117.0 (2026-09-07), so the last
-# successful push ran 2.116.0 and the first failure ran 2.117.0. That is
-# inferred from release dates, not observed: supabase/setup-cli does not log
-# the version it installs. v2.117.0 rewrote the CLI auth layer
+# successful push ran 2.116.0 and the first failure ran 2.117.0. That much
+# is still inferred from release dates rather than observed, because
+# supabase/setup-cli does not log the version it installs, which is why
+# diagnose runs `supabase --version` as its first step. What run
+# 35604160586 did observe directly is that this pin resolves to 2.116.0,
+# and that 2.116.0 fails today: the same version the August push succeeded
+# on. v2.117.0 rewrote the CLI auth layer
 # (legacy-platform-api.layer.ts, legacy-credentials.service.ts,
 # legacy-platform-api-factory.*, access_token.go) and its notes mention
 # ProjectConfig gaining hosted-field configuration, so `link` may now call
@@ -124,9 +170,10 @@ name: Supabase Migrations
 # existing old-format token still matches.
 #
 # This note used to call the pin "the experiment for this specific
-# failure". It never was one: zero workflow_dispatch runs exist on this
-# workflow, so that experiment has never been run. The hypothesis is also
-# now weak rather than merely untested. Upstream
+# failure". It never was one: when that was written zero workflow_dispatch
+# runs existed on this workflow, so the experiment had never been run.
+# Run 35604160586 is the first, and it settled the question the other way
+# round, by failing on the pinned version. Upstream
 # https://github.com/supabase/cli/issues/6392 reproduces this identical
 # message on 2.116.0 as well as on 2.107.0, so a version pin by itself
 # cannot be the fix. What the pin still legitimately does is the job it
@@ -139,6 +186,16 @@ name: Supabase Migrations
 # defaults to drift-check because drift-check and diagnose are the
 # read-only arms and push is not. Writing to prod stays opt-in, never
 # something you get by hitting "Run workflow" without reading it.
+#
+# Dispatching an arm the default branch has never heard of works, which is
+# worth writing down because it reads like it should not. `develop` is
+# this repo's default branch, and until this file merges there its copy
+# lists only drift-check and push under the `job` input's options. Even
+# so, `gh workflow run migrations.yml --ref <branch> -f job=diagnose` from
+# a branch whose copy does list it was accepted and ran: 35604160586.
+# Actions validated the input against the workflow file at the dispatched
+# ref, not against the default branch's copy. A candidate fix on a
+# throwaway branch is therefore testable without merging it first.
 
 # Trigger note: the pull_request trigger deliberately has no `paths:`
 # filter, and that is the one non-obvious thing in this file.
@@ -600,12 +657,16 @@ jobs:
         run: supabase --version
 
       - name: Can the token see the project at all
-        # If this lists gqoeyqvwgmkyxasqknss, the token is alive, the
-        # account can reach the project, and "wrong project ref" is dead as
-        # a hypothesis before the HTTP probes below even run.
+        # If this lists the project, the token is alive, the account can
+        # reach it, and "wrong project ref" is dead as a hypothesis before
+        # the HTTP probes below even run. Expect `***` in the REFERENCE ID
+        # column rather than the literal ref: GitHub masks
+        # SUPABASE_PROJECT_REF wherever it appears in a log, so the mask is
+        # itself the confirmation that the ref Supabase returned and the
+        # ref in the secret are the same string.
         run: supabase projects list
 
-      - name: Probe the two Management API endpoints `link` calls
+      - name: Probe the Management API endpoints `link` calls
         env:
           REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
@@ -616,6 +677,18 @@ jobs:
           # the log: `-o /dev/null` is load-bearing, not tidiness. The token
           # goes from the environment straight into the header and is never
           # interpolated into anything that gets echoed.
+          #
+          # The third arm exists because the first two both came back 200
+          # and link failed anyway (run 35604160586). link does not merely
+          # list the keys, it caches their values, and revealing a value is
+          # the privileged operation where listing the entries is not. So
+          # the ?reveal=true form is the arm that separates "link's key
+          # fetch is gated" from "link calls some fourth endpoint
+          # entirely". It is also the arm whose body is the most dangerous
+          # in this file: it returns the project's live anon and
+          # service-role key *values*, so it reuses probe() verbatim rather
+          # than growing a curl of its own. Never add -v here, never
+          # capture the body into a variable, never echo it on a non-200.
           probe() {
             curl -s -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
@@ -624,9 +697,11 @@ jobs:
 
           project_status="$(probe "https://api.supabase.com/v1/projects/$REF")"
           keys_status="$(probe "https://api.supabase.com/v1/projects/$REF/api-keys")"
+          reveal_status="$(probe "https://api.supabase.com/v1/projects/$REF/api-keys?reveal=true")"
 
-          echo "GET /v1/projects/<ref>           -> $project_status"
-          echo "GET /v1/projects/<ref>/api-keys  -> $keys_status"
+          echo "GET /v1/projects/<ref>                      -> $project_status"
+          echo "GET /v1/projects/<ref>/api-keys             -> $keys_status"
+          echo "GET /v1/projects/<ref>/api-keys?reveal=true -> $reveal_status"
           echo
           # Printed here rather than in a later step so that it is already
           # in the log whatever the link step below does.
@@ -646,10 +721,24 @@ jobs:
           echo "  403 on both   The account lacks project access outright, which"
           echo "                contradicts 'supabase projects list' succeeding above."
           echo "                Re-check which org the token belongs to."
-          echo "  200 then 200  but link still fails below: the fault is CLI-side. Bump"
-          echo "                the pin to 2.117.0 on a throwaway branch, dispatch"
-          echo "                diagnose again to compare, and add the finding to"
-          echo "                https://github.com/supabase/cli/issues/6392."
+          echo "  200 then 200  but link still fails below: the fault is in neither"
+          echo "                unparameterised endpoint. This is the branch run"
+          echo "                35604160586 took on 2026-09-21; the header carries the"
+          echo "                verdict. The third code is what narrows it further:"
+          echo "    reveal 403  The hypothesis is confirmed in its privileged form."
+          echo "                Listing the keys is allowed, revealing their values is"
+          echo "                not, and the value fetch is what link performs."
+          echo "                Remediation B, exactly as spelled out in the 200-then-403"
+          echo "                branch above: SUPABASE_DB_URL plus --db-url, taking the"
+          echo "                Management API off the critical path."
+          echo "    reveal 200  All three endpoints answer this token and link still"
+          echo "                fails, so the 403 is raised by a call none of these"
+          echo "                probes replicate. Do not remediate on a guess. Compare"
+          echo "                against the 2.117.0 throwaway-branch dispatch and report"
+          echo "                both to https://github.com/supabase/cli/issues/6392."
+          echo "    reveal 401  Remediation A: the token is dead for privileged reads"
+          echo "                specifically. Mint a replacement personal access token"
+          echo "                and update the SUPABASE_ACCESS_TOKEN repo secret."
 
       - name: Attempt the link that fails
         # Last on purpose, so the three observations above are already in
