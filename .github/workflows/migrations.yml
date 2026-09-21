@@ -4,8 +4,9 @@ name: Supabase Migrations
 # distinct concern with its own trigger shape, not folded into the
 # lint/typecheck/test job.
 #
-# Four jobs. Three do real work; the fourth only exists to tell the first
-# one whether it should:
+# Six jobs. Four do real work, one is a read-only probe kept for the next
+# time credentials break, and one exists only to tell dry-run whether it
+# should run:
 #   - changes: every PR into develop or master. Cheap. Reports whether the
 #     PR touches supabase/migrations/** — see the trigger note below for
 #     why that question can no longer be answered by a `paths:` filter.
@@ -21,6 +22,15 @@ name: Supabase Migrations
 #     job=drift-check. Read-only. Answers the one question nothing else
 #     here answers: does prod actually hold the migrations master says it
 #     should?
+#   - prod-migration-sync: every PR into master. A required status check on
+#     the protect-master ruleset. Read-only. Compares the state *after this
+#     PR lands* against prod: nothing already on master may be missing from
+#     prod, and prod may hold no version this PR's tree lacks a file for.
+#     This is the job that makes a broken delivery pipeline block the next
+#     promotion instead of surfacing months later.
+#   - diagnose: manual dispatch only. A read-only credentials probe against
+#     the Supabase Management API, for working out why `link` fails without
+#     extracting a repo secret onto a laptop.
 #
 # Why drift-check exists at all. The push job runs *after* merge, so a
 # failing push blocks nothing — the migration is already in git and the PR
@@ -53,12 +63,24 @@ name: Supabase Migrations
 #     nothing. The develop->master promotion PR is the one screen someone
 #     actually reads before shipping, so that is where the signal belongs.
 #
-# Secrets: push and drift-check both need SUPABASE_ACCESS_TOKEN and
-# SUPABASE_PROJECT_REF repo secrets. Both exist, and both predate the last
-# successful push on 2026-08-28. Since 2026-09-10 every push run has failed
-# at `supabase link` with "Authorization failed for the access token and
-# project ref pair" — but the obvious reading of that message, a dead
-# token, is not what is happening:
+# Secrets: push, drift-check and prod-migration-sync all need
+# SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_REF repo secrets. Both exist,
+# and both predate the last successful push on 2026-08-28.
+#
+# Be exact about the evidence. An earlier version of this note said "since
+# 2026-09-10 every push run has failed", which reads as a reproduced,
+# repeated fault. What exists is a single sample. The complete observed
+# history of this workflow against prod is three push runs and nothing
+# else:
+#   - 33082917747, 2026-08-27 14:33Z, green.
+#   - 33164166436, 2026-08-28 10:39Z, green. Applied
+#     20260828120000_grant_service_role_all_public.sql, which is still the
+#     newest migration prod holds a schema_migrations row for.
+#   - 34486392180, 2026-09-10 14:01Z, the merge of #46: the one failure.
+#
+# That one failure died at `supabase link` with "Authorization failed for
+# the access token and project ref pair". The obvious reading of that
+# message, a dead token, is not what is happening:
 #   - the token is valid until 2026-11-25, and its "last used" stamp moved
 #     on 2026-09-10, so Supabase accepted it and identified the account;
 #   - the failure is a 403 on privileges ("Your account does not have the
@@ -66,10 +88,24 @@ name: Supabase Migrations
 #   - `supabase projects list` on that account still returns project
 #     gqoeyqvwgmkyxasqknss (issebya-homes-ai-system, org issebya), so the
 #     project ref is right and the account's access to it is intact.
-# Nothing on our side changed either: this workflow has exactly one commit
-# in its history (d266b7e). The cause is still unresolved. The leading
-# suspect is the CLI version, see the next paragraph. Until it is found,
-# push and drift-check will both fail at the link step — a real outstanding
+# Nothing on our side changed either: at the time of the failure this
+# workflow had exactly one commit in its history (d266b7e), and every
+# commit since has changed what these jobs check, not how they
+# authenticate.
+#
+# The leading hypothesis, and how it gets tested. `supabase link` does not
+# make one Management API call, it makes two: GET /v1/projects/{ref} to
+# resolve the project, then GET /v1/projects/{ref}/api-keys to fetch the
+# anon and service-role keys it caches locally. The second is the one that
+# would plausibly start demanding a higher org role, and a 403 scoped to it
+# alone accounts for every observation above at once: the token
+# authenticates (a dead token gives 401 on identity, this is 403 on
+# privileges), the account still sees the project (`projects list` works),
+# and link still fails. The diagnose job below probes exactly those two
+# endpoints and prints only their status codes, which separates "the token
+# is dead" from "this one endpoint is now gated" without anyone having to
+# copy a repo secret onto a laptop to curl by hand. Until diagnose has run,
+# push and drift-check both fail at the link step: a real outstanding
 # problem, not a quirk of these jobs.
 #
 # CLI version: pinned to 2.116.0 below rather than `latest`. `latest` is an
@@ -85,15 +121,24 @@ name: Supabase Migrations
 # endpoints wanting a higher org role than this account holds. Ruled out:
 # the sbp_v0 token-format change in v2.117.0 is purely additive
 # (^sbp_(oauth_)?[a-f0-9]{40}$ -> ^sbp_(oauth_|v0_)?[a-f0-9]{40}$), so the
-# existing old-format token still matches. The pin therefore does two jobs:
-# it makes these runs reproducible, and it is the experiment for this
-# specific failure — dispatch job=push with the pin in place and see whether
-# the unchanged token goes green on 2.116.0.
+# existing old-format token still matches.
 #
-# One workflow_dispatch serves both jobs rather than two near-identical
-# workflows; the `job` input picks which one runs. It defaults to
-# drift-check because that is the read-only one — writing to prod is opt-in,
-# never something you get by hitting "Run workflow" without reading it.
+# This note used to call the pin "the experiment for this specific
+# failure". It never was one: zero workflow_dispatch runs exist on this
+# workflow, so that experiment has never been run. The hypothesis is also
+# now weak rather than merely untested. Upstream
+# https://github.com/supabase/cli/issues/6392 reproduces this identical
+# message on 2.116.0 as well as on 2.107.0, so a version pin by itself
+# cannot be the fix. What the pin still legitimately does is the job it
+# always did: it makes these runs reproducible, and it keeps `latest` from
+# being an unpinned external input that can break a green pipeline without
+# a single commit in this repo.
+#
+# One workflow_dispatch serves all three dispatchable jobs rather than
+# three near-identical workflows; the `job` input picks which one runs. It
+# defaults to drift-check because drift-check and diagnose are the
+# read-only arms and push is not. Writing to prod stays opt-in, never
+# something you get by hitting "Run workflow" without reading it.
 
 # Trigger note: the pull_request trigger deliberately has no `paths:`
 # filter, and that is the one non-obvious thing in this file.
@@ -127,6 +172,7 @@ on:
         options:
           - drift-check
           - push
+          - diagnose
 
 jobs:
   changes:
@@ -337,3 +383,275 @@ jobs:
           fi
 
           echo "No drift: master's migration history matches prod."
+
+  prod-migration-sync:
+    # The gate. Until this job existed, nothing in this repo could stop a
+    # broken delivery pipeline: push runs after the merge, so its failure
+    # blocks nothing, and drift-check answers a narrower question. A
+    # migration could land in git, never reach prod, and the next promotion
+    # would merge on top regardless. This job is what turns that silence
+    # into a blocked merge button, so it is a required status check on the
+    # protect-master ruleset.
+    #
+    # Two things it deliberately does NOT do. They are traps in opposite
+    # directions and both are specific to a job being *required*:
+    #   - No `if` gate on the changes job's output. A job skipped by an `if`
+    #     reports a `skipped` conclusion, and GitHub counts skipped as
+    #     satisfying a required check. Gating this on `changes` would make
+    #     it pass by vanishing on exactly the PRs where nothing in the diff
+    #     forced it to run, which is the drift case it exists to catch.
+    #   - No `paths:` filter on the trigger (see the trigger note above). A
+    #     workflow suppressed by a paths filter never reports its check at
+    #     all, which leaves a required context pending forever and blocks
+    #     the merge outright. eval-golden.yml's eval-gate is a live example
+    #     of that hazard in this repo; do not copy it here.
+    if: github.event_name == 'pull_request' && github.base_ref == 'master'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Deliberately NOT pinned to master, unlike push and drift-check,
+          # and the contrast is load-bearing rather than an oversight. Those
+          # two ask about master as it stands now; drift-check in particular
+          # pins master so it does not flag the PR's own migrations as
+          # drift. This job asks the opposite question: after this PR lands,
+          # is the only thing prod is missing exactly what this PR adds? So
+          # it wants the PR's merge commit, which is what checkout gives by
+          # default on a pull_request event.
+          #
+          # fetch-depth 0 because the comparison needs origin/master's tree
+          # as well as the merge commit's.
+          fetch-depth: 0
+
+      - uses: supabase/setup-cli@v1
+        with:
+          # Pinned deliberately, not `latest` — see the CLI version note in
+          # the header block. This pin and the ones in push, drift-check and
+          # diagnose must never drift apart; bump all four together.
+          version: 2.116.0
+
+      - name: Fetch master
+        # Stated rather than relying on fetch-depth 0 also fetching every
+        # remote branch. If origin/master is ever missing, the comparison
+        # below would read master as having zero migrations and pass
+        # vacuously, which is the one way a gate fails silently.
+        run: git fetch --no-tags origin "+refs/heads/master:refs/remotes/origin/master"
+
+      - name: Link to prod project
+        # No continue-on-error, on purpose. This is the single most
+        # load-bearing line in the job: a connection failure must fail the
+        # check. A gate that goes green when it cannot reach the thing it
+        # gates is worse than no gate, because it also tells you it looked.
+        run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Compare prod, master and this PR
+        run: |
+          set -uo pipefail
+          # Errexit off, matching drift-check: the CLI exits 0 whether or
+          # not there is drift, so its output has to be captured and
+          # inspected rather than used as a bare assertion, and a non-zero
+          # exit from jq or comm should reach the reporting code below
+          # instead of killing the step with no explanation.
+          set +e
+
+          # <tree-ish> -> the leading timestamp of every migration filename
+          # in it, one per line, sorted and deduped.
+          versions_from_tree() {
+            git ls-tree --name-only "$1" supabase/migrations/ \
+              | sed -n 's#^supabase/migrations/\([0-9][0-9]*\)_.*\.sql$#\1#p' \
+              | sort -u
+          }
+
+          # Set difference, $1 minus $2, both newline-separated.
+          set_diff() {
+            comm -23 \
+              <(printf '%s\n' "$1" | sed '/^$/d' | sort -u) \
+              <(printf '%s\n' "$2" | sed '/^$/d' | sort -u)
+          }
+
+          master_local="$(versions_from_tree origin/master)"
+          pr_local="$(versions_from_tree HEAD)"
+
+          # --output-format json rather than parsing the pipe-delimited
+          # table drift-check parses. The table's column widths are a
+          # presentation detail that can change between CLI releases;
+          # drift-check's own header flags its awk as the first thing to
+          # suspect. The JSON shape was verified on the pinned 2.116.0.
+          # Connection chatter goes to stderr, so stdout is clean JSON.
+          list_err="$(mktemp)"
+          list_json="$(supabase migration list --linked --output-format json 2>"$list_err")"
+          list_rc=$?
+
+          echo "::group::supabase migration list --linked"
+          echo "--- stderr ---"
+          cat "$list_err"
+          echo "--- stdout ---"
+          echo "$list_json"
+          echo "::endgroup::"
+
+          # `// ""` because only the both-sides row shape was observed: how
+          # a row that is absent remotely encodes its `remote` field (empty
+          # string, null, or key omitted) was not. The guard covers all
+          # three, and `.migrations[]?` covers the key being absent too.
+          remote="$(printf '%s' "$list_json" \
+            | jq -r '.migrations[]? | select((.remote // "") != "") | .remote' \
+            | sort -u)"
+          jq_rc=$?
+
+          # Guard the parsing before trusting it, the way drift-check does.
+          # An empty remote set next to a non-empty master is far more
+          # likely to mean the output shape changed than that prod's history
+          # was wiped, and reporting every migration ever written as
+          # "missing from prod" would bury the real signal.
+          if [ "$list_rc" -ne 0 ] || [ "$jq_rc" -ne 0 ] || { [ -z "$remote" ] && [ -n "$master_local" ]; }; then
+            echo "::error::Could not determine remote migration state. The CLI exited ${list_rc}, jq exited ${jq_rc}, and the extracted remote version set is $([ -z "$remote" ] && echo empty || echo non-empty) while master has $(printf '%s\n' "$master_local" | sed '/^$/d' | wc -l | tr -d ' ') migration file(s). Suspect a changed 'supabase migration list --output-format json' shape before suspecting prod."
+            exit 1
+          fi
+
+          fail=0
+
+          # Assertion 1: everything already on master must be in prod.
+          # A non-empty result is a push that failed or never ran, which is
+          # exactly the 2026-09-10 breakage this job exists to stop
+          # repeating.
+          missing_in_prod="$(set_diff "$master_local" "$remote")"
+          if [ -n "$missing_in_prod" ]; then
+            fail=1
+            echo "::error::Migrations on master have never been applied to prod. The delivery pipeline is broken and this PR must not merge on top of it. Fix it first: Run workflow on Supabase Migrations with job=push, then re-run this check."
+            printf '%s\n' "$missing_in_prod" | sed 's/^/  /'
+          fi
+
+          # Assertion 2: prod must hold nothing this PR's tree lacks a file
+          # for. Catches history repaired outside the repo (a statement run
+          # by hand in the SQL editor with a schema_migrations row written
+          # after it) and PRs that delete a migration prod already applied.
+          unknown_in_prod="$(set_diff "$remote" "$pr_local")"
+          if [ -n "$unknown_in_prod" ]; then
+            fail=1
+            echo "::error::Prod holds migration versions with no file in this PR's tree. Either history was repaired outside this repo, or this PR deletes a migration prod has already applied."
+            printf '%s\n' "$unknown_in_prod" | sed 's/^/  /'
+          fi
+
+          # Assertion 3 is informational only, and must stay that way.
+          # These are precisely the migrations the push job will apply once
+          # this PR merges, so on a promotion PR carrying a schema change
+          # the list is non-empty by design. Failing on it would red every
+          # migration promotion, which is the cry-wolf failure drift-check's
+          # header already argues against.
+          pending="$(set_diff "$pr_local" "$master_local")"
+          {
+            echo "### Prod migration sync"
+            echo
+            if [ -n "$pending" ]; then
+              echo "Merging this PR will apply the following migrations to prod:"
+              echo
+              printf '%s\n' "$pending" | sed 's/^/- `/; s/$/`/'
+            else
+              echo "This PR adds no migrations that master does not already have."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo
+          echo "prod applied:        $(printf '%s\n' "$remote" | sed '/^$/d' | tr '\n' ' ')"
+          echo "master files:        $(printf '%s\n' "$master_local" | sed '/^$/d' | tr '\n' ' ')"
+          echo "this PR's files:     $(printf '%s\n' "$pr_local" | sed '/^$/d' | tr '\n' ' ')"
+          echo "merge will apply:    $(printf '%s\n' "$pending" | sed '/^$/d' | tr '\n' ' ')"
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo
+          echo "In sync: prod holds everything master has, and holds nothing this PR does not."
+
+  diagnose:
+    # Read-only credentials probe, dispatch only. It exists because the
+    # root cause of the link 403 cannot be investigated from a developer
+    # machine: SUPABASE_ACCESS_TOKEN is a repo secret, and copying it onto
+    # a laptop to curl by hand would be the wrong way to answer the
+    # question. Run the probe where the credential already lives instead.
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'diagnose'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      # Deliberately NOT pinned to `ref: master`, unlike push and
+      # drift-check. Those two pin master because they act on migration
+      # history and prod is deployed from master. This job asks a question
+      # about credentials, not about history, so it should answer it for
+      # whatever branch the operator dispatched, including a throwaway
+      # branch carrying a candidate fix. Every other checkout in this file
+      # is pinned, so the exception is stated rather than left to read as
+      # an oversight.
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          # Pinned deliberately, not `latest` — see the CLI version note in
+          # the header block. Bump this on purpose, never by drift.
+          version: 2.116.0
+
+      - name: Which CLI actually got installed
+        # supabase/setup-cli does not log what it resolved, which is exactly
+        # why the 2.116.0-versus-2.117.0 story in the header is inferred
+        # from release dates rather than observed. This ends that.
+        run: supabase --version
+
+      - name: Can the token see the project at all
+        # If this lists gqoeyqvwgmkyxasqknss, the token is alive, the
+        # account can reach the project, and "wrong project ref" is dead as
+        # a hypothesis before the HTTP probes below even run.
+        run: supabase projects list
+
+      - name: Probe the two Management API endpoints `link` calls
+        env:
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+
+          # Status codes only. On success /api-keys returns the project's
+          # live anon and service-role keys, so its body must never reach
+          # the log: `-o /dev/null` is load-bearing, not tidiness. The token
+          # goes from the environment straight into the header and is never
+          # interpolated into anything that gets echoed.
+          probe() {
+            curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "$1"
+          }
+
+          project_status="$(probe "https://api.supabase.com/v1/projects/$REF")"
+          keys_status="$(probe "https://api.supabase.com/v1/projects/$REF/api-keys")"
+
+          echo "GET /v1/projects/<ref>           -> $project_status"
+          echo "GET /v1/projects/<ref>/api-keys  -> $keys_status"
+          echo
+          # Printed here rather than in a later step so that it is already
+          # in the log whatever the link step below does.
+          echo "How to read this:"
+          echo "  200 then 403  The leading hypothesis is confirmed: a Management API"
+          echo "                privilege change gates the key fetch that link performs."
+          echo "                Remediation: take the Management API off the critical"
+          echo "                path. Add a SUPABASE_DB_URL secret (session pooler host,"
+          echo "                port 5432, percent-encoded password; the direct"
+          echo "                db.<ref>.supabase.co host is IPv6-only and GitHub runners"
+          echo "                are IPv4-only) and replace link plus --linked with"
+          echo "                --db-url in push, drift-check and prod-migration-sync."
+          echo "  401 on either The token is dead or malformed despite what the"
+          echo "                dashboard says. Remediation: mint a replacement personal"
+          echo "                access token on an account that owns the issebya org and"
+          echo "                update the SUPABASE_ACCESS_TOKEN repo secret."
+          echo "  403 on both   The account lacks project access outright, which"
+          echo "                contradicts 'supabase projects list' succeeding above."
+          echo "                Re-check which org the token belongs to."
+          echo "  200 then 200  but link still fails below: the fault is CLI-side. Bump"
+          echo "                the pin to 2.117.0 on a throwaway branch, dispatch"
+          echo "                diagnose again to compare, and add the finding to"
+          echo "                https://github.com/supabase/cli/issues/6392."
+
+      - name: Attempt the link that fails
+        # Last on purpose, so the three observations above are already in
+        # the log by the time this fails and nobody has to scroll back up.
+        run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}

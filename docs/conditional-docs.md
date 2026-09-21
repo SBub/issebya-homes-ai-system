@@ -100,6 +100,10 @@ procedures, not code documentation) and anything gitignored.
 - `apps/website/app_docs/database/production-migrations.md`
   - Conditions:
     - When a schema change has to reach production
+    - When changing `.github/workflows/migrations.yml`
+    - When adding or changing a required status check on `master`
+    - When a prod migration apply has failed, or prod and `master` disagree about
+      which migrations are applied
 
 - `apps/website/app_docs/testing/unit_test_spec_format.md`
   - Conditions:
