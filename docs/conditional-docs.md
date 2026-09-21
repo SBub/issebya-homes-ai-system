@@ -40,6 +40,7 @@ procedures, not code documentation) and anything gitignored.
   - Conditions:
     - When changing availability, booking persistence, or the iCal merge
     - When you need to know why a page renders the way it does before changing it
+    - When you need to know which test layers run in CI and on push, and which are manual
 
 - `apps/website/app_docs/nextjs-patterns-guide.md`
   - Conditions:
@@ -158,6 +159,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing `resolveInitialCheckDates`, or anything that decides whether a `?checkIn=`/`?checkOut=` URL range is applied
     - When a guest reports that a GCA booking link opened on dates they did not agree to, or on the wrong month
     - When adding a second `role="status"` node inside `.booking-engine`, or changing which month `BookingCalendar` opens on
+
+- `apps/website/app_docs/feature-cc081a8b-gate-browser-tests-in-ci.md`
+  - Conditions:
+    - When a `*.browser.test.tsx` passes locally but fails in CI with `Vitest failed to find the runner`, or a `new dependencies optimized` line appears in the run
+    - When changing the website's `test` / `test:browser` scripts, `browser.instances`, or `optimizeDeps.include` in `vitest.config.ts`
+    - When deciding whether a new test should gate, or wondering why an `e2e/` spec never runs in CI
 
 ---
 

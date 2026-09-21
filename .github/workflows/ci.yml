@@ -47,5 +47,13 @@ jobs:
       - name: Dead code check (knip)
         run: yarn knip
 
+      # The website's `test` script runs the Vitest browser project, which
+      # launches a real Playwright chromium. `yarn install` does not fetch
+      # browser binaries, so without this the browser project fails to launch
+      # in CI. Only chromium: apps/website/vitest.config.ts narrows the gated
+      # run to it, and the full firefox/webkit sweep is a manual command.
+      - name: Install Playwright browser (chromium)
+        run: yarn workspace website playwright install --with-deps chromium
+
       - name: Tests
         run: yarn turbo run test

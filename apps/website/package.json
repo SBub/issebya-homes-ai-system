@@ -9,7 +9,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "vitest run --project unit",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -19,7 +19,7 @@
     "db:stop": "supabase stop",
     "db:status": "supabase status",
     "test:unit": "vitest --project unit",
-    "test:browser": "vitest --project browser",
+    "test:browser": "VITEST_ALL_BROWSERS=1 vitest --project browser",
     "test:integration": "playwright test"
   },
   "dependencies": {
