@@ -4,6 +4,7 @@ import { addBreadcrumb, captureException, setContext, setTag, startSpan } from "
 import { revalidateTag } from "next/cache";
 import { headers } from "next/headers";
 import { getAvailability } from "@/lib/availability";
+import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay, isValidDateRange, mergeDateRanges } from "@/lib/date-utils";
 import { calculateTotalPrice } from "@/lib/price-utils";
 import { captureBookingError } from "@/lib/sentry-booking";
@@ -171,11 +172,18 @@ async function checkAvailability(
 // timezone (UTC on Vercel), recording the previous day for every guest ahead
 // of UTC. Server Function arguments are untrusted client input, so the shape
 // is verified below by checkoutSchema rather than trusted.
+//
+// `returnTo` is where the booking started, when it started inside a blog post
+// (the browser sends its own pathname). It is a hint, not a permission: it is
+// shape-checked by checkoutSchema and then run past the post registry by
+// resolveBlogReturn before any of it reaches a Stripe URL. Anything else
+// degrades to `null` and the booking proceeds with today's URLs.
 export async function submitBooking(
   roomType: "room1" | "room2",
   checkIn: string | null,
   checkOut: string | null,
   source: "direct" | "gca",
+  returnTo: string | null,
   prevState: BookingFormState,
   formData: FormData,
 ): Promise<BookingFormState> {
@@ -258,6 +266,7 @@ export async function submitBooking(
         phone,
         whatsappOptIn,
         source,
+        returnTo,
       });
 
       if (!validation.success) {
@@ -275,6 +284,10 @@ export async function submitBooking(
       }
 
       const { personCount } = validation.data;
+
+      // Resolved once, here, rather than at each URL: the shape passed, but
+      // only the registry can say whether the slug names a real post.
+      const blogReturn = resolveBlogReturn(validation.data.returnTo);
 
       parentSpan?.setAttributes({
         "booking.roomType": roomType,
@@ -376,6 +389,13 @@ export async function submitBooking(
         const protocol = process.env.NODE_ENV === "production" ? "https" : "http";
         const origin = `${protocol}://${host}`;
 
+        // With no resolved return target both of these collapse to exactly
+        // the strings this action has always sent, character for character.
+        const returnParam = blogReturn ? `&return=${encodeURIComponent(blogReturn.path)}` : "";
+        const cancelUrl = blogReturn
+          ? `${origin}${blogReturn.href}`
+          : `${origin}/booking/${roomType}`;
+
         const roomLabel = ROOM_LABELS[roomType];
         const imageUrl = `https://issebya.com${ROOM_IMAGES[roomType]}`;
 
@@ -439,8 +459,8 @@ export async function submitBooking(
               },
               customer_email: email,
               // eslint-disable-next-line no-secrets/no-secrets -- Stripe URL template placeholder, not a secret
-              success_url: `${origin}/booking/confirmation?session={CHECKOUT_SESSION_ID}`,
-              cancel_url: `${origin}/booking/${roomType}`,
+              success_url: `${origin}/booking/confirmation?session={CHECKOUT_SESSION_ID}${returnParam}`,
+              cancel_url: cancelUrl,
               mode: "payment",
             });
             stripeSpan?.setAttribute("stripe.sessionId", stripeSession.id);

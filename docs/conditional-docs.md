@@ -146,6 +146,13 @@ procedures, not code documentation) and anything gitignored.
     - When adding navigation UI that is tempted to read the current URL with `usePathname()` inside a prerendered route
     - When a `*.browser.test.tsx` fails at import time on `next/link` (`process is not defined`)
 
+- `apps/website/app_docs/feature-4d0d9d75-blog-booking-return-link.md`
+  - Conditions:
+    - When changing `submitBooking`'s arguments, or the `success_url` / `cancel_url` it sends to Stripe
+    - When adding or validating any user-supplied redirect or return target (open-redirect surface)
+    - When changing what `/booking/confirmation` reads from `searchParams`, or the widget's `#book` anchor
+    - When a blog post slug convention changes, or `BookingEngineExpanded` gains another `next/navigation` hook
+
 ---
 
 ## apps/guest-communication-agent

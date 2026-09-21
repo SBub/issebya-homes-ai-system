@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { ErrorBoundary } from "@sentry/nextjs";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
+import { BOOKING_WIDGET_ANCHOR_ID } from "@/lib/blog/return-path";
 import { BookingType } from "@/lib/shared/types/booking";
 import { BookingEngine } from "../../booking/[type]/ui/BookingEngine";
 import { BookingEngineSkeleton } from "../../booking/[type]/ui/BookingEngineSkeleton";
@@ -33,6 +34,12 @@ import { RoomSwitcher } from "./RoomSwitcher";
  *
  * The widget takes no room prop: any post converts for either room, so the
  * reader chooses inside the widget.
+ *
+ * The `<aside>` carries `BOOKING_WIDGET_ANCHOR_ID` because it is the landing
+ * target a reader returns to after checkout: both the Stripe cancel URL and
+ * the confirmation page's back link point at `/blog/<slug>#book`. A post must
+ * therefore render at most one widget — two would be duplicate ids and the
+ * browser would land on the first.
  */
 function roomEngine(roomType: BookingType) {
   return (
@@ -55,7 +62,11 @@ function roomEngine(roomType: BookingType) {
 
 export function BookingWidget() {
   return (
-    <aside className="my-10 border border-dashed p-4 bg-white" data-testid="booking-widget">
+    <aside
+      id={BOOKING_WIDGET_ANCHOR_ID}
+      className="my-10 border border-dashed p-4 bg-white"
+      data-testid="booking-widget"
+    >
       <h2 className="text-xl font-hand font-bold">stay here while you read about it</h2>
       <p className="text-sm leading-relaxed mt-1 mb-4">
         Pick a room, pick your nights, and book without leaving the page.

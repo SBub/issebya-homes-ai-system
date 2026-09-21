@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { addDays, format, startOfDay } from "date-fns";
+import { createAdminClient } from "@/lib/shared/supabase";
 
 // Generate future dates relative to today so tests don't go stale
 const today = startOfDay(new Date());
@@ -150,5 +152,127 @@ test.describe("Blog breadcrumb trail", () => {
     await page.goto("/blog");
 
     await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toHaveCount(0);
+  });
+});
+
+test.describe("Booking confirmation returns to the originating post", () => {
+  // The fixture is a *confirmed* booking on purpose: /api/bookings/direct
+  // only calls Stripe for a `pending` row, so a confirmed one is served
+  // straight from the database and this spec needs no new MSW handler.
+  //
+  // room2 on days +40..+43 is also deliberate. The suite runs `workers: 1`
+  // (see playwright.config.ts for the two collisions that forced that), and
+  // the widget booking test above books room1 on +10..+13 — seeding well
+  // clear of that window keeps this fixture from blocking anyone's calendar.
+  const seedCheckIn = format(addDays(today, 40), "yyyy-MM-dd");
+  const seedCheckOut = format(addDays(today, 43), "yyyy-MM-dd");
+
+  async function seedConfirmedBooking() {
+    const supabase = createAdminClient();
+
+    const { data: guestContact, error: guestContactError } = await supabase
+      .from("guest_contacts")
+      .insert({
+        // Both `phone` and `email` are independently UNIQUE on
+        // guest_contacts, so both are randomised per run.
+        phone: `+000${randomUUID().replace(/\D/g, "").slice(0, 10)}`,
+        email: `e2e-return-${randomUUID()}@example.com`,
+        guest_name: "E2E Return Fixture",
+        enabled: false,
+      })
+      .select("id")
+      .single();
+
+    if (guestContactError || !guestContact) {
+      throw new Error(`Failed to seed guest_contacts fixture: ${guestContactError?.message}`);
+    }
+
+    const sessionId = `cs_test_e2e_return_${randomUUID()}`;
+    const { data: booking, error: bookingError } = await supabase
+      .from("bookings")
+      .insert({
+        room_type: "room2",
+        check_in: seedCheckIn,
+        check_out: seedCheckOut,
+        nights: 3,
+        person_count: 1,
+        base_price: 100,
+        tourist_tax: 10,
+        total_amount: 110,
+        guest_contact_id: guestContact.id,
+        source: "direct",
+        stripe_session_id: sessionId,
+        status: "confirmed",
+      })
+      .select("id")
+      .single();
+
+    if (bookingError || !booking) {
+      await supabase.from("guest_contacts").delete().eq("id", guestContact.id);
+      throw new Error(`Failed to seed confirmed booking fixture: ${bookingError?.message}`);
+    }
+
+    return {
+      sessionId,
+      cleanup: async () => {
+        await supabase.from("bookings").delete().eq("id", booking.id);
+        await supabase.from("guest_contacts").delete().eq("id", guestContact.id);
+      },
+    };
+  }
+
+  test("a valid return target renders a link that lands on the post's widget", async ({ page }) => {
+    const { sessionId, cleanup } = await seedConfirmedBooking();
+
+    try {
+      await page.goto(
+        `/booking/confirmation?session=${encodeURIComponent(sessionId)}&return=${encodeURIComponent(WIDGET_POST)}`,
+      );
+
+      await expect(page.getByRole("heading", { name: "Booking Confirmed" })).toBeVisible();
+
+      const returnLink = page.getByTestId("return-to-post");
+      await expect(returnLink).toBeVisible();
+      // The title comes from the post registry, not from the URL, which is
+      // what proves the page resolved the slug rather than echoing it.
+      await expect(returnLink).toContainText(NEWER_POST_TITLE);
+      await expect(returnLink).toHaveAttribute("href", `${WIDGET_POST}#book`);
+
+      await returnLink.click();
+      await page.waitForURL(`**${WIDGET_POST}#book`);
+
+      // The anchor target really exists on the post, so the reader lands at
+      // the widget rather than at the top of the article.
+      await expect(page.getByTestId("booking-widget")).toBeVisible();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Anyone can type this query parameter by hand, so the page revalidates it
+  // from scratch. A rejected target costs the link and nothing else: no
+  // redirect, no error, the same confirmation page as always.
+  test.describe("a forged return target is dropped", () => {
+    for (const [label, forged] of [
+      ["an absolute URL", "https://evil.example/"],
+      ["a protocol-relative URL", "//evil.example"],
+      ["a slug that names no post", "/blog/does-not-exist"],
+      ["a non-blog internal path", "/booking/room1"],
+    ] as const) {
+      test(label, async ({ page }) => {
+        const { sessionId, cleanup } = await seedConfirmedBooking();
+
+        try {
+          await page.goto(
+            `/booking/confirmation?session=${encodeURIComponent(sessionId)}&return=${encodeURIComponent(forged)}`,
+          );
+
+          await expect(page.getByRole("heading", { name: "Booking Confirmed" })).toBeVisible();
+          await expect(page.getByTestId("return-to-post")).toHaveCount(0);
+        } finally {
+          await cleanup();
+        }
+      });
+    }
   });
 });
