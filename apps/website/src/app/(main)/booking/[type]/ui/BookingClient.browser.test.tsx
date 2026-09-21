@@ -1,3 +1,4 @@
+import { addDays, format, startOfDay } from "date-fns";
 import { beforeEach, expect, test, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -166,4 +167,100 @@ test("user sees the exact days named by a GCA booking link", async () => {
 
   await expect.element(getByText("21 Jul 2027")).toBeInTheDocument();
   await expect.element(getByText("24 Jul 2027")).toBeInTheDocument();
+});
+
+// A GCA link whose dates cannot be applied used to fall back to the server
+// defaults in silence, so the guest saw a stay they never agreed to with
+// nothing explaining the swap. The notice below is the feedback path: the
+// accept/reject decision is unchanged, the rejection is just no longer
+// invisible. Future fixtures are built relative to today so they never go
+// stale, and always through date-fns rather than new Date("yyyy-MM-dd"),
+// which is UTC midnight (see AGENTS.md, "Calendar days are strings").
+const TODAY = startOfDay(new Date());
+const futureDay = (offset: number) => addDays(TODAY, offset);
+const futureParam = (offset: number) => format(futureDay(offset), "yyyy-MM-dd");
+const futureLabel = (offset: number) => format(futureDay(offset), "d MMM yyyy");
+
+test("user sees why a link with past dates was not applied", async () => {
+  mockSearchParams = new URLSearchParams({
+    checkIn: "2020-01-10",
+    checkOut: "2020-01-12",
+    phone: "+351920742845",
+    source: "gca",
+  });
+
+  const { getByRole, getByText } = await render(<BookingClient {...defaultProps} />);
+
+  const notice = getByRole("status");
+  await expect.element(notice).toHaveTextContent(/in the past/i);
+  await expect.element(notice).toHaveTextContent("10 Jan 2020");
+  await expect.element(notice).toHaveTextContent("12 Jan 2020");
+
+  // The selection itself still falls back to the server defaults, unchanged.
+  await expect.element(getByText("17 Jul 2025")).toBeInTheDocument();
+  await expect.element(getByText("19 Jul 2025")).toBeInTheDocument();
+});
+
+test("user sees why a link overlapping a booked range was not applied", async () => {
+  mockSearchParams = new URLSearchParams({
+    checkIn: futureParam(30),
+    checkOut: futureParam(33),
+    phone: "+351920742845",
+    source: "gca",
+  });
+
+  const { getByRole } = await render(
+    <BookingClient
+      {...defaultProps}
+      blockedDates={[{ start: futureDay(30), end: futureDay(33) }]}
+    />,
+  );
+
+  const notice = getByRole("status");
+  await expect.element(notice).toHaveTextContent(/no longer available/i);
+  await expect.element(notice).toHaveTextContent(futureLabel(30));
+  await expect.element(notice).toHaveTextContent(futureLabel(33));
+});
+
+test("user sees a could-not-be-read notice for unparseable link dates", async () => {
+  mockSearchParams = new URLSearchParams({ checkIn: "foo", checkOut: "bar" });
+
+  const { getByRole } = await render(<BookingClient {...defaultProps} />);
+
+  await expect.element(getByRole("status")).toHaveTextContent(/could not read the dates/i);
+});
+
+test("an inverted link range reads as could-not-be-read, with no dates named", async () => {
+  mockSearchParams = new URLSearchParams({
+    checkIn: futureParam(33),
+    checkOut: futureParam(30),
+  });
+
+  const { getByRole } = await render(<BookingClient {...defaultProps} />);
+
+  const notice = getByRole("status");
+  await expect.element(notice).toHaveTextContent(/could not read the dates/i);
+  await expect.element(notice).not.toHaveTextContent(futureLabel(33));
+});
+
+test("a valid future link is applied with no notice", async () => {
+  mockSearchParams = new URLSearchParams({
+    checkIn: futureParam(30),
+    checkOut: futureParam(33),
+    phone: "+351920742845",
+    source: "gca",
+  });
+
+  const { getByText } = await render(<BookingClient {...defaultProps} />);
+
+  await expect.element(getByText(futureLabel(30))).toBeInTheDocument();
+  await expect.element(getByText(futureLabel(33))).toBeInTheDocument();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+});
+
+test("a URL with no dates renders no notice at all", async () => {
+  const { getByLabelText } = await render(<BookingClient {...defaultProps} />);
+
+  await expect.element(getByLabelText("Select check-in date")).toBeInTheDocument();
+  await expect.element(page.getByRole("status")).not.toBeInTheDocument();
 });
