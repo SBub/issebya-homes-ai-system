@@ -17,10 +17,11 @@
  * datasets and per-segment eval files alongside this merged one — a
  * confusing double-tracking pattern that's gone now: the standalone
  * datasets were deleted, and their eval files were deleted or consolidated
- * into this one file. There is no push script — rows are added directly to
- * the live Braintrust Dataset (UI, or the Braintrust MCP's
- * edit_dataset_rows). Any new segment's rows go there with a new namespace
- * prefix, not a new standalone dataset/eval file.
+ * into this one file. Rows are added directly to the live Braintrust
+ * Dataset (UI, the Braintrust MCP's edit_dataset_rows, or a scoped upsert
+ * script like scripts/push-date-resolution-rows.ts that holds only the rows
+ * it inserts). Any new segment's rows go there with a new namespace prefix,
+ * not a new standalone dataset/eval file.
  *
  * The dataset itself is the sole source of truth for these rows — there is
  * deliberately no local JSON mirror under evals/data/ (unlike the

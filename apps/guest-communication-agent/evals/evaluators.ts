@@ -41,6 +41,15 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return false;
 }
 
+// Tools whose ARGS are deep-equal-checked against expected.toolCall.args, not
+// just their name. Everything else scores on name alone even when a row
+// carries args (several get_pricing rows carry `{room}` as documentation
+// only, and pricing-06 explicitly relies on that), so this is an allowlist,
+// not "compare whenever args are present". check_availability is here
+// because a wrong year is a silent failure: the tool reports the past as
+// available (nothing is booked there) and a stale-year booking link follows.
+const ARGS_SCORED_TOOLS = new Set(["send_booking_link", "check_availability"]);
+
 // Offline Eval() scorer (EvalScorer shape: ({input, output, expected, ...})
 // => Score), NOT an online Braintrust Scorer Function registered via
 // project.scorers.create — those two are different Braintrust concepts (see
@@ -56,10 +65,9 @@ function deepEqual(a: unknown, b: unknown): boolean {
 // allows it), so "did the model call the expected tool" means "is it
 // present anywhere in this round's toolCalls," not "was it the only/first
 // one requested." Kept intentionally simple for this dataset's shape: exact
-// tool NAME match is score 1/0. Deep-equal on args only applies when
-// expected.toolCall.name is "send_booking_link" (the one case where wrong
-// args, not just the wrong tool, is a real failure — see
-// docs/braintrust-online-eval-testing.md section 15b).
+// tool NAME match is score 1/0. Deep-equal on args only applies to the
+// ARGS_SCORED_TOOLS above (where wrong args, not just the wrong tool, is a
+// real failure, see docs/braintrust-online-eval-testing.md section 15b).
 export function toolCallMatch({
   output,
   expected,
@@ -155,15 +163,15 @@ export function toolCallMatch({
     };
   }
 
-  if (expectedCall.name === "send_booking_link") {
+  if (ARGS_SCORED_TOOLS.has(expectedCall.name)) {
     const argsMatch = deepEqual(match.args, expectedCall.args ?? {});
     return {
       name: "Tool Call Match",
       score: argsMatch ? 1 : 0,
       metadata: {
         rationale: argsMatch
-          ? "send_booking_link called with matching args."
-          : "send_booking_link tool name matched but args differ from expected.",
+          ? `${expectedCall.name} called with matching args.`
+          : `${expectedCall.name} tool name matched but args differ from expected.`,
         expected: expectedCall,
         actual: match,
       },
