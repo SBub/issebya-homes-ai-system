@@ -153,6 +153,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing what `/booking/confirmation` reads from `searchParams`, or the widget's `#book` anchor
     - When a blog post slug convention changes, or `BookingEngineExpanded` gains another `next/navigation` hook
 
+- `apps/website/app_docs/feature-39f3d713-booking-link-dates-notice.md`
+  - Conditions:
+    - When changing `resolveInitialCheckDates`, or anything that decides whether a `?checkIn=`/`?checkOut=` URL range is applied
+    - When a guest reports that a GCA booking link opened on dates they did not agree to, or on the wrong month
+    - When adding a second `role="status"` node inside `.booking-engine`, or changing which month `BookingCalendar` opens on
+
 ---
 
 ## apps/guest-communication-agent
