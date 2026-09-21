@@ -23,8 +23,8 @@ Dev routes through the ngrok webhook gateway, see `docs/ngrok-webhook-gateway-so
 ## The setup, in order
 
 1. **Meta Business verification** (Meta Business Manager > Security Center). Sole trader, so verification is against the person, not a company registry entry. What passed:
-   - Documents must match the legal name and the address exactly as printed, including the postal code, so use the address as it appears on the Finanças (tax authority) declaration, not a reformatted version.
-   - Prepaid phone bills are not accepted as address proof. Use the Finanças declaration or a bank/utility statement.
+   - Documents must match the legal name and the address exactly as printed, including the postal code: the Finanças (tax authority) activity declaration prints `2705-020 Colares` for this address, and the form had `2705-044`, which failed the address check until corrected.
+   - The business phone number needs its own proof (a postpaid phone bill or bank letter showing the number). A prepaid plan's payment summary (Lyca) was rejected. The Finanças declaration covers name and address, not the phone.
    - A mismatch in any field is a silent reject with a generic reason; fix the field and resubmit rather than guessing.
 2. **Twilio Embedded Signup** (Twilio Console > Messaging > Senders > WhatsApp senders > New sender). Pick "My own phone number" and enter the business number. Twilio creates or links the WABA and sends the verification code to that phone.
 3. **Wait for the final registration.** After signup the number shows **"Pending"** in WhatsApp Manager and stays there until the BSP (Twilio) runs the final registration API call on its side. Nothing in the Meta or Twilio UI triggers it. It needed a Twilio support ticket to get done.
