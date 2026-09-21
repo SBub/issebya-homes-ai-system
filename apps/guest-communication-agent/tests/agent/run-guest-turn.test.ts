@@ -33,14 +33,13 @@ vi.mock("@/agent/memory.js", () => ({
   foldMemory: foldMemoryMock,
 }));
 
-// property-question.ts calls createClient() at module load time (pulled in
-// transitively via run-agent-turn.ts -> run-tool.ts), so this must be
-// present even though no test here calls that tool.
+// The one real Supabase caller on this path is tracing.ts's
+// recordMissingInfoTraceAnchor insert (see run-agent-turn.test.ts's
+// identical mock); no test here drives answer_property_question.
 vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: vi.fn(() => ({
     from: () => ({ insert: () => Promise.resolve({ error: null }) }),
   })),
-  createClient: vi.fn(() => ({})),
 }));
 
 const sendOwnerNudgeMock = vi.fn();
