@@ -95,7 +95,7 @@ that start on `/booking/[type]` are byte-identical to before.
 
 ## How to Use
 
-1. Open a post that renders the widget, e.g. `/blog/a-weekend-in-almocageme`.
+1. Open a post that renders the widget, e.g. `/blog/welcome-to-issebya-homes`.
 2. Book from inside the post: pick a room, pick dates, fill the contact fields
    and confirm.
 3. On the hosted Stripe page, either pay or cancel.

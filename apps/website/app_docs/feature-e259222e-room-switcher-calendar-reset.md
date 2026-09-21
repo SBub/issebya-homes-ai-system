@@ -78,7 +78,7 @@ state.
 
 1. Run the site: `cd apps/website && yarn dev` (the app honours `PORT` and only
    defaults to 3000).
-2. Open `http://localhost:<PORT>/blog/a-weekend-in-almocageme`.
+2. Open `http://localhost:<PORT>/blog/welcome-to-issebya-homes`.
 3. Scroll to the inline booking widget, click **book** to expand the calendar,
    and pick a check-in and a check-out date.
 4. Click the **room 2** tab. The engine comes back collapsed, on room 2's own

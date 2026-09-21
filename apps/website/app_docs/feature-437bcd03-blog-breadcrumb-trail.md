@@ -52,7 +52,7 @@ current, non-linked item.
   inside the current-page `<li>` rather than its own list item, so the `<ol>`
   exposes exactly two entries and the separator never joins the current item's
   accessible name. Without that, a screen reader reads the title as "single
-  right-pointing angle quotation mark, A weekend in Almoçageme".
+  right-pointing angle quotation mark, Welcome to issebya.homes: a house for rest between the Sintra forest and the Atlantic".
 - **The current item is text, not a link.** `<li aria-current="page">` holds
   the bare title, so there is no self-referential link for a keyboard user to
   tab through.
@@ -73,8 +73,8 @@ current, non-linked item.
 
 1. Run the site: `cd apps/website && yarn dev` (the app honours `PORT` and only
    defaults to 3000).
-2. Open `http://localhost:<PORT>/blog/a-weekend-in-almocageme`.
-3. The line `blog › A weekend in Almoçageme` sits directly above the post
+2. Open `http://localhost:<PORT>/blog/welcome-to-issebya-homes`.
+3. The line `blog › Welcome to issebya.homes: a house for rest between the Sintra forest and the Atlantic` sits directly above the post
    title. Click `blog` to land on the index.
 4. `/blog` itself shows no trail: it is the root.
 
