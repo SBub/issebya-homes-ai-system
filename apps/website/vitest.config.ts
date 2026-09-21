@@ -39,15 +39,28 @@ export default defineConfig({
           postcss: {},
         },
         optimizeDeps: {
+          // Every dependency the browser suites pull in, listed up front. If
+          // Vite discovers one mid-run it re-optimizes and reloads the page,
+          // and the reload destroys the Vitest runner - the suite dies with
+          // "Vitest failed to find the runner". A warm .vite cache hides this;
+          // a cold one (every CI job, every first push after `yarn install`)
+          // does not.
           include: [
             "react",
             "react-dom",
+            "vitest-browser-react",
             "date-fns",
             "@sentry/nextjs",
             "zod",
             "next/image",
             "next/navigation",
+            "next/link",
+            "next/cache",
+            "next/headers",
             "posthog-js",
+            "stripe",
+            "@supabase/supabase-js",
+            "ical.js",
           ],
         },
         test: {

@@ -135,8 +135,17 @@ IMPORTANT: Execute every step in order, top to bottom.
 - Replace the inline `instances: [{ browser: "chromium" }, { browser: "firefox" },
 { browser: "webkit" }],` with `instances: browserInstances,`. Keep the existing
   `// https://vitest.dev/config/browser/playwright` comment above it.
-- Change nothing else in the file: `headless: true`, the `optimizeDeps` list, the
-  `include` globs and `setupFiles` all stay.
+- `headless: true`, the `include` globs and `setupFiles` stay as they are.
+  **Corrected after review (patch `cc081a8b`):** this step originally said the
+  `optimizeDeps` list stays untouched. It could not. Gating the browser project
+  means it runs on a cold `.vite` cache in every CI job and on a developer's
+  first push after `yarn install`. With only the original 8 entries, Vite
+  discovers `vitest-browser-react`, `next/link`, `next/cache`, `next/headers`,
+  `stripe`, `@supabase/supabase-js` and `ical.js` while a test file is being
+  imported, re-optimizes, reloads the page and destroys the Vitest runner
+  (`Vitest failed to find the runner`). All 7 are now in
+  `optimizeDeps.include`. A warm cache masks the failure entirely, so any
+  future validation of this project must be run cold.
 
 ### 3. Point `apps/website`'s `test` script at both projects
 
@@ -304,6 +313,10 @@ Execute every command to validate the chore is complete with zero regressions.
   `outputs: []` and no `env` list. `VITEST_ALL_BROWSERS` is never set during a
   turbo run (only by the direct `yarn workspace website test:browser`
   invocation), so it can not perturb turbo's task hash.
+- **A warm `.vite` cache is a false green for the browser project.** It hides
+  mid-run dependency discovery entirely. Validate cold:
+  `rm -rf apps/website/node_modules/.vite && yarn turbo run test
+--filter=./apps/website --force`.
 - **`vitest.config.ts` is not typechecked** — `apps/website/tsconfig.json`
   excludes it, along with `vitest.browser.setup.ts`. A typo in the instances array
   surfaces as a runtime failure at test start, not as a `tsc` error. Run the test
