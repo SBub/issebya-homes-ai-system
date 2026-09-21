@@ -111,16 +111,36 @@ class FilteringSpanProcessor implements SpanProcessor {
   }
 }
 
-// Guards against Next.js dev-mode hot-reload calling register() more than
-// once — a second SpanProcessor on the same provider would double-export
-// every span.
-let registered = false;
+// LANDMINE: this module is bundled into each route chunk as well as the
+// instrumentation entry (see next.config.ts's serverExternalPackages comment),
+// so module-scoped state is per copy: register() runs in the instrumentation
+// copy while flushTracing() is called from route-side copies, and a second
+// copy re-running register() would construct a second provider. Anything
+// shared across copies lives on globalThis under Symbol.for keys, which every
+// copy resolves to the same slot.
+const REGISTERED_KEY: unique symbol = Symbol.for("gca.instrumentationRegistered");
+const PROVIDER_KEY: unique symbol = Symbol.for("gca.tracerProvider");
 
-// Set once register() actually constructs a provider (i.e. at least one
-// SpanProcessor was configured, and this isn't the edge runtime). Stays
-// undefined otherwise, which is exactly when flushTracing() below should
-// no-op.
-let globalProvider: BasicTracerProvider | undefined;
+interface SharedInstrumentationState {
+  // Guards against Next.js dev-mode hot-reload (or a second bundled copy)
+  // calling register() more than once: a second SpanProcessor on the same
+  // provider would double-export every span.
+  [REGISTERED_KEY]?: true;
+  // Set once register() actually constructs a provider (i.e. at least one
+  // SpanProcessor was configured, and this isn't the edge runtime). Absent
+  // otherwise, which is exactly when flushTracing() below should no-op.
+  [PROVIDER_KEY]?: BasicTracerProvider;
+}
+
+const shared = globalThis as typeof globalThis & SharedInstrumentationState;
+
+function getSharedProvider(): BasicTracerProvider | undefined {
+  return shared[PROVIDER_KEY];
+}
+
+function setSharedProvider(provider: BasicTracerProvider): void {
+  shared[PROVIDER_KEY] = provider;
+}
 
 // Every processor here (Braintrust's, Axiom's) wraps a BatchSpanProcessor,
 // which buffers spans and exports on its own internal timer/batch-size —
@@ -139,11 +159,12 @@ let globalProvider: BasicTracerProvider | undefined;
 // successful request into a failed HTTP response, so this swallows and logs
 // rather than throwing.
 export async function flushTracing(): Promise<void> {
-  if (!globalProvider) {
+  const provider = getSharedProvider();
+  if (!provider) {
     return;
   }
   try {
-    await globalProvider.forceFlush();
+    await provider.forceFlush();
   } catch (err) {
     console.error("[instrumentation] flushTracing failed:", err);
   }
@@ -156,10 +177,10 @@ export async function register(): Promise<void> {
     return;
   }
 
-  if (registered) {
+  if (shared[REGISTERED_KEY]) {
     return;
   }
-  registered = true;
+  shared[REGISTERED_KEY] = true;
 
   const { BasicTracerProvider, BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor } =
     await import("@opentelemetry/sdk-trace-base");
@@ -369,7 +390,7 @@ export async function register(): Promise<void> {
     }),
     spanProcessors: processors,
   });
-  globalProvider = provider;
+  setSharedProvider(provider);
 
   trace.setGlobalTracerProvider(provider);
 
