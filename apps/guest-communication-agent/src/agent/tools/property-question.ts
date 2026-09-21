@@ -1,10 +1,11 @@
 import type { Span } from "@opentelemetry/api";
+import * as Sentry from "@sentry/nextjs";
 import { embed, tool } from "ai";
 import { z } from "zod";
 import { dispatchToolExecution } from "@/agent/tool-execution";
 import { openrouter } from "@/lib/openrouter";
+import { createClient } from "@/lib/supabase";
 import { markSpanFailed, steppedSpan, withSpan } from "@/lib/tracing";
-import { createClient } from "../../lib/supabase";
 import type { ToolContext } from "./config";
 
 type DocumentMetadata = {
@@ -45,12 +46,19 @@ async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQue
     value: args.query,
   });
 
-  // Constructed lazily (not at module scope) so importing this file — e.g.
-  // for its tool schema — doesn't require Supabase env vars to be set.
-  const supabaseAnon = createClient();
+  // Constructed lazily (not at module scope) so importing this file, e.g.
+  // for its tool schema, doesn't require Supabase env vars to be set.
+  //
+  // Deliberately the anon (RLS-scoped) client, least privilege: it can read
+  // `documents` and touch nothing else. anon needs an explicit table grant
+  // (supabase/migrations/20260921092000_grant_anon_select_documents.sql) on
+  // top of the RLS select policy (20260720150001_create_documents_pgvector.sql).
+  // Without the grant the hosted project fails with 42501 while local
+  // Supabase works, and the fallback text below would hide it.
+  const supabase = createClient();
 
   async function matchDocumentsForQuery(span: Span): Promise<string> {
-    const { data, error } = await supabaseAnon.rpc("match_documents", {
+    const { data, error } = await supabase.rpc("match_documents", {
       query_embedding: JSON.stringify(embedding),
       match_count: 5,
       match_threshold: 0.3,
@@ -58,17 +66,29 @@ async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQue
     });
 
     if (error) {
-      // Same fallback text as a genuine no-match, so the guest/model sees no
-      // difference — markSpanFailed just makes the real cause visible on
-      // the trace instead of indistinguishable from "nothing matched".
-      markSpanFailed(span, error.message);
+      // Same fallback text as a genuine no-match: the system prompt's rule
+      // 1 keys on this phrasing to route to missing_info. The span
+      // attribute, log line and Sentry event are what tell the two apart.
+      const dbError = new Error(`match_documents failed (${error.code}): ${error.message}`);
+      span.setAttribute("db.error_code", error.code);
+      markSpanFailed(span, dbError);
+      console.error("[answer_property_question] match_documents RPC failed:", {
+        code: error.code,
+        message: error.message,
+      });
+      Sentry.captureException(dbError, {
+        tags: { tool: "answer_property_question", "db.error_code": error.code },
+      });
       return "No relevant information found in the knowledge base.";
     }
-    if (!data?.length) {
+    const matches = (data ?? []) as DocumentMatch[];
+    span.setAttribute("db.match_count", matches.length);
+    if (matches.length === 0) {
       return "No relevant information found in the knowledge base.";
     }
+    span.setAttribute("db.top_similarity", matches[0].similarity);
 
-    return (data as DocumentMatch[]).map((d) => d.content).join("\n\n");
+    return matches.map((d) => d.content).join("\n\n");
   }
 
   return withSpan("db.matchDocuments", { "db.table": "documents" }, matchDocumentsForQuery);

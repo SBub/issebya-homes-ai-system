@@ -49,9 +49,6 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: vi.fn(() => ({
     from: () => ({ insert: () => Promise.resolve({ error: null }) }),
   })),
-  // property-question.ts calls createClient() at module load time, so this
-  // must be present even though no test here calls that tool.
-  createClient: vi.fn(() => ({})),
 }));
 
 const sendOwnerNudgeMock = vi.fn();
