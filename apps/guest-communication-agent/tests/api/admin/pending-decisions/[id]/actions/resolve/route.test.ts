@@ -172,6 +172,29 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
       expect(markPendingOwnerDecisionResolvedByIdMock).not.toHaveBeenCalled();
     });
 
+    it("returns 400 with computeSendBookingLink's own refusal when the row's stored dates are in the past", async () => {
+      getPendingOwnerDecisionByIdMock.mockResolvedValueOnce({
+        ...bookingRow,
+        context: { ...bookingRow.context, checkIn: "2025-10-11", checkOut: "2025-10-13" },
+      });
+      computeSendBookingLinkMock.mockReturnValueOnce({
+        error:
+          "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).",
+        reason: "past_date",
+      });
+
+      const res = await POST(makeRequest(), makeParams("decision-1"));
+      const json = await res.json();
+
+      expect(res.status).toBe(400);
+      expect(json).toEqual({
+        error:
+          "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).",
+      });
+      expect(sendWhatsAppMessageMock).not.toHaveBeenCalled();
+      expect(markPendingOwnerDecisionResolvedByIdMock).not.toHaveBeenCalled();
+    });
+
     it("does not mark the row resolved when the WhatsApp send fails", async () => {
       getPendingOwnerDecisionByIdMock.mockResolvedValueOnce(bookingRow);
       sendWhatsAppMessageMock.mockResolvedValueOnce({ ok: false, error: "Twilio rejected it" });

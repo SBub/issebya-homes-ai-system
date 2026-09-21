@@ -174,6 +174,13 @@ procedures, not code documentation) and anything gitignored.
     - When changing `apps/guest-communication-agent/scripts/dev.ts`, or anything about which processes `yarn dev` spawns, adopts, or signals on Ctrl-C
     - When running `yarn dev` and `yarn dev:adw` at the same time, or wondering why one leaves the other's gateway and tunnel alone
 
+- `apps/guest-communication-agent/app_docs/feature-d7d0c40c-reject-past-dates-booking.md`
+  - Conditions:
+    - When adding or changing a tool that takes a `checkIn`/`checkOut` pair, before re-deriving its own date checks instead of importing `validateStayRange`
+    - When a tool result has to refuse the model's arguments, and you need the shape that reaches the model without tripping `detectToolSoftFailure`
+    - When editing the `checkAvailability` mirror inside `sandbox.ts`'s `buildScript`, where an untagged template literal silently eats `\d`
+    - When `send_booking_link` resolves as not approved without the owner ever seeing a Telegram nudge
+
 ---
 
 ## apps/telegram-router

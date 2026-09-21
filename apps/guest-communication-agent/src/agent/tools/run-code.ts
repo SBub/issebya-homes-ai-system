@@ -45,7 +45,7 @@ export const runCode = tool({
     "Run a short JavaScript program (an async function body) in a real sandboxed environment, instead of making many individual tool calls.",
     "Use this when you'd otherwise need to call checkAvailability (or getPricing) repeatedly and reason over the results yourself — e.g. 'book the next available weekend': write one program that loops over candidate dates and computes the answer, rather than calling checkAvailability 5+ times across separate turns.",
     "Available inside the program:",
-    "  • await tools.checkAvailability({ room, checkIn, checkOut }) → { available, room, checkIn, checkOut }",
+    "  • await tools.checkAvailability({ room, checkIn, checkOut }) → { available, room, checkIn, checkOut }, or { available: false, reason, today } when the range starts in the past, is inverted, or isn't a valid YYYY-MM-DD date",
     "  • await tools.getPricing({ room }) → { room, pricePerNight, currency, note }",
     "  • await tools.getCurrentDate() → { date, dayOfWeek, isoTimestamp, timezone } — today's real-world date; call this before doing any relative-date arithmetic",
     "  • console.log(...) for debugging — captured and returned in `logs`",

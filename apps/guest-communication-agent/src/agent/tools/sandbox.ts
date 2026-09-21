@@ -11,8 +11,10 @@ import { markSpanFailed, withSpan } from "@/lib/tracing";
 // public surface, which doesn't exist yet). The 3 tools bridged below avoid
 // needing one:
 //   - checkAvailability: its real implementation is itself just a public
-//     fetch + a pure date-overlap check, so the generated script re-issues
-//     that same fetch directly — no callback needed.
+//     fetch + a pure date guard and date-overlap check, so the generated
+//     script re-issues that same fetch directly — no callback needed. Keep
+//     its guard in sync with stay-range.ts's validateStayRange, or run_code
+//     reports the past as available while the tool refuses it.
 //   - getPricing: no I/O, a hardcoded constant. Rather than hand-copying it
 //     (drift risk), this module calls the real closure once per room, in
 //     this process, before the sandbox starts, and embeds the result as a
@@ -145,7 +147,7 @@ function parseSandboxOutput(stdout: string): SandboxResult | null {
 // (see this file's top comment for why these are mirrors, not real
 // closures), followed by the agent-authored `code` as an async function
 // body.
-async function buildScript(code: string, api: SandboxApi): Promise<string> {
+export async function buildScript(code: string, api: SandboxApi): Promise<string> {
   const requested = new Set(Object.keys(api));
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
 
@@ -154,13 +156,33 @@ async function buildScript(code: string, api: SandboxApi): Promise<string> {
 
   if (requested.has("checkAvailability")) {
     preambleParts.push(`const SITE_URL = ${JSON.stringify(siteUrl)};`);
+    // LANDMINE: every shim below is written inside an untagged template
+    // literal, where a backslash escape JS doesn't know (\d, \s, \w) silently
+    // collapses to the bare letter in the emitted script. Any pattern here is
+    // spelled without backslashes ([0-9] rather than \d) so there is nothing
+    // to lose; a genuinely needed backslash has to be doubled.
     toolMethods.push(`
   async checkAvailability({ room, checkIn, checkOut }) {
+    const today = new Date().toISOString().slice(0, 10);
+    const refuse = function (reason) {
+      return { available: false, reason: reason, room: room, checkIn: checkIn, checkOut: checkOut, today: today };
+    };
+    const isCalendarDate = function (value) {
+      if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return false;
+      const parsed = new Date(value);
+      return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+    };
+    if (!isCalendarDate(checkIn) || !isCalendarDate(checkOut)) {
+      return refuse("invalid_date");
+    }
+    if (checkIn < today) {
+      return refuse("past_date");
+    }
+    if (checkOut <= checkIn) {
+      return refuse("invalid_range");
+    }
     const reqStart = new Date(checkIn);
     const reqEnd = new Date(checkOut);
-    if (Number.isNaN(reqStart.getTime()) || Number.isNaN(reqEnd.getTime())) {
-      return { available: false, error: "Invalid date format" };
-    }
     const res = await fetch(SITE_URL + "/api/availability?room=" + room);
     if (!res.ok) {
       throw new Error("GET /api/availability?room=" + room + " failed with status " + res.status);
