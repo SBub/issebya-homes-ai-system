@@ -4,7 +4,7 @@ import { embed, tool } from "ai";
 import { z } from "zod";
 import { dispatchToolExecution } from "@/agent/tool-execution";
 import { openrouter } from "@/lib/openrouter";
-import { createAdminClient } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase";
 import { markSpanFailed, steppedSpan, withSpan } from "@/lib/tracing";
 import type { ToolContext } from "./config";
 
@@ -49,12 +49,13 @@ async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQue
   // Constructed lazily (not at module scope) so importing this file, e.g.
   // for its tool schema, doesn't require Supabase env vars to be set.
   //
-  // LANDMINE: must be the service-role client. In the hosted project the
-  // anon role has no privileges on `documents` (only local Supabase grants
-  // them by default), so an anon client makes every production lookup fail
-  // with 42501 while the fallback text below makes it look like an empty
-  // KB. Grants history: supabase/migrations/20260828120000_grant_service_role_all_public.sql.
-  const supabase = createAdminClient();
+  // Deliberately the anon (RLS-scoped) client, least privilege: it can read
+  // `documents` and touch nothing else. anon needs an explicit table grant
+  // (supabase/migrations/20260921092000_grant_anon_select_documents.sql) on
+  // top of the RLS select policy (20260720150001_create_documents_pgvector.sql).
+  // Without the grant the hosted project fails with 42501 while local
+  // Supabase works, and the fallback text below would hide it.
+  const supabase = createClient();
 
   async function matchDocumentsForQuery(span: Span): Promise<string> {
     const { data, error } = await supabase.rpc("match_documents", {

@@ -22,7 +22,7 @@ trace.setGlobalTracerProvider(
 // own span plumbing, runs for real.
 const rpcMock = vi.fn();
 vi.mock("@/lib/supabase.js", () => ({
-  createAdminClient: vi.fn(() => ({ rpc: rpcMock })),
+  createClient: vi.fn(() => ({ rpc: rpcMock })),
 }));
 
 const embedMock = vi.fn();
