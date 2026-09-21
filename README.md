@@ -71,7 +71,7 @@ corepack enable   # one-time, if not already done, makes `yarn` resolve to the p
 yarn install           # also installs the lefthook git hooks (postinstall)
 cp apps/telegram-router/.env.example apps/telegram-router/.env  # fill in TELEGRAM_BOT_TOKEN,
                        # TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET
-cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env  # fill in
+cp apps/guest-communication-agent/.env.example apps/guest-communication-agent/.env.development  # fill in
                        # SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY (from
                        # `yarn supabase status`, Publishable/Secret on newer CLI versions),
                        # OPENROUTER_API_KEY,
