@@ -42,3 +42,24 @@ arithmetic.
   deliberately separate concerns. A blocked day must never receive
   `calendar-date-available`; it renders as selected, check-out boundary
   (hatched) or unavailable. Change one without the other only on purpose.
+
+## Which test layers gate, and which don't
+
+- `yarn turbo run test` for this workspace runs **both** Vitest projects, `unit`
+  and `browser`. CI runs it and so does the lefthook `pre-push` hook, so a
+  `*.browser.test.tsx` you add is a real regression gate from the moment it
+  lands.
+- The gated browser run is chromium only. `yarn workspace website test:browser`
+  runs the full chromium/firefox/webkit sweep and is manual. Webkit cannot
+  launch on macOS 14 arm64 (Playwright ships a frozen build for that platform),
+  so expect the sweep to fail there on webkit alone.
+- The Playwright `e2e/` suite is **deliberately not in CI**. It needs a running
+  dev server on this run's port, the shared local Supabase, `.env.development`
+  and the `E2E_MOCK_STRIPE` / `E2E_MOCK_ICAL_FAILURE` in-process mocks from
+  `src/instrumentation.ts`, none of which exist in the CI image. It runs
+  manually via `yarn workspace website test:integration` and automatically as
+  step 7 of the ADW test phase (`.claude/commands/test.md`). A spec you add
+  under `e2e/` will not re-run in CI; put anything that must gate into a
+  `*.unit.test.ts` or a `*.browser.test.tsx` instead.
+- A new browser test now costs every push a few seconds. Keep them
+  component-scoped (mock children), as the existing ones are.

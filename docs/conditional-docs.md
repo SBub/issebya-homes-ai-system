@@ -40,6 +40,7 @@ procedures, not code documentation) and anything gitignored.
   - Conditions:
     - When changing availability, booking persistence, or the iCal merge
     - When you need to know why a page renders the way it does before changing it
+    - When you need to know which test layers run in CI and on push, and which are manual
 
 - `apps/website/app_docs/nextjs-patterns-guide.md`
   - Conditions:

@@ -48,12 +48,17 @@ scripts/                    # Dev utility scripts (start.ts)
 | Browser component | `src/app/**/*.browser.test.tsx`, `src/ui/**/*.browser.test.tsx` | Client components (`'use client'`) only (mock all children)                                      |
 | Integration (E2E) | `e2e/*.integration.spec.ts`                                     | Full flows via Playwright against real Next.js dev server; mock API responses via `page.route()` |
 
+The unit and browser rows gate: `yarn test` runs both, and that is what CI and
+the lefthook `pre-push` hook run. The integration row does not gate; it runs
+manually and via the ADW test phase.
+
 Config: `vitest.config.ts` (unit + browser projects), `playwright.config.ts` (spins up `yarn dev`).
 
 ```bash
-yarn test:unit        # vitest unit
-yarn test:browser     # vitest browser (Playwright)
-yarn test:integration # Playwright E2E
+yarn test             # vitest unit + browser (chromium), what CI and pre-push run
+yarn test:unit        # vitest unit only, watch
+yarn test:browser     # vitest browser, all three browsers, watch, manual sweep
+yarn test:integration # Playwright E2E, manual / ADW only, not in CI
 ```
 
 ## Environment variables
