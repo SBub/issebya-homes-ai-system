@@ -205,6 +205,30 @@ name: Supabase Migrations
 # secret, dispatch job=drift-check, confirm it is green against master, and
 # only then make prod-migration-sync a required check.
 #
+# Note which run is which, because the two are a step apart and only the
+# second is evidence of the guard. 35607046865 above is the *pre-guard*
+# run: the one where `--db-url ""` silently dialled the runner's own
+# Postgres socket, which is what bought the guard in the first place. Run
+# 35607215583 (headSha cb6fcc5, 2026-09-21 13:41Z) is the same dispatch
+# after the guard landed, now failing at `Require SUPABASE_DB_URL` as
+# itself. That is the guard's own proof, and it puts the "green dispatched
+# drift-check" precondition on the record as unmet.
+#
+# This chore therefore shipped incomplete, and a reader of this file should
+# not have to open issue #89 to learn it. Three of that issue's five
+# acceptance criteria are false today: push is not green on master with
+# 20260921092000 recorded (the newest migrations.yml run on master is still
+# 34486392180, 2026-09-10, failure); drift-check and prod-migration-sync are
+# not required status checks (the protect-master ruleset still requires only
+# check and eval-gate); and a PR into master carrying a local migration prod
+# has never applied can still merge. What did ship is the four jobs, the
+# --db-url remediation, this record and the fail-closed guard.
+#
+# The condensed order sentence above is written out step by step, with the
+# gotchas and the reason each step must not be reordered, in
+# docs/prod-migration-gate-handoff-sop.md. Follow that rather than this
+# paragraph when actually doing the work.
+#
 # CLI version: pinned to 2.116.0 below rather than `latest`. `latest` is an
 # unpinned external input, and it is how a green pipeline here broke itself
 # without a single commit in this repo. The stable releases either side of
@@ -543,8 +567,9 @@ jobs:
     # blocks nothing, and drift-check answers a narrower question. A
     # migration could land in git, never reach prod, and the next promotion
     # would merge on top regardless. This job is what turns that silence
-    # into a blocked merge button, so it is a required status check on the
-    # protect-master ruleset.
+    # into a blocked merge button, which is why it is meant to be a required
+    # status check on the protect-master ruleset. It is not one yet; see the
+    # verification status below.
     #
     # Two things it deliberately does NOT do. They are traps in opposite
     # directions and both are specific to a job being *required*:
@@ -558,6 +583,22 @@ jobs:
     #     all, which leaves a required context pending forever and blocks
     #     the merge outright. eval-golden.yml's eval-gate is a live example
     #     of that hazard in this repo; do not copy it here.
+    #
+    # Verification status, stated plainly because the difference matters.
+    # This job's shell has never executed on a runner. The `if` below gates
+    # on github.base_ref == 'master' and every run so far has been a PR into
+    # develop, so every one of them reports `skipped`.
+    #
+    # The comparison logic was replayed by hand against the real
+    # origin/master and HEAD trees rather than left unchecked: assertions 1
+    # and 2 came back empty, assertion 3 reported 20260921092000, and
+    # deleting 20260828120000 from the tree correctly tripped assertion 2.
+    # So this is an unverified gate, not a known-broken one.
+    #
+    # The deliberate-failure run id belongs right here, and is absent
+    # because step 6 of docs/prod-migration-gate-handoff-sop.md has not been
+    # run. Whoever runs it writes the id in. This file's own standard
+    # stands: a gate nobody has seen fail is a gate nobody knows works.
     if: github.event_name == 'pull_request' && github.base_ref == 'master'
     runs-on: ubuntu-latest
     env:

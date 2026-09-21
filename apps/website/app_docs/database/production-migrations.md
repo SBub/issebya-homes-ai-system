@@ -50,8 +50,17 @@ the reviewer can see what the promotion does to prod before approving it.
 
 Both `prod-migration-sync` and `drift-check` are intended to be required status
 checks on the `protect-master` ruleset, which is what turns a broken delivery
-pipeline into a blocked merge button rather than a red X nobody sees. Neither
-job may ever be given a `paths:` filter or an `if` gate on the `changes` job:
+pipeline into a blocked merge button rather than a red X nobody sees.
+
+**As of 2026-09-21 neither is a required check yet.** The `protect-master` ruleset
+still requires only `check` and `eval-gate`, so until that changes a broken
+delivery pipeline is still only a red X, not a blocked merge button. The reason is
+one missing repo secret: `SUPABASE_DB_URL` does not exist, and creating it needs the
+prod database password, which only a Supabase org owner can read. The steps that
+finish the job, in the order they have to happen, are in
+`docs/prod-migration-gate-handoff-sop.md`.
+
+Neither job may ever be given a `paths:` filter or an `if` gate on the `changes` job:
 a skipped job counts as satisfying a required check, and a workflow suppressed
 by a `paths:` filter never reports its check at all. Both are commented in the
 job for that reason.
