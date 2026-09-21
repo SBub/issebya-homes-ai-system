@@ -3,7 +3,16 @@ import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
 import { createAdminClient } from "@/lib/supabase";
 
-const tracer = trace.getTracer("guest-communication-agent");
+// LANDMINE: resolve per call, never at module load. A module-level
+// trace.getTracer() binds to whichever @opentelemetry/api instance/proxy
+// provider is current at import time; if that happens before
+// src/instrumentation.ts's register() sets the global provider, the result
+// is a no-op tracer for the process lifetime. Resolving per call always goes
+// through the registered global. Full story: next.config.ts's
+// serverExternalPackages comment.
+function getTracer() {
+  return trace.getTracer("guest-communication-agent");
+}
 
 // A real span's identity, threaded as plain JSON (not a live Span object) so
 // a later span — possibly a different process, possibly a different Inngest
@@ -52,7 +61,7 @@ export async function startTraceRoot<T>(
   attributes: Attributes,
   fn: (span: Span) => Promise<T>,
 ): Promise<{ anchor: TraceAnchor; result: T }> {
-  return tracer.startActiveSpan(name, { attributes }, async (span) => {
+  return getTracer().startActiveSpan(name, { attributes }, async (span) => {
     stampTraceId(span);
     const { traceId, spanId } = span.spanContext();
     try {
@@ -97,7 +106,7 @@ export async function withTurnSpan<T>(
     isRemote: true,
   });
   return context.with(parentContext, () =>
-    tracer.startActiveSpan(name, { attributes }, async (span) => {
+    getTracer().startActiveSpan(name, { attributes }, async (span) => {
       stampTraceId(span);
       try {
         return await fn(span);
@@ -162,7 +171,7 @@ export async function withSpan<T>(
   attributes: Attributes,
   fn: (span: Span) => Promise<T>,
 ): Promise<T> {
-  return tracer.startActiveSpan(name, { attributes }, async (span) => {
+  return getTracer().startActiveSpan(name, { attributes }, async (span) => {
     stampTraceId(span);
     try {
       // Same reasoning as withTurnSpan: no explicit OK on success, so a
