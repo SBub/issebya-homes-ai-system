@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 
+import { fetchNgrokTunnels, findAdoptableTunnel, isPortListening } from "./dev-adoption";
+
 // Where this repo's one shared ngrok tunnel actually terminates. Must match
 // scripts/dev-webhook-gateway.ts's own GATEWAY_PORT constant at the repo
 // root (not importable from here — that file is a bare side-effecting
@@ -34,7 +36,7 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   if (!commandExists("supabase")) {
     console.error("supabase CLI not found — https://supabase.com/docs/guides/cli/getting-started");
     process.exit(1);
@@ -71,21 +73,7 @@ function main(): void {
     detached: true,
   });
 
-  // Repo-root process, not this app's own — fans the one shared ngrok
-  // tunnel (GATEWAY_PORT above) out to every app's webhook by path. Only
-  // routes this app's own /api/webhook/whatsapp and telegram-router's
-  // /api/telegram/webhook today (see dev-webhook-gateway.ts's ROUTES table);
-  // telegram-router's own `yarn dev` (port 3003) still has to be running
-  // separately for that second leg to actually resolve — this only wires up
-  // the routing, it doesn't start telegram-router itself, that's a distinct
-  // app with its own lifecycle.
-  const gatewayDev = spawn("yarn", ["dev:webhook-gateway"], {
-    stdio: "inherit",
-    detached: true,
-    // apps/guest-communication-agent -> apps -> repo root, same two levels
-    // this app's own next.config.ts uses for its Turbopack root fix.
-    cwd: path.join(process.cwd(), "..", ".."),
-  });
+  const gatewayDev = await startWebhookGateway();
 
   // Twilio's webhook can only reach a real public URL, never localhost
   // directly — TWILIO_WEBHOOK_URL (see .env.development) is that public URL,
@@ -96,15 +84,19 @@ function main(): void {
   // hardcoded, so a reserved-domain change only has to happen in one place.
   // Skipped, not fatal, when unset — plenty of local dev work (unit tests,
   // non-webhook routes) doesn't need a live Twilio tunnel at all.
-  const ngrokDev = startNgrokTunnel();
+  const ngrokDev = await startNgrokTunnel();
 
   let shuttingDown = false;
 
+  // Only what this run actually spawned. An adopted gateway or tunnel belongs
+  // to `yarn dev:adw` (whose listener is meant to stay up permanently), so it
+  // is never signalled here and its exit is never fatal to this stack.
+  const spawned = [nextDev, inngestDev, gatewayDev, ngrokDev].filter(
+    (p): p is ChildProcess => p !== undefined,
+  );
+
   const shutdown = (signal: NodeJS.Signals) => {
-    killGroup(nextDev, signal);
-    killGroup(inngestDev, signal);
-    killGroup(gatewayDev, signal);
-    if (ngrokDev) killGroup(ngrokDev, signal);
+    for (const child of spawned) killGroup(child, signal);
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
@@ -117,37 +109,47 @@ function main(): void {
     process.exit(code ?? 0);
   };
 
-  const allProcesses = ngrokDev
-    ? [nextDev, inngestDev, gatewayDev, ngrokDev]
-    : [nextDev, inngestDev, gatewayDev];
-  nextDev.on(
-    "exit",
-    handleExit(
-      "Next.js dev server",
-      allProcesses.filter((p) => p !== nextDev),
-    ),
-  );
-  inngestDev.on(
-    "exit",
-    handleExit(
-      "Inngest Dev Server",
-      allProcesses.filter((p) => p !== inngestDev),
-    ),
-  );
-  gatewayDev.on(
-    "exit",
-    handleExit(
-      "Webhook gateway",
-      allProcesses.filter((p) => p !== gatewayDev),
-    ),
-  );
-  ngrokDev?.on(
-    "exit",
-    handleExit(
-      "ngrok tunnel",
-      allProcesses.filter((p) => p !== ngrokDev),
-    ),
-  );
+  const register = (child: ChildProcess, name: string) => {
+    child.on(
+      "exit",
+      handleExit(
+        name,
+        spawned.filter((p) => p !== child),
+      ),
+    );
+  };
+
+  register(nextDev, "Next.js dev server");
+  register(inngestDev, "Inngest Dev Server");
+  if (gatewayDev) register(gatewayDev, "Webhook gateway");
+  if (ngrokDev) register(ngrokDev, "ngrok tunnel");
+}
+
+// Repo-root process, not this app's own — fans the one shared ngrok tunnel
+// (GATEWAY_PORT above) out to every app's webhook by path. Only routes this
+// app's own /api/webhook/whatsapp and telegram-router's
+// /api/telegram/webhook today (see dev-webhook-gateway.ts's ROUTES table);
+// telegram-router's own `yarn dev` (port 3003) still has to be running
+// separately for that second leg to actually resolve — this only wires up
+// the routing, it doesn't start telegram-router itself, that's a distinct
+// app with its own lifecycle. `yarn dev:adw` starts the same gateway and is
+// meant to stay up permanently, so an existing listener on GATEWAY_PORT is
+// adopted rather than fought over.
+async function startWebhookGateway(): Promise<ChildProcess | undefined> {
+  if (await isPortListening(GATEWAY_PORT)) {
+    console.log(
+      `webhook gateway already listening on :${GATEWAY_PORT} — using it, not starting a second.`,
+    );
+    return undefined;
+  }
+
+  return spawn("yarn", ["dev:webhook-gateway"], {
+    stdio: "inherit",
+    detached: true,
+    // apps/guest-communication-agent -> apps -> repo root, same two levels
+    // this app's own next.config.ts uses for its Turbopack root fix.
+    cwd: path.join(process.cwd(), "..", ".."),
+  });
 }
 
 // Starts `ngrok http --domain=<host> <GATEWAY_PORT>` so Twilio (and, via the
@@ -160,8 +162,11 @@ function main(): void {
 // GATEWAY_PORT's own comment for why that distinction matters. ngrok itself,
 // unlike supabase above, is not a hard dependency of `yarn dev` — missing it
 // only degrades webhook testing, not the rest of local dev — so this warns
-// and continues rather than exiting.
-function startNgrokTunnel(): ChildProcess | undefined {
+// and continues rather than exiting. A live tunnel for this exact host is
+// adopted (dev-adoption.ts's findAdoptableTunnel); anything else falls
+// through to spawning our own, which then fails loudly on ERR_NGROK_334 if
+// the reserved domain really is taken elsewhere.
+async function startNgrokTunnel(): Promise<ChildProcess | undefined> {
   const webhookUrl = process.env.TWILIO_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn(
@@ -175,6 +180,17 @@ function startNgrokTunnel(): ChildProcess | undefined {
     host = new URL(webhookUrl).host;
   } catch {
     console.warn(`TWILIO_WEBHOOK_URL ("${webhookUrl}") isn't a valid URL — skipping ngrok.`);
+    return undefined;
+  }
+
+  const adopted = findAdoptableTunnel(await fetchNgrokTunnels(), host);
+  if (adopted) {
+    console.log(`ngrok tunnel for ${host} already online — using it, not starting a second.`);
+    if (adopted.addr && adopted.addr.split(":").pop() !== String(GATEWAY_PORT)) {
+      console.warn(
+        `that tunnel forwards to ${adopted.addr}, NOT to the gateway on :${GATEWAY_PORT} — webhook calls won't reach this dev stack until it is re-pointed.`,
+      );
+    }
     return undefined;
   }
 
@@ -192,4 +208,7 @@ function startNgrokTunnel(): ChildProcess | undefined {
   });
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
