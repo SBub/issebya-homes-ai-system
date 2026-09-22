@@ -14,11 +14,13 @@ type Props = {
 
 export default function Gallery({ images }: Props) {
   const [imageIndex, setImageIndex] = useState(0);
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
 
   const touchStartX = useRef<number | null>(null);
 
   const handleThumbnailClick = (index: number) => {
     setImageIndex(index);
+    setAspectRatio(null);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -35,8 +37,10 @@ export default function Gallery({ images }: Props) {
     if (Math.abs(diff) > swipeThreshold) {
       if (diff > 0 && imageIndex < images.length - 1) {
         setImageIndex(imageIndex + 1);
+        setAspectRatio(null);
       } else if (diff < 0 && imageIndex > 0) {
         setImageIndex(imageIndex - 1);
+        setAspectRatio(null);
       }
     }
 
@@ -50,7 +54,8 @@ export default function Gallery({ images }: Props) {
   return (
     <>
       <div
-        className="relative w-[60%] mx-auto aspect-[4/3]"
+        className="relative w-[60%] mx-auto"
+        style={{ aspectRatio: aspectRatio ?? 4 / 3 }}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
@@ -59,6 +64,10 @@ export default function Gallery({ images }: Props) {
           alt={images[imageIndex].label}
           fill
           className="object-contain"
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            setAspectRatio(img.naturalWidth / img.naturalHeight);
+          }}
         />
       </div>
       <div className="text-center break-words my-2 md:my-4 px-4 text-secondary">
