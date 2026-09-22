@@ -16,7 +16,6 @@ type Props = {
 
 export default function Gallery({ images, roomType }: Props) {
   const [imageIndex, setImageIndex] = useState(0);
-  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
 
   const touchStartX = useRef<number | null>(null);
 
@@ -29,7 +28,6 @@ export default function Gallery({ images, roomType }: Props) {
       });
     }
     setImageIndex(index);
-    setAspectRatio(null);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -52,7 +50,6 @@ export default function Gallery({ images, roomType }: Props) {
           trigger: "swipe",
         });
         setImageIndex(nextIndex);
-        setAspectRatio(null);
       } else if (diff < 0 && imageIndex > 0) {
         const nextIndex = imageIndex - 1;
         posthog.capture("gallery_image_viewed", {
@@ -61,7 +58,6 @@ export default function Gallery({ images, roomType }: Props) {
           trigger: "swipe",
         });
         setImageIndex(nextIndex);
-        setAspectRatio(null);
       }
     }
 
@@ -75,8 +71,7 @@ export default function Gallery({ images, roomType }: Props) {
   return (
     <>
       <div
-        className="relative w-[60%] mx-auto"
-        style={{ aspectRatio: aspectRatio ?? 4 / 3 }}
+        className="relative w-[60%] mx-auto aspect-[4/3]"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
@@ -85,10 +80,6 @@ export default function Gallery({ images, roomType }: Props) {
           alt={images[imageIndex].label}
           fill
           className="object-contain"
-          onLoad={(e) => {
-            const img = e.currentTarget;
-            setAspectRatio(img.naturalWidth / img.naturalHeight);
-          }}
           preload
           loading="eager"
           sizes="(min-width: 768px) 50vw, 100vw"
