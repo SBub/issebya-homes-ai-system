@@ -1,3 +1,4 @@
+import { type StoredTurnMessages, TURN_MESSAGES_SCHEMA_VERSION } from "@/agent/turn-messages";
 import { createAdminClient } from "./supabase";
 import { withSpan } from "./tracing";
 
@@ -14,6 +15,16 @@ export interface MessageRow {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  // Only set on assistant rows written by a guest turn; null replays as text.
+  turn_messages: StoredTurnMessages | null;
+}
+
+function parseTurnMessages(value: unknown): StoredTurnMessages | null {
+  if (typeof value !== "object" || value === null) return null;
+  const stored = value as Partial<StoredTurnMessages>;
+  return stored.schema_version === TURN_MESSAGES_SCHEMA_VERSION && Array.isArray(stored.messages)
+    ? (stored as StoredTurnMessages)
+    : null;
 }
 
 // Returns up to `limit` most recent messages, oldest-first. Must query
@@ -35,7 +46,7 @@ export async function loadRecentMessages(
       const supabase = createAdminClient();
       const { data, error } = await supabase
         .from("whatsapp_messages")
-        .select("id, role, content, created_at")
+        .select("id, role, content, created_at, turn_messages")
         .eq("conversation_id", conversationId)
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -47,6 +58,7 @@ export async function loadRecentMessages(
           role: m.role as "user" | "assistant",
           content: m.content as string,
           created_at: m.created_at as string,
+          turn_messages: parseTurnMessages(m.turn_messages),
         }))
         .reverse();
     },

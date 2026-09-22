@@ -179,7 +179,7 @@ describe("computeSendBookingLink", () => {
 
     expect(result).toEqual({
       error:
-        "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).",
+        "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21). Re-read the dates from your earlier tool result in this conversation and call the tool again with them.",
       reason: "past_date",
     });
     expect(result).not.toHaveProperty("url");

@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import type { GetStepTools } from "inngest";
 import { foldMemory } from "@/agent/memory";
 import { FALLBACK_REPLY_TEXT, runAgentTurn } from "@/agent/run-agent-turn";
+import { finalizeTurnMessages } from "@/agent/turn-messages";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
 import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
@@ -70,6 +71,8 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     lastMessage?.role === "assistant" && typeof lastMessage.content === "string"
       ? lastMessage.content
       : FALLBACK_REPLY_TEXT;
+  // Deterministic over memoized step outputs, so safe outside any step.
+  const turnMessages = finalizeTurnMessages(result.turnMessages, replyText);
 
   // A real, single-write span rather than an updateSpanIO patch on
   // "braintrust.guest_turn" — input/output are already known here, so a
@@ -99,7 +102,10 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     traceAnchor,
     "record-reply",
     { "gca.conversation_id": conversationId },
-    () => recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId),
+    () =>
+      recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId, {
+        turnMessages,
+      }),
   );
 
   async function sendGuestWhatsAppReply(span: Span) {

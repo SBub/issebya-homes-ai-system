@@ -1,11 +1,20 @@
 import type { ModelMessage } from "ai";
+import type { MessageRow } from "@/lib/db";
 
 // Shared shapes between executors.ts (the task) and evaluators.ts (the
 // scorers) — this dataset row's `input` shape (messages so far, including
 // this turn's newest guest message last, plus the rolling memory summary
 // that feeds the system prompt's {guest_memory_block}).
+//
+// A row gives either `messages` (used verbatim) or `rows`: prior turns as
+// stored whatsapp_messages rows, including turn_messages, newest guest
+// message last, turned into messages by production's own
+// buildHistoryMessages. `today` (ISO date) pins the system prompt's today
+// line; absent, the real current date is used.
 export interface EvalInput {
-  messages: ModelMessage[];
+  messages?: ModelMessage[];
+  rows?: MessageRow[];
+  today?: string;
   contextBlock: string;
 }
 

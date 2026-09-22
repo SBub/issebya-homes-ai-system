@@ -4,8 +4,10 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import type { JSONValue, ModelMessage, ToolResultPart } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { estimateTokens } from "@/agent/context.js";
+import { estimateTokens, KEEP_CONTEXT_TOKENS } from "@/agent/context.js";
+import type { MessageRow } from "@/lib/db.js";
 
 // Same in-memory OTel wiring as run-turn.test.ts/approval-gate.test.ts: real
 // tracing.ts's withTurnSpan stays real here (only loadPrompt/generateText are
@@ -64,7 +66,8 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
-const { loadMemory, foldMemory, buildMemoryMessage } = await import("@/agent/memory.js");
+const { loadMemory, foldMemory, buildMemoryMessage, buildHistoryMessages } =
+  await import("@/agent/memory.js");
 
 const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
 
@@ -80,21 +83,33 @@ function messageRow(
   role: "user" | "assistant",
   chars: number,
   createdAt: string,
-): { id: string; role: "user" | "assistant"; content: string; created_at: string } {
+): MessageRow {
   const phrase = "the quick brown fox jumps over the lazy dog and then trots back home again ";
   const body = `${id}: `;
   let content = body;
   while (content.length < chars) content += phrase;
-  return { id, role, content: content.slice(0, chars), created_at: createdAt };
+  return { id, role, content: content.slice(0, chars), created_at: createdAt, turn_messages: null };
 }
 
-// 8 rows of 1100 chars (223 real tokens) each, oldest-first — same shape as
-// context.test.ts's over-budget fixture: 1784 tokens total, just over
-// MAX_CONTEXT_TOKENS (1600), trims down to the newest 3 (669 tokens, under
-// KEEP_CONTEXT_TOKENS), dropping the oldest 5.
+// 8 rows of 6600 chars (1323 real tokens) each, oldest-first, grouped into
+// turns [0,1] [2,3,4] [5,6] [7] (msg-4 is a second assistant row in its
+// turn): 10584 tokens total, over MAX_CONTEXT_TOKENS (8000). Dropping the
+// first group still leaves 7938, over KEEP_CONTEXT_TOKENS (6000), so the
+// first two groups go (msg-0..msg-4) and the newest 3 rows survive (3969).
+const OVERFLOW_ROLES = [
+  "user",
+  "assistant",
+  "user",
+  "assistant",
+  "assistant",
+  "user",
+  "assistant",
+  "user",
+] as const;
+
 function overflowingRows() {
-  return Array.from({ length: 8 }, (_, i) =>
-    messageRow(`msg-${i}`, i % 2 === 0 ? "user" : "assistant", 1100, `2026-08-0${i + 1}T00:00:00Z`),
+  return OVERFLOW_ROLES.map((role, i) =>
+    messageRow(`msg-${i}`, role, 6600, `2026-08-0${i + 1}T00:00:00Z`),
   );
 }
 
@@ -215,7 +230,7 @@ describe("loadMemory", () => {
       preferencesSummary: null,
     });
     expect(estimateTokens(rows.map((r) => ({ role: r.role, content: r.content })))).toBeLessThan(
-      800,
+      KEEP_CONTEXT_TOKENS,
     );
 
     const result = await loadMemory({ conversationId: "convo-overlap", phone: "+351900000030" });
@@ -976,5 +991,203 @@ describe("buildMemoryMessage", () => {
         "Summary of earlier conversation:\n" +
         "Confirmed a booking for Room 2.",
     });
+  });
+});
+
+describe("turn_messages replay", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLoadPrompt();
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
+  });
+
+  function row(
+    id: string,
+    role: "user" | "assistant",
+    content: string,
+    turnMessages: ModelMessage[] | null = null,
+  ): MessageRow {
+    return {
+      id,
+      role,
+      content,
+      created_at: "2026-09-22T21:48:00Z",
+      turn_messages: turnMessages ? { schema_version: 1, messages: turnMessages } : null,
+    };
+  }
+
+  function toolTurn(tag: string, resultValue: JSONValue, replyText: string): ModelMessage[] {
+    return [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: `call-${tag}`,
+            toolName: "run_code",
+            input: { code: `search(${tag})` },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: `call-${tag}`,
+            toolName: "run_code",
+            output: { type: "json", value: resultValue },
+          },
+        ],
+      },
+      { role: "assistant", content: replyText },
+    ];
+  }
+
+  function partsOfType(messages: ModelMessage[], type: string) {
+    return messages.flatMap((m) =>
+      Array.isArray(m.content) ? m.content.filter((part) => part.type === type) : [],
+    );
+  }
+
+  // The 2026-09-22 production transcript: the turn-3 reply only says
+  // "October 6 to October 8"; the ISO dates live in its run_code result.
+  const OFFER_TURN = toolTurn(
+    "offer",
+    { room: "room1", checkIn: "2026-10-06", checkOut: "2026-10-08", available: true },
+    "Room 1 is open from October 6 to October 8.",
+  );
+
+  function transcriptRows(): MessageRow[] {
+    return [
+      row("msg-1", "user", "I'd like to book room 1 asap"),
+      row("msg-2", "assistant", "Which dates?"),
+      row("msg-3", "user", "ASAP"),
+      row("msg-4", "assistant", "Room 1 is open from October 6 to October 8.", OFFER_TURN),
+      row("msg-5", "user", "Yes"),
+    ];
+  }
+
+  it("replays a prior turn's tool-call and tool-result verbatim", async () => {
+    loadRecentMessagesMock.mockResolvedValue(transcriptRows());
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const { historyMessages } = await loadMemory({
+      conversationId: "convo-replay",
+      phone: "+351900000040",
+    });
+
+    expect(historyMessages).toEqual([
+      { role: "user", content: "I'd like to book room 1 asap" },
+      { role: "assistant", content: "Which dates?" },
+      { role: "user", content: "ASAP" },
+      ...OFFER_TURN,
+      { role: "user", content: "Yes" },
+    ]);
+    expect(JSON.stringify(historyMessages)).toContain("2026-10-06");
+  });
+
+  it("replays tool parts for the last 3 turns only, older turns as text", () => {
+    const rows = Array.from({ length: 5 }, (_, i) => [
+      row(`u${i}`, "user", `question ${i}`),
+      row(`a${i}`, "assistant", `answer ${i}`, toolTurn(`t${i}`, { turn: i }, `answer ${i}`)),
+    ]).flat();
+
+    const { groups } = buildHistoryMessages(rows);
+
+    expect(groups).toHaveLength(5);
+    expect(partsOfType(groups[0], "tool-call")).toHaveLength(0);
+    expect(partsOfType(groups[1], "tool-call")).toHaveLength(0);
+    expect(groups[1]).toEqual([
+      { role: "user", content: "question 1" },
+      { role: "assistant", content: "answer 1" },
+    ]);
+    for (const group of groups.slice(2)) {
+      expect(partsOfType(group, "tool-call")).toHaveLength(1);
+      expect(partsOfType(group, "tool-result")).toHaveLength(1);
+    }
+  });
+
+  it("replays text only for every row when replayTurnMessages is false", () => {
+    const { groups } = buildHistoryMessages(transcriptRows(), { replayTurnMessages: false });
+
+    const messages = groups.flat();
+    expect(messages.every((m) => typeof m.content === "string")).toBe(true);
+    expect(messages[3]).toEqual({
+      role: "assistant",
+      content: "Room 1 is open from October 6 to October 8.",
+    });
+  });
+
+  const LINK = "https://issebya.com/booking?room=room1&checkIn=2026-10-06&checkOut=2026-10-08";
+
+  // Two turn groups (both in the verbatim tier): the link turn [u0, a0],
+  // then one guest message followed by `followUps` assistant rows.
+  function bookingLinkRows(followUps: number): MessageRow[] {
+    const linkTurn = toolTurn("link", { ok: true, bookingUrl: LINK }, "Here is your link.");
+    return [
+      row("u0", "user", "Book it"),
+      row("a0", "assistant", "Here is your link.", linkTurn),
+      row("u1", "user", "thanks"),
+      ...Array.from({ length: followUps }, (_, i) => row(`x${i}`, "assistant", `follow-up ${i}`)),
+    ];
+  }
+
+  function toolResultOutputs(messages: ModelMessage[]) {
+    return partsOfType(messages, "tool-result").map((part) => (part as ToolResultPart).output);
+  }
+
+  it("redacts URLs inside a replayed tool-result when its turn is outside the unredacted window", () => {
+    // 11 rows: the last 8 are all in the second group, so the link turn
+    // falls entirely outside the window.
+    const { groups } = buildHistoryMessages(bookingLinkRows(8));
+
+    expect(toolResultOutputs(groups[0])).toEqual([
+      { type: "json", value: { ok: true, bookingUrl: "[link]" } },
+    ]);
+    const toolCall = partsOfType(groups[0], "tool-call")[0] as { input: unknown };
+    expect(toolCall.input).toEqual({ code: "search(link)" });
+  });
+
+  it("keeps every message of a turn group unredacted when any of its rows is inside the window", () => {
+    // 9 rows: a0 is the 8th-newest, u0 the 9th, so the group straddles the
+    // window edge and stays unredacted as a whole.
+    const { groups } = buildHistoryMessages(bookingLinkRows(6));
+
+    expect(toolResultOutputs(groups[0])).toEqual([
+      { type: "json", value: { ok: true, bookingUrl: LINK } },
+    ]);
+  });
+
+  it("passes text-only transcript lines to the summariser even when dropped rows carry turn_messages", async () => {
+    const rows = overflowingRows().map((r) =>
+      r.role === "assistant"
+        ? {
+            ...r,
+            turn_messages: {
+              schema_version: 1 as const,
+              messages: [
+                ...OFFER_TURN.slice(0, 2),
+                { role: "assistant" as const, content: r.content },
+              ],
+            },
+          }
+        : r,
+    );
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+    generateTextMock.mockResolvedValue({ text: "Summary." });
+
+    await foldMemory({
+      conversationId: "convo-fold-text-only",
+      phone: "+351900000041",
+      traceAnchor: TEST_TRACE_ANCHOR,
+    });
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const [[call]] = generateTextMock.mock.calls as [{ messages: Array<{ content: string }> }][];
+    expect(call.messages[1].content).toContain("msg-1:");
+    expect(call.messages[1].content).not.toContain("tool-call");
+    expect(call.messages[1].content).not.toContain("2026-10-06");
   });
 });

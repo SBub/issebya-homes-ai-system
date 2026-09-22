@@ -4,19 +4,27 @@
  * dataset stays the source of truth for every other row; this file only
  * holds the rows it inserts, so they can be reviewed in a PR before they
  * land. Idempotent: Dataset.insert with an explicit `id` upserts, so
- * re-running overwrites these four rows and touches nothing else.
+ * re-running overwrites these rows and touches nothing else.
  *
- * All four reproduce the 2026-09-21 production incident: (a) "asap" got
- * "which exact dates?" twice because the model never used run_code to scan
- * forward, and (b) "October 11-13" was resolved to 2025, check_availability
- * reported the past as available, and a 2025 booking link went out.
- * Scenario reference date: today = 2026-09-21 (a Monday).
+ * The date-resolution rows reproduce the 2026-09-21 production incident:
+ * (a) "asap" got "which exact dates?" twice because the model never used
+ * run_code to scan forward, and (b) "October 11-13" was resolved to 2025,
+ * check_availability reported the past as available, and a 2025 booking
+ * link went out. Scenario reference date: today = 2026-09-21 (a Monday),
+ * except where a row pins its own `today`.
+ *
+ * date-resolution-replay-01 reproduces the 2026-09-22 incident: the guest
+ * said "Yes" to an offer whose ISO dates lived only in the previous turn's
+ * run_code result, and the model guessed 2025. Its `rows` go through
+ * production's buildHistoryMessages, so the stored turn_messages replay the
+ * same way they do live.
  *
  * Run with (needs BRAINTRUST_API_KEY; same org/project in every env):
  *   yarn tsx --env-file=.env.development scripts/push-date-resolution-rows.ts
  */
 import { initDataset } from "braintrust";
 import type { EvalInput, ExpectedShape } from "../evals/types";
+import type { MessageRow } from "../src/lib/db";
 
 const PROJECT = "issebya-homes-ai-system";
 const DATASET_NAME = "GCA — Golden Dataset";
@@ -29,6 +37,75 @@ interface GoldenRow {
 }
 
 const NO_CONTEXT = "No prior guest information available.";
+
+function storedRow(
+  id: string,
+  role: MessageRow["role"],
+  content: string,
+  createdAt: string,
+  turnMessages: NonNullable<MessageRow["turn_messages"]>["messages"] | null = null,
+): MessageRow {
+  return {
+    id,
+    role,
+    content,
+    created_at: createdAt,
+    turn_messages: turnMessages ? { schema_version: 1, messages: turnMessages } : null,
+  };
+}
+
+const OFFER_TEXT = "Room 1 is open from October 6 to October 8. Shall I send you the booking link?";
+
+const replayRows: MessageRow[] = [
+  storedRow(
+    "replay-1",
+    "user",
+    "Hi, I'm Ana Silva (ana.silva@example.com). I'd like to book room 1 asap",
+    "2026-09-22T21:48:00Z",
+  ),
+  storedRow(
+    "replay-2",
+    "assistant",
+    "Hi Ana! Which dates did you have in mind for Room 1?",
+    "2026-09-22T21:48:30Z",
+  ),
+  storedRow("replay-3", "user", "ASAP", "2026-09-22T21:50:00Z"),
+  storedRow("replay-4", "assistant", OFFER_TEXT, "2026-09-22T21:50:40Z", [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call_scan_1",
+          toolName: "run_code",
+          input: {
+            code: 'const { date } = await getCurrentDate();\nreturn await findFirstAvailable("room1", date, 2);',
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "call_scan_1",
+          toolName: "run_code",
+          output: {
+            type: "json",
+            value: {
+              ok: true,
+              result: { room: "room1", checkIn: "2026-10-06", checkOut: "2026-10-08" },
+              logs: [],
+            },
+          },
+        },
+      ],
+    },
+    { role: "assistant", content: OFFER_TEXT },
+  ]),
+  storedRow("replay-5", "user", "Yes", "2026-09-22T21:51:00Z"),
+];
 
 const rows: GoldenRow[] = [
   {
@@ -69,15 +146,44 @@ const rows: GoldenRow[] = [
     id: "date-resolution-year-01",
     input: {
       contextBlock: NO_CONTEXT,
+      today: "2026-09-22",
       messages: [{ role: "user", content: "October 11-13 room 1" }],
     },
     expected: {
-      toolCall: { name: "get_current_date" },
-      expectedAlternative: "run_code",
+      toolCall: {
+        name: "check_availability",
+        args: { room: "room1", checkIn: "2026-10-11", checkOut: "2026-10-13" },
+      },
+      expectedAlternative: "get_current_date",
     },
     metadata: {
       description:
-        "Room and dates given, but with no year. The model must resolve the year from get_current_date (or inside run_code, which can call it) before touching availability. Calling check_availability directly in this turn with a guessed year is the failure: on 2026-09-21 the model guessed 2025, check_availability found nothing booked in the past and said available, and a 2025 booking link was sent. Companion row date-resolution-year-02 covers the turn after get_current_date returns.",
+        "Cold start: room and dates given, but with no year. Today's date (2026-09-22) is in the system context, so the model can resolve the year directly: check_availability(room1, 2026-10-11, 2026-10-13). Args are scored (ARGS_SCORED_TOOLS), so a guessed 2025 fails the row. An extra get_current_date check first is accepted (expectedAlternative). On 2026-09-21 the model guessed 2025, check_availability found nothing booked in the past and said available, and a 2025 booking link was sent. Companion row date-resolution-year-02 covers the turn after get_current_date returns.",
+    },
+  },
+  {
+    id: "date-resolution-replay-01",
+    input: {
+      contextBlock: NO_CONTEXT,
+      today: "2026-09-22",
+      rows: replayRows,
+    },
+    expected: {
+      toolCall: {
+        name: "send_booking_link",
+        args: {
+          guestName: "Ana Silva",
+          email: "ana.silva@example.com",
+          room: "room1",
+          checkIn: "2026-10-06",
+          checkOut: "2026-10-08",
+        },
+      },
+      expectedAlternative: null,
+    },
+    metadata: {
+      description:
+        "2026-09-22 production transcript: the previous turn's run_code found room 1 free 2026-10-06 to 2026-10-08 and the reply offered 'October 6 to October 8'. The guest says 'Yes'. The previous turn's tool call and result are replayed from turn_messages, so the model must call send_booking_link with exactly those ISO dates (args scored). Guessing the year from the prose (2025 in production) or re-running run_code is a miss. Run with GCA_EVAL_DISABLE_TURN_REPLAY=1 to replay text only; this row is expected to fail then.",
     },
   },
   {

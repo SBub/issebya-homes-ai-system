@@ -222,6 +222,7 @@ function emptyResponse(
 // every booking round below needs a clock to be in the future of and a
 // fetch to answer — hence the pinned date and the "nothing booked" stub.
 const TODAY = new Date("2026-09-21T10:00:00.000Z");
+const EXPECTED_SYSTEM = `${SYSTEM_PROMPT_TEXT}\n\nToday's date is Monday, 2026-09-21 (UTC).`;
 
 describe("runAgentTurn", () => {
   let step: ReturnType<typeof makeStepMock>;
@@ -303,7 +304,7 @@ describe("runAgentTurn", () => {
     });
 
     const [call] = generateTextMock.mock.calls[0] as [{ system: string; messages: ModelMessage[] }];
-    expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    expect(call.system).toBe(EXPECTED_SYSTEM);
     // No guest-memory-derived text substituted into the system string —
     // loadMemory returned memoryMessage: null here, and `system` is a fixed
     // stub with nothing memory-shaped in it in the first place.
@@ -350,7 +351,7 @@ describe("runAgentTurn", () => {
     expect(call.messages[1]).toBe(history[0]);
     expect(call.messages[2]).toBe(history[1]);
     // Never substituted into the system prompt string.
-    expect(call.system).toBe(SYSTEM_PROMPT_TEXT);
+    expect(call.system).toBe(EXPECTED_SYSTEM);
     expect(call.system).not.toContain("vegetarian");
   });
 
@@ -809,6 +810,34 @@ describe("runAgentTurn", () => {
 
     const last = result.messages.at(-1);
     expect(last?.role).toBe("tool");
+    // 8 rounds of (assistant tool-call, tool result), no history.
+    expect(result.turnMessages).toEqual(result.messages);
+    expect(result.turnMessages).toHaveLength(16);
+  });
+
+  it("returns exactly this turn's appended messages as turnMessages, after the loaded history", async () => {
+    const history: ModelMessage[] = [{ role: "user", content: "How much is room 1?" }];
+    const memoryMessage: ModelMessage = { role: "assistant", content: "User preferences:\nnone" };
+    loadMemoryMock.mockResolvedValue({ historyMessages: history, memoryMessage });
+    generateTextMock
+      .mockResolvedValueOnce(
+        toolCallResponse([
+          { toolName: "get_pricing", input: { room: "room1" }, toolCallId: "call_price" },
+        ]),
+      )
+      .mockResolvedValueOnce(textResponse("Here's the price."));
+
+    const result = await runAgentTurn(
+      { conversationId: "convo-1", phone: "+3519", incomingMessage: "How much is room 1?" },
+      { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
+    );
+
+    expect(result.turnMessages).toEqual(result.messages.slice(2));
+    expect(result.turnMessages.map((m) => m.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(result.turnMessages.at(-1)).toEqual({
+      role: "assistant",
+      content: "Here's the price.",
+    });
   });
 
   it("keeps looping after a missing_info tool call (a real step.waitForEvent answer flows back as the tool's own result, and the model composes a real final reply in the same turn)", async () => {
