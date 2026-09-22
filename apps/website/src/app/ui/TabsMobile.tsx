@@ -32,7 +32,7 @@ export function TabsMobile({ tabs, activeTabId }: TabsMobileProps) {
                   posthog.capture("room_tab_clicked", { room_type: tab.id });
                 }
               }}
-              className={`${widthClass} px-3 py-1.5 text-sm text-center ${!isLast ? "border-r border-black" : ""}`}
+              className={`${widthClass} px-3 py-1.5 text-center ${!isLast ? "border-r border-black" : ""}`}
             >
               {tab.label}
             </TabLink>

@@ -8,5 +8,5 @@
  * drifting apart visually.
  */
 export function tabStateClasses(isActive: boolean): string {
-  return isActive ? "bg-[#d9b98b]" : "text-gray-600 hover:text-black";
+  return isActive ? "bg-[#d9b98b] text-secondary" : "text-secondary";
 }

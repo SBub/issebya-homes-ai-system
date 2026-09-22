@@ -14,32 +14,28 @@ import Gallery from "./ui/Gallery";
 const bookingTabs = [
   {
     id: BookingType.room1,
-    label: "room 1",
+    label: "Room 1",
     href: `/booking/${BookingType.room1}`,
   },
   {
     id: BookingType.room2,
-    label: "room 2",
+    label: "Room 2",
     href: `/booking/${BookingType.room2}`,
   },
 ];
 
 const ROOM_CONTENT: Record<string, { title: string; description: string[]; airbnbUrl: string }> = {
   room1: {
-    title: "private room 1",
+    title: "Private room 1",
     description: [
-      "The private room is located on the ground floor of a three-level house. It opens onto the front garden and has access to its own bathroom (not en suite). On the same level, there's a shared living room with a fireplace and a desk.",
-      "Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic.",
-      "All spaces, except for the guest bedroom and bathroom, are shared.",
+      "The private room is located on the ground floor of a three-level house. It opens onto the front garden and has access to its own bathroom (not en suite). On the same level, there's a shared living room with a fireplace and a desk. Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic. All spaces, except for the guest bedroom and bathroom, are shared.",
     ],
     airbnbUrl: "https://www.airbnb.com/rooms/1424633715489915166",
   },
   room2: {
-    title: "private room 2",
+    title: "Private room 2",
     description: [
-      "The private room is located on the ground floor of a three-level house. It has its own en suite bathroom. On the same level, there's a shared living room with a fireplace and a desk.",
-      "Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic.",
-      "All spaces, except for the guest bedroom and bathroom, are shared.",
+      "The private room is located on the ground floor of a three-level house. It has its own en suite bathroom. On the same level, there's a shared living room with a fireplace and a desk. Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic. All spaces, except for the guest bedroom and bathroom, are shared.",
     ],
     airbnbUrl: "https://www.airbnb.com/rooms/1507883205063503481",
   },
@@ -66,7 +62,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
       <TabsMobile tabs={bookingTabs} activeTabId={type} />
 
       {/* Gallery (top on mobile) */}
-      <div className="order-1 md:order-2 md:w-1/2 flex flex-col items-center justify-start p-4 relative md:sticky md:top-0 md:h-screen">
+      <div className="order-1 md:order-2 md:w-1/2 flex flex-col items-center justify-start p-4 md:pt-[88px] relative md:sticky md:top-0 md:h-screen">
         <Gallery
           key={type} // Force remount when type changes
           images={type === "room1" ? room1Images : room2Images}
@@ -78,7 +74,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
       <div className="order-2 md:order-1 md:w-1/2 p-4 md:p-12 space-y-6">
         <TabsDesktop tabs={bookingTabs} activeTabId={type} />
         <div className="space-y-6">
-          <h2 className="text-2xl font-hand font-bold">
+          <h2 className="text-2xl text-header">
             {title}
             <br />
             with shared spaces
@@ -99,31 +95,31 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
             </Suspense>
           </ErrorBoundary>
 
-          <p className="font-sans">cap: max 2 persons</p>
+          <p className="text-secondary md:whitespace-nowrap">cap: max 2 persons</p>
 
-          <p className="text-sm leading-relaxed">
+          <p className="text-secondary">
             <a
               href="https://maps.google.com/?q=Almoçageme,+Sintra,+Portugal"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-secondary-link"
             >
               Almoçageme, Sintra
             </a>
           </p>
 
           {description.map((text, index) => (
-            <p key={index} className="text-sm leading-relaxed">
+            <p key={index} className="text-secondary">
               {text}
             </p>
           ))}
 
-          <p className="text-sm leading-relaxed">
+          <p className="text-secondary">
             <a
               href={airbnbUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-secondary-link"
             >
               Read public reviews on Airbnb
             </a>

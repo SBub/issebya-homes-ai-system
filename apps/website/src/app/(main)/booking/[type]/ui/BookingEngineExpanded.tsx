@@ -297,7 +297,7 @@ export function BookingEngineExpanded({
                 const digits = e.target.value.replace(/\D/g, "");
                 if (digits !== e.target.value) e.target.value = digits;
               }}
-              placeholder="920 742 845"
+              placeholder="912 345 678"
               required
               pattern="\d{4,14}"
               className={`booking-phone-input ${state.errors.localNumber ? "border-red-500" : ""}`}
