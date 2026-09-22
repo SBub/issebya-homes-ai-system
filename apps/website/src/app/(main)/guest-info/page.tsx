@@ -41,53 +41,52 @@ export default function GuestInfoPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#f0eeea] font-sans">
-      {/* Header */}
-      <header className="bg-[#f0eeea]">
-        <div className="max-w-4xl mx-auto py-8 relative">
-          <div className="px-6 md:px-12">
-            <nav className="md:overflow-visible overflow-x-auto scrollbar-hide">
-              <div className="md:flex md:flex-wrap flex gap-6 text-sm min-w-max md:min-w-0">
-                {sections.map((section) => (
-                  <a
-                    key={section.id}
-                    href={`#${section.id}`}
-                    className={`pb-1 transition-colors hover:text-gray-600 whitespace-nowrap ${
-                      activeSection === section.id ? "border-b-2 border-black" : ""
-                    }`}
-                  >
-                    {section.title}
-                  </a>
-                ))}
-              </div>
-            </nav>
-          </div>
-          {/* Animated arrow to indicate scrollability - positioned in padding area */}
-          <div className="absolute top-1/2 right-2 transform -translate-y-1/2 pointer-events-none md:hidden">
-            <div className="animate-pulse">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                className="animate-bounce opacity-60"
+    <div className="p-4 md:p-12">
+      <h1 className="text-4xl text-header mb-6">Guest Info</h1>
+
+      {/* Section nav */}
+      <div className="relative mb-8">
+        <nav className="md:overflow-visible overflow-x-auto scrollbar-hide">
+          <div className="md:flex md:flex-wrap flex gap-6 text-sm min-w-max md:min-w-0">
+            {sections.map((section) => (
+              <a
+                key={section.id}
+                href={`#${section.id}`}
+                className={`pb-1 transition-colors hover:text-gray-600 whitespace-nowrap ${
+                  activeSection === section.id ? "border-b-2 border-black" : ""
+                }`}
               >
-                <path
-                  d="M6 4l4 4-4 4"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </div>
+                {section.title}
+              </a>
+            ))}
+          </div>
+        </nav>
+        {/* Fade + animated arrow to indicate scrollability, sitting on top of
+            the nav's own edge rather than floating in now-thin page padding. */}
+        <div className="absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-[#f0eeea] to-transparent pointer-events-none md:hidden flex items-center justify-end">
+          <div className="animate-pulse">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              className="animate-bounce opacity-60"
+            >
+              <path
+                d="M6 4l4 4-4 4"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </div>
         </div>
-      </header>
+      </div>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-6 md:px-12 pb-8 space-y-18">
-        <InfoSection id="booking-arrival" title="Arrival Information">
+      <main className="max-w-[70ch] space-y-18">
+        <InfoSection id="booking-arrival" title="Arrival Information" titleClassName="text-price">
           <p>
             <strong>Check-in:</strong> After 15:00
           </p>
@@ -108,19 +107,19 @@ export default function GuestInfoPage() {
           <p>
             <strong>Entrance:</strong> Blue gate
           </p>
-          <div className="mt-4">
+          <div className="page-decor-photo mt-4">
             <Image
               src="/bluegate.webp"
               alt="Parking area near the house"
-              width={400}
-              height={533}
-              className="shadow-md"
+              fill
+              className="object-cover"
+              sizes="(min-width: 640px) 320px, 100vw"
               preload
             />
           </div>
         </InfoSection>
 
-        <InfoSection id="parking" title="Parking">
+        <InfoSection id="parking" title="Parking" titleClassName="text-price">
           <p>There is no private parking at the house.</p>
           <p>
             Guests typically park along the main street, there&apos;s usually space a few meters
@@ -136,7 +135,7 @@ export default function GuestInfoPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="house-guidelines" title="House Guidelines">
+        <InfoSection id="house-guidelines" title="House Guidelines" titleClassName="text-price">
           <div>
             <p>
               <strong>Wi-Fi</strong>
@@ -163,7 +162,7 @@ export default function GuestInfoPage() {
           </div>
         </InfoSection>
 
-        <InfoSection id="waste-recycling" title="Waste, Recycling">
+        <InfoSection id="waste-recycling" title="Waste, Recycling" titleClassName="text-price">
           <p>In the kitchen, you&apos;ll find separate bins for:</p>
           <ul className="list-disc list-inside space-y-1 ml-4">
             <li>Paper</li>
@@ -199,7 +198,7 @@ export default function GuestInfoPage() {
           </ul>
         </InfoSection>
 
-        <InfoSection id="local-essentials" title="Local Essentials">
+        <InfoSection id="local-essentials" title="Local Essentials" titleClassName="text-price">
           <div className="space-y-6">
             <div>
               <p>
@@ -257,7 +256,7 @@ export default function GuestInfoPage() {
           </div>
         </InfoSection>
 
-        <InfoSection id="beaches-hikes" title="Beaches, Hikes">
+        <InfoSection id="beaches-hikes" title="Beaches, Hikes" titleClassName="text-price">
           <div className="space-y-6">
             <div>
               <p>
@@ -351,7 +350,7 @@ export default function GuestInfoPage() {
           </div>
         </InfoSection>
 
-        <InfoSection id="need-anything" title="Need Anything?">
+        <InfoSection id="need-anything" title="Need Anything?" titleClassName="text-price">
           <p>
             For help, questions, or anything else, contact us on <WhatsAppLink />.
           </p>

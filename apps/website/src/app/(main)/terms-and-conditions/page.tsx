@@ -9,17 +9,16 @@ export const metadata: Metadata = {
 
 export default function TermsAndConditionsPage() {
   return (
-    <div className="min-h-screen bg-[#f0eeea] font-sans">
-      <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
-        <div>
-          <h1 className="text-4xl text-header mb-4">Terms &amp; Conditions</h1>
-          <p className="text-sm leading-relaxed">
-            These terms apply to all bookings and stays at issebya.homes. By booking or staying with
-            us, you agree to the terms below.
-          </p>
-        </div>
+    <div className="p-4 md:p-12">
+      <h1 className="text-4xl text-header mb-6">Terms &amp; Conditions</h1>
 
-        <InfoSection id="operator" title="Property & Operator">
+      <main className="max-w-[70ch] space-y-18">
+        <p className="text-sm leading-relaxed">
+          These terms apply to all bookings and stays at issebya.homes. By booking or staying with
+          us, you agree to the terms below.
+        </p>
+
+        <InfoSection id="operator" title="Property & Operator" titleClassName="text-price">
           <p>
             <strong>Property:</strong> Rua do Lagarto 5, 2705-044, Almoçageme, Portugal
           </p>
@@ -41,7 +40,7 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="booking-payment" title="Booking & Payment">
+        <InfoSection id="booking-payment" title="Booking & Payment" titleClassName="text-price">
           <p>
             Prices shown at checkout are all-inclusive: accommodation plus the Sintra municipal
             tourist tax (€2 per guest, per night, for the first 3 nights), where applicable. Payment
@@ -49,7 +48,7 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="cancellation" title="Cancellation & Refunds">
+        <InfoSection id="cancellation" title="Cancellation & Refunds" titleClassName="text-price">
           <p>
             Once a reservation is made, we are unable to provide a refund. Please be sure of your
             dates before booking.
@@ -68,7 +67,11 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="check-in-registration" title="Check-in & Guest Registration">
+        <InfoSection
+          id="check-in-registration"
+          title="Check-in & Guest Registration"
+          titleClassName="text-price"
+        >
           <p>
             <strong>Check-in:</strong> After 15:00
           </p>
@@ -86,7 +89,7 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="house-rules" title="House Rules">
+        <InfoSection id="house-rules" title="House Rules" titleClassName="text-price">
           <p>
             <strong>Maximum occupancy:</strong> 2 guests per room, or 4 guests for the full house
             booking. These limits may not be exceeded.
@@ -106,7 +109,7 @@ export default function TermsAndConditionsPage() {
           <p>Additional house guidelines are shared directly with guests ahead of their stay.</p>
         </InfoSection>
 
-        <InfoSection id="privacy" title="Guest Data & Privacy">
+        <InfoSection id="privacy" title="Guest Data & Privacy" titleClassName="text-price">
           <p>
             We collect the personal data needed to process your booking and communicate with you,
             including your name, contact details, and WhatsApp messages. Identity documents for
@@ -119,7 +122,7 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="complaints" title="Complaints">
+        <InfoSection id="complaints" title="Complaints" titleClassName="text-price">
           <p>
             This establishment has an electronic complaints book, available at{" "}
             <a
@@ -134,7 +137,11 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="dispute-resolution" title="Alternative Dispute Resolution">
+        <InfoSection
+          id="dispute-resolution"
+          title="Alternative Dispute Resolution"
+          titleClassName="text-price"
+        >
           <p>
             In case of a consumer dispute, you may resort to an Alternative Dispute Resolution (ADR)
             entity. The applicable entity for this establishment is CACCL (Centro de Arbitragem de
@@ -157,7 +164,7 @@ export default function TermsAndConditionsPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="governing-law" title="Governing Law">
+        <InfoSection id="governing-law" title="Governing Law" titleClassName="text-price">
           <p>These terms are governed by Portuguese law.</p>
         </InfoSection>
       </main>
