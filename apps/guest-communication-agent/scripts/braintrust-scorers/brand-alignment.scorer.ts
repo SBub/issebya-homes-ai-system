@@ -40,12 +40,12 @@ const model = openrouter.chat(MODEL);
 const CHOICE_SCORES: Record<string, number> = { A: 1.0, B: 0.5, C: 0.0 };
 
 // Rubric is grounded in the live "gca-system" prompt (loaded from Braintrust
-// at runtime by src/agent/run-turn.ts, not stored in this repo) rather than
-// a generic brand-voice guess — see the specific concierge-voice rules it
-// encodes below (warmth/directness, booking pace, complaint handling,
+// at runtime by src/agent/run-agent-turn.ts, not stored in this repo) rather
+// than a generic brand-voice guess — see the specific concierge-voice rules
+// it encodes below (warmth/directness, booking pace, complaint handling,
 // staying in character, no emojis). Deliberately does NOT score the
-// no-em-dash / no-bold rules: sanitizeReplyText in run-turn.ts strips both
-// mechanically before a reply ever reaches the guest, so they can never
+// no-em-dash / no-bold rules: sanitizeReplyText in run-agent-turn.ts strips
+// both mechanically before a reply ever reaches the guest, so they can never
 // actually fail here.
 const RUBRIC_PROMPT = `You are evaluating one reply from the issebya.homes WhatsApp concierge (a guest house in Almoçageme, Portugal) against its brand voice — not whether it is factually correct.
 
@@ -156,7 +156,7 @@ project.scorers.create({
   handler: async ({ input, output }) => {
     // Defensive guard, not required by current wiring: the online-scoring
     // automation targets only "braintrust.guest_turn.result" (see
-    // run-turn.ts's "update-turn-trace-io" step), a single-write span
+    // run-guest-turn.ts's "update-turn-trace-io" step), a single-write span
     // created with real input/output already set, so these should always be
     // real strings. Kept as cheap insurance against a malformed/unexpected
     // row rather than assuming the automation config never changes — skip

@@ -20,9 +20,9 @@ vi.mock("@/lib/twilio-send.js", () => ({
   sendWhatsAppMessage: sendWhatsAppMessageMock,
 }));
 
-const runSendBookingLinkMock = vi.fn();
+const computeSendBookingLinkMock = vi.fn();
 vi.mock("@/agent/tools/booking.js", () => ({
-  runSendBookingLink: runSendBookingLinkMock,
+  computeSendBookingLink: computeSendBookingLinkMock,
 }));
 
 const { POST } = await import("@/app/api/admin/pending-decisions/[id]/actions/resolve/route.js");
@@ -80,13 +80,13 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
     recordMessageMock.mockReset();
     updateMessageDeliveryStatusMock.mockReset();
     sendWhatsAppMessageMock.mockReset();
-    runSendBookingLinkMock.mockReset();
+    computeSendBookingLinkMock.mockReset();
 
     markPendingOwnerDecisionResolvedByIdMock.mockResolvedValue(undefined);
     recordMessageMock.mockResolvedValue("msg-new-1");
     updateMessageDeliveryStatusMock.mockResolvedValue(undefined);
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
-    runSendBookingLinkMock.mockResolvedValue({
+    computeSendBookingLinkMock.mockReturnValue({
       url: "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
     });
   });
@@ -129,7 +129,7 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
       const res = await POST(makeRequest(), makeParams("decision-1"));
       const json = await res.json();
 
-      expect(runSendBookingLinkMock).toHaveBeenCalledWith(
+      expect(computeSendBookingLinkMock).toHaveBeenCalledWith(
         {
           guestName: "Ana",
           email: "ana@example.com",
@@ -137,7 +137,7 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
           checkIn: "2026-09-01",
           checkOut: "2026-09-05",
         },
-        { phone: "+351920742845" },
+        "+351920742845",
       );
       expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
         "+351920742845",
@@ -168,6 +168,29 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
       const res = await POST(makeRequest(), makeParams("decision-1"));
 
       expect(res.status).toBe(400);
+      expect(sendWhatsAppMessageMock).not.toHaveBeenCalled();
+      expect(markPendingOwnerDecisionResolvedByIdMock).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 with computeSendBookingLink's own refusal when the row's stored dates are in the past", async () => {
+      getPendingOwnerDecisionByIdMock.mockResolvedValueOnce({
+        ...bookingRow,
+        context: { ...bookingRow.context, checkIn: "2025-10-11", checkOut: "2025-10-13" },
+      });
+      computeSendBookingLinkMock.mockReturnValueOnce({
+        error:
+          "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).",
+        reason: "past_date",
+      });
+
+      const res = await POST(makeRequest(), makeParams("decision-1"));
+      const json = await res.json();
+
+      expect(res.status).toBe(400);
+      expect(json).toEqual({
+        error:
+          "Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).",
+      });
       expect(sendWhatsAppMessageMock).not.toHaveBeenCalled();
       expect(markPendingOwnerDecisionResolvedByIdMock).not.toHaveBeenCalled();
     });

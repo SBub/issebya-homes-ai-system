@@ -1,6 +1,20 @@
+import { trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import type { GetStepTools } from "inngest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { inngest } from "@/lib/inngest";
+
+// Same in-memory OTel wiring as wants-human.test.ts/approval-gate.test.ts,
+// so the braintrust.tags assertion below can inspect a real span's
+// attributes instead of a no-op.
+const spanExporter = new InMemorySpanExporter();
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }),
+);
 
 // Isolates requestOwnerNudge directly, rather than driving it indirectly
 // through runAgentTurn's step-cap branch. No more Supabase mocking here —
@@ -37,6 +51,7 @@ describe("requestOwnerNudge", () => {
   beforeEach(() => {
     sendOwnerNudgeMock.mockReset();
     step = makeStepMock();
+    spanExporter.reset();
   });
 
   afterEach(() => {
@@ -98,5 +113,22 @@ describe("requestOwnerNudge", () => {
     expect(result).toBe(false);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("tags the owner_nudge.request span with reasonCategory, so a real send failure clears @braintrust/otel's export filter", async () => {
+    sendOwnerNudgeMock.mockResolvedValueOnce({ ok: true });
+
+    await requestOwnerNudge({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      reason: "Guest wants a human",
+      reasonCategory: "wants_human",
+      step,
+    });
+
+    const nudgeSpan = spanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "owner_nudge.request");
+    expect(nudgeSpan?.attributes["braintrust.tags"]).toEqual(["wants_human"]);
   });
 });

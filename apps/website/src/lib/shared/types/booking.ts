@@ -1,11 +1,10 @@
 export enum BookingType {
   room1 = "room1",
   room2 = "room2",
-  event = "event",
 }
 
 export function isValidBookingType(type: string | undefined): type is BookingType {
-  return type === BookingType.room1 || type === BookingType.room2 || type === BookingType.event;
+  return type === BookingType.room1 || type === BookingType.room2;
 }
 
 export type Booking = {

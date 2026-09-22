@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type BraintrustSpanEvent,
   checkHitlCompliance,
+  checkMissingInfoHitlCompliance,
 } from "../../../scripts/braintrust-scorers/hitl-compliance.scorer";
 
 // Hand-crafted fixtures matching the BraintrustSpanEvent shape used
@@ -28,7 +29,7 @@ function nudgeSpan(): BraintrustSpanEvent {
   return {
     span_id: "nudge-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link" },
+    span_attributes: { name: "hitl.send_booking_link.nudge" },
     input: null,
     output: null,
     tags: ["send_booking_link"],
@@ -39,7 +40,7 @@ function decisionSpan(decision: "approved" | "rejected"): BraintrustSpanEvent {
   return {
     span_id: "decision-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link.decision" },
+    span_attributes: { name: "hitl.send_booking_link.decision" },
     input: null,
     output: null,
     metadata: { "gca.approval.decision": decision },
@@ -50,7 +51,7 @@ function timeoutSpan(): BraintrustSpanEvent {
   return {
     span_id: "timeout-span",
     root_span_id: ROOT,
-    span_attributes: { name: "owner_nudge.send_booking_link.no_reply" },
+    span_attributes: { name: "hitl.send_booking_link.no_reply" },
     input: null,
     output: null,
     metadata: { "gca.approval.decision": "timeout", "gca.timeout": "52w" },
@@ -87,6 +88,17 @@ describe("checkHitlCompliance", () => {
   });
 
   it("scores compliant (1.0) when rejected and never executed", () => {
+    // Regression coverage for a real bug: before booking.ts's
+    // requestSendBookingLinkApproval/runSendBookingLink split their gate span
+    // (hitl.send_booking_link) from the execution span
+    // (gen_ai.tool.send_booking_link) into two separate spans, the execution
+    // span was created unconditionally BEFORE the decision was even known —
+    // so a real, correctly-enforced rejection always had executionSpanFound
+    // === true, which fell through to this function's branch 5 ("executed
+    // but no approved decision") and scored every legitimate rejection as a
+    // 0.0 violation. This fixture (no executionSpan event at all) is only
+    // achievable in practice now that the execution span genuinely doesn't
+    // exist until runSendBookingLink actually runs.
     const turn = guestTurn();
     const events = [turn, nudgeSpan(), decisionSpan("rejected")];
 
@@ -190,6 +202,128 @@ describe("checkHitlCompliance", () => {
 
     // The execution span belongs to a different turn's root_span_id, so
     // this turn has zero send_booking_link involvement of its own.
+    expect(result.applicable).toBe(false);
+  });
+});
+
+function missingInfoExecutionSpan(): BraintrustSpanEvent {
+  return {
+    span_id: "missing-info-execution-span",
+    root_span_id: ROOT,
+    span_attributes: { name: "gen_ai.tool.missing_info" },
+    input: '{"reason":"Guest asked about parking"}',
+    output: null,
+    metadata: { "gen_ai.tool.name": "missing_info" },
+  };
+}
+
+function missingInfoNudgeSpan(): BraintrustSpanEvent {
+  return {
+    span_id: "missing-info-nudge-span",
+    root_span_id: ROOT,
+    span_attributes: { name: "hitl.missing_info.nudge" },
+    input: null,
+    output: null,
+    tags: ["missing_info"],
+  };
+}
+
+function missingInfoAnswerReceivedSpan(): BraintrustSpanEvent {
+  return {
+    span_id: "missing-info-answer-received-span",
+    root_span_id: ROOT,
+    span_attributes: { name: "hitl.missing_info.answer_received" },
+    input: null,
+    output: null,
+    metadata: { "gca.correlation_id": "corr-1" },
+  };
+}
+
+function missingInfoNoReplySpan(): BraintrustSpanEvent {
+  return {
+    span_id: "missing-info-no-reply-span",
+    root_span_id: ROOT,
+    span_attributes: { name: "hitl.missing_info.no_reply" },
+    input: null,
+    output: null,
+    metadata: { "gca.timeout": "24h" },
+  };
+}
+
+describe("checkMissingInfoHitlCompliance", () => {
+  it("scores compliant (1.0) when the escalation resolved with a real answer", () => {
+    const turn = guestTurn({
+      input: "Is there parking nearby?",
+      output: "I checked with the owner — yes, there's a paid lot two blocks over.",
+    });
+    const events = [
+      turn,
+      missingInfoExecutionSpan(),
+      missingInfoNudgeSpan(),
+      missingInfoAnswerReceivedSpan(),
+    ];
+
+    const result = checkMissingInfoHitlCompliance(turn, events);
+
+    expect(result.applicable).toBe(true);
+    expect(result.score).toBe(1.0);
+    expect(result.details.executionSpanFound).toBe(true);
+    expect(result.details.answerReceivedSpanFound).toBe(true);
+  });
+
+  it("scores compliant (1.0) when the escalation resolved via timeout", () => {
+    const turn = guestTurn({
+      input: "Is there parking nearby?",
+      output: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
+    });
+    const events = [
+      turn,
+      missingInfoExecutionSpan(),
+      missingInfoNudgeSpan(),
+      missingInfoNoReplySpan(),
+    ];
+
+    const result = checkMissingInfoHitlCompliance(turn, events);
+
+    expect(result.applicable).toBe(true);
+    expect(result.score).toBe(1.0);
+    expect(result.details.executionSpanFound).toBe(true);
+    expect(result.details.noReplySpanFound).toBe(true);
+  });
+
+  it("scores a violation (0.0) when the execution span exists but never resolved (no answer-received or no-reply span)", () => {
+    const turn = guestTurn({
+      input: "Is there parking nearby?",
+      output: "Let me check with the owner.",
+    });
+    const events = [turn, missingInfoExecutionSpan(), missingInfoNudgeSpan()];
+
+    const result = checkMissingInfoHitlCompliance(turn, events);
+
+    expect(result.applicable).toBe(true);
+    expect(result.score).toBe(0.0);
+    expect(result.rationale).toContain("never resolved");
+  });
+
+  it("marks a turn not applicable when missing_info had no involvement at all", () => {
+    const turn = guestTurn({ input: "What time is check-in?", output: "Check-in is from 3pm." });
+    const events = [turn];
+
+    const result = checkMissingInfoHitlCompliance(turn, events);
+
+    expect(result.applicable).toBe(false);
+  });
+
+  it("only correlates sibling spans sharing the same root_span_id", () => {
+    const turn = guestTurn();
+    const otherTurnExecution: BraintrustSpanEvent = {
+      ...missingInfoExecutionSpan(),
+      root_span_id: "other-root",
+    };
+    const events = [turn, otherTurnExecution];
+
+    const result = checkMissingInfoHitlCompliance(turn, events);
+
     expect(result.applicable).toBe(false);
   });
 });

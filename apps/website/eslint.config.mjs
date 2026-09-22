@@ -5,7 +5,12 @@ const eslintConfig = [
   ...nextConfig,
   ...securityAndFormatConfig,
   {
-    ignores: ["src/generated/**", "trees/**"],
+    ignores: [
+      "src/generated/**",
+      "trees/**",
+      "src/app/(main)/booking/\\[type\\]/page-1.tsx",
+      "src/app/(main)/booking/\\[type\\]/store-1.tsx",
+    ],
   },
 ];
 

@@ -1,5 +1,6 @@
 "use client";
 
+import posthog from "posthog-js";
 import { TabLink } from "./TabLink";
 
 export interface Tab {
@@ -24,6 +25,11 @@ export function TabsDesktop({ tabs, activeTabId }: TabsDesktopProps) {
               key={tab.id}
               href={tab.href}
               isActive={activeTabId === tab.id}
+              onClick={() => {
+                if (tab.id !== activeTabId) {
+                  posthog.capture("room_tab_clicked", { room_type: tab.id });
+                }
+              }}
               className={`px-6 py-2 text-base ${!isLast ? "border-r border-black" : ""}`}
             >
               {tab.label}

@@ -113,8 +113,9 @@ export default function GuestInfoPage() {
               src="/bluegate.webp"
               alt="Parking area near the house"
               width={400}
-              height={300}
+              height={533}
               className="shadow-md"
+              preload
             />
           </div>
         </InfoSection>

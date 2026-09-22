@@ -44,4 +44,55 @@ describe("toolCallMatch", () => {
     });
     expect(score.score).toBe(0);
   });
+
+  // check_availability is args-scored: the 2026-09-21 production incident
+  // resolved "October 11-13" to 2025, check_availability reported the past
+  // as available, and a 2025 booking link went out. Name-only matching
+  // scored that turn 1.
+  describe("check_availability args", () => {
+    const expected = {
+      toolCall: {
+        name: "check_availability",
+        args: { room: "room1", checkIn: "2026-10-11", checkOut: "2026-10-13" },
+      },
+      expectedAlternative: null,
+    };
+
+    it("scores 0 when check_availability is called with the wrong year", () => {
+      const score = toolCallMatch({
+        output: result([
+          {
+            toolName: "check_availability",
+            args: { room: "room1", checkIn: "2025-10-11", checkOut: "2025-10-13" },
+          },
+        ]),
+        expected,
+      });
+      expect(score.score).toBe(0);
+    });
+
+    it("scores 1 when check_availability args match, regardless of key order", () => {
+      const score = toolCallMatch({
+        output: result([
+          {
+            toolName: "check_availability",
+            args: { checkOut: "2026-10-13", checkIn: "2026-10-11", room: "room1" },
+          },
+        ]),
+        expected,
+      });
+      expect(score.score).toBe(1);
+    });
+
+    it("still scores tools outside the allowlist on name alone even when the row carries args", () => {
+      const score = toolCallMatch({
+        output: result([{ toolName: "get_pricing", args: { room: "room2" } }]),
+        expected: {
+          toolCall: { name: "get_pricing", args: { room: "room1" } },
+          expectedAlternative: null,
+        },
+      });
+      expect(score.score).toBe(1);
+    });
+  });
 });

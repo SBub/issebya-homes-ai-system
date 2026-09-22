@@ -40,6 +40,13 @@ export function parseICalData(icalString: string): ICalEvent[] {
     const events: ICalEvent[] = vevents.map((vevent) => {
       const event = new ICAL.Event(vevent);
 
+      // OTA feeds emit stays as all-day events (DTSTART;VALUE=DATE:20260921),
+      // which ical.js models as a floating date. toJSDate() renders a floating
+      // date at LOCAL midnight of that calendar day, so these boundaries
+      // already follow the same convention as fromCalendarDay in date-utils.ts
+      // and as the startOfDay normalisation getBlockedDates applies below. A
+      // feed that sends timed, zoned boundaries instead lands on the right
+      // local day too, since getBlockedDates truncates to startOfDay.
       return {
         dtstart: event.startDate.toJSDate(),
         dtend: event.endDate.toJSDate(),

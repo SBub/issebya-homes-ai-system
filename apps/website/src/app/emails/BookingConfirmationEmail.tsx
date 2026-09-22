@@ -1,4 +1,5 @@
 import * as React from "react";
+import { fromCalendarDay } from "@/lib/date-utils";
 
 type BookingConfirmationEmailProps = {
   roomLabel: string;
@@ -13,7 +14,10 @@ type BookingConfirmationEmailProps = {
 };
 
 function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString("en-GB", {
+  // A stored calendar day ("yyyy-MM-dd"), not an instant: parse it at local
+  // midnight so the guest is shown the day they picked, whatever timezone
+  // this renders in.
+  return fromCalendarDay(dateString).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
     year: "numeric",

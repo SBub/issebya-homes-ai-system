@@ -1,9 +1,12 @@
 import type { Span } from "@opentelemetry/api";
+import * as Sentry from "@sentry/nextjs";
 import { embed, tool } from "ai";
 import { z } from "zod";
+import { dispatchToolExecution } from "@/agent/tool-execution";
 import { openrouter } from "@/lib/openrouter";
-import { markSpanFailed, withSpan } from "@/lib/tracing";
-import { createClient } from "../../lib/supabase";
+import { createClient } from "@/lib/supabase";
+import { markSpanFailed, steppedSpan, withSpan } from "@/lib/tracing";
+import type { ToolContext } from "./config";
 
 type DocumentMetadata = {
   source: string;
@@ -23,8 +26,8 @@ const answerPropertyQuestionSchema = z.object({
   query: z.string().describe("The search query based on what the guest is asking"),
 });
 
-// Schema-only declaration (no `execute`) — run-turn.ts dispatches to
-// runAnswerPropertyQuestion below by name.
+// Schema-only — run-tool.ts dispatches to runAnswerPropertyQuestion below by
+// name.
 export const answerPropertyQuestion = tool({
   description:
     "Search the property knowledge base for information about rooms, pricing, check-in, location, house rules, local recommendations, and more.",
@@ -34,33 +37,28 @@ export const answerPropertyQuestion = tool({
 // Always searches unfiltered — a prior `filter.type` param was dropped after
 // the model guessing a wrong type silently excluded relevant content.
 //
-// The withSpan below is a deliberate, narrow exception to run-turn.ts's "tool
-// files stay pure, no step/span" rule (see that file's comment near `tools`):
-// it wraps only this file's own DB call, never touches `step`/Inngest, and
-// carries none of the replay-safety hazard that rule exists to prevent (see
-// SELF_STEPPED_TOOLS's comment in run-turn.ts for that hazard). It nests
-// automatically (via OTel's ambient context) inside the generic per-tool span
-// run-turn.ts's dispatch loop already opens for this call, giving fine-grained
-// timing on the DB query specifically — separate from embed() and the rest of
-// this function. Moving it to run-turn.ts would mean moving the Supabase call
-// itself there too (the span has to wrap the actual query), which would pull
-// real business logic into the orchestrator — exactly backwards from what the
-// rule is for. Kept here on purpose; do not treat this as license to add
-// `step`/Inngest usage to this file.
-export async function runAnswerPropertyQuestion(
-  args: z.infer<typeof answerPropertyQuestionSchema>,
-) {
+// The inner withSpan is a plain OTel span, no step/Inngest — nests
+// automatically under runAnswerPropertyQuestion's own execution span,
+// giving fine-grained timing on the DB query alone.
+async function queryPropertyKnowledgeBase(args: z.infer<typeof answerPropertyQuestionSchema>) {
   const { embedding } = await embed({
     model: openrouter.embedding("openai/text-embedding-3-small"),
     value: args.query,
   });
 
-  // Constructed lazily (not at module scope) so importing this file — e.g.
-  // for its tool schema — doesn't require Supabase env vars to be set.
-  const supabaseAnon = createClient();
+  // Constructed lazily (not at module scope) so importing this file, e.g.
+  // for its tool schema, doesn't require Supabase env vars to be set.
+  //
+  // Deliberately the anon (RLS-scoped) client, least privilege: it can read
+  // `documents` and touch nothing else. anon needs an explicit table grant
+  // (supabase/migrations/20260921092000_grant_anon_select_documents.sql) on
+  // top of the RLS select policy (20260720150001_create_documents_pgvector.sql).
+  // Without the grant the hosted project fails with 42501 while local
+  // Supabase works, and the fallback text below would hide it.
+  const supabase = createClient();
 
   async function matchDocumentsForQuery(span: Span): Promise<string> {
-    const { data, error } = await supabaseAnon.rpc("match_documents", {
+    const { data, error } = await supabase.rpc("match_documents", {
       query_embedding: JSON.stringify(embedding),
       match_count: 5,
       match_threshold: 0.3,
@@ -68,20 +66,44 @@ export async function runAnswerPropertyQuestion(
     });
 
     if (error) {
-      // Previously collapsed into the same "no relevant information found"
-      // string a genuine no-match produces — a DB/RPC outage and "nothing
-      // matched" were indistinguishable. Still returns the same fallback
-      // text (the guest/model shouldn't see a different answer either way),
-      // just makes the real cause visible on the trace.
-      markSpanFailed(span, error.message);
+      // Same fallback text as a genuine no-match: the system prompt's rule
+      // 1 keys on this phrasing to route to missing_info. The span
+      // attribute, log line and Sentry event are what tell the two apart.
+      const dbError = new Error(`match_documents failed (${error.code}): ${error.message}`);
+      span.setAttribute("db.error_code", error.code);
+      markSpanFailed(span, dbError);
+      console.error("[answer_property_question] match_documents RPC failed:", {
+        code: error.code,
+        message: error.message,
+      });
+      Sentry.captureException(dbError, {
+        tags: { tool: "answer_property_question", "db.error_code": error.code },
+      });
       return "No relevant information found in the knowledge base.";
     }
-    if (!data?.length) {
+    const matches = (data ?? []) as DocumentMatch[];
+    span.setAttribute("db.match_count", matches.length);
+    if (matches.length === 0) {
       return "No relevant information found in the knowledge base.";
     }
+    span.setAttribute("db.top_similarity", matches[0].similarity);
 
-    return (data as DocumentMatch[]).map((d) => d.content).join("\n\n");
+    return matches.map((d) => d.content).join("\n\n");
   }
 
   return withSpan("db.matchDocuments", { "db.table": "documents" }, matchDocumentsForQuery);
+}
+
+export async function runAnswerPropertyQuestion(
+  args: z.infer<typeof answerPropertyQuestionSchema>,
+  context: ToolContext,
+) {
+  return steppedSpan(
+    context.step,
+    "tool-answer_property_question",
+    context.traceAnchor,
+    "gen_ai.tool.answer_property_question",
+    { "gen_ai.tool.name": "answer_property_question", "gen_ai.operation.name": "execute_tool" },
+    (span) => dispatchToolExecution(span, args, () => queryPropertyKnowledgeBase(args)),
+  );
 }

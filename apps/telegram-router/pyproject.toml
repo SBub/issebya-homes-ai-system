@@ -1,0 +1,42 @@
+[project]
+name = "telegram-router"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.121",
+  "uvicorn[standard]>=0.38",
+  "httpx>=0.28",
+  "pydantic>=2.12",
+  "sentry-sdk>=2.44",
+  "opentelemetry-sdk>=1.38",
+  "opentelemetry-exporter-otlp-proto-http>=1.38",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4", "pytest-asyncio>=1.3", "respx>=0.22", "ruff>=0.16", "mypy>=2.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Vercel's filename detection would already find app/main.py on its own, but
+# Vercel recommends stating the entrypoint explicitly for new projects. An
+# unknown [tool.*] table is inert for uv, hatchling, ruff, mypy and pytest.
+[tool.vercel]
+entrypoint = "app.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+explicit_package_bases = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100

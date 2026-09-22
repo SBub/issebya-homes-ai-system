@@ -1,4 +1,4 @@
--- Minimal persistence for Orch-A v0.1.0 (spec-v0.1.0.md §Data / State):
+-- Minimal persistence for Orch-A v0.1.0:
 -- last successful run timestamp (dead-man's switch) and a durable fallback
 -- record for failed Telegram deliveries.
 

@@ -5,9 +5,7 @@ import Header from "@/app/ui/Header";
 export default function MainLayout({ children }: { children: ReactNode }) {
   return (
     <>
-      <Suspense fallback={<div>Loading...</div>}>
-        <Header />
-      </Suspense>
+      <Header />
       <main className="flex-1">{children}</main>
       <Footer />
     </>

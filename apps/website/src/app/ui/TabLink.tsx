@@ -1,6 +1,5 @@
-"use client";
-
 import Link from "next/link";
+import { tabStateClasses } from "./tab-styles";
 
 interface TabLinkProps {
   href: string;
@@ -12,11 +11,7 @@ interface TabLinkProps {
 
 export function TabLink({ href, isActive, onClick, children, className = "" }: TabLinkProps) {
   return (
-    <Link
-      href={href}
-      onClick={onClick}
-      className={`${isActive ? "bg-[#d9b98b]" : "text-gray-600 hover:text-black"} ${className}`}
-    >
+    <Link href={href} onClick={onClick} className={`${tabStateClasses(isActive)} ${className}`}>
       {children}
     </Link>
   );

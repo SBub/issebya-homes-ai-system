@@ -359,6 +359,33 @@ function BookingForm({ onSuccess }: FormProps) {
 }
 ```
 
+### Alternative: wrap the action instead of watching state
+
+The `useEffect` above works, but watching `state` for a callback has a real cost: the callback runs on a separate, later render pass than the state update that produced it — this is the same "notifying parent components about state changes" anti-pattern from [react.dev's "You Might Not Need an Effect"](https://react.dev/learn/you-might-not-need-an-effect), generalized to an async action. In one real form this caused two observed bugs: `isPending` flipped back to `false` as soon as the action's promise resolved, before the separately-scheduled `useEffect` actually fired `window.location.href` — briefly re-enabling the submit button before the redirect happened — and a callback prop update (e.g. refreshing a parent's cached data) landed a full commit later than this component's own state update.
+
+Prefer wrapping the action call in a plain client async function that runs the callback inline, right after `await`, in the same continuation as the interaction — not a `useEffect`:
+
+```tsx
+async function runSubmitBooking(prevState: FormState, formData: FormData): Promise<FormState> {
+  const result = await submitBooking(prevState, formData);
+  if (result.success && result.data) {
+    onSuccess(result.data);
+  }
+  return result;
+}
+
+function BookingForm({ onSuccess }: FormProps) {
+  const [state, formAction, isPending] = useActionState(runSubmitBooking, {
+    success: false,
+    errors: [],
+  });
+
+  return <form action={formAction}>{/* ... */}</form>;
+}
+```
+
+This costs `action` being a literal Server Function reference — `formAction` now dispatches the wrapper, not `submitBooking` itself. `submitBooking` is still called first and is still the sole authority for validation; the wrapper only adds client-only follow-up work. For a form whose fields already require JS regardless (a calendar, a controlled picker), that trade-off is usually free.
+
 ---
 
 ## Quick Reference

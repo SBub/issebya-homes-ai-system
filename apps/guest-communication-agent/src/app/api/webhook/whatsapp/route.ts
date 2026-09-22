@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { after, type NextRequest, NextResponse } from "next/server";
-import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-turn";
+import { GUEST_TURN_REQUESTED_EVENT } from "@/agent/run-guest-turn";
 import { getOrCreateActiveConversation, recordMessage } from "@/lib/conversations";
 import { flushTracing } from "@/instrumentation";
 import { inngest } from "@/lib/inngest";
@@ -16,8 +16,8 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  * A missing_info owner nudge can suspend the turn for minutes or hours
  * waiting on the owner's Telegram reply, which an HTTP request can't stay
  * open for — so every reply is delivered later, proactively, by the
- * function itself (run-turn.ts's sendWhatsAppMessage call). This route's
- * response is always just an ack.
+ * function itself (run-guest-turn.ts's sendWhatsAppMessage call). This
+ * route's response is always just an ack.
  *
  * "webhook.turn" below is a genuine trace root (src/lib/tracing.ts's
  * startTraceRoot) — a plain Next.js request handler runs exactly once per
@@ -28,10 +28,11 @@ import { verifyTwilioSignature } from "@/lib/twilio";
  * would nest every later webhook.* stage AND the entire guest turn *inside*
  * that one stage's span (e.g. reading as one long "verify_signature" span
  * holding everything, when it's supposed to be a narrow signature check).
- * Every later stage in this request, AND every span run-turn.ts's triggered
- * function emits, parents to this marker's real {traceId, spanId} (its
- * "anchor") instead of a synthetic stand-in — the anchor rides along in the
- * enqueued event's own data (see run-turn.ts's GuestTurnRequestedEventData)
+ * Every later stage in this request, AND every span run-guest-turn.ts's
+ * triggered function emits, parents to this marker's real {traceId, spanId}
+ * (its "anchor") instead of a synthetic stand-in — the anchor rides along in
+ * the enqueued event's own data (see run-guest-turn.ts's
+ * GuestTurnRequestedEventData)
  * so the function can read it back on every one of its own Inngest replays.
  * A trace that has "webhook.record_inbound_message" but no
  * "webhook.enqueue_inngest" is, by construction, a turn that died before

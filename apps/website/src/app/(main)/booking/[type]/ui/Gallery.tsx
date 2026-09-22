@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import posthog from "posthog-js";
 import { useRef, useState } from "react";
 
 export type GalleryImage = {
@@ -10,15 +11,23 @@ export type GalleryImage = {
 
 type Props = {
   images: GalleryImage[];
+  roomType?: string;
 };
 
-export default function Gallery({ images }: Props) {
+export default function Gallery({ images, roomType }: Props) {
   const [imageIndex, setImageIndex] = useState(0);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
 
   const touchStartX = useRef<number | null>(null);
 
   const handleThumbnailClick = (index: number) => {
+    if (index !== imageIndex) {
+      posthog.capture("gallery_image_viewed", {
+        room_type: roomType,
+        image_index: index,
+        trigger: "thumbnail",
+      });
+    }
     setImageIndex(index);
     setAspectRatio(null);
   };
@@ -36,10 +45,22 @@ export default function Gallery({ images }: Props) {
 
     if (Math.abs(diff) > swipeThreshold) {
       if (diff > 0 && imageIndex < images.length - 1) {
-        setImageIndex(imageIndex + 1);
+        const nextIndex = imageIndex + 1;
+        posthog.capture("gallery_image_viewed", {
+          room_type: roomType,
+          image_index: nextIndex,
+          trigger: "swipe",
+        });
+        setImageIndex(nextIndex);
         setAspectRatio(null);
       } else if (diff < 0 && imageIndex > 0) {
-        setImageIndex(imageIndex - 1);
+        const nextIndex = imageIndex - 1;
+        posthog.capture("gallery_image_viewed", {
+          room_type: roomType,
+          image_index: nextIndex,
+          trigger: "swipe",
+        });
+        setImageIndex(nextIndex);
         setAspectRatio(null);
       }
     }
@@ -68,6 +89,9 @@ export default function Gallery({ images }: Props) {
             const img = e.currentTarget;
             setAspectRatio(img.naturalWidth / img.naturalHeight);
           }}
+          preload
+          loading="eager"
+          sizes="(min-width: 768px) 50vw, 100vw"
         />
       </div>
       <div className="text-center break-words my-2 md:my-4 px-4 text-secondary">
@@ -83,7 +107,13 @@ export default function Gallery({ images }: Props) {
               index === imageIndex ? "opacity-100" : "opacity-40 hover:opacity-70"
             }`}
           >
-            <Image src={image.src} alt={image.label} fill className="object-cover" />
+            <Image
+              src={image.src}
+              alt={image.label}
+              fill
+              className="object-cover"
+              sizes="(min-width: 768px) 64px, 48px"
+            />
           </button>
         ))}
       </div>

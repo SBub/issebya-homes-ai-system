@@ -4,12 +4,12 @@ This document defines the required environment variables and setup for developme
 
 ## Development Environment (Local Supabase)
 
-Development uses a local Supabase instance that starts automatically with `./scripts/start.py`.
+Development uses a local Supabase instance that starts automatically with `yarn dev` (runs `scripts/start.ts`).
 
 ### Setup
 
-1. Start the app: `./scripts/start.py` (auto-starts Supabase)
-2. Get local credentials: `yarn supabase:status --output env`
+1. Start the app: `yarn dev` (auto-starts Supabase)
+2. Get local credentials: `yarn db:status --output env`
 3. Create `.env.development`:
 
 ```

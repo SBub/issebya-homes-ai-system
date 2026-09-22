@@ -11,18 +11,18 @@ import { wantsHuman } from "@/agent/tools/wants-human";
 import { openrouter } from "@/lib/openrouter";
 import type { EvalInput, SingleTurnResult } from "./types";
 
-// Duplicated from run-turn.ts's own MODEL/tools/SYSTEM_PROMPT_SLUG module
-// constants (none of which run-turn.ts exports) rather than imported —
-// keeps this eval from depending on run-turn.ts's own dispatch loop at all.
-// Keep in sync by hand if run-turn.ts's own values ever change; there is no
-// compiler check that would catch drift.
+// Duplicated from run-agent-turn.ts's own MODEL/SYSTEM_PROMPT_SLUG module
+// constants (neither exported) rather than imported — keeps this eval from
+// depending on run-agent-turn.ts's own dispatch loop at all. Keep in sync by
+// hand if those values ever change; there is no compiler check that would
+// catch drift.
 const MODEL = "deepseek/deepseek-v4-pro";
 const model = openrouter.chat(MODEL);
 const MAX_OUTPUT_TOKENS = 1000;
 const SYSTEM_PROMPT_SLUG = "gca-system";
 
 // Every one of these tool() objects (get_pricing.ts, availability.ts, etc.)
-// is schema-only — no `execute` field, same as run-turn.ts's own `tools`
+// is schema-only — no `execute` field, same as run-tool.ts's own `tools`
 // object (see that file's module comment near its `tools` literal, and
 // each tool file's own "Schema-only declaration" comment). That means
 // generateText below can only ever return the model's REQUESTED tool
@@ -45,7 +45,7 @@ const tools = {
 } satisfies ToolSet;
 
 // Loads the real Braintrust-hosted system prompt (slug gca-system), same
-// call shape run-turn.ts's own loadSystemPromptText uses, no version
+// call shape run-agent-turn.ts's own loadSystemPromptText uses, no version
 // pinning, so this eval always reflects whatever prompt text is actually
 // live in production — a pinned eval would validate a prompt that isn't
 // necessarily what's live, defeating the point of the eval gate. Returns

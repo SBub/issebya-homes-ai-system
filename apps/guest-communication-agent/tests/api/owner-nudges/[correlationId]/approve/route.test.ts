@@ -166,14 +166,14 @@ describe("POST /api/owner-nudges/[correlationId]/approve", () => {
       return span;
     }
 
-    it("nests under the real toolAnchor when consumeApprovalGateTraceAnchor finds one", async () => {
-      const toolAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
-      consumeApprovalGateTraceAnchorMock.mockResolvedValueOnce(toolAnchor);
+    it("nests under the real hitlAnchor when consumeApprovalGateTraceAnchor finds one", async () => {
+      const hitlAnchor = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
+      consumeApprovalGateTraceAnchorMock.mockResolvedValueOnce(hitlAnchor);
 
       await POST(makeRequest({ approved: true }), makeParams("corr-abc-123"));
 
       expect(withTurnSpanSpy).toHaveBeenCalledWith(
-        toolAnchor,
+        hitlAnchor,
         "owner_nudges.handle_approval",
         expect.any(Object),
         expect.any(Function),

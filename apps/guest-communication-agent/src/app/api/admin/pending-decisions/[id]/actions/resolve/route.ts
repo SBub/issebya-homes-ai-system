@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { runSendBookingLink } from "@/agent/tools/booking";
+import { computeSendBookingLink } from "@/agent/tools/booking";
 import { requireApiKey } from "@/lib/auth";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import {
@@ -9,9 +9,10 @@ import {
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // send_booking_link's context is written at insert time by
-// approval-gate.ts's requestApprovalGate (run-turn.ts's dispatchGatedToolCall
-// passes the model's own tool-call args straight through) — the exact same
-// shape sendBookingLinkSchema declares (see booking.ts).
+// approval-gate.ts's requestApprovalGate (booking.ts's
+// requestSendBookingLinkApproval passes the model's own tool-call args
+// straight through) — the exact same shape sendBookingLinkSchema declares
+// (see booking.ts).
 interface BookingContext {
   guestName?: string;
   email?: string;
@@ -35,9 +36,10 @@ interface MissingInfoContext {
  *
  * Branches on tool_name:
  * - send_booking_link: rebuilds the same deterministic booking URL
- *   runSendBookingLink would have produced, from the row's own `context`
+ *   computeSendBookingLink would have produced, from the row's own `context`
  *   (guestName/email/room/checkIn/checkOut, captured at insert time — see
- *   BookingContext above).
+ *   BookingContext above). Inherits that function's date guard, so a row
+ *   whose stay has since started or passed is refused rather than resent.
  * - missing_info: sends a short plain-text message containing the owner's
  *   actual answer, from the row's own `context.answer` (captured once the
  *   owner-nudges answer route received it — see MissingInfoContext above).
@@ -55,7 +57,8 @@ interface MissingInfoContext {
  * - 404 if no row exists for this id.
  * - 409 if the row is already resolved (idempotent-safe: a second resolve
  *   attempt is rejected rather than double-sending).
- * - 400 if the row's tool_name-specific context needed to act is missing
+ * - 400 if the row's tool_name-specific context needed to act is missing, or
+ *   if its stored dates no longer pass computeSendBookingLink's date guard
  *   (an unexpected state for a real row, but not something to 500 over).
  * - 502 if the WhatsApp send itself fails — the row is left unresolved so
  *   this action can be retried.
@@ -93,7 +96,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           { status: 400 },
         );
       }
-      const { url } = await runSendBookingLink(
+      const result = computeSendBookingLink(
         {
           guestName: context.guestName ?? "Guest",
           email: context.email ?? "unknown@example.com",
@@ -101,9 +104,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           checkIn: context.checkIn,
           checkOut: context.checkOut,
         },
-        { phone: decision.phone },
+        decision.phone,
       );
-      messageText = url;
+      if ("error" in result) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      messageText = result.url;
     } else {
       const answer = (decision.context as MissingInfoContext | null)?.answer;
       if (!answer) {
@@ -125,7 +131,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     if (decision.conversationId) {
       // Same two-step recordMessage-then-updateMessageDeliveryStatus
-      // sequence run-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
+      // sequence run-guest-turn.ts's sendGuestWhatsAppReply uses — sendResult.ok
       // is already confirmed true here (the !sendResult.ok branch above
       // already returned), so this always writes "sent", never "failed".
       const messageId = await recordMessage(decision.conversationId, "assistant", messageText);

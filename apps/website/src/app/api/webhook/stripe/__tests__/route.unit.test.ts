@@ -40,6 +40,12 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
+const mockRevalidateTag = vi.fn();
+
+vi.mock("next/cache", () => ({
+  revalidateTag: (...args: unknown[]) => mockRevalidateTag(...args),
+}));
+
 // --- Helpers ---
 
 // This route never compares checkIn/checkOut against "now" (it just persists
@@ -176,6 +182,7 @@ describe("POST /api/webhook/stripe", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toBe("Missing stripe-signature header");
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 400 when signature verification fails", async () => {
@@ -190,6 +197,7 @@ describe("POST /api/webhook/stripe", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toBe("Invalid signature");
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 200 and confirms pending booking on checkout.session.completed", async () => {
@@ -223,6 +231,10 @@ describe("POST /api/webhook/stripe", () => {
     expect(emailData.email).toBe("guest@example.com");
     expect(emailData.nights).toBe(3);
     expect(emailData.total_amount).toBe(207);
+
+    // Verify the availability cache for this room was invalidated so the
+    // next read no longer serves the pre-confirmation snapshot
+    expect(mockRevalidateTag).toHaveBeenCalledWith("availability-room1", { expire: 0 });
   });
 
   it("returns 200 with no DB/email calls when metadata is missing", async () => {
@@ -235,6 +247,7 @@ describe("POST /api/webhook/stripe", () => {
     expect(res.status).toBe(200);
     expect(mockSupabaseFrom).not.toHaveBeenCalled();
     expect(mockSendConfirmation).not.toHaveBeenCalled();
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("returns 200 with no DB/email calls when metadata is incomplete", async () => {
@@ -246,6 +259,7 @@ describe("POST /api/webhook/stripe", () => {
 
     expect(res.status).toBe(200);
     expect(mockSendConfirmation).not.toHaveBeenCalled();
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("falls back to insert when no pending booking exists", async () => {
@@ -267,9 +281,13 @@ describe("POST /api/webhook/stripe", () => {
     // Emails should still be sent after fallback insert
     expect(mockSendConfirmation).toHaveBeenCalledOnce();
     expect(mockSendNotification).toHaveBeenCalledOnce();
+
+    // Verify the availability cache was invalidated on the fallback-insert
+    // path too, not just the update-existing-booking path
+    expect(mockRevalidateTag).toHaveBeenCalledWith("availability-room1", { expire: 0 });
   });
 
-  it("handles duplicate webhook gracefully (no emails sent)", async () => {
+  it("handles duplicate webhook gracefully (no emails sent, no cache invalidation)", async () => {
     mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
     mockDuplicateInsert();
 
@@ -281,6 +299,9 @@ describe("POST /api/webhook/stripe", () => {
     // No emails when booking is null (duplicate)
     expect(mockSendConfirmation).not.toHaveBeenCalled();
     expect(mockSendNotification).not.toHaveBeenCalled();
+    // No new confirmed booking resulted from this request, so nothing to
+    // invalidate
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("ignores non-checkout events", async () => {
@@ -297,6 +318,7 @@ describe("POST /api/webhook/stripe", () => {
     expect(res.status).toBe(200);
     expect(mockSupabaseFrom).not.toHaveBeenCalled();
     expect(mockSendConfirmation).not.toHaveBeenCalled();
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
   });
 
   it("still returns 200 when email sending fails", async () => {

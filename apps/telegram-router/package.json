@@ -1,46 +1,11 @@
 {
-  "name": "telegram-router",
+  "name": "telegram-router-tasks",
   "version": "0.1.0",
-  "description": "Telegram webhook router — owns all Telegram I/O, dispatches commands to plain logic APIs in other apps",
   "private": true,
-  "type": "module",
-  "engines": {
-    "node": ">=22.13.0"
-  },
   "scripts": {
-    "dev": "next dev --port 3003",
-    "build": "next build",
-    "start": "next start --port 3003",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
-  },
-  "dependencies": {
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/context-async-hooks": "^2.10.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
-    "@opentelemetry/resources": "^2.0.0",
-    "@opentelemetry/sdk-trace-base": "^2.10.0",
-    "@opentelemetry/semantic-conventions": "^1.43.0",
-    "@sentry/nextjs": "^10",
-    "next": "^16.2.1",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.1",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "^16.2.1",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-no-secrets": "^2.3.3",
-    "eslint-plugin-security": "^4.0.0",
-    "prettier": "^3.8.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "dev": "uv run uvicorn app.main:app --reload --port 3003",
+    "start": "uv run uvicorn app.main:app --port 3003",
+    "typecheck": "uv run mypy app",
+    "format:check": "uv run ruff format --check ."
   }
 }

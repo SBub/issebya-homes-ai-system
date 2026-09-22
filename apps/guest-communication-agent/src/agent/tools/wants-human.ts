@@ -1,5 +1,9 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { flushTracing } from "@/instrumentation";
+import { steppedSpan, type TraceAnchor, updateSpanIO } from "@/lib/tracing";
+import type { ToolContext } from "./config";
+import { requestOwnerNudge } from "./owner-nudge";
 
 const wantsHumanSchema = z.object({
   reason: z
@@ -9,31 +13,75 @@ const wantsHumanSchema = z.object({
     ),
 });
 
-// Schema-only declaration — dispatched by run-turn.ts's runToolCall. A
-// one-way alert with no decision to approve, so it has no entry in
-// run-turn.ts's APPROVAL_GATES table and dispatches directly, the same as
-// getPricing/checkAvailability.
+// A one-way alert with no decision to approve, so it has no entry in
+// run-agent-turn.ts's NEEDS_APPROVAL set.
 export const wantsHuman = tool({
   description:
     "Alert the owner and hand off the conversation. Use when the guest explicitly asks to speak with a human/person, or when they've made a request only the owner can act on or approve (e.g. early check-in, a special accommodation) that you can't resolve yourself.",
   inputSchema: wantsHumanSchema,
 });
 
-// Pure — no step/span/Inngest of any kind (see run-turn.ts's "tool files
-// stay pure" rule near `tools`). The real work (sending the owner nudge,
-// stepped/spanned for replay-safety) now lives in run-turn.ts's private
-// dispatchWantsHuman, called from the SELF_STEPPED_TOOLS branch; this
-// function is left with only the tool's own result shape — kept as a real
-// function (not inlined at the call site) for consistency with the rest of
-// this app's run<ToolName> dispatch pattern. `nudged` is dispatchWantsHuman's
-// already-known result of the owner-nudge send, threaded through so a failed
-// nudge gets an honest message instead of falsely claiming the owner was
-// notified.
-export function runWantsHuman(nudged: boolean) {
-  return nudged
+// wants_human is a one-way alert with no suspend/resume, so unlike
+// missing_info/send_booking_link this resolves in one round trip: create
+// the gen_ai.tool.wants_human span FIRST (input already known), send the
+// nudge as its real child, then patch `output` once the nudge result is
+// known. Deliberate exception to "tool files stay pure" (run-agent-turn.ts's
+// RULE comment) — real durability plumbing lives here, not in the dispatch
+// loop.
+export async function runWantsHuman(
+  args: { reason: string },
+  context: ToolContext,
+): Promise<{ escalated: true; message: string }> {
+  const { conversationId, phone, step, traceAnchor } = context;
+
+  const toolSpanId = await steppedSpan(
+    step,
+    "tool-wants_human",
+    traceAnchor,
+    "gen_ai.tool.wants_human",
+    {
+      "gen_ai.tool.name": "wants_human",
+      "gen_ai.operation.name": "execute_tool",
+      "gca.tool.input": JSON.stringify(args),
+      "braintrust.input": JSON.stringify(args),
+    },
+    async (span) => span.spanContext().spanId,
+  );
+  // See updateSpanIO's doc comment (tracing.ts) for why this flush must
+  // happen before the later patch below.
+  await flushTracing();
+  const toolAnchor: TraceAnchor = { traceId: traceAnchor.traceId, spanId: toolSpanId };
+
+  const nudged = await steppedSpan(
+    step,
+    "owner-nudge-wants-human",
+    toolAnchor,
+    "owner_nudge.wants_human",
+    // braintrust.tags clears the export filter — see tracing.ts's
+    // Braintrust-attribute-namespace comment.
+    {
+      "gca.conversation_id": conversationId,
+      "gca.phone": phone,
+      "braintrust.tags": ["wants_human"],
+    },
+    () =>
+      requestOwnerNudge({
+        conversationId,
+        phone,
+        reason: args.reason,
+        reasonCategory: "wants_human",
+        step,
+      }),
+  );
+
+  const result: { escalated: true; message: string } = nudged
     ? { escalated: true, message: "The owner has been notified and will be in touch shortly." }
     : {
         escalated: true,
         message: "I wasn't able to reach the owner about this. Please try asking again in a bit.",
       };
+
+  await step.run("update-wants-human-trace-io", () => updateSpanIO(toolSpanId, { output: result }));
+
+  return result;
 }

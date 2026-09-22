@@ -168,7 +168,7 @@ describe("loadMemory", () => {
   // The fast path never summarizes or writes, even when this turn's trim
   // drops rows past the existing watermark — that's foldMemory's job now
   // (see the "foldMemory" describe block below), called later by
-  // run-turn.ts, off this turn's own critical path.
+  // run-guest-turn.ts, off this turn's own critical path.
   it("returns the trimmed history without summarizing or writing, even when overflow drops rows past the watermark", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
@@ -483,12 +483,12 @@ describe("foldMemory", () => {
   // Regression test for the bug this fix addresses: summarizeConversation
   // used to call loadPrompt() BEFORE opening its withTurnSpan, so a
   // Braintrust failure there threw with no span open yet to record it on.
-  // Now loadPrompt() runs inside the span callback (matching run-turn.ts's
-  // loadSystemPromptText), so withTurnSpan's own catch (tracing.ts) marks
-  // the span ERROR before writeDiscreteFold's console.error-only catch
-  // swallows the exception. The swallow-and-continue behavior itself is
-  // unchanged and intentional (see writeDiscreteFold's own comment) — this
-  // only asserts the span is no longer silently unmarked.
+  // Now loadPrompt() runs inside the span callback (matching
+  // run-agent-turn.ts's loadSystemPromptText), so withTurnSpan's own catch
+  // (tracing.ts) marks the span ERROR before writeDiscreteFold's
+  // console.error-only catch swallows the exception. The swallow-and-continue
+  // behavior itself is unchanged and intentional (see writeDiscreteFold's
+  // own comment) — this only asserts the span is no longer silently unmarked.
   it("marks the gen_ai.chat span ERROR when loadPrompt rejects for the discrete-fold summarizer, even though writeDiscreteFold's own catch still swallows the error", async () => {
     const rows = overflowingRows();
     loadRecentMessagesMock.mockResolvedValue(rows);
@@ -743,10 +743,15 @@ describe("foldMemory", () => {
 
 // URLs (booking links, Google Maps links, etc.) are redacted by
 // toModelMessage before DB rows become ModelMessage[] — see memory.ts's
-// URL_PATTERN/URL_PLACEHOLDER comment for why. These tests exercise that
-// redaction indirectly through loadMemory (historyMessages, the fast path)
-// and foldMemory (the summarizer's transcript input), since toModelMessage
-// itself isn't exported.
+// URL_PATTERN/URL_PLACEHOLDER comment for why — but ONLY for rows older than
+// RECENT_MESSAGES_KEPT_UNREDACTED; the tail is always left real (see that
+// constant's own comment for why: redacting a message the model just sent
+// makes it read its own reply back as "I said [link]" and reproduce that
+// literal placeholder in a fresh reply instead of a real URL — a real,
+// confirmed production bug). These tests exercise that indirectly through
+// loadMemory (historyMessages, the fast path) and foldMemory (the
+// summarizer's transcript input), since toModelMessage itself isn't
+// exported.
 describe("URL redaction in toModelMessage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -760,29 +765,48 @@ describe("URL redaction in toModelMessage", () => {
   const PLAIN_TEXT =
     "Sure thing! Check-in is at 3pm, and there's a $50 deposit (refundable) — see you then :)";
 
-  it("redacts a booking-link-shaped URL in historyMessages (loadMemory's fast path)", async () => {
+  // Short, low-token filler rows appended AFTER a target row to push it
+  // outside the RECENT_MESSAGES_KEPT_UNREDACTED window without tripping
+  // trimToTokenBudget (which would drop the target row entirely rather than
+  // just redact it — a different code path, not what these tests exercise).
+  function trailingFillerRows(count: number, startIndex: number) {
+    return Array.from({ length: count }, (_, i) =>
+      messageRow(
+        `msg-${startIndex + i}`,
+        i % 2 === 0 ? "user" : "assistant",
+        20,
+        `2026-08-01T00:${String(2 + i).padStart(2, "0")}:00Z`,
+      ),
+    );
+  }
+
+  it("redacts a booking-link-shaped URL old enough to fall outside the recent window", async () => {
     const rows = [
       messageRow("msg-1", "user", 10, "2026-08-01T00:00:00Z"),
       {
         ...messageRow("msg-2", "assistant", 10, "2026-08-01T00:01:00Z"),
         content: BOOKING_LINK_TEXT,
       },
+      ...trailingFillerRows(8, 3),
     ];
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
 
     const result = await loadMemory({ conversationId: "convo-url-1", phone: "+351900000010" });
 
-    const assistantMessage = result.historyMessages.find((m) => m.role === "assistant");
-    expect(assistantMessage?.content).toBe(
+    const linkMessage = result.historyMessages.find((m) =>
+      typeof m.content === "string" ? m.content.includes("booking link") : false,
+    );
+    expect(linkMessage?.content).toBe(
       "Here's your booking link for Room 1, September 18-20, 2026:\n\n[link]",
     );
-    expect(assistantMessage?.content).not.toContain("https://");
+    expect(linkMessage?.content).not.toContain("https://");
   });
 
-  it("redacts a Google Maps-style URL too, proving the regex isn't issebya.com-specific", async () => {
+  it("redacts an old Google Maps-style URL too, proving the regex isn't issebya.com-specific", async () => {
     const rows = [
       { ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"), content: MAPS_LINK_TEXT },
+      ...trailingFillerRows(8, 2),
     ];
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
@@ -803,6 +827,59 @@ describe("URL redaction in toModelMessage", () => {
     const result = await loadMemory({ conversationId: "convo-url-3", phone: "+351900000012" });
 
     expect(result.historyMessages[0].content).toBe(PLAIN_TEXT);
+  });
+
+  it("does NOT redact a URL in the most recent messages, so the model can relay a link it just sent", async () => {
+    const rows = [
+      {
+        ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"),
+        content: BOOKING_LINK_TEXT,
+      },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({ conversationId: "convo-url-recent", phone: "+351900000016" });
+
+    expect(result.historyMessages[0].content).toBe(BOOKING_LINK_TEXT);
+    expect(result.historyMessages[0].content).toContain("https://");
+    expect(result.historyMessages[0].content).not.toContain("[link]");
+  });
+
+  it("regression: a real link sent 3 rows back (real-link reply, follow-up question, its answer, then a new booking confirmation) stays real, not [link]", async () => {
+    // Mirrors the exact reported failure: guest books room2 (gets a real
+    // link), asks a follow-up about room1, gets an answer, then says "yep"
+    // to book room1 too — the room2 link is only 3 rows back from "yep" and
+    // must still read as a real URL in this turn's own history, not
+    // "[link]" (which the model was reproducing verbatim before this fix).
+    const rows = [
+      {
+        ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"),
+        content: "Here you go, John:\n\nhttps://issebya.com/booking/room2?checkIn=2026-12-01",
+      },
+      {
+        ...messageRow("msg-2", "user", 10, "2026-08-01T00:01:00Z"),
+        content: "ok, also the same date for room1, is it available?",
+      },
+      {
+        ...messageRow("msg-3", "assistant", 10, "2026-08-01T00:02:00Z"),
+        content: "Room 1 is also available. Would you like to book that as well, John?",
+      },
+      { ...messageRow("msg-4", "user", 10, "2026-08-01T00:03:00Z"), content: "yep" },
+    ];
+    loadRecentMessagesMock.mockResolvedValue(rows);
+    getGuestMemoryMock.mockResolvedValue(null);
+
+    const result = await loadMemory({
+      conversationId: "convo-url-regression",
+      phone: "+351900000017",
+    });
+
+    const linkMessage = result.historyMessages.find((m) =>
+      typeof m.content === "string" ? m.content.includes("Here you go") : false,
+    );
+    expect(linkMessage?.content).toContain("https://issebya.com/booking/room2");
+    expect(linkMessage?.content).not.toContain("[link]");
   });
 
   it("redacts URLs in the transcript passed to the summarizer (foldMemory's generateText call)", async () => {
@@ -838,12 +915,15 @@ describe("URL redaction in toModelMessage", () => {
 
     const rows = [
       { ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"), content: twoLinkText },
+      ...trailingFillerRows(8, 2),
     ];
     loadRecentMessagesMock.mockResolvedValue(rows);
     getGuestMemoryMock.mockResolvedValue(null);
 
     const result = await loadMemory({ conversationId: "convo-url-5", phone: "+351900000014" });
-    const redactedText = result.historyMessages[0].content as string;
+    const redactedText = result.historyMessages.find((m) =>
+      typeof m.content === "string" ? m.content.includes("booking link") : false,
+    )?.content as string;
 
     const beforeTokens = estimateTokens([{ role: "assistant", content: twoLinkText }]);
     const afterTokens = estimateTokens([{ role: "assistant", content: redactedText }]);
