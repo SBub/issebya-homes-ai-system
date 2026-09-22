@@ -107,7 +107,7 @@ Nothing to configure. The behaviour shows up on three paths:
 2. **Model asks for a booking link anyway.** `send_booking_link` re-checks first.
    A bad range or a taken room resolves the gate as not approved, the owner's
    Telegram stays quiet, and the model receives a message such as
-   `Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21).`
+   `Cannot build a booking link: check-in 2025-10-11 is in the past (today is 2026-09-21). Re-read the dates from your earlier tool result in this conversation and call the tool again with them.`
 3. **Admin resends a stuck link.** The resolve route returns 400 with the same
    refusal message instead of sending a link whose stay has since passed.
 

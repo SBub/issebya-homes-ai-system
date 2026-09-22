@@ -187,11 +187,18 @@ describe("runGuestTurn", () => {
       step,
     });
 
+    expect(recordMessageMock).toHaveBeenCalledTimes(1);
     expect(recordMessageMock).toHaveBeenCalledWith(
       "convo-1",
       "assistant",
       "Yes, room 1 is available!",
       expect.any(String),
+      {
+        turnMessages: {
+          schema_version: 1,
+          messages: [{ role: "assistant", content: "Yes, room 1 is available!" }],
+        },
+      },
     );
     expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
       "+351920742845",
@@ -378,12 +385,27 @@ describe("runGuestTurn", () => {
     });
 
     const expectedFallback = "Sorry, I couldn't process that — please try again shortly.";
+    expect(recordMessageMock).toHaveBeenCalledTimes(1);
     expect(recordMessageMock).toHaveBeenCalledWith(
       "convo-1",
       "assistant",
       expectedFallback,
       expect.any(String),
+      { turnMessages: expect.objectContaining({ schema_version: 1 }) },
     );
+    // The step-cap tail ends on a tool message; the stored array closes
+    // with the fallback reply so every tool-call has its result and the
+    // array ends in assistant text.
+    const [, , , , { turnMessages }] = recordMessageMock.mock.calls[0] as [
+      string,
+      string,
+      string,
+      string,
+      { turnMessages: { messages: ModelMessage[] } },
+    ];
+    expect(turnMessages.messages).toHaveLength(17);
+    expect(turnMessages.messages.at(-2)?.role).toBe("tool");
+    expect(turnMessages.messages.at(-1)).toEqual({ role: "assistant", content: expectedFallback });
     expect(sendWhatsAppMessageMock).toHaveBeenCalledWith("+351920742845", expectedFallback);
   });
 

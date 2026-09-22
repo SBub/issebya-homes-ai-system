@@ -1,3 +1,4 @@
+import type { StoredTurnMessages } from "@/agent/turn-messages";
 import { createAdminClient } from "./supabase";
 import { withSpan } from "./tracing";
 
@@ -54,16 +55,41 @@ export async function getOrCreateActiveConversation(phone: string): Promise<Acti
   );
 }
 
+const UNIQUE_VIOLATION = "23505";
+
+async function findAssistantMessageIdByTrace(traceId: string): Promise<string> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("whatsapp_messages")
+    .select("id")
+    .eq("trace_id", traceId)
+    .eq("role", "assistant")
+    .single();
+  if (error || !data) {
+    throw new Error(
+      `Failed to look up existing assistant message for trace ${traceId}: ${error?.message}`,
+    );
+  }
+  return data.id;
+}
+
 // `traceId` is omitted (not written as null) when absent — matches
 // whatsapp_messages.trace_id's nullable convention (holds a real OTel trace
 // id, see startTraceRoot in src/lib/tracing.ts). Returns the new row's id,
 // passed through as RunAgentTurnConfig.triggerMessageId (the guest's real
 // original message id, distinct from a tool's own paraphrase).
+//
+// An assistant row with a trace id is unique per trace (partial unique
+// index whatsapp_messages_assistant_trace_id_key), so an Inngest retry of
+// record-reply whose earlier insert already landed returns that row's id
+// instead of failing. Select-after-conflict rather than upsert: PostgREST's
+// onConflict can't target a partial index.
 export async function recordMessage(
   conversationId: string,
   role: "user" | "assistant",
   content: string,
   traceId?: string,
+  options?: { turnMessages?: StoredTurnMessages },
 ): Promise<string> {
   return withSpan(
     "db.recordMessage",
@@ -74,11 +100,17 @@ export async function recordMessage(
       if (traceId !== undefined) {
         insert.trace_id = traceId;
       }
+      if (options?.turnMessages !== undefined) {
+        insert.turn_messages = options.turnMessages;
+      }
       const { data, error } = await supabase
         .from("whatsapp_messages")
         .insert(insert)
         .select("id")
         .single();
+      if (error?.code === UNIQUE_VIOLATION && role === "assistant" && traceId !== undefined) {
+        return findAssistantMessageIdByTrace(traceId);
+      }
       if (error || !data) {
         throw new Error(
           `Failed to record ${role} message for conversation ${conversationId}: ${error?.message}`,
