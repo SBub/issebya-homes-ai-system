@@ -102,7 +102,6 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
           <p className="font-sans">cap: max 2 persons</p>
 
           <p className="text-sm leading-relaxed">
-            📍{" "}
             <a
               href="https://maps.google.com/?q=Almoçageme,+Sintra,+Portugal"
               target="_blank"
