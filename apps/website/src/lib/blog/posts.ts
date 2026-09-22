@@ -22,18 +22,12 @@
  * Validation happens at module scope, so a post with malformed `meta` throws
  * while this module is being evaluated and fails the build.
  */
-import AWeekendInAlmocageme, {
-  meta as aWeekendInAlmocagemeMeta,
-} from "@/content/blog/a-weekend-in-almocageme.mdx";
-import HouseNotesTheSharedKitchen, {
-  meta as houseNotesTheSharedKitchenMeta,
-} from "@/content/blog/house-notes-the-shared-kitchen.mdx";
+import WelcomeToIssebyaHomes, {
+  meta as welcomeToIssebyaHomesMeta,
+} from "@/content/blog/welcome-to-issebya-homes.mdx";
 import { assertUniqueSlugs, type BlogPost, sortPostsByDateDesc, toBlogPost } from "./schema";
 
-const posts: BlogPost[] = [
-  toBlogPost(aWeekendInAlmocagemeMeta, AWeekendInAlmocageme),
-  toBlogPost(houseNotesTheSharedKitchenMeta, HouseNotesTheSharedKitchen),
-];
+const posts: BlogPost[] = [toBlogPost(welcomeToIssebyaHomesMeta, WelcomeToIssebyaHomes)];
 
 assertUniqueSlugs(posts);
 

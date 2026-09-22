@@ -10,23 +10,19 @@ const checkOutLabel = format(addDays(today, 13), "MMMM d, yyyy");
 // The same day as checkInLabel, in the format the collapsed engine displays it.
 const checkInDisplayText = format(addDays(today, 10), "d MMM yyyy");
 
-const WIDGET_POST = "/blog/a-weekend-in-almocageme";
-const NEWER_POST_TITLE = "A weekend in Almoçageme";
-const OLDER_POST_TITLE = "House notes: the shared kitchen";
+const WIDGET_POST = "/blog/welcome-to-issebya-homes";
+const POST_TITLE = "A house for rest between the Sintra forest and the Atlantic";
 
 test.describe("Blog with an inline booking widget", () => {
-  test("index lists posts newest first", async ({ page }) => {
+  test("index lists the post and links to it", async ({ page }) => {
     await page.goto("/blog");
 
-    const titles = page.locator("article, li h2");
-    await expect(page.getByRole("heading", { name: NEWER_POST_TITLE })).toBeVisible();
-    await expect(page.getByRole("heading", { name: OLDER_POST_TITLE })).toBeVisible();
-
-    // Both posts carry a `date` in their frontmatter and the registry sorts on
-    // it, so DOM order is the assertion: the 2026-08 post must precede the
-    // 2026-07 one.
-    const headings = await titles.allTextContents();
-    expect(headings.indexOf(NEWER_POST_TITLE)).toBeLessThan(headings.indexOf(OLDER_POST_TITLE));
+    // Newest-first ordering is covered one layer down, in
+    // src/lib/blog/__tests__/schema.unit.test.ts, so with a single post the
+    // index only has to render it and route to it.
+    await page.getByRole("heading", { name: POST_TITLE }).click();
+    await expect(page).toHaveURL(WIDGET_POST);
+    await expect(page.getByRole("heading", { level: 1, name: POST_TITLE })).toBeVisible();
   });
 
   test("booking completes from inside a post", async ({ page }) => {
@@ -135,14 +131,13 @@ test.describe("Blog breadcrumb trail", () => {
     // and deliberately not a link.
     const current = trail.getByRole("listitem").nth(1);
     await expect(current).toHaveAttribute("aria-current", "page");
-    await expect(current).toContainText(NEWER_POST_TITLE);
-    await expect(trail.getByRole("link", { name: NEWER_POST_TITLE })).toHaveCount(0);
+    await expect(current).toContainText(POST_TITLE);
+    await expect(trail.getByRole("link", { name: POST_TITLE })).toHaveCount(0);
 
     await trail.getByRole("link", { name: "blog" }).click();
     await page.waitForURL("**/blog");
 
-    await expect(page.getByRole("heading", { name: NEWER_POST_TITLE })).toBeVisible();
-    await expect(page.getByRole("heading", { name: OLDER_POST_TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: POST_TITLE })).toBeVisible();
   });
 
   // The index is the root of the trail, so it shows none. This also proves the
@@ -235,7 +230,7 @@ test.describe("Booking confirmation returns to the originating post", () => {
       await expect(returnLink).toBeVisible();
       // The title comes from the post registry, not from the URL, which is
       // what proves the page resolved the slug rather than echoing it.
-      await expect(returnLink).toContainText(NEWER_POST_TITLE);
+      await expect(returnLink).toContainText(POST_TITLE);
       await expect(returnLink).toHaveAttribute("href", `${WIDGET_POST}#book`);
 
       await returnLink.click();

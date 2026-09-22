@@ -17,7 +17,7 @@
 - A validated post registry: `zod`-checked frontmatter expressed as `export const meta = {...}` inside each `.mdx` file, so a malformed post fails the build.
 - `sitemap.ts` and `robots.ts`, plus a single `SITE_URL` constant now also feeding `layout.tsx`'s `metadataBase` and Open Graph URLs.
 - A `Blog` link in the site header, and shared tab styling extracted so the booking page's `<Link>` tabs and the widget's `<button>` tabs cannot drift apart visually.
-- Two seed posts: `a-weekend-in-almocageme.mdx` (uses the widget) and `house-notes-the-shared-kitchen.mdx`.
+- One post: `welcome-to-issebya-homes.mdx` (uses the widget). The two seed posts it replaced were placeholder content.
 
 ## Technical Implementation
 
@@ -86,6 +86,6 @@ A reader lands on a post, reads it, picks `room 1` or `room 2` in the widget, pi
 ## Notes
 
 - The whole change lands in `apps/website`; the only files outside it are the repo-root `lefthook.yml`, `.prettierignore` and the spec.
-- Playwright now runs with a single worker. Separate spec *files* previously ran in parallel against one dev server, one shared local Supabase and one process-global `__e2eIcalShouldFail` toggle. Two real collisions were observed: the existing dates-unavailable test seeds a confirmed room1 booking for the same room and window the new blog booking test tries to book, and any concurrent room1 booking fails `checkAvailability`'s unverifiable gate while the iCal-failure toggle is on. Both are scheduling artifacts, not app bugs.
+- Playwright now runs with a single worker. Separate spec _files_ previously ran in parallel against one dev server, one shared local Supabase and one process-global `__e2eIcalShouldFail` toggle. Two real collisions were observed: the existing dates-unavailable test seeds a confirmed room1 booking for the same room and window the new blog booking test tries to book, and any concurrent room1 booking fails `checkAvailability`'s unverifiable gate while the iCal-failure toggle is on. Both are scheduling artifacts, not app bugs.
 - `dynamicParams` is left unset on the post route on purpose: `notFound()` already handles an unknown slug, and leaving it off keeps the route free of dynamic config flags under `cacheComponents`.
 - The sitemap omits `/` (it redirects), `/guest-info` and `/checkin/*` (already noindex) and all `/api` routes, and carries no `lastModified` on static entries since `new Date()` there would churn on every build.
