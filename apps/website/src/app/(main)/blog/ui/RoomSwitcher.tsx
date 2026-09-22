@@ -10,8 +10,8 @@ interface RoomSwitcherProps {
 }
 
 const ROOMS = [
-  { id: "room1", label: "room 1" },
-  { id: "room2", label: "room 2" },
+  { id: "room1", label: "Room 1" },
+  { id: "room2", label: "Room 2" },
 ] as const;
 
 type RoomId = (typeof ROOMS)[number]["id"];
@@ -68,7 +68,7 @@ export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
                 posthog.capture("room_tab_clicked", { room_type: id });
                 setActiveRoom(id);
               }}
-              className={`w-1/2 px-3 py-1.5 text-sm text-center sm:w-auto sm:px-6 sm:py-2 sm:text-base ${tabStateClasses(isActive)} ${!isLast ? "border-r border-black" : ""}`}
+              className={`w-1/2 px-3 py-1.5 text-center sm:w-auto sm:px-6 sm:py-2 ${tabStateClasses(isActive)} ${!isLast ? "border-r border-black" : ""}`}
             >
               {label}
             </button>

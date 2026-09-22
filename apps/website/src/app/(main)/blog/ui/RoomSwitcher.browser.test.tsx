@@ -110,17 +110,17 @@ const widenToDesktop = () => page.viewport(1280, 900);
 const room1DefaultCheckInDisplay = format(dayOfNextMonth(2), "d MMM yyyy");
 const room2DefaultCheckInDisplay = format(dayOfNextMonth(5), "d MMM yyyy");
 
-test("room 1's panel is on screen first and room 2's is not", async () => {
+test("Room 1's panel is on screen first and Room 2's is not", async () => {
   const { getByText } = await render(<RoomSwitcher {...panels} />);
 
   await expect.element(getByText("room one panel")).toBeInTheDocument();
   await expect.element(page.getByText("room two panel")).not.toBeInTheDocument();
 });
 
-test("clicking the room 2 tab swaps which panel is rendered", async () => {
+test("clicking the Room 2 tab swaps which panel is rendered", async () => {
   const { getByRole, getByText } = await render(<RoomSwitcher {...panels} />);
 
-  await getByRole("tab", { name: "room 2" }).click();
+  await getByRole("tab", { name: "Room 2" }).click();
 
   await expect.element(getByText("room two panel")).toBeInTheDocument();
   await expect.element(page.getByText("room one panel")).not.toBeInTheDocument();
@@ -130,19 +130,19 @@ test("aria-selected follows the active tab", async () => {
   const { getByRole } = await render(<RoomSwitcher {...panels} />);
 
   await expect
-    .element(getByRole("tab", { name: "room 1" }))
+    .element(getByRole("tab", { name: "Room 1" }))
     .toHaveAttribute("aria-selected", "true");
   await expect
-    .element(getByRole("tab", { name: "room 2" }))
+    .element(getByRole("tab", { name: "Room 2" }))
     .toHaveAttribute("aria-selected", "false");
 
-  await getByRole("tab", { name: "room 2" }).click();
+  await getByRole("tab", { name: "Room 2" }).click();
 
   await expect
-    .element(getByRole("tab", { name: "room 1" }))
+    .element(getByRole("tab", { name: "Room 1" }))
     .toHaveAttribute("aria-selected", "false");
   await expect
-    .element(getByRole("tab", { name: "room 2" }))
+    .element(getByRole("tab", { name: "Room 2" }))
     .toHaveAttribute("aria-selected", "true");
 });
 
@@ -152,7 +152,7 @@ test("aria-selected follows the active tab", async () => {
 // a key React reconciles them as one instance and updates props, and
 // BookingClient reads its availability and its selection from props on mount
 // only.
-test("switching to room 2 shows room 2's blocked dates, not room 1's", async () => {
+test("switching to Room 2 shows Room 2's blocked dates, not Room 1's", async () => {
   await widenToDesktop();
 
   const { getByLabelText, getByRole } = await render(
@@ -167,7 +167,7 @@ test("switching to room 2 shows room 2's blocked dates, not room 1's", async () 
   await expect.element(getByLabelText(room1BlockedLabel)).toBeDisabled();
   await expect.element(getByLabelText(room2BlockedLabel)).toBeEnabled();
 
-  await getByRole("tab", { name: "room 2" }).click();
+  await getByRole("tab", { name: "Room 2" }).click();
 
   // The engine comes back collapsed because it remounted, which is why it has
   // to be expanded a second time.
@@ -177,7 +177,7 @@ test("switching to room 2 shows room 2's blocked dates, not room 1's", async () 
   await expect.element(getByLabelText(room1BlockedLabel)).toBeEnabled();
 });
 
-test("a date selected on room 1 does not survive a switch to room 2", async () => {
+test("a date selected on Room 1 does not survive a switch to Room 2", async () => {
   await widenToDesktop();
 
   const { getByLabelText, getByRole } = await render(
@@ -199,7 +199,7 @@ test("a date selected on room 1 does not survive a switch to room 2", async () =
     .element(getByLabelText("Select check-in date"))
     .toHaveTextContent(format(dayOfNextMonth(15), "d MMM yyyy"));
 
-  await getByRole("tab", { name: "room 2" }).click();
+  await getByRole("tab", { name: "Room 2" }).click();
 
   await expect.element(page.getByTestId("expanded-engine")).not.toBeInTheDocument();
   await expect

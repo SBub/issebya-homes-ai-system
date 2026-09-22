@@ -12,6 +12,26 @@
   --font-hand: var(--font-hand);
 }
 
+@utility text-secondary {
+  @apply text-sm leading-relaxed text-foreground font-sans;
+}
+
+@utility text-secondary-link {
+  @apply text-secondary underline hover:text-gray-900 underline-offset-4;
+}
+
+@utility text-secondary-link-bold {
+  @apply text-secondary-link font-bold;
+}
+
+@utility text-header {
+  @apply font-hand font-bold;
+}
+
+@utility text-price {
+  @apply text-xl font-bold;
+}
+
 /*
  @media (prefers-color-scheme: dark) {
   :root {
@@ -62,11 +82,11 @@ body {
 }
 
 .booking-date-button {
-  @apply px-3 py-2 border border-foreground bg-background hover:bg-foreground hover:text-background transition-colors cursor-pointer;
+  @apply flex-1 min-w-0 px-3 py-2 border border-foreground bg-background transition-colors cursor-pointer;
 }
 
 .booking-date-value {
-  @apply text-sm font-semibold font-sans;
+  @apply text-secondary truncate block;
 }
 
 .booking-date-separator {
@@ -74,16 +94,16 @@ body {
 }
 
 .booking-book-button {
-  @apply px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm lowercase tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
+  @apply flex-1 px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
 }
 
 /* Pricing info in collapsed state */
 .booking-pricing-info {
-  @apply flex flex-col gap-1 pt-2;
+  @apply flex flex-col gap-6 pt-6;
 }
 
 .booking-price-per-night {
-  @apply text-xl font-bold my-4;
+  @apply text-price;
 }
 
 .booking-discount-info {
@@ -91,7 +111,7 @@ body {
 }
 
 .booking-cancellation-notice {
-  @apply text-xs text-gray-500;
+  @apply text-secondary md:whitespace-nowrap;
 }
 
 /* Expanded State */
@@ -114,7 +134,7 @@ body {
 
 /* Summary row at top of expanded state */
 .booking-summary-row {
-  @apply flex justify-between items-start mb-4 pb-4 border-b border-black;
+  @apply flex flex-wrap justify-between items-start gap-x-4 gap-y-2 mb-4 pb-4 border-b border-black;
 }
 
 .booking-summary-left {
@@ -163,7 +183,7 @@ body {
 
 /* Tourist tax info */
 .booking-tourist-tax-info {
-  @apply text-xs text-gray-500 mt-4;
+  @apply text-xs text-foreground mt-4;
 }
 
 /* Name input field — same shape as the email field below */
@@ -236,11 +256,11 @@ body {
 }
 
 .booking-close-button {
-  @apply flex-1 px-4 py-2 border border-foreground bg-background text-foreground font-sans text-sm lowercase tracking-wide hover:bg-foreground hover:text-background transition-colors;
+  @apply flex-1 px-4 py-2 border border-foreground bg-background text-foreground font-sans text-sm capitalize tracking-wide hover:bg-foreground hover:text-background transition-colors;
 }
 
 .booking-book-button-expanded {
-  @apply flex-1 px-4 py-2 bg-foreground text-background font-sans text-sm lowercase tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply flex-1 px-4 py-2 bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 /* Calendar Styles */

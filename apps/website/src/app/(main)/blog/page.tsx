@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 export default function BlogIndexPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 md:px-12 py-8 space-y-8">
-      <h1 className="text-4xl font-hand font-bold">blog</h1>
+      <h1 className="text-4xl font-hand font-bold">Blog</h1>
 
       {allPosts.length === 0 ? (
         <p className="text-sm leading-relaxed">No posts yet. Check back soon.</p>
@@ -23,7 +23,7 @@ export default function BlogIndexPage() {
           {allPosts.map(({ slug, title, description, date }) => (
             <li key={slug}>
               <Link href={`/blog/${slug}`} className="block group">
-                <h2 className="text-2xl font-hand font-bold group-hover:text-gray-600">{title}</h2>
+                <h2 className="text-price">{title}</h2>
                 <p className="text-xs text-gray-600 mt-1">
                   {format(fromCalendarDay(date), "d MMMM yyyy")}
                 </p>

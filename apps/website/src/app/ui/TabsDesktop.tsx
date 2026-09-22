@@ -30,7 +30,7 @@ export function TabsDesktop({ tabs, activeTabId }: TabsDesktopProps) {
                   posthog.capture("room_tab_clicked", { room_type: tab.id });
                 }
               }}
-              className={`px-6 py-2 text-base ${!isLast ? "border-r border-black" : ""}`}
+              className={`px-6 py-2 ${!isLast ? "border-r border-black" : ""}`}
             >
               {tab.label}
             </TabLink>

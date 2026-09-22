@@ -23,7 +23,7 @@ import Link from "next/link";
  */
 export function Breadcrumb({ title }: { title: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="mb-2">
+    <nav aria-label="Breadcrumb" className="mb-4">
       <ol className="flex items-center text-xs text-gray-600">
         <li className="shrink-0">
           <Link href="/blog" className="underline hover:text-black">

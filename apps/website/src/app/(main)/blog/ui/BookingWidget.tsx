@@ -67,11 +67,6 @@ export function BookingWidget() {
       className="my-10 border border-dashed p-4 bg-white"
       data-testid="booking-widget"
     >
-      <h2 className="text-xl font-hand font-bold">stay here while you read about it</h2>
-      <p className="text-sm leading-relaxed mt-1 mb-4">
-        Pick a room, pick your nights, and book without leaving the page.
-      </p>
-
       <RoomSwitcher room1={roomEngine(BookingType.room1)} room2={roomEngine(BookingType.room2)} />
     </aside>
   );

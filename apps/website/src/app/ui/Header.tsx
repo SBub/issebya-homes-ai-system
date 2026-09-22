@@ -17,7 +17,7 @@ export default function Header() {
     >
       {showLogo && (
         <Link href="/">
-          <h1 className="text-xl sm:text-3xl font-hand whitespace-nowrap relative z-10">
+          <h1 className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10">
             issebya.homes
           </h1>
         </Link>

@@ -53,7 +53,7 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
     <article className="max-w-2xl mx-auto px-6 md:px-12 py-8">
       <Breadcrumb title={title} />
 
-      <h1 className="text-4xl font-hand font-bold">{title}</h1>
+      <h1 className="text-price">{title}</h1>
       <p className="text-xs text-gray-600 mt-1 mb-6">
         {format(fromCalendarDay(date), "d MMMM yyyy")}
       </p>
