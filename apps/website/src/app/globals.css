@@ -32,6 +32,14 @@
   @apply text-xl font-bold;
 }
 
+/* The one supporting-photo size shared by Contact, the blog index, each
+   blog post's hero and Guest Info's arrival photo. These images are
+   decoration, not the main event, so they all stay this same modest size
+   instead of each page inventing its own scale. */
+@utility page-decor-photo {
+  @apply relative w-full sm:max-w-xs aspect-[4/3];
+}
+
 /*
  @media (prefers-color-scheme: dark) {
   :root {
@@ -53,7 +61,6 @@ html {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }
 
 /* Booking Engine Styles */
@@ -248,6 +255,22 @@ body {
 
 .booking-whatsapp-optin-label {
   @apply flex items-center gap-2 text-sm mt-2 cursor-pointer;
+}
+
+.booking-whatsapp-optin-input {
+  @apply appearance-none w-4 h-4 shrink-0 border border-foreground bg-white cursor-pointer;
+}
+
+.booking-whatsapp-optin-input:checked {
+  @apply bg-foreground;
+}
+
+.booking-whatsapp-optin-input:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+.booking-whatsapp-optin-input:focus-visible {
+  @apply outline outline-2 outline-foreground outline-offset-2;
 }
 
 /* Action buttons */

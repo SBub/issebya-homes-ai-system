@@ -318,6 +318,7 @@ export function BookingEngineExpanded({
               id="booking-whatsapp-optin"
               name="whatsappOptIn"
               type="checkbox"
+              className="booking-whatsapp-optin-input"
               // Unchecked by default: this is a marketing consent checkbox, and
               // GDPR (CJEU Planet49) plus Portugal's ePrivacy law (Lei
               // 41/2004) require an affirmative opt-in, not a pre-ticked box.

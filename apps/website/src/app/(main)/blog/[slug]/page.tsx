@@ -50,7 +50,7 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
   const { title, date, hero, Content } = post;
 
   return (
-    <article className="max-w-2xl mx-auto px-6 md:px-12 py-8">
+    <article className="p-4 md:p-12">
       <Breadcrumb title={title} />
 
       <h1 className="text-price">{title}</h1>
@@ -59,17 +59,20 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
       </p>
 
       {hero && (
-        <Image
-          src={hero.src}
-          alt={hero.alt}
-          width={hero.width}
-          height={hero.height}
-          sizes="(max-width: 768px) 100vw, 672px"
-          className="w-full h-auto mb-8"
-        />
+        <div className="page-decor-photo mb-8">
+          <Image
+            src={hero.src}
+            alt={hero.alt}
+            fill
+            className="object-cover"
+            sizes="(min-width: 640px) 320px, 100vw"
+          />
+        </div>
       )}
 
-      <Content />
+      <div className="max-w-[70ch]">
+        <Content />
+      </div>
     </article>
   );
 }

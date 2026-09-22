@@ -8,17 +8,16 @@ export const metadata: Metadata = {
 
 export default function PrivacyPolicyPage() {
   return (
-    <div className="min-h-screen bg-[#f0eeea] font-sans">
-      <main className="max-w-4xl mx-auto px-6 md:px-12 py-8 space-y-18">
-        <div>
-          <h1 className="text-4xl text-header mb-4">Privacy Policy</h1>
-          <p className="text-sm leading-relaxed">
-            This policy explains what personal data issebya.homes collects, why, and what rights you
-            have over it. It covers our website, booking flow, and WhatsApp assistant.
-          </p>
-        </div>
+    <div className="p-4 md:p-12">
+      <h1 className="text-4xl text-header mb-6">Privacy Policy</h1>
 
-        <InfoSection id="controller" title="Who We Are">
+      <main className="max-w-[70ch] space-y-18">
+        <p className="text-sm leading-relaxed">
+          This policy explains what personal data issebya.homes collects, why, and what rights you
+          have over it. It covers our website, booking flow, and WhatsApp assistant.
+        </p>
+
+        <InfoSection id="controller" title="Who We Are" titleClassName="text-price">
           <p>
             issebya.homes is operated by Sviatlana Buben, NIF 330791745, Rua do Lagarto 5, 2705-044,
             Almoçageme, Portugal (Alojamento Local registration 168673/AL). For any question about
@@ -30,7 +29,7 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="what-we-collect" title="What We Collect">
+        <InfoSection id="what-we-collect" title="What We Collect" titleClassName="text-price">
           <p>
             <strong>Booking form:</strong> name, email, phone number, number of guests, and your
             chosen dates, when you book a room on our website.
@@ -52,7 +51,7 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="why-we-use-it" title="Why We Use It">
+        <InfoSection id="why-we-use-it" title="Why We Use It" titleClassName="text-price">
           <p>
             <strong>Processing your booking and stay:</strong> to fulfil our contract with you.
           </p>
@@ -79,7 +78,11 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="ai-assistant" title="Our WhatsApp AI Assistant">
+        <InfoSection
+          id="ai-assistant"
+          title="Our WhatsApp AI Assistant"
+          titleClassName="text-price"
+        >
           <p>
             When you message us on WhatsApp, your conversation may be handled in part by an AI
             assistant, which can answer questions about the property and help prepare a booking for
@@ -89,7 +92,11 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="who-we-share-with" title="Who We Share Data With">
+        <InfoSection
+          id="who-we-share-with"
+          title="Who We Share Data With"
+          titleClassName="text-price"
+        >
           <p>
             <strong>Supabase</strong> (database hosting) stores our data in the EU, in Ireland.
           </p>
@@ -108,7 +115,7 @@ export default function PrivacyPolicyPage() {
           <p>You can ask us for more information about any of these safeguards at any time.</p>
         </InfoSection>
 
-        <InfoSection id="retention" title="How Long We Keep Data">
+        <InfoSection id="retention" title="How Long We Keep Data" titleClassName="text-price">
           <p>
             <strong>Booking and invoice records:</strong> kept for 10 years, as required by
             Portuguese tax law.
@@ -120,7 +127,7 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="your-rights" title="Your Rights">
+        <InfoSection id="your-rights" title="Your Rights" titleClassName="text-price">
           <p>
             Under the GDPR, you have the right to access, correct, delete, or restrict the personal
             data we hold about you, to receive a copy of it in a portable format, to object to our
@@ -145,7 +152,7 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="security" title="Security">
+        <InfoSection id="security" title="Security" titleClassName="text-price">
           <p>
             We use reasonable technical and organisational measures to protect your data, including
             handling all payments through Stripe rather than storing card details ourselves, and
@@ -153,7 +160,7 @@ export default function PrivacyPolicyPage() {
           </p>
         </InfoSection>
 
-        <InfoSection id="changes" title="Changes to This Policy">
+        <InfoSection id="changes" title="Changes to This Policy" titleClassName="text-price">
           <p>We may update this policy from time to time. Last updated: August 2026.</p>
         </InfoSection>
       </main>
