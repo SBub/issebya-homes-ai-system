@@ -13,6 +13,16 @@ const checkOutLabel = format(checkOutDate, "MMMM d, yyyy");
 const checkInISO = format(checkInDate, "yyyy-MM-dd");
 const checkOutISO = format(checkOutDate, "yyyy-MM-dd");
 
+// The URL shape send_booking_link builds (booking.ts), assembled the same way
+// so the ?phone=/source=gca prefill contract is exercised, not just the dates.
+const gcaBookingLink = (checkIn: string, checkOut: string) =>
+  `/booking/room1?${new URLSearchParams({
+    checkIn,
+    checkOut,
+    phone: "+351920742845",
+    source: "gca",
+  })}`;
+
 test.describe("Booking flow", () => {
   test("user sees available dates and booking form after page loads", async ({ page }) => {
     // Availability used to be fetched client-side from /api/availability and
@@ -223,5 +233,48 @@ test.describe("Booking flow", () => {
     } finally {
       await request.post("/api/e2e-ical-mock", { data: { enabled: false } });
     }
+  });
+
+  test("a GCA link whose dates have passed shows a notice, with the engine open", async ({
+    page,
+  }) => {
+    // The link shape send_booking_link generates (see
+    // apps/guest-communication-agent/src/agent/tools/booking.ts), with a
+    // check-in that has since gone by — a guest opening a week-old link.
+    // Deterministic with no fixture seeding: a past range is rejected by
+    // isValidDateRange whatever the local availability data says.
+    await page.goto(
+      gcaBookingLink(
+        format(addDays(today, -30), "yyyy-MM-dd"),
+        format(addDays(today, -28), "yyyy-MM-dd"),
+      ),
+    );
+
+    await expect(page.getByText(/are in the past/i)).toBeVisible();
+    // ?phone= auto-expands the engine, so the calendar the notice points at
+    // is already on screen.
+    await expect(page.getByLabel("Confirm booking")).toBeVisible();
+  });
+
+  test("a GCA link with a free future range is preselected with no notice", async ({ page }) => {
+    // +300 days on purpose: this spec runs against real local data (the
+    // shared Supabase `bookings` table plus the configured iCal feeds, see
+    // the comment on the first test), and OTA feeds do not publish blocks
+    // that far out, so the range is reliably free without seeding or
+    // resetting anything.
+    const futureCheckIn = addDays(today, 300);
+    const futureCheckOut = addDays(today, 302);
+
+    await page.goto(
+      gcaBookingLink(format(futureCheckIn, "yyyy-MM-dd"), format(futureCheckOut, "yyyy-MM-dd")),
+    );
+
+    await expect(page.getByLabel("Select check-in date")).toHaveText(
+      format(futureCheckIn, "d MMM yyyy"),
+    );
+    await expect(page.getByLabel("Select check-out date")).toHaveText(
+      format(futureCheckOut, "d MMM yyyy"),
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
   });
 });

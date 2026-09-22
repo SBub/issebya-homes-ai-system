@@ -10,8 +10,8 @@ import { markSpanFailed } from "@/lib/tracing";
 // `{ error: string }` shape (run-tool.ts's "unknown tool name" fallback) —
 // not "does this object have an error key anywhere". Several tools return a
 // plain successful object that happens to have an `error`-named field as
-// normal data (e.g. checkAvailability's `{ available: false, error: "..." }`
-// for a malformed date), which must not be marked failed.
+// normal data (e.g. sendBookingLink's `{ error: "...", reason: "past_date" }`
+// for a refused stay range), which must not be marked failed.
 function detectToolSoftFailure(output: unknown): string | null {
   if (typeof output !== "object" || output === null) {
     return null;

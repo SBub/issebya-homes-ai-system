@@ -29,16 +29,16 @@ a graph or state machine.
 
 ### Tools
 
-| Tool                       | Purpose                                                                                                                    |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `get_pricing`              | Nightly rate lookup                                                                                                        |
-| `check_availability`       | Checks a room against booked date ranges via a live API                                                                    |
-| `answer_property_question` | Embeds the guest's question and runs a pgvector similarity search over a knowledge base (house rules, amenities, policies) |
-| `send_booking_link`        | Builds the booking URL (**requires human approval**, see §5)                                                               |
-| `get_current_date`         | Grounds the model in today's date/day-of-week                                                                              |
-| `run_code`                 | Lets the model write and execute a short script instead of chaining many tool calls (**runs in a remote sandbox**, see §6) |
-| `wants_human`              | One-way escalation ping to the owner (no approval loop, informational)                                                     |
-| `missing_info`             | Suspends the turn and asks the owner a question when the agent doesn't know the answer (see §2)                            |
+| Tool                       | Purpose                                                                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `get_pricing`              | Nightly rate lookup                                                                                                         |
+| `check_availability`       | Checks a room against booked date ranges via a live API; refuses a past or inverted range instead of reporting it available |
+| `answer_property_question` | Embeds the guest's question and runs a pgvector similarity search over a knowledge base (house rules, amenities, policies)  |
+| `send_booking_link`        | Builds the booking URL (**requires human approval**, see §5)                                                                |
+| `get_current_date`         | Grounds the model in today's date/day-of-week                                                                               |
+| `run_code`                 | Lets the model write and execute a short script instead of chaining many tool calls (**runs in a remote sandbox**, see §6)  |
+| `wants_human`              | One-way escalation ping to the owner (no approval loop, informational)                                                      |
+| `missing_info`             | Suspends the turn and asks the owner a question when the agent doesn't know the answer (see §2)                             |
 
 Two tools intercept for a human: `send_booking_link` (blocking approval: the model
 cannot proceed without an explicit yes) and `missing_info` (blocking on an answer, not
@@ -114,10 +114,17 @@ rather than left as tribal knowledge.
 Sending a booking link is the one action gated behind explicit owner approval before
 it happens. When the model calls `send_booking_link`:
 
-1. The owner gets a Telegram message with inline Approve/Reject buttons.
-2. The run suspends on `step.waitForEvent`, matched by correlation ID carried in the
+1. The requested room and dates are re-verified against the same availability source
+   `check_availability` uses, before anything reaches the owner. A range that starts
+   in the past, ends on or before it starts, or covers a room that is already booked
+   resolves the gate immediately as not approved, with a structured refusal the model
+   can act on. No Telegram message is sent: the owner is never asked to approve a link
+   that could not be built. The tools cannot disagree here, because both run the same
+   guard (`validateStayRange`) and the same availability check.
+2. The owner gets a Telegram message with inline Approve/Reject buttons.
+3. The run suspends on `step.waitForEvent`, matched by correlation ID carried in the
    button's callback data (not parsed from free text, more reliable).
-3. Approve → the link is built and returned to the model to send. Reject or timeout →
+4. Approve → the link is built and returned to the model to send. Reject or timeout →
    the model receives a structured "not approved" result and responds accordingly,
    the tool's real logic never executes.
 
@@ -156,10 +163,17 @@ Evaluation runs at two layers, both on Braintrust.
 
 **Offline evals**, run against a golden dataset before merging:
 
-- A **golden dataset** (29 hand-built cases) covering the agent's four key
-  tool-selection decisions (`send_booking_link`, `get_pricing`, `missing_info`,
-  `answer_property_question`), scored with a **Tool Call Match** scorer, run at
-  3 trials per case since the model is non-deterministic.
+- A **golden dataset** of hand-built cases covering the agent's key tool-selection
+  decisions (`send_booking_link`, `get_pricing`, `missing_info`,
+  `answer_property_question`, `check_availability`), scored with a **Tool Call
+  Match** scorer, run at 3 trials per case since the model is non-deterministic.
+  The live Braintrust dataset "GCA — Golden Dataset" is the source of truth for
+  the rows (no copy lives in this repo; `scripts/push-date-resolution-rows.ts`
+  upserts one reviewed batch into it and nothing else). For `send_booking_link`
+  and `check_availability` the scorer also deep-compares the call's args against
+  the expected ones, because a wrong year in `check_availability` is a silent
+  failure: the tool reports the past as available and a stale-year booking link
+  follows.
 - A **prompt-injection dataset** (10 cases) with adversarial guest messages, scored on
   both Tool Call Match and a **Security Invariant Held** scorer: an LLM judge that
   checks, per case, whether a specific stated security invariant held or was violated,

@@ -8,7 +8,7 @@ export function WhatsAppLink() {
       href="https://wa.me/351920742845"
       target="_blank"
       rel="noopener noreferrer"
-      className="font-bold underline"
+      className="text-secondary-link-bold"
       onClick={() => {
         posthog.capture("whatsapp_link_clicked");
       }}

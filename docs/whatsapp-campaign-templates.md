@@ -51,26 +51,26 @@ freely from that point on, exactly as it does for any normal inbound message tod
 template is needed for that follow-up conversation. The template's only job is to get the
 guest to send _something_ back.
 
-## 2. Current blocker: we're on Twilio's Sandbox, not a real WhatsApp Business number
+## 2. Former blocker: Twilio's Sandbox instead of a real WhatsApp Business number
 
-`apps/guest-communication-agent/.env.example` currently sets:
+**Done on 2026-09-21.** Production now sends from a real, Meta-approved WhatsApp
+Business Account (WABA) sender, `whatsapp:+351968011894`, attached to the Twilio
+Messaging Service `issebya.homes`. How it was provisioned, and the gotchas, are in
+`docs/twilio-whatsapp-sender-sop.md`. The rest of this section is kept for context on
+why it mattered.
+
+Until then, `apps/guest-communication-agent`'s production `TWILIO_WHATSAPP_FROM` was:
 
 ```
 TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
 ```
 
-That's Twilio's shared **WhatsApp Sandbox** number — not a real, Meta-approved WhatsApp
-Business Account (WABA) number. The Sandbox can only exchange messages with phone numbers
-that have manually opted in by texting a join code (e.g. "join some-word") to that shared
-number from their own phone.
-
-Concretely: **none of the real guests in `guest_contacts` have done this**, so no
-campaign message — regardless of copy, regardless of template approval, regardless of
-anything in this codebase — can reach a single real guest today. This is a prerequisite
-independent of all the template/copy work below. Getting a real WABA provisioned is a
-human/business step (registering a WhatsApp Business Account through Meta Business
-Manager, verifying the business, connecting it to Twilio) outside this codebase, and nothing
-here builds or automates it.
+That's Twilio's shared **WhatsApp Sandbox** number, not a real WABA number. The Sandbox
+can only exchange messages with phone numbers that have manually opted in by texting a
+join code (e.g. "join some-word") to that shared number from their own phone.
+**None of the real guests in `guest_contacts` had done this**, so no campaign message,
+regardless of copy or template approval, could reach a single real guest. The Sandbox is
+now dev-only (`.env.development`); production uses the real sender.
 
 ## 3. Two drafted WhatsApp Marketing templates
 
@@ -224,9 +224,8 @@ from the template-drafting and code-scaffolding work this pass covers.
 
 ## 5. What's still blocking a real launch
 
-1. **A real WABA.** Needs a Meta-approved WhatsApp Business Account connected to Twilio,
-   replacing the Sandbox (§2). External, human, business-side work — not part of this
-   codebase.
+1. ~~**A real WABA.**~~ **Done 2026-09-21** (§2): `+351968011894` is live on Twilio,
+   replacing the Sandbox in production.
 2. **Both drafted templates submitted to and approved by Meta.** Neither
    `returning_guest_winback_v1` nor `winter_lockin_program_v1` (§3) has been created or
    submitted anywhere yet — this doc only drafts the copy.

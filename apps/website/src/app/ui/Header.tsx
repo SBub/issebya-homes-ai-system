@@ -17,7 +17,7 @@ export default function Header() {
     >
       {showLogo && (
         <Link href="/">
-          <h1 className="text-xl sm:text-3xl font-hand whitespace-nowrap relative z-10">
+          <h1 className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10">
             issebya.homes
           </h1>
         </Link>
@@ -29,6 +29,9 @@ export default function Header() {
           className={`pb-1 ${isActive("/booking") ? "border-b-2 border-black" : ""}`}
         >
           Booking
+        </Link>
+        <Link href="/blog" className={`pb-1 ${isActive("/blog") ? "border-b-2 border-black" : ""}`}>
+          Blog
         </Link>
         <Link
           href="/contact"

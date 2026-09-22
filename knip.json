@@ -1,16 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
-    "apps/telegram-router": {
-      "next": true,
-      "entry": ["tests/**/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"],
-      "ignoreDependencies": [
-        "eslint-config-prettier",
-        "eslint-plugin-no-secrets",
-        "eslint-plugin-security"
-      ]
-    },
     "apps/guest-communication-agent": {
       "next": true,
       "entry": ["tests/**/*.test.ts", "scripts/**/*.ts"],
@@ -33,7 +23,7 @@
       ]
     }
   },
-  "ignoreBinaries": ["stripe", "pkill", "lsof", "ngrok"],
+  "ignoreBinaries": ["stripe", "pkill", "lsof", "ngrok", "uv"],
   "ignoreFiles": [
     "apps/website/src/app/(main)/booking/[type]/page-1.tsx",
     "apps/website/src/app/(main)/booking/[type]/store-1.tsx"

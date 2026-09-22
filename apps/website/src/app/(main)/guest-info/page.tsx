@@ -100,7 +100,7 @@ export default function GuestInfoPage() {
               href="https://maps.app.goo.gl/3zBr4vAiyEWcszsm6"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600"
+              className="text-secondary-link"
             >
               Rua do Lagarto 5, 2705-044, Almoçageme, Portugal
             </a>
@@ -129,7 +129,7 @@ export default function GuestInfoPage() {
               href="https://maps.app.goo.gl/75jxxiksPZyLixSA7"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-gray-600 ml-1"
+              className="text-secondary-link ml-1"
             >
               Park here
             </a>
@@ -179,7 +179,7 @@ export default function GuestInfoPage() {
                 href="https://maps.app.goo.gl/YYUzkApipx6iww3N6"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline hover:text-gray-600 mx-1"
+                className="text-secondary-link mx-1"
               >
                 large public bin
               </a>
@@ -191,7 +191,7 @@ export default function GuestInfoPage() {
                 href="https://maps.app.goo.gl/fm5ZMzk1YHz68hdBA"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline hover:text-gray-600 mx-1"
+                className="text-secondary-link mx-1"
               >
                 marked containers nearby
               </a>
@@ -207,7 +207,7 @@ export default function GuestInfoPage() {
                   href="https://maps.app.goo.gl/bvm2LB1RJAR5wLo57"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline hover:text-gray-600 mx-1"
+                  className="text-secondary-link mx-1"
                 >
                   <strong>Amor pla Terra</strong>
                 </a>
@@ -220,7 +220,7 @@ export default function GuestInfoPage() {
                   href="https://maps.app.goo.gl/s32scv7So1W4nXqJA"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline hover:text-gray-600 mx-1"
+                  className="text-secondary-link mx-1"
                 >
                   <strong>Supermarket</strong>
                 </a>
@@ -233,7 +233,7 @@ export default function GuestInfoPage() {
                   href="https://maps.app.goo.gl/Eek71hTS9swrZvcf6"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline hover:text-gray-600 mx-1"
+                  className="text-secondary-link mx-1"
                 >
                   <strong>Pharmacy</strong>
                 </a>
@@ -246,7 +246,7 @@ export default function GuestInfoPage() {
                   href="https://maps.app.goo.gl/j8KiG3wt2VAzBff36"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline hover:text-gray-600 mx-1"
+                  className="text-secondary-link mx-1"
                 >
                   <strong>Laundry</strong>
                 </a>
@@ -269,7 +269,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/V7WJgamGd1EQwDLw9"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Praia da Adraga
                   </a>
@@ -280,7 +280,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/17twBLuodYf6PjzD7"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Praia Grande
                   </a>
@@ -290,7 +290,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/89TJjaU27Es5Xh1W8"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Praia das Maçãs
                   </a>
@@ -300,7 +300,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/E5WwF38FQ1rntuZZA"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Praia da Ursa
                   </a>
@@ -318,7 +318,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/kpAGeSDUkLRBNpyG8"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Convento dos Capuchos
                   </a>
@@ -329,7 +329,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/1ff4sAys3kVGby519"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Cabo da Roca
                   </a>
@@ -340,7 +340,7 @@ export default function GuestInfoPage() {
                     href="https://maps.app.goo.gl/6SomJBmZpFMXoAjs5"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-gray-600 mx-1"
+                    className="text-secondary-link mx-1"
                   >
                     Pedra Amarela
                   </a>

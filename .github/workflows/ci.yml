@@ -23,17 +23,37 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          version: "0.12.15"
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
       - name: Lint (ESLint)
         run: yarn turbo run lint
 
       - name: Format check (Prettier)
         run: yarn prettier --check .
 
+      - name: Format check (Ruff)
+        run: uv run ruff format --check .
+
       - name: Type check
         run: yarn turbo run typecheck
 
       - name: Dead code check (knip)
         run: yarn knip
+
+      # The website's `test` script runs the Vitest browser project, which
+      # launches a real Playwright chromium. `yarn install` does not fetch
+      # browser binaries, so without this the browser project fails to launch
+      # in CI. Only chromium: apps/website/vitest.config.ts narrows the gated
+      # run to it, and the full firefox/webkit sweep is a manual command.
+      - name: Install Playwright browser (chromium)
+        run: yarn workspace website playwright install --with-deps chromium
 
       - name: Tests
         run: yarn turbo run test

@@ -52,8 +52,18 @@ export function BookingCalendar({
   selectedCheckOut,
   onDateSelect,
 }: BookingCalendarProps) {
-  // Find the first month with available dates to show initially
-  const initialMonth = useMemo(() => findFirstMonthWithAvailability(blockedDates), [blockedDates]);
+  // Open on the month the guest is actually looking at: their already-selected
+  // check-in (from a GCA link or an earlier pick), falling back to the first
+  // month with any availability when nothing is selected yet. Consumed only as
+  // useState's initial argument below, so recomputing it on a later render is
+  // inert and never overrides the guest's own ← / → paging.
+  const initialMonth = useMemo(
+    () =>
+      selectedCheckIn
+        ? startOfMonth(selectedCheckIn)
+        : findFirstMonthWithAvailability(blockedDates),
+    [blockedDates, selectedCheckIn],
+  );
 
   const [currentMonth, setCurrentMonth] = useState(initialMonth);
   const nextMonthDate = addMonths(currentMonth, 1);

@@ -8,6 +8,23 @@ const nextConfig: NextConfig = {
     root: path.join(__dirname, "..", ".."),
   },
   transpilePackages: ["pricing"],
+  // LANDMINE: without this, Turbopack bundles @opentelemetry/api separately
+  // into the instrumentation entry and into each route chunk, so the process
+  // holds two API instances. A tracer resolved through the route-side copy
+  // before register() (src/instrumentation.ts) registers the global provider
+  // stays a no-op forever, and the global-registration handoff only works
+  // when instrumentation and routes share one Node-resolved instance.
+  serverExternalPackages: [
+    "@opentelemetry/api",
+    "@opentelemetry/sdk-trace-base",
+    "@opentelemetry/context-async-hooks",
+    "@opentelemetry/core",
+    "@opentelemetry/resources",
+    "@opentelemetry/semantic-conventions",
+    "@opentelemetry/exporter-trace-otlp-http",
+    "@braintrust/otel",
+    "braintrust",
+  ],
 };
 
 // Wraps the config above with @sentry/nextjs's (v10) build-time integration

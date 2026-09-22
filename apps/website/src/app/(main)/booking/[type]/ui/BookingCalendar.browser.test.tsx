@@ -240,3 +240,22 @@ test("first blocked date gets checkout-boundary style, mid-block dates stay full
     .toHaveClass("calendar-date-checkout-boundary");
   await expect.element(getByLabelText("July 24, 2025")).toHaveClass("calendar-date-blocked");
 });
+
+test("calendar opens on the selected check-in's month, not the first available one", async () => {
+  // Local constructors, not new Date("2025-10-05"): that is UTC midnight and
+  // lands in the previous month for a browser behind UTC (AGENTS.md,
+  // "Calendar days are strings"). findFirstMonthWithAvailability is mocked to
+  // July 2025, so an October selection proves the selection wins.
+  const { getByText } = await render(
+    <BookingCalendar
+      blockedDates={[]}
+      selectedCheckIn={new Date(2025, 9, 5)}
+      selectedCheckOut={new Date(2025, 9, 8)}
+      onDateSelect={vi.fn()}
+    />,
+  );
+
+  await expect.element(getByText("October 2025")).toBeInTheDocument();
+  await expect.element(getByText("November 2025")).toBeInTheDocument();
+  await expect.element(getByText("July 2025")).not.toBeInTheDocument();
+});
