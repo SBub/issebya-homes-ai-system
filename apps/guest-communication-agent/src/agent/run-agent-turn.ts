@@ -8,6 +8,7 @@ import { flushTracing } from "@/instrumentation";
 import type { HitlDecision } from "@/agent/tools/approval-gate";
 import { requestSendBookingLinkApproval } from "@/agent/tools/booking";
 import type { ToolContext } from "@/agent/tools/config";
+import { buildTodayLine } from "@/agent/tools/current-date";
 import { requestMissingInfoApproval } from "@/agent/tools/missing-info";
 import { inngest } from "@/lib/inngest";
 import { steppedSpan, type TraceAnchor } from "@/lib/tracing";
@@ -110,6 +111,10 @@ export interface RunAgentTurnConfig {
 
 export interface RunAgentTurnResult {
   messages: ModelMessage[];
+  // This turn's own messages: everything after the loaded history, from the
+  // first model response through the final reply (or the last tool message
+  // on the step-cap path).
+  turnMessages: ModelMessage[];
   stepCount: number;
   guestTurnSpanId: string;
   // Deliberately narrow, not "every tool this turn used": only wants_human,
@@ -182,6 +187,7 @@ export async function runAgentTurn(
   let messages: ModelMessage[] = memoryMessage
     ? [memoryMessage, ...historyMessages]
     : historyMessages;
+  const historyLength = messages.length;
 
   // Hoisted out of the loop — fetched once per turn, not once per round,
   // since un-stepped code between step.run checkpoints re-runs on every
@@ -199,7 +205,7 @@ export async function runAgentTurn(
 
   // Cast: same steppedSpan narrowing as above; this prompt is always a
   // plain string.
-  const system = (await steppedSpan(
+  const promptText = (await steppedSpan(
     step,
     "load-system-prompt",
     turnAnchor,
@@ -207,6 +213,9 @@ export async function runAgentTurn(
     {},
     loadSystemPromptText,
   )) as string;
+  // Outside the step on purpose: a turn resumed after a missing_info suspend
+  // gets the real current date on its later model calls.
+  const system = `${promptText}\n\n${buildTodayLine()}`;
 
   let stepCount = 0;
   const firedTags: string[] = [];
@@ -225,7 +234,13 @@ export async function runAgentTurn(
       const replyText =
         result.text.trim() === "" ? FALLBACK_REPLY_TEXT : sanitizeReplyText(result.text);
       messages = [...messages, { role: "assistant", content: replyText }];
-      return { messages, stepCount, guestTurnSpanId, firedTags };
+      return {
+        messages,
+        turnMessages: messages.slice(historyLength),
+        stepCount,
+        guestTurnSpanId,
+        firedTags,
+      };
     }
 
     // No tool has `execute`, so we dispatch and build the tool-result
@@ -290,5 +305,11 @@ export async function runAgentTurn(
     ];
   }
 
-  return { messages, stepCount, guestTurnSpanId, firedTags };
+  return {
+    messages,
+    turnMessages: messages.slice(historyLength),
+    stepCount,
+    guestTurnSpanId,
+    firedTags,
+  };
 }

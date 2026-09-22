@@ -67,10 +67,25 @@ one conversation.
 Guest memory is a two-tier system: a durable per-guest preference summary, plus a
 small, capped window of recent "folds."
 
+- **Turn replay**: every guest turn stores its own AI SDK messages (assistant tool
+  calls, tool results, the final reply) on its assistant row, in the
+  `whatsapp_messages.turn_messages` column as `{ schema_version, messages }`. Each tool
+  result is capped at 2,000 characters; tool-call arguments are never cut. History is
+  grouped into turns (a guest message plus the replies to it) and replayed in three
+  tiers: the last 3 turns replay their stored messages word for word, so the model
+  sees the exact facts its tools found; older turns in the window replay as plain
+  text; anything older is covered by the folds below. Rows with no stored messages
+  (older rows, admin resends) replay as text. The assistant row insert is unique per
+  trace, so an Inngest retry of the write returns the existing row.
 - **Per-turn trimming**: recent messages are loaded fresh from Postgres each turn and
   trimmed to a token budget using a real tokenizer (`gpt-tokenizer`'s o200k_base
   encoder, the closest available approximation since no maintained tokenizer exists
-  for the production model). Budget: 1600 tokens in, trimmed down to 800.
+  for the production model). Budget: 8000 tokens in, trimmed down to 6000, sized for
+  about 10 turns with one or two tool rounds each. Trimming drops whole turns only,
+  never part of one, since a tool call separated from its result is rejected by the
+  provider.
+- **Today's date**: one line stating today's date (UTC) is appended to the Braintrust
+  system prompt on every model call, so the model never has to guess the year.
 - **Folding**: whenever trimming drops messages out of that window, the dropped chunk
   (never the full history) gets summarized on its own and stored as a row in
   `guest_memory_folds`. Only one recent fold is kept per guest.
@@ -89,7 +104,9 @@ small, capped window of recent "folds."
 - **URL redaction**: before anything is folded or shown to the model, URLs are
   replaced with a placeholder. A two-URL message alone measured 231 tokens with the
   real tokenizer; the model only needs to know a link was sent, not its bytes. Real
-  links are untouched in storage, this only affects what the model sees.
+  links are untouched in storage, this only affects what the model sees. It covers
+  replayed tool results too, but never a turn that touches the 8 most recent rows.
+  The summarizer only ever receives the text of each row, never tool messages.
 
 Both the conversation summarizer and the preferences distiller are separate,
 version-pinned prompts managed in Braintrust's Prompt Hub, so either can be iterated

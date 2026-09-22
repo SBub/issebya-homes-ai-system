@@ -29,6 +29,16 @@ export function computeCurrentDate() {
   };
 }
 
+// The system-context line run-agent-turn.ts appends after the Braintrust
+// prompt. Takes an ISO date so evals can pin "today".
+export function buildTodayLine(isoDate: string = computeCurrentDate().date): string {
+  const dayOfWeek = new Date(`${isoDate}T00:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  });
+  return `Today's date is ${dayOfWeek}, ${isoDate} (UTC).`;
+}
+
 export async function runGetCurrentDate(context: ToolContext) {
   return steppedSpan(
     context.step,

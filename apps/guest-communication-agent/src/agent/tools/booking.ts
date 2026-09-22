@@ -73,7 +73,7 @@ function describeBookingRefusal(
     case "invalid_date":
       return `Cannot build a booking link: ${checkIn} to ${checkOut} is not a valid YYYY-MM-DD range (today is ${today}).`;
     case "past_date":
-      return `Cannot build a booking link: check-in ${checkIn} is in the past (today is ${today}).`;
+      return `Cannot build a booking link: check-in ${checkIn} is in the past (today is ${today}). Re-read the dates from your earlier tool result in this conversation and call the tool again with them.`;
     case "invalid_range":
       return `Cannot build a booking link: check-out ${checkOut} is not after check-in ${checkIn}.`;
     case "not_available":

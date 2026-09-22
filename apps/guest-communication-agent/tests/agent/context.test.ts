@@ -56,43 +56,58 @@ describe("estimateTokens", () => {
 });
 
 describe("trimToTokenBudget", () => {
-  it("leaves a set of many short messages untouched when comfortably under budget", () => {
-    // 20 short messages (~13 tokens each -> 260 tokens total), nowhere near
-    // MAX_CONTEXT_TOKENS (1600).
-    const messages = Array.from({ length: 20 }, (_, i) => messageOfLength("user", 50, `m${i}`));
+  it("leaves many short groups untouched when comfortably under budget", () => {
+    // 20 short one-message groups (~13 tokens each -> 260 tokens total),
+    // nowhere near MAX_CONTEXT_TOKENS.
+    const groups = Array.from({ length: 20 }, (_, i) => [messageOfLength("user", 50, `m${i}`)]);
 
-    expect(estimateTokens(messages)).toBeLessThan(MAX_CONTEXT_TOKENS);
+    expect(estimateTokens(groups.flat())).toBeLessThan(MAX_CONTEXT_TOKENS);
 
-    const trimmed = trimToTokenBudget(messages);
+    const trimmed = trimToTokenBudget(groups);
 
-    expect(trimmed).toEqual(messages);
-    expect(trimmed).toHaveLength(20);
+    expect(trimmed).toEqual(groups);
   });
 
-  it("trims a set of few very long messages down to under KEEP_CONTEXT_TOKENS, dropping oldest first", () => {
-    // 8 long messages (1100 chars -> 223 real tokens each -> 1784 tokens
-    // total), just over MAX_CONTEXT_TOKENS (1600). Only the most recent 3
-    // (669 tokens) fit under KEEP_CONTEXT_TOKENS (800) — the newest 4 would
-    // be 892, over budget.
-    const messages = Array.from({ length: 8 }, (_, i) => messageOfLength("user", 1100, `m${i}`));
+  it("trims to under KEEP_CONTEXT_TOKENS, dropping the oldest groups first", () => {
+    // 40 long one-message groups (1100 chars -> 223 real tokens each ->
+    // 8920 tokens total), just over MAX_CONTEXT_TOKENS (8000). The newest 26
+    // (5798 tokens) fit under KEEP_CONTEXT_TOKENS (6000); 27 would not.
+    const groups = Array.from({ length: 40 }, (_, i) => [messageOfLength("user", 1100, `m${i}`)]);
 
-    expect(estimateTokens(messages)).toBeGreaterThan(MAX_CONTEXT_TOKENS);
+    expect(estimateTokens(groups.flat())).toBeGreaterThan(MAX_CONTEXT_TOKENS);
 
-    const trimmed = trimToTokenBudget(messages);
+    const trimmed = trimToTokenBudget(groups);
 
-    expect(estimateTokens(trimmed)).toBeLessThanOrEqual(KEEP_CONTEXT_TOKENS);
-    expect(trimmed).toHaveLength(3);
-    // Oldest dropped first: the survivors are the tail of the original
-    // array, in original (oldest-first-among-survivors) order.
-    expect(trimmed).toEqual(messages.slice(5));
+    expect(estimateTokens(trimmed.flat())).toBeLessThanOrEqual(KEEP_CONTEXT_TOKENS);
+    expect(trimmed).toHaveLength(26);
+    expect(trimmed).toEqual(groups.slice(14));
   });
 
-  it("never trims below a single message, even if that message alone is over budget", () => {
-    const messages = [messageOfLength("user", 20000, "huge")];
+  it("drops whole turn groups only, never a message from inside one", () => {
+    // 3-message groups (user, assistant, assistant) of 223 tokens per
+    // message -> 669 per group, 13 groups -> 8697 tokens. KEEP (6000) falls
+    // inside a group: 8 groups is 5352, 9 would be 6021.
+    const groups = Array.from({ length: 13 }, (_, i) => [
+      messageOfLength("user", 1100, `u${i}`),
+      messageOfLength("assistant", 1100, `a${i}`),
+      messageOfLength("assistant", 1100, `b${i}`),
+    ]);
 
-    const trimmed = trimToTokenBudget(messages);
+    const trimmed = trimToTokenBudget(groups);
 
-    expect(trimmed).toHaveLength(1);
-    expect(trimmed).toEqual(messages);
+    expect(trimmed).toHaveLength(8);
+    expect(trimmed).toEqual(groups.slice(5));
+    for (const group of trimmed) expect(group).toHaveLength(3);
+  });
+
+  it("never drops the last group, even if that group alone is over budget", () => {
+    const groups = [
+      [messageOfLength("user", 1100, "older")],
+      [messageOfLength("user", 60000, "huge")],
+    ];
+
+    const trimmed = trimToTokenBudget(groups);
+
+    expect(trimmed).toEqual([groups[1]]);
   });
 });

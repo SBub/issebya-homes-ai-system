@@ -1,8 +1,9 @@
-import { generateText, stepCountIs, type ToolSet } from "ai";
+import { generateText, type ModelMessage, stepCountIs, type ToolSet } from "ai";
 import { loadPrompt, traced } from "braintrust";
 import { checkAvailability } from "@/agent/tools/availability";
 import { sendBookingLink } from "@/agent/tools/booking";
-import { getCurrentDate } from "@/agent/tools/current-date";
+import { buildHistoryMessages } from "@/agent/memory";
+import { buildTodayLine, getCurrentDate } from "@/agent/tools/current-date";
 import { missingInfo } from "@/agent/tools/missing-info";
 import { getPricing } from "@/agent/tools/pricing";
 import { answerPropertyQuestion } from "@/agent/tools/property-question";
@@ -93,7 +94,7 @@ async function loadCompiledSystemPrompt(contextBlock: string) {
 async function generateTextWithPromptSpan(
   compiled: Awaited<ReturnType<typeof loadCompiledSystemPrompt>>,
   system: string,
-  messages: EvalInput["messages"],
+  messages: ModelMessage[],
 ) {
   return traced(
     async (span) => {
@@ -128,8 +129,19 @@ async function generateTextWithPromptSpan(
   );
 }
 
+// Eval-only: GCA_EVAL_DISABLE_TURN_REPLAY=1 replays stored rows as text only,
+// the pre-turn_messages behaviour, to prove a replay row catches that
+// regression.
+export function evalMessages(input: EvalInput): ModelMessage[] {
+  if (input.rows === undefined) return input.messages ?? [];
+  const { groups } = buildHistoryMessages(input.rows, {
+    replayTurnMessages: process.env.GCA_EVAL_DISABLE_TURN_REPLAY !== "1",
+  });
+  return groups.flat();
+}
+
 /**
- * Single-turn executor: input.messages is passed to generateText VERBATIM
+ * Single-turn executor: evalMessages(input) is passed to generateText VERBATIM
  * (no history/incoming-message splitting, no synthetic message appended) —
  * dataset rows that already encode a multi-turn conversation, including a
  * prior real tool-call/tool-result pair (e.g. a guest message, then a
@@ -146,9 +158,10 @@ async function generateTextWithPromptSpan(
  */
 export async function singleTurnWithMocks(input: EvalInput): Promise<SingleTurnResult> {
   const compiled = await loadCompiledSystemPrompt(input.contextBlock);
-  const system = compiled.messages[0].content as string;
+  // Same today line runAgentTurn appends after the Braintrust prompt.
+  const system = `${compiled.messages[0].content as string}\n\n${buildTodayLine(input.today)}`;
 
-  const result = await generateTextWithPromptSpan(compiled, system, input.messages);
+  const result = await generateTextWithPromptSpan(compiled, system, evalMessages(input));
 
   const toolCalls = result.toolCalls.map((call) => ({
     toolName: call.toolName,

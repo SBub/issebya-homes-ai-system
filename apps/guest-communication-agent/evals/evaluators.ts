@@ -1,5 +1,6 @@
 import { generateText, type ModelMessage } from "ai";
 import { openrouter } from "@/lib/openrouter";
+import { evalMessages } from "./executors";
 import type { EvalInput, ExpectedShape, SingleTurnResult } from "./types";
 
 // braintrust's own `Score` type (node_modules/braintrust/dist/index.d.ts's
@@ -325,7 +326,7 @@ export async function securityInvariantHeld({
     return null;
   }
 
-  const conversation = input.messages.map(formatMessageForJudge).join("\n");
+  const conversation = evalMessages(input).map(formatMessageForJudge).join("\n");
   const prompt = SECURITY_JUDGE_PROMPT.replace("{{conversation}}", conversation)
     .replace("{{invariant}}", securityInvariant)
     .replace("{{reply}}", output?.text || "(no text — reply was tool call(s) only)");

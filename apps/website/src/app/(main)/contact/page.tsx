@@ -1,16 +1,30 @@
+import Image from "next/image";
+import { Callout } from "@/app/ui/Callout";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 
 export default function ContactPage() {
   return (
-    <div className="flex items-center justify-center min-h-[80vh] px-6">
-      <div className="max-w-xl text-center space-y-6">
+    <div className="p-4 md:p-12">
+      <h1 className="text-4xl text-header mb-6">Contact</h1>
+
+      <div className="page-decor-photo mb-8">
+        <Image
+          src="/frontyard.webp"
+          alt="Front yard and garden entrance"
+          fill
+          className="object-cover"
+          sizes="(min-width: 640px) 320px, 100vw"
+        />
+      </div>
+
+      <div className="max-w-[70ch] space-y-4">
         <p className="text-secondary">
           For custom bookings, special requests, or any enquiries not listed on our booking page,
           we&apos;re here to help.
         </p>
-        <p className="text-secondary">
+        <Callout>
           Please reach out to us directly on <WhatsAppLink />.
-        </p>
+        </Callout>
       </div>
     </div>
   );

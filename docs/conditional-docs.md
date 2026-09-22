@@ -198,6 +198,12 @@ procedures, not code documentation) and anything gitignored.
     - When editing the `checkAvailability` mirror inside `sandbox.ts`'s `buildScript`, where an untagged template literal silently eats `\d`
     - When `send_booking_link` resolves as not approved without the owner ever seeing a Telegram nudge
 
+- `apps/guest-communication-agent/app_docs/feature-4f43c209-turn-message-replay.md`
+  - Conditions:
+    - When changing how history is loaded, grouped, trimmed or redacted in `memory.ts`/`context.ts`, or what `record-reply` stores in `whatsapp_messages.turn_messages`
+    - When the agent forgets a fact (dates, price, availability) that a tool returned in an earlier turn, or a provider rejects history with a 400 over an orphaned tool-call
+    - When adding a golden eval row that replays stored `whatsapp_messages` rows, or using `GCA_EVAL_DISABLE_TURN_REPLAY`
+
 ---
 
 ## apps/telegram-router

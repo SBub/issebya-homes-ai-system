@@ -140,6 +140,57 @@ describe("recordMessage", () => {
     expect(result).toBe("msg-2");
   });
 
+  it("includes turn_messages in the insert when supplied", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-3" }, error: null });
+    const turnMessages = {
+      schema_version: 1 as const,
+      messages: [{ role: "assistant" as const, content: "Room 1 is free." }],
+    };
+
+    await recordMessage("convo-1", "assistant", "Room 1 is free.", "run-1", { turnMessages });
+
+    expect(insertMock).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      role: "assistant",
+      content: "Room 1 is free.",
+      trace_id: "run-1",
+      turn_messages: turnMessages,
+    });
+  });
+
+  it("returns the existing assistant row's id when the trace already has one (Inngest retry)", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+    const existingSingleMock = vi.fn().mockResolvedValueOnce({
+      data: { id: "msg-existing" },
+      error: null,
+    });
+    const existingEqRoleMock = vi.fn(() => ({ single: existingSingleMock }));
+    const existingEqTraceMock = vi.fn(() => ({ eq: existingEqRoleMock }));
+    selectMock.mockImplementationOnce(
+      () => ({ eq: existingEqTraceMock }) as unknown as ReturnType<typeof selectMock>,
+    );
+
+    const result = await recordMessage("convo-1", "assistant", "Yes!", "run-1");
+
+    expect(existingEqTraceMock).toHaveBeenCalledWith("trace_id", "run-1");
+    expect(existingEqRoleMock).toHaveBeenCalledWith("role", "assistant");
+    expect(result).toBe("msg-existing");
+  });
+
+  it("still throws on a unique violation for a row without a trace id", async () => {
+    insertSelectSingleMock.mockResolvedValueOnce({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+
+    await expect(recordMessage("convo-1", "assistant", "Yes!")).rejects.toThrow(
+      "Failed to record assistant message for conversation convo-1: duplicate key value",
+    );
+  });
+
   it("throws when the insert fails", async () => {
     insertSelectSingleMock.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
 

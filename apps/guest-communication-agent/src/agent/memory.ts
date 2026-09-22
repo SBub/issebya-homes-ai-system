@@ -1,5 +1,5 @@
 import type { Span } from "@opentelemetry/api";
-import { generateText, type ModelMessage } from "ai";
+import { generateText, type JSONValue, type ModelMessage, type ToolResultPart } from "ai";
 import { loadPrompt } from "braintrust";
 import { trimToTokenBudget } from "@/agent/context";
 import {
@@ -60,7 +60,7 @@ export interface AgentMemory {
 const URL_PATTERN = /https?:\/\/\S*[^\s.,!?;:)\]}'"]/g;
 const URL_PLACEHOLDER = "[link]";
 
-// LANDMINE: never redact the most recent rows. The model reads its own
+// LANDMINE: never redact the most recent turns. The model reads its own
 // history as-is — a redacted prior reply reads as "I already said [link]",
 // and the model then reproduces that literal placeholder in a fresh reply
 // instead of a real URL from that turn's own send_booking_link call
@@ -69,16 +69,122 @@ const URL_PLACEHOLDER = "[link]";
 // must never touch the tail the model is actively working from. 8 covers
 // the shortest real failure chain observed (real-link reply, a follow-up
 // question, its answer, the guest's next booking confirmation — 4 rows)
-// with headroom for a longer exchange before a repeat booking.
+// with headroom for a longer exchange before a repeat booking. Applied per
+// turn group: every message in a group that touches one of these rows stays
+// unredacted, including replayed tool results.
 const RECENT_MESSAGES_KEPT_UNREDACTED = 8;
+
+// How many of the most recent turn groups replay their stored turn_messages
+// (tool calls and results) verbatim; older groups replay text only. Same
+// default as Anthropic's clear_tool_uses (keeps 3) and the AI SDK's
+// pruneMessages ("before-last-3-messages").
+const VERBATIM_TURNS = 3;
 
 function redactUrls(content: string): string {
   return content.replace(URL_PATTERN, URL_PLACEHOLDER);
 }
 
+function redactJson(value: JSONValue): JSONValue {
+  if (typeof value === "string") return redactUrls(value);
+  if (Array.isArray(value)) return value.map(redactJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, v]) => [key, v === undefined ? v : redactJson(v)]),
+    );
+  }
+  return value;
+}
+
+function redactToolResult(part: ToolResultPart): ToolResultPart {
+  const { output } = part;
+  switch (output.type) {
+    case "text":
+    case "error-text":
+      return { ...part, output: { ...output, value: redactUrls(output.value) } };
+    case "json":
+    case "error-json":
+      return { ...part, output: { ...output, value: redactJson(output.value) } };
+    default:
+      return part;
+  }
+}
+
+// Tool-call inputs are left alone: they hold no URLs and are the facts.
+function redactMessage(message: ModelMessage): ModelMessage {
+  if (typeof message.content === "string") {
+    return { ...message, content: redactUrls(message.content) } as ModelMessage;
+  }
+  if (message.role === "assistant") {
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "text" ? { ...part, text: redactUrls(part.text) } : part,
+      ),
+    };
+  }
+  if (message.role === "tool") {
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool-result" ? redactToolResult(part) : part,
+      ),
+    };
+  }
+  return message;
+}
+
+// Text-only: ignores turn_messages. Also the summariser's row mapper, so
+// folds never receive tool JSON.
 function toModelMessage(row: MessageRow, redact: boolean): ModelMessage {
   const content = redact ? redactUrls(row.content) : row.content;
   return row.role === "user" ? { role: "user", content } : { role: "assistant", content };
+}
+
+// A user row starts a group and the assistant rows after it join it.
+// Leading assistant rows (possible right after the watermark) form their
+// own group. Interleaving from a suspended turn (user1, user2,
+// assistant(run2), assistant(run1)) is safe because each stored
+// turn_messages array is self-contained (see turn-messages.ts).
+function groupRowsByTurn(rows: MessageRow[]): MessageRow[][] {
+  const groups: MessageRow[][] = [];
+  for (const row of rows) {
+    const current = groups.at(-1);
+    if (row.role === "user" || current === undefined) {
+      groups.push([row]);
+    } else {
+      current.push(row);
+    }
+  }
+  return groups;
+}
+
+// Builds history from oldest-first rows, one ModelMessage[] per turn group,
+// with rowGroups[i] the rows behind groups[i] so a caller can map trimmed
+// groups back to message ids. replayTurnMessages: false forces text-only
+// replay for every row; it exists only for the eval regression switch.
+export function buildHistoryMessages(
+  rows: MessageRow[],
+  options?: { replayTurnMessages?: boolean },
+): { groups: ModelMessage[][]; rowGroups: MessageRow[][] } {
+  const replayTurnMessages = options?.replayTurnMessages ?? true;
+  const rowGroups = groupRowsByTurn(rows);
+  const unredactedFromIndex = rows.length - RECENT_MESSAGES_KEPT_UNREDACTED;
+
+  let rowIndex = 0;
+  const groups = rowGroups.map((groupRows, groupIndex) => {
+    const groupEndIndex = rowIndex + groupRows.length - 1;
+    rowIndex += groupRows.length;
+    const redact = groupEndIndex < unredactedFromIndex;
+    const verbatim = replayTurnMessages && rowGroups.length - groupIndex <= VERBATIM_TURNS;
+
+    return groupRows.flatMap((row) => {
+      const stored = verbatim && row.role === "assistant" ? row.turn_messages : null;
+      if (stored === null) return [toModelMessage(row, redact)];
+      return redact ? stored.messages.map(redactMessage) : stored.messages;
+    });
+  });
+
+  return { groups, rowGroups };
 }
 
 // `phone` arrives already normalized (no "whatsapp:" prefix) — the webhook
@@ -211,18 +317,15 @@ async function loadMemoryState(
   const watermarkIndex = watermarkId ? rows.findIndex((r) => r.id === watermarkId) : -1;
   const unfoldedRows = watermarkIndex === -1 ? rows : rows.slice(watermarkIndex + 1);
 
-  // unfoldedRows is oldest-first (loadRecentMessages' own ordering), so the
-  // last RECENT_MESSAGES_KEPT_UNREDACTED rows are the most recent ones —
-  // see that constant's own comment for why those must stay unredacted.
-  const mapped = unfoldedRows.map((row, i) =>
-    toModelMessage(row, unfoldedRows.length - i > RECENT_MESSAGES_KEPT_UNREDACTED),
-  );
-  const historyMessages = trimToTokenBudget(mapped);
+  const { groups, rowGroups } = buildHistoryMessages(unfoldedRows);
+  const keptGroups = trimToTokenBudget(groups);
+  const historyMessages = keptGroups.flat();
 
-  // trimToTokenBudget only peels off the front (oldest first), so dropped
-  // rows are positionally unfoldedRows.slice(0, droppedCount).
-  const droppedCount = mapped.length - historyMessages.length;
-  const newlyDroppedRows = unfoldedRows.slice(0, droppedCount);
+  // trimToTokenBudget only peels whole groups off the front (oldest first),
+  // so the dropped rows are the rows of the first droppedGroupCount groups,
+  // and the watermark always advances at a turn boundary.
+  const droppedGroupCount = groups.length - keptGroups.length;
+  const newlyDroppedRows = rowGroups.slice(0, droppedGroupCount).flat();
 
   return { historyMessages, existingMemory, newlyDroppedRows };
 }
@@ -349,7 +452,8 @@ export async function foldMemory(params: {
 
   // Always redacted — these rows are, by definition, old enough to be
   // dropped from active history and summarized, so the recent-window
-  // exemption above doesn't apply.
+  // exemption above doesn't apply. toModelMessage is text-only, so the
+  // summariser never sees replayed tool JSON.
   const newlyDroppedMessages = newlyDroppedRows.map((row) => toModelMessage(row, true));
   const oldestDroppedId = newlyDroppedRows[0].id;
   const newWatermark = newlyDroppedRows[newlyDroppedRows.length - 1].id;
