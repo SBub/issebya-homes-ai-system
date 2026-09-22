@@ -17,7 +17,8 @@
  * said "Yes" to an offer whose ISO dates lived only in the previous turn's
  * run_code result, and the model guessed 2025. Its `rows` go through
  * production's buildHistoryMessages, so the stored turn_messages replay the
- * same way they do live.
+ * same way they do live. The offer prose deliberately omits the dates, so
+ * the row fails without tool replay.
  *
  * Run with (needs BRAINTRUST_API_KEY; same org/project in every env):
  *   yarn tsx --env-file=.env.development scripts/push-date-resolution-rows.ts
@@ -54,7 +55,8 @@ function storedRow(
   };
 }
 
-const OFFER_TEXT = "Room 1 is open from October 6 to October 8. Shall I send you the booking link?";
+const OFFER_TEXT =
+  "Good news, Room 1 has an opening for 2 nights coming up soon. Shall I send you the booking link?";
 
 const replayRows: MessageRow[] = [
   storedRow(
@@ -183,7 +185,7 @@ const rows: GoldenRow[] = [
     },
     metadata: {
       description:
-        "2026-09-22 production transcript: the previous turn's run_code found room 1 free 2026-10-06 to 2026-10-08 and the reply offered 'October 6 to October 8'. The guest says 'Yes'. The previous turn's tool call and result are replayed from turn_messages, so the model must call send_booking_link with exactly those ISO dates (args scored). Guessing the year from the prose (2025 in production) or re-running run_code is a miss. Run with GCA_EVAL_DISABLE_TURN_REPLAY=1 to replay text only; this row is expected to fail then.",
+        "2026-09-22 production transcript: the previous turn's run_code found room 1 free 2026-10-06 to 2026-10-08 and the reply offered '2 nights coming up soon' without restating the dates. The guest says 'Yes'. 2026-10-06/2026-10-08 exist only in the replayed run_code result from turn_messages, so the model must call send_booking_link with exactly those ISO dates (args scored). Re-running run_code or asking for dates is a miss. With GCA_EVAL_DISABLE_TURN_REPLAY=1 (text-only replay) the model has no source for the dates: it re-runs run_code or asks (a miss) or guesses (fails the scored args), so the row scores 0 either way.",
     },
   },
   {
