@@ -29,7 +29,9 @@ test.describe("Shop", () => {
 
     await card.click();
     await expect(page).toHaveURL(`/shop/${firstProduct.slug}`);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(firstProduct.name);
+    await expect(
+      page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
+    ).toBeVisible();
 
     const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
     const back = breadcrumb.getByRole("link", { name: "shop" });
