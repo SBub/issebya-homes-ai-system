@@ -170,6 +170,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing the website's `test` / `test:browser` scripts, `browser.instances`, or `optimizeDeps.include` in `vitest.config.ts`
     - When deciding whether a new test should gate, or wondering why an `e2e/` spec never runs in CI
 
+- `apps/website/app_docs/feature-f72316fa-booking-og-metadata.md`
+  - Conditions:
+    - When a WhatsApp (or other) link preview for a `/booking/[type]` URL shows the home card, the wrong room, or no image
+    - When changing `generateMetadata` on `/booking/[type]`, adding a room, or replacing a `public/og/booking-*.jpg` share image
+    - When `/booking/room1` or `/booking/room2` stops showing as prerendered in the build route table
+
 ---
 
 ## apps/guest-communication-agent
