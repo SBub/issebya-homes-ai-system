@@ -1,5 +1,5 @@
 import { addDays, format, startOfDay } from "date-fns";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
@@ -56,6 +56,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSearchParams = new URLSearchParams();
   capturedOnClose = null;
+});
+
+// The scroll tests spy on Element.prototype and window; clearAllMocks above
+// resets call history but does not restore the originals.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 test("user sees error message when availability fetch failed and no dates are available", async () => {
@@ -116,6 +122,65 @@ test("expanded view hides when user clicks close", async () => {
   // Close
   await userEvent.click(getByRole("button", { name: "Close" }));
   await expect.element(page.getByTestId("mock-expanded")).not.toBeInTheDocument();
+});
+
+// Closing used to scroll to the top of the document, which on the mobile room
+// page is the gallery and in a blog post is the article's top. It must land on
+// the same element expanding lands on: the engine, date row at the top.
+test("closing the calendar scrolls back to the engine, not the page top", async () => {
+  const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+  const { getByRole, getByLabelText, container } = await render(
+    <BookingClient {...defaultProps} />,
+  );
+  await expect.element(getByLabelText("Book selected dates")).toBeInTheDocument();
+  // A direct visitor is never scrolled on mount.
+  expect(scrollIntoView).not.toHaveBeenCalled();
+
+  await userEvent.click(getByLabelText("Book selected dates"));
+  await expect.element(page.getByTestId("mock-expanded")).toBeInTheDocument();
+  scrollIntoView.mockClear();
+
+  await userEvent.click(getByRole("button", { name: "Close" }));
+  await expect.element(page.getByTestId("mock-expanded")).not.toBeInTheDocument();
+
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  expect(scrollIntoView.mock.contexts[0]).toBe(container.querySelector(".booking-engine"));
+  expect(scrollTo).not.toHaveBeenCalled();
+});
+
+// BookingWidget renders this same BookingClient mid-article inside the #book
+// aside, so the fix has to hold there without any widget-specific code.
+// Mirrors BOOKING_WIDGET_ANCHOR_ID; not imported because @/lib/blog/return-path
+// pulls in the MDX post registry, which the browser test bundle cannot load.
+const BOOKING_WIDGET_ANCHOR_ID = "book";
+
+test("inside the blog widget arrangement, closing lands on the engine", async () => {
+  const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+  const { getByRole, getByLabelText, container } = await render(
+    <aside id={BOOKING_WIDGET_ANCHOR_ID}>
+      <div style={{ height: 2000 }}>article above</div>
+      <BookingClient {...defaultProps} />
+    </aside>,
+  );
+
+  await userEvent.click(getByLabelText("Book selected dates"));
+  await expect.element(page.getByTestId("mock-expanded")).toBeInTheDocument();
+  scrollIntoView.mockClear();
+
+  await userEvent.click(getByRole("button", { name: "Close" }));
+  await expect.element(page.getByTestId("mock-expanded")).not.toBeInTheDocument();
+
+  const engine = container.querySelector(`#${BOOKING_WIDGET_ANCHOR_ID} .booking-engine`);
+  expect(engine).not.toBeNull();
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(scrollIntoView.mock.contexts[0]).toBe(engine);
+  expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  expect(scrollTo).not.toHaveBeenCalled();
 });
 
 test("user sees formatted dates when provided", async () => {
