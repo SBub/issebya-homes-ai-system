@@ -15,8 +15,6 @@ export const metadata: Metadata = {
 export default function BlogIndexPage() {
   return (
     <div className="p-4 md:p-12">
-      <h1 className="text-4xl font-hand font-bold mb-8">Blog</h1>
-
       {allPosts.length === 0 ? (
         <p className="text-sm leading-relaxed">No posts yet. Check back soon.</p>
       ) : (

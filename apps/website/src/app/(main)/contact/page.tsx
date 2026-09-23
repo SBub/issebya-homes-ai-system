@@ -5,8 +5,6 @@ import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 export default function ContactPage() {
   return (
     <div className="p-4 md:p-12">
-      <h1 className="text-4xl text-header mb-6">Contact</h1>
-
       <div className="page-decor-photo mb-8">
         <Image
           src="/frontyard.webp"
