@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value       | Last Updated                  |
 | ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 13          | Wed Sep 23 21:25:33 WEST 2026 |
-| Longest Streak    | 13          | Wed Sep 23 21:25:33 WEST 2026 |
-| Total Plan Size   | 4609 lines  | Wed Sep 23 21:25:33 WEST 2026 |
-| Largest Plan Size | 698 lines   | Wed Sep 23 21:25:33 WEST 2026 |
-| Total Diff Size   | 13478 lines | Wed Sep 23 21:25:33 WEST 2026 |
-| Largest Diff Size | 2629 lines  | Wed Sep 23 21:25:33 WEST 2026 |
-| Average Presence  | 1.0         | Wed Sep 23 21:25:33 WEST 2026 |
+| Current Streak    | 14          | Wed Sep 23 22:29:59 WEST 2026 |
+| Longest Streak    | 14          | Wed Sep 23 22:29:59 WEST 2026 |
+| Total Plan Size   | 4905 lines  | Wed Sep 23 22:29:59 WEST 2026 |
+| Largest Plan Size | 698 lines   | Wed Sep 23 22:29:59 WEST 2026 |
+| Total Diff Size   | 14513 lines | Wed Sep 23 22:29:59 WEST 2026 |
+| Largest Diff Size | 2629 lines  | Wed Sep 23 22:29:59 WEST 2026 |
+| Average Presence  | 1.0         | Wed Sep 23 22:29:59 WEST 2026 |
 
 ## ADW KPIs
 
@@ -35,3 +35,4 @@ Detailed metrics for individual ADW workflow runs.
 | Tue Sep 22 23:37:46 WEST 2026 | 4f43c209 | 113          | /bug        | 1        | 340               | 1642/96/29                      | Tue Sep 22 23:37:46 WEST 2026 | Tue Sep 22 23:37:46 WEST 2026 |
 | Wed Sep 23 21:02:05 WEST 2026 | f72316fa | 122          | /feature    | 1        | 360               | 556/0/6                         | Wed Sep 23 21:02:05 WEST 2026 | Wed Sep 23 21:02:05 WEST 2026 |
 | Wed Sep 23 21:25:33 WEST 2026 | 78e55892 | 123          | /bug        | 1        | 160               | 313/10/4                        | Wed Sep 23 21:25:33 WEST 2026 | Wed Sep 23 21:25:33 WEST 2026 |
+| Wed Sep 23 22:29:59 WEST 2026 | 6db7ada5 | 108          | /feature    | 1        | 296               | 1016/19/26                      | Wed Sep 23 22:29:59 WEST 2026 | Wed Sep 23 22:29:59 WEST 2026 |

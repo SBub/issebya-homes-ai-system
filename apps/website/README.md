@@ -24,6 +24,12 @@ Guest-facing website for [issebya.homes](https://issebya.homes), a guest house i
 | `/booking/confirmation` | Post-payment confirmation                      |
 | `/contact`              | WhatsApp contact link                          |
 | `/guest-info`           | Arrival, parking, house rules, local tips      |
+| `/shop`                 | Product card grid                              |
+| `/shop/[slug]`          | Product details                                |
+
+### Shop
+
+Products live in one explicit, zod-validated registry, `src/lib/shop/products.ts`, and their images in `public/shop/` (local `.webp` only; the schema rejects any `src` outside `/shop/`). The six current entries are **sample data**: replace them by editing that file and those images, and keep each entry's `width`/`height` in step with its photo. There is no cart or checkout yet.
 
 ### API routes
 

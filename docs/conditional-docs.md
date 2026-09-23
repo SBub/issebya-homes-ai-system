@@ -182,6 +182,12 @@ procedures, not code documentation) and anything gitignored.
     - When opening or closing the booking calendar leaves the guest at the page top, the gallery, or the top of a blog post instead of the date row
     - When a Playwright assertion after a smooth scroll passes or fails regardless of where the page ends up
 
+- `apps/website/app_docs/feature-6db7ada5-shop-product-grid.md`
+  - Conditions:
+    - When replacing the sample products or images, or adding a field to the product schema in `src/lib/shop/`
+    - When changing `ProductCard` sizing, or the card stops being portrait or its photo collapses at some breakpoint
+    - When changing the shared `src/app/ui/Breadcrumb.tsx` or adding another detail route that needs a back trail
+
 ---
 
 ## apps/guest-communication-agent
