@@ -10,6 +10,9 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-work);
   --font-hand: var(--font-hand);
+  /* The shop's two palette values, named once: grid ground and card. */
+  --color-shop-ground: #6f6f6f;
+  --color-shop-card: #f1eac8;
 }
 
 @utility text-secondary {

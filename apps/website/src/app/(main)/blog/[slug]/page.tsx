@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { fromCalendarDay } from "@/lib/date-utils";
+import { Breadcrumb } from "@/app/ui/Breadcrumb";
 import { allPosts, getPostBySlug } from "@/lib/blog/posts";
 import { SITE_URL } from "@/lib/site";
-import { Breadcrumb } from "../ui/Breadcrumb";
 
 export function generateStaticParams() {
   return allPosts.map(({ slug }) => ({ slug }));
@@ -51,7 +51,7 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
 
   return (
     <article className="p-4 md:p-12">
-      <Breadcrumb title={title} />
+      <Breadcrumb parent={{ href: "/blog", label: "blog" }} title={title} />
 
       <h1 className="text-price">{title}</h1>
       <p className="text-xs text-gray-600 mt-1 mb-6">
