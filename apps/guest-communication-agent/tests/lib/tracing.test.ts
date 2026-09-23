@@ -1,4 +1,10 @@
-import { context, trace } from "@opentelemetry/api";
+import {
+  context,
+  INVALID_SPANID,
+  INVALID_TRACEID,
+  ProxyTracerProvider,
+  trace,
+} from "@opentelemetry/api";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import {
   BasicTracerProvider,
@@ -37,7 +43,13 @@ vi.mock("@/lib/supabase.js", () => ({
   createAdminClient: () => ({ from: mockFrom }),
 }));
 
-const { recordMissingInfoTraceAnchor, updateSpanIO } = await import("@/lib/tracing.js");
+const captureMessageMock = vi.fn();
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: captureMessageMock,
+}));
+
+const { isValidTraceAnchor, recordMissingInfoTraceAnchor, startTraceRoot, updateSpanIO } =
+  await import("@/lib/tracing.js");
 
 const TEST_ANCHOR = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
 
@@ -128,5 +140,46 @@ describe("tracing.ts best-effort helpers — failure visibility", () => {
     });
 
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe("trace anchor validity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("isValidTraceAnchor accepts a real id pair and rejects OTel's invalid sentinel", () => {
+    expect(
+      isValidTraceAnchor({
+        traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+        spanId: "00f067aa0ba902b7",
+      }),
+    ).toBe(true);
+    expect(isValidTraceAnchor({ traceId: INVALID_TRACEID, spanId: INVALID_SPANID })).toBe(false);
+  });
+
+  it("startTraceRoot returns a valid anchor and reports nothing when a provider is registered", async () => {
+    const { anchor, result } = await startTraceRoot("webhook.turn", {}, async () => "ok");
+
+    expect(result).toBe("ok");
+    expect(isValidTraceAnchor(anchor)).toBe(true);
+    expect(captureMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("startTraceRoot reports the gap without throwing when no provider is registered", async () => {
+    vi.spyOn(trace, "getTracer").mockReturnValue(new ProxyTracerProvider().getTracer("noop"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { anchor, result } = await startTraceRoot("webhook.turn", {}, async () => "ok");
+
+    expect(result).toBe("ok");
+    expect(isValidTraceAnchor(anchor)).toBe(false);
+    expect(captureMessageMock).toHaveBeenCalledTimes(1);
+    expect(captureMessageMock.mock.calls[0]?.[0]).toContain("webhook.turn");
+    expect(consoleErrorSpy).toHaveBeenCalled();
   });
 });

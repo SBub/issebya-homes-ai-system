@@ -1,4 +1,4 @@
-import { SpanStatusCode, trace } from "@opentelemetry/api";
+import { INVALID_SPANID, INVALID_TRACEID, SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -97,11 +97,22 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: () => ({ chat: (modelId: string) => modelId }),
 }));
 
+const captureMessageMock = vi.fn();
+vi.mock("@sentry/nextjs", () => ({
+  captureException: vi.fn(),
+  captureMessage: captureMessageMock,
+}));
+
 const { runGuestTurn } = await import("@/agent/run-guest-turn.js");
 
 const SYSTEM_PROMPT_TEXT = "You are the whatsapp booking agent.";
 
-const TEST_TRACE_ANCHOR = { traceId: "0".repeat(32), spanId: "0".repeat(16) };
+const TEST_TRACE_ANCHOR = {
+  traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+  spanId: "00f067aa0ba902b7",
+};
+// OTel's no-provider sentinel (see isValidTraceAnchor, tracing.ts).
+const INVALID_TRACE_ANCHOR = { traceId: INVALID_TRACEID, spanId: INVALID_SPANID };
 
 // Hand-rolled Inngest step mock — step.run immediately invokes its callback
 // (matching how a real step.run behaves from the caller's perspective once
@@ -192,7 +203,7 @@ describe("runGuestTurn", () => {
       "convo-1",
       "assistant",
       "Yes, room 1 is available!",
-      expect.any(String),
+      TEST_TRACE_ANCHOR.traceId,
       {
         turnMessages: {
           schema_version: 1,
@@ -390,7 +401,7 @@ describe("runGuestTurn", () => {
       "convo-1",
       "assistant",
       expectedFallback,
-      expect.any(String),
+      TEST_TRACE_ANCHOR.traceId,
       { turnMessages: expect.objectContaining({ schema_version: 1 }) },
     );
     // The step-cap tail ends on a tool message; the stored array closes
@@ -400,13 +411,64 @@ describe("runGuestTurn", () => {
       string,
       string,
       string,
-      string,
+      string | undefined,
       { turnMessages: { messages: ModelMessage[] } },
     ];
     expect(turnMessages.messages).toHaveLength(17);
     expect(turnMessages.messages.at(-2)?.role).toBe("tool");
     expect(turnMessages.messages.at(-1)).toEqual({ role: "assistant", content: expectedFallback });
     expect(sendWhatsAppMessageMock).toHaveBeenCalledWith("+351920742845", expectedFallback);
+  });
+
+  it("records the reply without a trace id and reports the gap when the trace anchor is invalid", async () => {
+    generateTextMock.mockResolvedValueOnce(textResponse("Yes, room 1 is available!"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runGuestTurn({
+      conversationId: "convo-1",
+      phone: "+351920742845",
+      incomingMessage: "Is room 1 free?",
+      triggerMessageId: "msg-user-1",
+      correlationId: "corr-1",
+      traceAnchor: INVALID_TRACE_ANCHOR,
+      step,
+    });
+
+    expect(recordMessageMock).toHaveBeenCalledTimes(1);
+    expect(recordMessageMock.mock.calls[0]?.[3]).toBeUndefined();
+    const recordReplyReports = captureMessageMock.mock.calls.filter(([message]) =>
+      String(message).includes("run-guest-turn.record-reply"),
+    );
+    expect(recordReplyReports).toHaveLength(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("two zero-anchor turns produce two assistant rows", async () => {
+    generateTextMock
+      .mockResolvedValueOnce(textResponse("Room 1 is free."))
+      .mockResolvedValueOnce(textResponse("Check-in is at 3pm."));
+    recordMessageMock.mockResolvedValueOnce("msg-a").mockResolvedValueOnce("msg-b");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    for (const [incomingMessage, correlationId] of [
+      ["Is room 1 free?", "corr-a"],
+      ["When is check-in?", "corr-b"],
+    ] as const) {
+      await runGuestTurn({
+        conversationId: "convo-1",
+        phone: "+351920742845",
+        incomingMessage,
+        correlationId,
+        traceAnchor: INVALID_TRACE_ANCHOR,
+        step: makeStepMock(),
+      });
+    }
+
+    expect(recordMessageMock).toHaveBeenCalledTimes(2);
+    expect(recordMessageMock.mock.calls.map((call) => call[3])).toEqual([undefined, undefined]);
+    expect(updateMessageDeliveryStatusMock).toHaveBeenNthCalledWith(1, "msg-a", "sent");
+    expect(updateMessageDeliveryStatusMock).toHaveBeenNthCalledWith(2, "msg-b", "sent");
+    consoleErrorSpy.mockRestore();
   });
 
   it("logs but does not throw when sendWhatsAppMessage fails", async () => {

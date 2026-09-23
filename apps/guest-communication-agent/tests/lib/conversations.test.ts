@@ -100,6 +100,9 @@ describe("getOrCreateActiveConversation", () => {
 });
 
 describe("recordMessage", () => {
+  const VALID_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const ZERO_TRACE_ID = "0".repeat(32);
+
   beforeEach(() => {
     insertSelectSingleMock.mockReset();
     insertSelectMock.mockClear();
@@ -129,13 +132,18 @@ describe("recordMessage", () => {
   it("includes trace_id in the insert when supplied", async () => {
     insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-2" }, error: null });
 
-    const result = await recordMessage("convo-1", "assistant", "Yes, room 1 is free!", "run-1");
+    const result = await recordMessage(
+      "convo-1",
+      "assistant",
+      "Yes, room 1 is free!",
+      VALID_TRACE_ID,
+    );
 
     expect(insertMock).toHaveBeenCalledWith({
       conversation_id: "convo-1",
       role: "assistant",
       content: "Yes, room 1 is free!",
-      trace_id: "run-1",
+      trace_id: VALID_TRACE_ID,
     });
     expect(result).toBe("msg-2");
   });
@@ -147,13 +155,15 @@ describe("recordMessage", () => {
       messages: [{ role: "assistant" as const, content: "Room 1 is free." }],
     };
 
-    await recordMessage("convo-1", "assistant", "Room 1 is free.", "run-1", { turnMessages });
+    await recordMessage("convo-1", "assistant", "Room 1 is free.", VALID_TRACE_ID, {
+      turnMessages,
+    });
 
     expect(insertMock).toHaveBeenCalledWith({
       conversation_id: "convo-1",
       role: "assistant",
       content: "Room 1 is free.",
-      trace_id: "run-1",
+      trace_id: VALID_TRACE_ID,
       turn_messages: turnMessages,
     });
   });
@@ -173,9 +183,9 @@ describe("recordMessage", () => {
       () => ({ eq: existingEqTraceMock }) as unknown as ReturnType<typeof selectMock>,
     );
 
-    const result = await recordMessage("convo-1", "assistant", "Yes!", "run-1");
+    const result = await recordMessage("convo-1", "assistant", "Yes!", VALID_TRACE_ID);
 
-    expect(existingEqTraceMock).toHaveBeenCalledWith("trace_id", "run-1");
+    expect(existingEqTraceMock).toHaveBeenCalledWith("trace_id", VALID_TRACE_ID);
     expect(existingEqRoleMock).toHaveBeenCalledWith("role", "assistant");
     expect(result).toBe("msg-existing");
   });
@@ -189,6 +199,49 @@ describe("recordMessage", () => {
     await expect(recordMessage("convo-1", "assistant", "Yes!")).rejects.toThrow(
       "Failed to record assistant message for conversation convo-1: duplicate key value",
     );
+  });
+
+  it("stores an invalid (all-zero) trace id as null and returns the new row id even when another zero-trace assistant row exists", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    selectMock.mockClear();
+    insertSelectSingleMock.mockResolvedValueOnce({ data: { id: "msg-new" }, error: null });
+
+    const result = await recordMessage("convo-1", "assistant", "Second reply", ZERO_TRACE_ID);
+
+    expect(insertMock).toHaveBeenCalledWith({
+      conversation_id: "convo-1",
+      role: "assistant",
+      content: "Second reply",
+    });
+    expect(result).toBe("msg-new");
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it("throws on a unique violation with an invalid trace id instead of returning another row's id", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    selectMock.mockClear();
+    insertSelectSingleMock.mockResolvedValueOnce({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+    const existingSingleMock = vi.fn().mockResolvedValueOnce({
+      data: { id: "msg-existing" },
+      error: null,
+    });
+    const existingEqRoleMock = vi.fn(() => ({ single: existingSingleMock }));
+    const existingEqTraceMock = vi.fn(() => ({ eq: existingEqRoleMock }));
+    selectMock.mockImplementationOnce(
+      () => ({ eq: existingEqTraceMock }) as unknown as ReturnType<typeof selectMock>,
+    );
+
+    await expect(
+      recordMessage("convo-1", "assistant", "Second reply", ZERO_TRACE_ID),
+    ).rejects.toThrow(
+      "Failed to record assistant message for conversation convo-1: duplicate key value",
+    );
+    expect(selectMock).not.toHaveBeenCalled();
+    selectMock.mockReset();
+    selectMock.mockImplementation(() => ({ eq: lookupEqPhoneMock }));
   });
 
   it("throws when the insert fails", async () => {
