@@ -159,6 +159,16 @@ class TestSendBookingLink:
             ("❌ Reject", "booking_reject:corr-abc-123"),
         ]
 
+    async def test_includes_guest_phone_line(self, client: httpx.AsyncClient, mocks: dict) -> None:
+        await client.post(OWNER_NUDGES_URL, json=self.BOOKING_BODY, headers=_headers())
+
+        text, buttons = mocks["send_message"].call_args[0][:2]
+        assert "\nGuest: +351920742845\n" in text
+        assert [(b.text, b.callback_data) for b in buttons] == [
+            ("✅ Approve", "booking_approve:corr-abc-123"),
+            ("❌ Reject", "booking_reject:corr-abc-123"),
+        ]
+
     async def test_does_not_append_ref_tag(self, client: httpx.AsyncClient, mocks: dict) -> None:
         await client.post(OWNER_NUDGES_URL, json=self.BOOKING_BODY, headers=_headers())
 
