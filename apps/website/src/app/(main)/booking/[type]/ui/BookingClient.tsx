@@ -171,14 +171,19 @@ export function BookingClient({
     addBookingBreadcrumb("Booking engine initialized", { roomType });
   }, [roomType]);
 
+  // Expanding and closing land on the same place: the engine container, with
+  // the collapsed date row at the top of the viewport. One helper so the two
+  // targets can't drift apart again (close used to jump to the page top, which
+  // is the gallery on mobile and the article's top in a blog post).
+  const scrollEngineIntoView = useCallback(() => {
+    containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   useEffect(() => {
-    if (isExpanded && containerRef.current) {
-      containerRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
+    if (isExpanded) {
+      scrollEngineIntoView();
     }
-  }, [isExpanded]);
+  }, [isExpanded, scrollEngineIntoView]);
 
   const validateRange = useCallback(
     (checkIn: Date, checkOut: Date): boolean => {
@@ -226,11 +231,11 @@ export function BookingClient({
     addBookingBreadcrumb("User expanded booking calendar", { roomType });
   }, [roomType]);
 
-  // Handle close
+  // Handle close: return to the date row, the same target expand scrolls to
   const handleClose = useCallback(() => {
     setIsExpanded(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+    scrollEngineIntoView();
+  }, [scrollEngineIntoView]);
 
   // Applies a freshly-fetched availability snapshot (e.g. after a
   // dates_unavailable checkout retry) and clears the now-invalid selection.

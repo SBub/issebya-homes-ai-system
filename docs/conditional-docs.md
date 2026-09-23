@@ -176,6 +176,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing `generateMetadata` on `/booking/[type]`, adding a room, or replacing a `public/og/booking-*.jpg` share image
     - When `/booking/room1` or `/booking/room2` stops showing as prerendered in the build route table
 
+- `apps/website/app_docs/feature-78e55892-booking-close-scroll-target.md`
+  - Conditions:
+    - When changing where `BookingClient` scrolls on expand or close, or adding a sticky/fixed header that could cover `.booking-engine`
+    - When opening or closing the booking calendar leaves the guest at the page top, the gallery, or the top of a blog post instead of the date row
+    - When a Playwright assertion after a smooth scroll passes or fails regardless of where the page ends up
+
 ---
 
 ## apps/guest-communication-agent
