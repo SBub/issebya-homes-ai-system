@@ -1,11 +1,13 @@
 import { Suspense } from "react";
 import { ErrorBoundary } from "@sentry/nextjs";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Callout } from "@/app/ui/Callout";
 import { TabsDesktop } from "@/app/ui/TabsDesktop";
 import { TabsMobile } from "@/app/ui/TabsMobile";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
+import { SITE_URL } from "@/lib/site";
 import { room1Images, room2Images } from "@/utils/images";
 import { BookingEngine } from "./ui/BookingEngine";
 import { BookingEngineSkeleton } from "./ui/BookingEngineSkeleton";
@@ -43,6 +45,60 @@ const ROOM_CONTENT: Record<string, { title: string; description: string[]; airbn
 
 export async function generateStaticParams() {
   return [{ type: BookingType.room1 }, { type: BookingType.room2 }];
+}
+
+const MAX_DESCRIPTION_LENGTH = 160;
+
+// The leading whole sentences of `text` that fit in a meta description. Only
+// cuts mid-sentence when the first sentence alone is already too long.
+function leadingSentences(text: string): string {
+  const sentences = text.split(/(?<=\.)\s+/);
+  let result = "";
+  for (const sentence of sentences) {
+    const next = result ? `${result} ${sentence}` : sentence;
+    if (next.length > MAX_DESCRIPTION_LENGTH) break;
+    result = next;
+  }
+  if (result) return result;
+
+  const cut = sentences[0].slice(0, MAX_DESCRIPTION_LENGTH - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${lastSpace > 0 ? cut.slice(0, lastSpace) : cut}…`;
+}
+
+// Reads `params` only, never searchParams, cookies() or headers(), so the
+// card is per room rather than per link and both rooms keep prerendering.
+export async function generateMetadata(props: {
+  params: Promise<{ type: string }>;
+}): Promise<Metadata> {
+  const { type: requested } = await props.params;
+  // An unknown type is a redirect, not a build failure: the page itself
+  // redirects to /booking/room1. Returning room1's card here keeps
+  // generateMetadata from throwing first, and matches where the guest lands.
+  const type = isValidBookingType(requested) ? requested : BookingType.room1;
+  const { title: roomTitle, description: paragraphs } = ROOM_CONTENT[type];
+  const title = `Book ${roomTitle} - issebya.homes`;
+  const description = leadingSentences(paragraphs[0]);
+  const url = `${SITE_URL}/booking/${type}`;
+  // A JPEG with declared dimensions: WhatsApp's preview fetcher skips WebP
+  // and uses width/height to render without a second fetch.
+  const image = {
+    url: `/og/booking-${type}.jpg`,
+    width: 1200,
+    height: 630,
+    type: "image/jpeg",
+    alt: `${roomTitle} at issebya.homes`,
+  };
+
+  // Metadata merges shallowly: these openGraph/twitter objects replace the
+  // root layout's wholesale, so each carries its own title and description.
+  return {
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: { title, description, url, type: "website", images: [image] },
+    twitter: { card: "summary_large_image", title, description, images: [image.url] },
+  };
 }
 
 export default async function BookingTypePage(props: { params: Promise<{ type: string }> }) {
