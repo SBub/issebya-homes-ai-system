@@ -2,8 +2,8 @@ name: GCA Eval Gate
 
 # Separate from ci.yml on purpose: this runs real Braintrust experiments
 # against real model calls (real API spend), on a different trigger/cadence
-# than lint/typecheck/test. Only when this app's own files change (see
-# `paths:` below), to avoid spending real API budget on pushes that can't
+# than lint/typecheck/test. The real suite only runs when this app's own
+# files change, to avoid spending real API budget on pushes that can't
 # have touched the eval-gated behavior.
 #
 # Two triggers, two different jobs:
@@ -11,10 +11,20 @@ name: GCA Eval Gate
 # - `push` to `develop`: informational, non-blocking early warning. A
 #   repository ruleset on `develop` only requires ci.yml's `check`, not
 #   this — so this run can never gate a develop merge, it just surfaces a
-#   regression as soon as it lands instead of only at promotion time.
+#   regression as soon as it lands instead of only at promotion time. Uses
+#   a plain `paths:` filter: nothing depends on this run reporting.
 # - `pull_request` into `master`: the real gate. A repository ruleset on
 #   `master` requires this check ("eval-gate") to pass before any PR can
 #   merge. This is the one that's actually load-bearing.
+#
+# The pull_request trigger deliberately has NO `paths:` filter, same
+# reasoning as migrations.yml's `changes` job. A required status check that
+# never reports blocks the merge forever, and a workflow skipped by a
+# `paths:` filter never reports. That locked promotion PR #119 (a SQL-only
+# hotfix) on 2026-09-23 with prod down. So the workflow always runs on a PR
+# into master; the cheap `changes` job asks the API whether the PR touches
+# this app, and `eval-gate` skips itself when it doesn't. A job skipped via
+# `if:` reports "skipped", which the ruleset accepts, while spending nothing.
 #
 # Deliberately NOT also `push` to `master`: merging into a protected ref
 # still fires a push event even though direct pushes are blocked, so a
@@ -29,11 +39,46 @@ on:
       - "apps/guest-communication-agent/**"
   pull_request:
     branches: [master]
-    paths:
-      - "apps/guest-communication-agent/**"
 
 jobs:
+  changes:
+    # Stands in for the `paths:` filter the pull_request trigger gave up.
+    # No checkout: asking the API for the PR's file list is faster than
+    # cloning to diff it, and needs no fetch-depth games to get a merge base.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      gca: ${{ steps.filter.outputs.gca }}
+    steps:
+      - name: Does this PR touch apps/guest-communication-agent/**?
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Assigned first, not piped straight into grep, so that a failure
+          # of `gh` itself kills the step (errexit) instead of being read as
+          # "GCA untouched", which would silently skip the real gate.
+          files="$(gh pr diff "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --name-only)"
+          echo "Changed files:"
+          echo "$files" | sed 's/^/  /'
+
+          if echo "$files" | grep -q '^apps/guest-communication-agent/'; then
+            echo "gca=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "gca=false" >> "$GITHUB_OUTPUT"
+          fi
+
   eval-gate:
+    needs: changes
+    # `!cancelled()` so this still evaluates on `push`, where `changes` is
+    # itself skipped (a skipped `needs` would otherwise skip this job too).
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.gca == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -79,6 +79,15 @@ field 'members'` — is expected and non-fatal while there are zero Python
   output when the workspace has none. It disappears once the first real
   Python app exists. Its own remediation text ("run `uv lock` and commit
   uv.lock") is wrong in this state — the lockfile is already committed.
+- A Python app deployed to Vercel needs a `vercel.json` in its own directory
+  that sets `installCommand` to `uv sync --frozen --no-dev --no-editable
+--package <name>` and `buildCommand` to a smoke import of the entrypoint
+  module. Without it, Vercel's turbo detection sets Install Command to
+  `yarn install`, the Python builder treats that custom command as "deps
+  already installed" and skips `uv sync`, and the function ships with no
+  packages: a green build, then `ModuleNotFoundError` on every request. See
+  `apps/telegram-router/README.md`'s Deployment section. After any deploy of
+  a Python app, hit its `/api/health` before calling it done.
 - Do **not** add a `required-version` floor under `[tool.uv]` in the root
   `pyproject.toml`. It gates every `uv` invocation, including the one inside
   Vercel's build image — which ships its own uv (0.10.11 at the time of

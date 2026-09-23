@@ -51,18 +51,39 @@ secret, the shared key with GCA, Axiom/Sentry observability config).
 ## Deployment
 
 Deployed on Vercel as the project `ihas-telegram-router`, with Root Directory
-`apps/telegram-router` and framework preset `Other` (there is no framework to
-build, this is a plain ASGI app). It runs as a single Vercel Function with
-Fluid compute. The entrypoint is declared as `app.main:app` under
-`[tool.vercel]` in `pyproject.toml`; Vercel's own filename detection would
-find `app/main.py` anyway, but stating it is Vercel's recommendation for new
-projects.
+`apps/telegram-router` and framework preset `FastAPI`. It runs as a single
+Vercel Function with Fluid compute. The entrypoint is declared as
+`app.main:app` under `[tool.vercel]` in `pyproject.toml`; Vercel's own
+filename detection would find `app/main.py` anyway, but stating it is
+Vercel's recommendation for new projects.
 
 Dependencies come from `pyproject.toml`, resolved with uv against the
-repo-root `uv.lock` when the build context includes files outside the Root
-Directory. There is deliberately no `requirements.txt` (it would be a second
-source of truth for the same dependency list) and no `vercel.json` (nothing
-here needs `maxDuration` or `excludeFiles` yet).
+repo-root `uv.lock`. There is deliberately no `requirements.txt` (it would be
+a second source of truth for the same dependency list).
+
+`vercel.json` exists for exactly one reason, and it is load-bearing. Vercel
+detects the repo-root `turbo.json` and, unless told otherwise, sets this
+project's Install Command to `yarn install` and its Build Command to
+`turbo run build`. Vercel's Python builder treats any custom Install Command
+as "dependencies are already installed" and skips its own `uv sync`. The
+result is a green build whose function bundle contains no Python packages
+at all, and every request, `/api/health` included, fails with
+`ModuleNotFoundError` (the first import in `app/main.py` that isn't stdlib,
+`sentry_sdk`). That is how this app shipped dead to production on
+2026-09-22 and stayed that way for 17 hours. So `vercel.json` pins:
+
+- `installCommand`: `uv sync --frozen --no-dev --no-editable --package
+telegram-router`. Runs in this directory with the builder's virtualenv
+  active (`VIRTUAL_ENV`/`UV_PROJECT_ENVIRONMENT` are set by the builder),
+  so uv resolves the workspace, finds the root lockfile, and installs only
+  this member's runtime dependencies into the venv the builder then bundles.
+- `buildCommand`: `python -c 'import app.main'`. There is nothing to build;
+  this is a smoke import with the venv's Python, so a missing dependency
+  fails the build loudly instead of every request at runtime.
+
+After any deploy, `curl <deployment>/api/health` must return
+`{"ok": true}`. A `FUNCTION_INVOCATION_FAILED` page there means the bundle
+has no dependencies again.
 
 The registered Telegram webhook URL is a contract. Telegram holds the
 deployed domain plus `/api/telegram/webhook`; change either and every inbound
