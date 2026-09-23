@@ -15,6 +15,10 @@ export interface EvalInput {
   messages?: ModelMessage[];
   rows?: MessageRow[];
   today?: string;
+  // Overrides first-turn detection for rows whose `messages` already hold
+  // this turn's own tool call/result: an assistant message, yet still the
+  // guest's first turn.
+  firstTurn?: boolean;
   contextBlock: string;
 }
 
@@ -39,4 +43,5 @@ export interface SingleTurnResult {
 export interface ExpectedShape {
   toolCall: { name: string; args?: Record<string, unknown> } | null;
   expectedAlternative: string | null;
+  aiDisclosure?: "present" | "absent";
 }

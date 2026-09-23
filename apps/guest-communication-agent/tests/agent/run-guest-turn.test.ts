@@ -163,6 +163,7 @@ describe("runGuestTurn", () => {
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
       memoryMessage: null,
+      hasAssistantHistory: true,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),

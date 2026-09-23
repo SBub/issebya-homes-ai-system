@@ -85,7 +85,9 @@ small, capped window of recent "folds."
   never part of one, since a tool call separated from its result is rejected by the
   provider.
 - **Today's date**: one line stating today's date (UTC) is appended to the Braintrust
-  system prompt on every model call, so the model never has to guess the year.
+  system prompt on every model call, so the model never has to guess the year. When
+  the conversation has no prior assistant row, a first-turn line is appended too, so
+  the AI disclosure fires on the first reply without the model inferring it.
 - **Folding**: whenever trimming drops messages out of that window, the dropped chunk
   (never the full history) gets summarized on its own and stored as a row in
   `guest_memory_folds`. Only one recent fold is kept per guest.
@@ -191,6 +193,9 @@ Evaluation runs at two layers, both on Braintrust.
   the expected ones, because a wrong year in `check_availability` is a silent
   failure: the tool reports the past as available and a stale-year booking link
   follows.
+- The golden set also carries `ai-disclosure-*` rows, scored by a deterministic
+  **AI Disclosure** scorer (informational in the CI gate, not blocking);
+  `scripts/push-ai-disclosure-rows.ts` upserts them.
 - A **prompt-injection dataset** (10 cases) with adversarial guest messages, scored on
   both Tool Call Match and a **Security Invariant Held** scorer: an LLM judge that
   checks, per case, whether a specific stated security invariant held or was violated,
