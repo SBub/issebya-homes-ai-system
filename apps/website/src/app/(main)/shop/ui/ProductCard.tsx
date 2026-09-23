@@ -11,9 +11,12 @@ import { formatPrice, type Product } from "@/lib/shop/schema";
  * product name alone. Without it a screen reader would read the numeral, the
  * brand, the image alt, the price and the description as one long link name.
  *
- * `min-h` rather than a fixed aspect ratio: a portrait card with a fixed ratio
- * clips its text at narrow `md` widths, and the grid's default `stretch`
- * already keeps every card in a row the same height.
+ * A portrait 3:5 card with the photo filling the top 58%, per the design. The
+ * one exception is the three-column `md` range (768-1023px), where a 3:5 card
+ * is too short for the name, price and three-line description. There it uses a
+ * portrait `min-h` instead. `h-full` makes the link's height definite, so the
+ * photo's 58% basis resolves, and the grid's default `stretch` keeps every card
+ * in a row the same height.
  */
 export function ProductCard({ product, position }: { product: Product; position: number }) {
   const { slug, brand, name, price, description, image } = product;
@@ -23,9 +26,9 @@ export function ProductCard({ product, position }: { product: Product; position:
     <Link
       href={`/shop/${slug}`}
       aria-labelledby={nameId}
-      className="group flex flex-col h-full min-h-[28rem] bg-shop-card text-foreground p-3.5"
+      className="group flex flex-col h-full aspect-[3/5] md:max-lg:aspect-auto md:max-lg:min-h-[26rem] bg-shop-card text-foreground p-3.5"
     >
-      <div className="relative w-full aspect-square shrink-0 overflow-hidden">
+      <div className="relative w-full basis-[58%] shrink-0 overflow-hidden">
         <Image
           src={image.src}
           alt={image.alt}
