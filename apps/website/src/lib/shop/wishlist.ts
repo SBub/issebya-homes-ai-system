@@ -1,11 +1,13 @@
 /**
  * Copy and validation for the shop wishlist form on `/shop/[slug]`.
  *
- * Imports only `zod` and the product registry, so it runs in the vitest node
- * pool. It lives outside `actions.ts` because a "use server" file may only
- * export async functions, and a schema or a string constant is a value export.
+ * Imports only `zod`, the shared email schema and the product registry, so it
+ * runs in the vitest node pool. It lives outside `actions.ts` because a
+ * "use server" file may only export async functions, and a schema or a string
+ * constant is a value export.
  */
 import { z } from "zod";
+import { emailSchema } from "@/lib/shared/schemas/email";
 import { getProductBySlug } from "./products";
 
 // The consent sentence shown next to the checkbox. The Server Action stores
@@ -22,14 +24,9 @@ export const WISHLIST_SUCCESS_COPY = "Saved. We'll let you know about it.";
 export const WISHLIST_ERROR_COPY = "Sorry, that did not save. Please try again in a moment.";
 
 export const wishlistSchema = z.object({
-  // Trimmed and lowercased before the check, so the stored value satisfies the
-  // `email = lower(btrim(email))` constraint on `shop_wishlist_contacts`.
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .max(254, "Please enter a valid email address")
-    .pipe(z.email("Please enter a valid email address")),
+  // Normalised to match the `email = lower(btrim(email))` constraint on
+  // `shop_wishlist_contacts`.
+  email: emailSchema,
   // The slug is the product identity (see products.ts). There is no foreign
   // key to check it against, so the registry is the check.
   productSlug: z

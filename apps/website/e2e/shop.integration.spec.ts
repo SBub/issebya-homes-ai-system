@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { allProducts } from "@/lib/shop/products";
 import {
+  SELLER_CONTACT_CONSENT_COPY,
+  SELLER_SUBMISSIONS_BUCKET,
+  sellerSuccessCopy,
+} from "@/lib/shop/seller-submission";
+import {
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
   WISHLIST_SUCCESS_COPY,
@@ -68,11 +73,12 @@ test.describe("Shop", () => {
     ).not.toHaveClass(/border-b-2/);
   });
 
-  test("sitemap lists /shop and every product", async ({ page }) => {
+  test("sitemap lists /shop, /shop/sell and every product", async ({ page }) => {
     const res = await page.request.get("/sitemap.xml");
     const body = await res.text();
 
     expect(body).toContain(`${SITE_URL}/shop</loc>`);
+    expect(body).toContain(`${SITE_URL}/shop/sell</loc>`);
     for (const { slug } of allProducts) {
       expect(body).toContain(`${SITE_URL}/shop/${slug}</loc>`);
     }
@@ -135,5 +141,88 @@ test.describe("Wishlist", () => {
       expect(data).toBeNull();
       expect(error?.code).toBe("42501");
     }
+  });
+});
+
+// The PNG file signature is enough: the bucket checks the declared type and
+// the size, never the bytes.
+const TINY_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+test.describe("Seller submission", () => {
+  let email: string;
+
+  test.beforeEach(() => {
+    email = `e2e-seller-${randomUUID()}@example.com`;
+  });
+
+  // Removes this test's photos and rows. Owner emails never go out: the
+  // Playwright server runs with E2E_MOCK_RESEND.
+  test.afterEach(async () => {
+    const supabase = createAdminClient();
+    const { data: rows } = await supabase
+      .from("shop_seller_submissions")
+      .select("id, photo_paths")
+      .eq("seller_email", email);
+
+    for (const row of rows ?? []) {
+      await supabase.storage.from(SELLER_SUBMISSIONS_BUCKET).remove(row.photo_paths);
+    }
+    await supabase.from("shop_seller_submissions").delete().eq("seller_email", email);
+  });
+
+  test("the shop links to the sell page", async ({ page }) => {
+    await page.goto("/shop");
+
+    await page.getByRole("link", { name: "Offer it here." }).click();
+
+    await expect(page).toHaveURL("/shop/sell");
+    await expect(page.getByRole("heading", { level: 1, name: "Offer a piece" })).toBeVisible();
+  });
+
+  test("a seller submits a piece with two photos", async ({ page }) => {
+    await page.goto("/shop/sell");
+
+    await page.getByLabel("Your name").fill("E2E Seller");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Title").fill("Oak side table");
+    await page.getByLabel("Materials").fill("Solid oak");
+    await page.getByLabel("Condition").selectOption("vintage");
+    await page.getByLabel("Asking price in euros").fill("120,50");
+    await page
+      .getByLabel("Description")
+      .fill("Bought in Porto in the seventies, one small mark on the top.");
+    await page.getByLabel("Photos").setInputFiles([
+      { name: "front.png", mimeType: "image/png", buffer: TINY_PNG },
+      { name: "back.png", mimeType: "image/png", buffer: TINY_PNG },
+    ]);
+    await page.getByRole("checkbox", { name: SELLER_CONTACT_CONSENT_COPY }).check();
+    await page.getByRole("button", { name: "Send to the owner" }).click();
+
+    await expect(page.getByText(sellerSuccessCopy(email))).toBeVisible({ timeout: 15000 });
+
+    const supabase = createAdminClient();
+    const { data: rows } = await supabase
+      .from("shop_seller_submissions")
+      .select("id, status, asking_price_cents, photo_paths")
+      .eq("seller_email", email);
+    expect(rows).toHaveLength(1);
+
+    const [row] = rows ?? [];
+    expect(row.status).toBe("new");
+    expect(row.asking_price_cents).toBe(12050);
+    expect(row.photo_paths).toHaveLength(2);
+    for (const path of row.photo_paths as string[]) {
+      expect(path.startsWith(`${row.id}/`)).toBe(true);
+    }
+
+    const { data: objects } = await supabase.storage.from(SELLER_SUBMISSIONS_BUCKET).list(row.id);
+    expect(objects).toHaveLength(2);
+  });
+
+  test("anon cannot read seller submissions", async () => {
+    const { data, error } = await createClient().from("shop_seller_submissions").select("*");
+
+    expect(data).toBeNull();
+    expect(error?.code).toBe("42501");
   });
 });

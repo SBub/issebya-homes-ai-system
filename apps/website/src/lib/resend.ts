@@ -1,6 +1,11 @@
 import { Resend } from "resend";
 import { BookingConfirmationEmail } from "@/app/emails/BookingConfirmationEmail";
 import { BookingNotificationEmail } from "@/app/emails/BookingNotificationEmail";
+import {
+  formatCents,
+  SELLER_CONDITION_LABELS,
+  type SellerCondition,
+} from "@/lib/shop/seller-submission";
 
 type BookingEmailData = {
   stripe_session_id: string;
@@ -84,4 +89,73 @@ export async function sendBookingNotificationEmail(booking: BookingEmailData): P
       totalAmount: booking.total_amount,
     }),
   });
+}
+
+type SellerSubmissionEmailData = {
+  sellerName: string;
+  sellerEmail: string;
+  sellerPhone: string | null;
+  title: string;
+  makerOrBrand: string | null;
+  materials: string;
+  dimensions: string | null;
+  condition: SellerCondition;
+  askingPriceCents: number;
+  description: string;
+};
+
+/**
+ * Tells the owner a seller has offered a piece. Plain text on purpose: the
+ * owner reads it, clicks the photo links and decides in Studio. Unlike the
+ * booking helpers this checks Resend's `{ error }` and throws it, so the
+ * caller's Sentry report sees a failed send instead of a silent one.
+ */
+export async function sendSellerSubmissionNotificationEmail(
+  submission: SellerSubmissionEmailData,
+  photoUrls: string[],
+): Promise<void> {
+  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+
+  if (!adminEmail) {
+    return;
+  }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+  if (!fromEmail) {
+    throw new Error("Missing environment variable: RESEND_FROM_EMAIL");
+  }
+
+  const text = [
+    `Seller: ${submission.sellerName}`,
+    `Email: ${submission.sellerEmail}`,
+    `Phone: ${submission.sellerPhone ?? "not given"}`,
+    "",
+    `Title: ${submission.title}`,
+    `Maker or brand: ${submission.makerOrBrand ?? "not given"}`,
+    `Materials: ${submission.materials}`,
+    `Dimensions: ${submission.dimensions ?? "not given"}`,
+    `Condition: ${SELLER_CONDITION_LABELS[submission.condition]}`,
+    `Asking price: ${formatCents(submission.askingPriceCents)}`,
+    "",
+    "Description:",
+    submission.description,
+    "",
+    ...photoUrls.map((url, index) => `Photo ${index + 1}: ${url}`),
+    "",
+    "Review in Supabase Studio → shop_seller_submissions",
+  ].join("\n");
+
+  const { error } = await resend.emails.send({
+    from: fromEmail,
+    to: adminEmail,
+    replyTo: submission.sellerEmail,
+    subject: `New shop submission: ${submission.title}`,
+    text,
+  });
+
+  if (error) {
+    throw new Error(`Resend failed to send the seller submission email: ${error.message}`);
+  }
 }
