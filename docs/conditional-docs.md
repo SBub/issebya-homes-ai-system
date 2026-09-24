@@ -220,6 +220,11 @@ procedures, not code documentation) and anything gitignored.
     - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit
     - When changing `scripts/vercel-ignore.sh`, the `Deploy-Preview: yes` trailer, or any app's `vercel.json` `ignoreCommand`
     - When adding a new Vercel-deployed app, or when the 100/day deployment cap is hit again
+- `apps/website/app_docs/feature-ebada8f2-shop-card-edge-to-edge.md`
+  - Conditions:
+    - When changing the padding, width or breadcrumb placement around the yellow `bg-shop-card` block on `/shop/[slug]` or `/shop/sell`
+    - When grey page background shows around a shop card, or `shop-card-edge-to-edge.browser.test.tsx` fails
+    - When giving another shop page (e.g. the wishlist unsubscribe message) the same edge-to-edge card layout
 
 ---
 
