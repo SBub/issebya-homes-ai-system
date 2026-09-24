@@ -8,6 +8,8 @@ import {
   wishlistInputFromFormData,
   wishlistSchema,
 } from "@/lib/shop/wishlist";
+import { sendWishlistConfirmationEmail } from "@/lib/resend";
+import { getProductBySlug } from "@/lib/shop/products";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { formatZodErrors } from "@/lib/shared/validation";
 
@@ -31,7 +33,7 @@ export async function addToWishlist(
     // no DB call, so a bot never learns which field gave it away.
     if (issues.some(({ field }) => field === "honeypot")) {
       addBreadcrumb({ category: "shop", message: "Wishlist honeypot tripped", level: "info" });
-      return { attempt, ok: true, errors: {}, generalError: "", email };
+      return { attempt, ok: true, errors: {}, generalError: "", email, created: false };
     }
 
     const errors: WishlistFormState["errors"] = {};
@@ -40,7 +42,7 @@ export async function addToWishlist(
         errors[field] ??= message;
       }
     }
-    return { attempt, ok: false, errors, generalError: "", email };
+    return { attempt, ok: false, errors, generalError: "", email, created: false };
   }
 
   const { productSlug } = parsed.data;
@@ -50,6 +52,7 @@ export async function addToWishlist(
     errors: {},
     generalError: WISHLIST_ERROR_COPY,
     email,
+    created: false,
   };
 
   // Only the slug goes into Sentry, never the email.
@@ -93,7 +96,28 @@ export async function addToWishlist(
         return failure;
       }
 
-      return { attempt, ok: true, errors: {}, generalError: "", email };
+      // No error means a new row; a unique violation means already wished.
+      const created = itemError === null;
+
+      // Only a new wish is confirmed by email, so repeat clicks never resend.
+      // A failed send is reported but never fails the save.
+      if (created) {
+        try {
+          // Always defined: the schema already checked the slug.
+          const product = getProductBySlug(productSlug);
+          if (!product) throw new Error(`Unknown product ${productSlug}`);
+          await sendWishlistConfirmationEmail({
+            email: parsed.data.email,
+            productName: product.name,
+            productSlug,
+          });
+        } catch (error) {
+          console.error("Wishlist confirmation email failed", error);
+          captureException(error, { tags: { "email.type": "wishlist_confirmation" } });
+        }
+      }
+
+      return { attempt, ok: true, errors: {}, generalError: "", email, created };
     },
   );
 }

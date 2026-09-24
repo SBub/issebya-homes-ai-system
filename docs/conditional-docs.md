@@ -200,6 +200,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding another browser-to-Supabase-Storage upload, or when an upload fails on a CSP `connect-src` block
     - When a seller submission is saved but the owner email never arrives, or a finalize is refused over photo paths
 
+- `apps/website/app_docs/feature-bcb9a5cf-wishlist-heart-modal-email.md`
+  - Conditions:
+    - When changing the wishlist heart button, its `<dialog>`, or the confirmation panel on `/shop/[slug]`
+    - When changing the guest wishlist confirmation email, or when it is sent twice or never arrives
+    - When adding another modal dialog to the site (scroll lock, backdrop-click and focus-return patterns)
+
 ---
 
 ## apps/guest-communication-agent

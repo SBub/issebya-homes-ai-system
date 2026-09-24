@@ -24,6 +24,11 @@ vi.mock("@/lib/shared/supabase", () => ({
   createAdminClient: () => mockCreateAdminClient(),
 }));
 
+const mockSendWishlistEmail = vi.fn();
+vi.mock("@/lib/resend", () => ({
+  sendWishlistConfirmationEmail: (...args: unknown[]) => mockSendWishlistEmail(...args),
+}));
+
 vi.mock("@sentry/nextjs", () => ({
   startSpan: (_opts: unknown, fn: (span?: undefined) => unknown) => fn(undefined),
   addBreadcrumb: vi.fn(),
@@ -56,6 +61,7 @@ describe("addToWishlist", () => {
     vi.clearAllMocks();
     mockUpsert.mockResolvedValue({ error: null });
     mockInsert.mockResolvedValue({ error: null });
+    mockSendWishlistEmail.mockResolvedValue(undefined);
   });
 
   it("records consent before the wish and returns success", async () => {
@@ -87,13 +93,46 @@ describe("addToWishlist", () => {
     expect(mockUpsert.mock.calls[0][0].opt_in_copy).toBe(WISHLIST_OPT_IN_COPY);
   });
 
-  it("treats an already-wished product as success", async () => {
+  it("treats an already-wished product as success and sends no email", async () => {
     mockInsert.mockResolvedValue({ error: { code: "23505", message: "duplicate key" } });
 
     const result = await addToWishlist(initialWishlistState, formData());
 
     expect(result.ok).toBe(true);
+    expect(result.created).toBe(false);
     expect(captureException).not.toHaveBeenCalled();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
+  });
+
+  it("emails the guest once, after the item insert, for a new wish", async () => {
+    const result = await addToWishlist(initialWishlistState, formData());
+
+    expect(result.created).toBe(true);
+    expect(mockSendWishlistEmail).toHaveBeenCalledOnce();
+    expect(mockSendWishlistEmail).toHaveBeenCalledWith({
+      email: "guest@example.com",
+      productName: firstProduct.name,
+      productSlug: firstProduct.slug,
+    });
+    expect(mockInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSendWishlistEmail.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("keeps the save when the email fails, and reports it", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockSendWishlistEmail.mockRejectedValue(new Error("resend down"));
+
+    const result = await addToWishlist(initialWishlistState, formData());
+
+    expect(result.ok).toBe(true);
+    expect(result.created).toBe(true);
+    expect(captureException).toHaveBeenCalledOnce();
+    expect(captureException).toHaveBeenCalledWith(expect.any(Error), {
+      tags: { "email.type": "wishlist_confirmation" },
+    });
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it("rejects an unknown slug without touching the database", async () => {
@@ -104,7 +143,9 @@ describe("addToWishlist", () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors.productSlug).toBe("Unknown product");
+    expect(result.created).toBe(false);
     expect(mockCreateAdminClient).not.toHaveBeenCalled();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 
   it("rejects an unticked opt-in without touching the database", async () => {
@@ -112,7 +153,9 @@ describe("addToWishlist", () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors.marketingOptIn).toBe(WISHLIST_OPT_IN_HELPER);
+    expect(result.created).toBe(false);
     expect(mockCreateAdminClient).not.toHaveBeenCalled();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 
   it("answers a filled honeypot with success and writes nothing", async () => {
@@ -122,7 +165,9 @@ describe("addToWishlist", () => {
     );
 
     expect(result.ok).toBe(true);
+    expect(result.created).toBe(false);
     expect(mockCreateAdminClient).not.toHaveBeenCalled();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 
   it("does not store the wish when the consent upsert fails", async () => {
@@ -132,8 +177,10 @@ describe("addToWishlist", () => {
 
     expect(result.ok).toBe(false);
     expect(result.generalError).toBe(WISHLIST_ERROR_COPY);
+    expect(result.created).toBe(false);
     expect(mockInsert).not.toHaveBeenCalled();
     expect(captureException).toHaveBeenCalledOnce();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 
   it("reports a non-duplicate item insert failure", async () => {
@@ -142,15 +189,17 @@ describe("addToWishlist", () => {
     const result = await addToWishlist(initialWishlistState, formData());
 
     expect(result.ok).toBe(false);
+    expect(result.created).toBe(false);
     expect(result.generalError).toBe(WISHLIST_ERROR_COPY);
     expect(captureException).toHaveBeenCalledOnce();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 
   it("returns only the form state shape", async () => {
     const result = await addToWishlist(initialWishlistState, formData());
 
     expect(Object.keys(result).sort()).toEqual(
-      ["attempt", "email", "errors", "generalError", "ok"].sort(),
+      ["attempt", "created", "email", "errors", "generalError", "ok"].sort(),
     );
   });
 });

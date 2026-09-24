@@ -6,6 +6,8 @@ import {
   SELLER_CONDITION_LABELS,
   type SellerCondition,
 } from "@/lib/shop/seller-submission";
+import { WISHLIST_EMAIL_SUBJECT, wishlistConfirmationEmailText } from "@/lib/shop/wishlist";
+import { SITE_URL } from "@/lib/site";
 
 type BookingEmailData = {
   stripe_session_id: string;
@@ -157,5 +159,47 @@ export async function sendSellerSubmissionNotificationEmail(
 
   if (error) {
     throw new Error(`Resend failed to send the seller submission email: ${error.message}`);
+  }
+}
+
+/**
+ * Tells a guest the piece they wished for is on their list. Sent only when the
+ * wish is new, after the DB writes succeed. Plain text on purpose: HTML
+ * templates are out of scope. Replies go to the owner when
+ * `ADMIN_NOTIFICATION_EMAIL` is set, so "reply to stop" reaches someone who can
+ * act on it. Throws on a Resend `{ error }` so the caller's Sentry report sees
+ * a failed send.
+ */
+export async function sendWishlistConfirmationEmail({
+  email,
+  productName,
+  productSlug,
+}: {
+  email: string;
+  productName: string;
+  productSlug: string;
+}): Promise<void> {
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+  if (!fromEmail) {
+    throw new Error("Missing environment variable: RESEND_FROM_EMAIL");
+  }
+
+  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+
+  const { error } = await resend.emails.send({
+    from: fromEmail,
+    to: email,
+    ...(adminEmail ? { replyTo: adminEmail } : {}),
+    subject: WISHLIST_EMAIL_SUBJECT,
+    text: wishlistConfirmationEmailText({
+      productName,
+      productUrl: `${SITE_URL}/shop/${productSlug}`,
+    }),
+  });
+
+  if (error) {
+    throw new Error(`Resend failed to send the wishlist confirmation email: ${error.message}`);
   }
 }

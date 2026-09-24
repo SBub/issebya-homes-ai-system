@@ -7,16 +7,19 @@ import {
   sellerSuccessCopy,
 } from "@/lib/shop/seller-submission";
 import {
+  WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
   WISHLIST_SUCCESS_COPY,
+  wishlistEmailSentCopy,
 } from "@/lib/shop/wishlist";
 import { createAdminClient, createClient } from "@/lib/shared/supabase";
 import { SITE_URL } from "@/lib/site";
 
 // The catalogue reads no database. The wishlist tests write to the shared
 // local DB, each under its own unique email, and delete that contact
-// afterwards (its items cascade).
+// afterwards (its items cascade). The Playwright server runs with
+// E2E_MOCK_RESEND=true, so a new wish never emails these addresses.
 const [firstProduct] = allProducts;
 
 test.describe("Shop", () => {
@@ -100,23 +103,37 @@ test.describe("Wishlist", () => {
     await page.goto(`/shop/${firstProduct.slug}`);
 
     await page.getByRole("button", { name: "Add to wishlist" }).click();
-    await page.getByLabel("Email").fill(email);
+    const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Email").fill(email);
 
-    const submit = page.getByRole("button", { name: "Save to wishlist" });
+    const submit = dialog.getByRole("button", { name: "Save to wishlist" });
     await expect(submit).toBeDisabled();
-    await expect(page.getByText(WISHLIST_OPT_IN_HELPER)).toBeVisible();
+    await expect(dialog.getByText(WISHLIST_OPT_IN_HELPER)).toBeVisible();
 
-    await page.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
+    await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
     await submit.click();
-    await expect(page.getByText(WISHLIST_SUCCESS_COPY)).toBeVisible();
+    const panel = dialog.getByRole("status");
+    await expect(panel).toContainText(firstProduct.name);
+    await expect(panel).toContainText(WISHLIST_SUCCESS_COPY);
+    await expect(panel).toContainText(wishlistEmailSentCopy(email));
+    const addedHeart = page.getByRole("button", { name: "Added to wishlist" });
+    await expect(addedHeart).toHaveAttribute("aria-pressed", "true");
+    await panel.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
 
-    // Second visit: the email (and consent) come back from localStorage.
+    // Second visit: the heart is empty again (in-memory by design), and the
+    // email (and consent) come back from localStorage.
     await page.reload();
-    await page.getByRole("button", { name: "Add to wishlist" }).click();
-    await expect(page.getByLabel("Email")).toHaveValue(email);
-    await page.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-    await page.getByRole("button", { name: "Save to wishlist" }).click();
-    await expect(page.getByText(WISHLIST_SUCCESS_COPY)).toBeVisible();
+    const heart = page.getByRole("button", { name: "Add to wishlist" });
+    await expect(heart).not.toHaveAttribute("aria-pressed");
+    await heart.click();
+    await expect(dialog.getByLabel("Email")).toHaveValue(email);
+    await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
+    await dialog.getByRole("button", { name: "Save to wishlist" }).click();
+    // Already wished: saved, but no second email, so no "sent a note" line.
+    await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
+    await expect(dialog.getByRole("status")).not.toContainText(wishlistEmailSentCopy(email));
 
     const supabase = createAdminClient();
     const { data: items } = await supabase
@@ -131,6 +148,20 @@ test.describe("Wishlist", () => {
       .select("marketing_opt_in, opt_in_copy")
       .eq("email", email);
     expect(contacts).toEqual([{ marketing_opt_in: true, opt_in_copy: WISHLIST_OPT_IN_COPY }]);
+  });
+
+  test("Escape closes the dialog and returns focus to the heart", async ({ page }) => {
+    await page.goto(`/shop/${firstProduct.slug}`);
+
+    const heart = page.getByRole("button", { name: "Add to wishlist" });
+    await heart.click();
+    const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
+    await expect(dialog).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(dialog).toBeHidden();
+    await expect(heart).toBeFocused();
   });
 
   test("anon cannot read either wishlist table", async () => {

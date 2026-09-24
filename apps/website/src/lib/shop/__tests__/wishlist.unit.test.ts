@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { allProducts } from "../products";
-import { WISHLIST_OPT_IN_HELPER, wishlistInputFromFormData, wishlistSchema } from "../wishlist";
+import {
+  initialWishlistState,
+  WISHLIST_EMAIL_NEWS_LINE,
+  WISHLIST_EMAIL_STOP_LINE,
+  WISHLIST_OPT_IN_COPY,
+  WISHLIST_OPT_IN_HELPER,
+  wishlistConfirmationEmailText,
+  wishlistEmailSentCopy,
+  wishlistInputFromFormData,
+  wishlistSchema,
+} from "../wishlist";
 
 const [firstProduct] = allProducts;
 
@@ -69,5 +79,40 @@ describe("wishlistInputFromFormData", () => {
     const fd = new FormData();
     fd.set("website", "filled");
     expect(wishlistInputFromFormData(fd).honeypot).toBe("filled");
+  });
+});
+
+describe("initialWishlistState", () => {
+  it("starts with no item created", () => {
+    expect(initialWishlistState.created).toBe(false);
+  });
+});
+
+describe("wishlistEmailSentCopy", () => {
+  it("fills in the guest's email", () => {
+    expect(wishlistEmailSentCopy("guest@example.com")).toBe(
+      "We've sent a note to guest@example.com.",
+    );
+  });
+});
+
+describe("wishlistConfirmationEmailText", () => {
+  const productUrl = `https://issebya.com/shop/${firstProduct.slug}`;
+  const text = wishlistConfirmationEmailText({ productName: firstProduct.name, productUrl });
+
+  it("names the product and links to it on its own line", () => {
+    const lines = text.split("\n");
+    expect(lines[0]).toContain(firstProduct.name);
+    expect(lines).toContain(productUrl);
+  });
+
+  it("carries the news line, the consent sentence and how to stop", () => {
+    expect(text).toContain(WISHLIST_EMAIL_NEWS_LINE);
+    expect(text).toContain(WISHLIST_OPT_IN_COPY);
+    expect(text).toContain(WISHLIST_EMAIL_STOP_LINE);
+  });
+
+  it("uses no em dash", () => {
+    expect(text).not.toContain("\u2014");
   });
 });

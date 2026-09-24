@@ -23,6 +23,42 @@ export const WISHLIST_SUCCESS_COPY = "Saved. We'll let you know about it.";
 
 export const WISHLIST_ERROR_COPY = "Sorry, that did not save. Please try again in a moment.";
 
+export const WISHLIST_DIALOG_HEADING = "Save to your wishlist";
+
+// Shown on the confirmation panel only when this submit created a new wish,
+// because only then does the action send the confirmation email.
+const WISHLIST_EMAIL_SENT_COPY = "We've sent a note to {email}.";
+
+export function wishlistEmailSentCopy(email: string): string {
+  return WISHLIST_EMAIL_SENT_COPY.replace("{email}", email);
+}
+
+// An en dash, matching the booking email subjects. Never an em dash.
+export const WISHLIST_EMAIL_SUBJECT = "Saved to your wishlist – issebya.homes";
+
+export const WISHLIST_EMAIL_NEWS_LINE = "We'll write to you when there's news about it.";
+
+export const WISHLIST_EMAIL_STOP_LINE = "Reply to this email to stop these.";
+
+// The guest's confirmation email body. The URL is passed in rather than built
+// here so this module stays free of site config.
+export function wishlistConfirmationEmailText({
+  productName,
+  productUrl,
+}: {
+  productName: string;
+  productUrl: string;
+}): string {
+  return [
+    `${productName} is on your wishlist.`,
+    productUrl,
+    "",
+    WISHLIST_EMAIL_NEWS_LINE,
+    "",
+    `You asked us to: "${WISHLIST_OPT_IN_COPY}" ${WISHLIST_EMAIL_STOP_LINE}`,
+  ].join("\n");
+}
+
 export const wishlistSchema = z.object({
   // Normalised to match the `email = lower(btrim(email))` constraint on
   // `shop_wishlist_contacts`.
@@ -47,6 +83,9 @@ export type WishlistFormState = {
   errors: Partial<Record<"email" | "marketingOptIn" | "productSlug", string>>;
   generalError: string;
   email: string;
+  // True only when this submit inserted a new item row. The client shows the
+  // "sent a note" line only then, since only then is the email sent.
+  created: boolean;
 };
 
 export const initialWishlistState: WishlistFormState = {
@@ -55,6 +94,7 @@ export const initialWishlistState: WishlistFormState = {
   errors: {},
   generalError: "",
   email: "",
+  created: false,
 };
 
 // One mapping from the form's fields to the schema's input, shared by the

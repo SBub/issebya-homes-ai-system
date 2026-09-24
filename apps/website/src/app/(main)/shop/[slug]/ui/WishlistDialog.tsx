@@ -1,15 +1,18 @@
 "use client";
 
 import posthog from "posthog-js";
-import { useActionState, useState } from "react";
+import { type MouseEvent, useActionState, useId, useRef, useState } from "react";
 import {
   initialWishlistState,
+  WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
   WISHLIST_SUCCESS_COPY,
   type WishlistFormState,
+  wishlistEmailSentCopy,
 } from "@/lib/shop/wishlist";
 import { addToWishlist } from "../actions";
+import { HeartIcon } from "./HeartIcon";
 
 // A convenience only: the server never treats these as consent. Every submit
 // sends the checkbox value, and the action re-validates and re-records it.
@@ -37,66 +40,131 @@ function rememberWishlistEmail(email: string) {
   }
 }
 
-type WishlistFormProps = {
+type WishlistDialogProps = {
   productSlug: string;
+  productName: string;
 };
 
-export function WishlistForm({ productSlug }: WishlistFormProps) {
+export function WishlistDialog({ productSlug, productName }: WishlistDialogProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const heartRef = useRef<HTMLButtonElement>(null);
+  // Whether this open session saved, for the dismissed event.
+  const submittedRef = useRef(false);
+  // In-memory on purpose: the heart is empty again after a reload.
+  const [added, setAdded] = useState(false);
+  // The fields render only while the dialog is open, so every open mounts a
+  // fresh form seeded from `remembered`, and a closed success resets.
   const [isOpen, setIsOpen] = useState(false);
   const [remembered, setRemembered] = useState({ email: "", consent: false });
+  const headingId = useId();
   const formId = `wishlist-form-${productSlug}`;
 
   // localStorage is read here, in the click handler, and never during
   // render: the page is prerendered, so reading it while rendering would make
   // the first client render differ from the static HTML.
-  const handleToggle = () => {
-    if (isOpen) {
-      setIsOpen(false);
-      return;
-    }
+  const handleOpen = () => {
     setRemembered(readRemembered());
     setIsOpen(true);
+    submittedRef.current = false;
+    dialogRef.current?.showModal();
     posthog.capture("wishlist_form_opened", { product_slug: productSlug });
   };
 
+  const closeDialog = () => dialogRef.current?.close();
+
+  // Fires for every way out: the Close buttons, Escape and a backdrop click.
+  const handleClose = () => {
+    posthog.capture("wishlist_dialog_dismissed", {
+      product_slug: productSlug,
+      had_submitted: submittedRef.current,
+    });
+    setIsOpen(false);
+    heartRef.current?.focus();
+  };
+
+  // All content sits in an inner div and the dialog has no padding, so only
+  // a click on the backdrop targets the dialog element itself.
+  const handleBackdropClick = (event: MouseEvent<HTMLDialogElement>) => {
+    if (event.target === event.currentTarget) closeDialog();
+  };
+
+  const handleSaved = () => {
+    setAdded(true);
+    submittedRef.current = true;
+  };
+
   return (
-    <div className="flex flex-col gap-3">
+    <>
       <button
+        ref={heartRef}
         type="button"
-        onClick={handleToggle}
-        aria-expanded={isOpen}
-        aria-controls={formId}
-        className="self-start uppercase tracking-[0.2em] text-xs border border-current px-4 py-2 cursor-pointer"
+        onClick={handleOpen}
+        aria-label={added ? "Added to wishlist" : "Add to wishlist"}
+        aria-pressed={added ? true : undefined}
+        aria-haspopup="dialog"
+        className="inline-flex items-center justify-center min-w-11 min-h-11 cursor-pointer"
       >
-        Add to wishlist
+        <HeartIcon filled={added} className="w-6 h-6" />
       </button>
 
-      {isOpen && (
-        <WishlistFields
-          formId={formId}
-          productSlug={productSlug}
-          rememberedEmail={remembered.email}
-          rememberedConsent={remembered.consent}
-        />
-      )}
-    </div>
+      <dialog
+        ref={dialogRef}
+        aria-labelledby={headingId}
+        onClose={handleClose}
+        onClick={handleBackdropClick}
+        className="m-auto p-0 backdrop:bg-black/50 bg-shop-card text-foreground max-w-md w-[calc(100%-2rem)]"
+      >
+        <div className="p-6 flex flex-col gap-4">
+          <div className="flex items-start justify-between gap-4">
+            <h2 id={headingId} className="uppercase tracking-[0.2em] text-xs">
+              {WISHLIST_DIALOG_HEADING}
+            </h2>
+            <button
+              type="button"
+              onClick={closeDialog}
+              className="uppercase tracking-[0.2em] text-xs cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+
+          {isOpen && (
+            <WishlistFields
+              formId={formId}
+              productSlug={productSlug}
+              productName={productName}
+              rememberedEmail={remembered.email}
+              rememberedConsent={remembered.consent}
+              onSaved={handleSaved}
+              onClose={closeDialog}
+            />
+          )}
+        </div>
+      </dialog>
+    </>
   );
 }
 
 type WishlistFieldsProps = {
   formId: string;
   productSlug: string;
+  productName: string;
   rememberedEmail: string;
   rememberedConsent: boolean;
+  onSaved: () => void;
+  onClose: () => void;
 };
 
-// Mounted only once the visitor opens the form, so the checkbox state below
-// is seeded from the remembered consent at mount time.
+// Mounted each time the dialog opens, so the checkbox state below is seeded
+// from the remembered consent at mount time.
 function WishlistFields({
   formId,
   productSlug,
+  productName,
   rememberedEmail,
   rememberedConsent,
+  onSaved,
+  onClose,
 }: WishlistFieldsProps) {
   const [optedIn, setOptedIn] = useState(rememberedConsent);
 
@@ -107,6 +175,7 @@ function WishlistFields({
     const next = await addToWishlist(prevState, formData);
     if (next.ok) {
       rememberWishlistEmail(next.email);
+      onSaved();
       posthog.capture("wishlist_item_added", { product_slug: productSlug });
     }
     return next;
@@ -114,11 +183,26 @@ function WishlistFields({
 
   const [state, formAction, isPending] = useActionState(runAddToWishlist, initialWishlistState);
 
+  // A confirmation panel, not a toast: it stays until the visitor closes it.
   if (state.ok) {
     return (
-      <p id={formId} role="status" className="text-sm">
-        {WISHLIST_SUCCESS_COPY}
-      </p>
+      <div
+        id={formId}
+        role="status"
+        className="border border-black bg-shop-card p-4 flex flex-col gap-3 text-sm"
+      >
+        <HeartIcon filled className="w-6 h-6" />
+        <h3 className="text-base">{productName}</h3>
+        <p>{WISHLIST_SUCCESS_COPY}</p>
+        {state.created && <p>{wishlistEmailSentCopy(state.email)}</p>}
+        <button
+          type="button"
+          onClick={onClose}
+          className="self-start uppercase tracking-[0.2em] text-xs border border-current px-4 py-2 cursor-pointer"
+        >
+          Close
+        </button>
+      </div>
     );
   }
 
@@ -140,6 +224,8 @@ function WishlistFields({
           name="email"
           type="email"
           autoComplete="email"
+          // Focus lands here on open rather than on the dialog's Close.
+          autoFocus
           required
           defaultValue={state.attempt ? state.email : rememberedEmail}
           placeholder="your@email.com"
