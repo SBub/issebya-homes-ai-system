@@ -11,10 +11,22 @@ import { addToWishlist } from "../actions";
 
 // --- Mocks ---
 
-const mockUpsert = vi.fn();
+const STORED_TOKEN = "c".repeat(64);
+const OLD_TOKEN = "d".repeat(64);
+
+// `select().eq().maybeSingle()` is the contact pre-read; `upsert().select()
+// .single()` is the consent write reading back the stored token.
+const mockMaybeSingle = vi.fn();
+const mockSelectEq = vi.fn(() => ({ maybeSingle: mockMaybeSingle }));
+const mockUpsertSingle = vi.fn();
+const mockUpsert = vi.fn((_payload: Record<string, unknown>, _options: unknown) => ({
+  select: () => ({ single: mockUpsertSingle }),
+}));
 const mockInsert = vi.fn();
 const mockFrom = vi.fn((table: string) => {
-  if (table === "shop_wishlist_contacts") return { upsert: mockUpsert };
+  if (table === "shop_wishlist_contacts") {
+    return { select: () => ({ eq: mockSelectEq }), upsert: mockUpsert };
+  }
   if (table === "shop_wishlist_items") return { insert: mockInsert };
   throw new Error(`Unexpected table ${table}`);
 });
@@ -59,7 +71,11 @@ function formData(overrides: Record<string, string | null> = {}) {
 describe("addToWishlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUpsert.mockResolvedValue({ error: null });
+    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
+    mockUpsertSingle.mockResolvedValue({
+      data: { marketing_opt_in: true, unsubscribe_token: STORED_TOKEN },
+      error: null,
+    });
     mockInsert.mockResolvedValue({ error: null });
     mockSendWishlistEmail.mockResolvedValue(undefined);
   });
@@ -113,6 +129,7 @@ describe("addToWishlist", () => {
       email: "guest@example.com",
       productName: firstProduct.name,
       productSlug: firstProduct.slug,
+      unsubscribeToken: STORED_TOKEN,
     });
     expect(mockInsert.mock.invocationCallOrder[0]).toBeLessThan(
       mockSendWishlistEmail.mock.invocationCallOrder[0],
@@ -171,7 +188,7 @@ describe("addToWishlist", () => {
   });
 
   it("does not store the wish when the consent upsert fails", async () => {
-    mockUpsert.mockResolvedValue({ error: { code: "XX000", message: "boom" } });
+    mockUpsertSingle.mockResolvedValue({ data: null, error: { code: "XX000", message: "boom" } });
 
     const result = await addToWishlist(initialWishlistState, formData());
 
@@ -180,6 +197,68 @@ describe("addToWishlist", () => {
     expect(result.created).toBe(false);
     expect(mockInsert).not.toHaveBeenCalled();
     expect(captureException).toHaveBeenCalledOnce();
+    expect(mockSendWishlistEmail).not.toHaveBeenCalled();
+  });
+
+  it("re-subscribes an unsubscribed contact with a rotated token", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { unsubscribed_at: "2026-09-20T10:00:00.000Z", unsubscribe_token: OLD_TOKEN },
+      error: null,
+    });
+
+    await addToWishlist(initialWishlistState, formData());
+
+    expect(mockSelectEq).toHaveBeenCalledWith("email", "guest@example.com");
+    const payload = mockUpsert.mock.calls[0][0];
+    expect(payload.marketing_opt_in).toBe(true);
+    expect(payload.unsubscribed_at).toBeNull();
+    expect(new Date(payload.opted_in_at as string).toISOString()).toBe(payload.opted_in_at);
+    expect(payload.unsubscribe_token).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.unsubscribe_token).not.toBe(OLD_TOKEN);
+  });
+
+  it("emails once on a renewed consent for an already-wished product", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { unsubscribed_at: "2026-09-20T10:00:00.000Z", unsubscribe_token: OLD_TOKEN },
+      error: null,
+    });
+    mockInsert.mockResolvedValue({ error: { code: "23505", message: "duplicate key" } });
+
+    const result = await addToWishlist(initialWishlistState, formData());
+
+    expect(result.ok).toBe(true);
+    expect(result.created).toBe(false);
+    expect(mockSendWishlistEmail).toHaveBeenCalledOnce();
+    expect(mockSendWishlistEmail.mock.calls[0][0]).toMatchObject({
+      unsubscribeToken: STORED_TOKEN,
+    });
+  });
+
+  it("keeps a subscribed contact's token", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { unsubscribed_at: null, unsubscribe_token: STORED_TOKEN },
+      error: null,
+    });
+
+    await addToWishlist(initialWishlistState, formData());
+
+    const payload = mockUpsert.mock.calls[0][0];
+    expect(payload).not.toHaveProperty("unsubscribe_token");
+    expect(payload).not.toHaveProperty("unsubscribed_at");
+  });
+
+  it("stores nothing when the contact pre-read fails", async () => {
+    mockMaybeSingle.mockResolvedValue({ data: null, error: { code: "XX000", message: "boom" } });
+
+    const result = await addToWishlist(initialWishlistState, formData());
+
+    expect(result.ok).toBe(false);
+    expect(result.generalError).toBe(WISHLIST_ERROR_COPY);
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(captureException).toHaveBeenCalledWith(expect.anything(), {
+      tags: { "db.operation": "shop_wishlist_contacts_select" },
+    });
     expect(mockSendWishlistEmail).not.toHaveBeenCalled();
   });
 

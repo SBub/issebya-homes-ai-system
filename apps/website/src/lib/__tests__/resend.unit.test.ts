@@ -92,7 +92,9 @@ describe("sendWishlistConfirmationEmail", () => {
     email: "guest@example.com",
     productName: "Oak side table",
     productSlug: "oak-side-table",
+    unsubscribeToken: "a".repeat(64),
   };
+  const link = `https://issebya.com/shop/wishlist/unsubscribe?token=${"a".repeat(64)}`;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -121,6 +123,16 @@ describe("sendWishlistConfirmationEmail", () => {
     expect(lines).toContain("https://issebya.com/shop/oak-side-table");
     expect(lines).toContain(`${SITE_URL}/shop/oak-side-table`);
     expect(message.text).toContain("Oak side table");
+  });
+
+  it("ends with the unsubscribe link and sends it as List-Unsubscribe", async () => {
+    await sendWishlistConfirmationEmail(wish);
+
+    const message = mockSend.mock.calls[0][0];
+    expect(message.text).toContain(link);
+    expect(message.headers["List-Unsubscribe"]).toBe(`<${link}>`);
+    expect(message.headers).not.toHaveProperty("List-Unsubscribe-Post");
+    expect(message.replyTo).toBe("owner@example.com");
   });
 
   it("omits replyTo when no admin email is configured", async () => {

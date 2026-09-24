@@ -341,7 +341,7 @@ export function BookingEngineExpanded({
           <button
             type="button"
             onClick={onClose}
-            className="booking-close-button"
+            className="booking-close-button button-outline"
             aria-label="Close booking calendar"
             disabled={isPending}
           >

@@ -6,6 +6,7 @@ import {
   SELLER_CONDITION_LABELS,
   type SellerCondition,
 } from "@/lib/shop/seller-submission";
+import { unsubscribeUrl } from "@/lib/shop/unsubscribe";
 import { WISHLIST_EMAIL_SUBJECT, wishlistConfirmationEmailText } from "@/lib/shop/wishlist";
 import { SITE_URL } from "@/lib/site";
 
@@ -163,21 +164,24 @@ export async function sendSellerSubmissionNotificationEmail(
 }
 
 /**
- * Tells a guest the piece they wished for is on their list. Sent only when the
- * wish is new, after the DB writes succeed. Plain text on purpose: HTML
- * templates are out of scope. Replies go to the owner when
- * `ADMIN_NOTIFICATION_EMAIL` is set, so "reply to stop" reaches someone who can
- * act on it. Throws on a Resend `{ error }` so the caller's Sentry report sees
- * a failed send.
+ * Tells a guest the piece they wished for is on their list. Sent only for a new
+ * wish or a renewed consent, after the DB writes succeed. Plain text on
+ * purpose: HTML templates are out of scope. It ends with the guest's
+ * unsubscribe link, also sent as a `List-Unsubscribe` header so mail clients
+ * can offer it. Replies go to the owner when `ADMIN_NOTIFICATION_EMAIL` is set.
+ * Throws on a Resend `{ error }` so the caller's Sentry report sees a failed
+ * send.
  */
 export async function sendWishlistConfirmationEmail({
   email,
   productName,
   productSlug,
+  unsubscribeToken,
 }: {
   email: string;
   productName: string;
   productSlug: string;
+  unsubscribeToken: string;
 }): Promise<void> {
   const resend = new Resend(process.env.RESEND_API_KEY);
   const fromEmail = process.env.RESEND_FROM_EMAIL;
@@ -187,6 +191,7 @@ export async function sendWishlistConfirmationEmail({
   }
 
   const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+  const url = unsubscribeUrl(unsubscribeToken);
 
   const { error } = await resend.emails.send({
     from: fromEmail,
@@ -196,7 +201,10 @@ export async function sendWishlistConfirmationEmail({
     text: wishlistConfirmationEmailText({
       productName,
       productUrl: `${SITE_URL}/shop/${productSlug}`,
+      unsubscribeUrl: url,
     }),
+    // No List-Unsubscribe-Post: one-click POST unsubscribe is out of scope.
+    headers: { "List-Unsubscribe": `<${url}>` },
   });
 
   if (error) {
