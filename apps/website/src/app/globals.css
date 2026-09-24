@@ -66,6 +66,11 @@ body {
   color: var(--foreground);
 }
 
+/* Lock page scroll while a modal dialog is open; nothing in JS has to undo it. */
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
 /* Booking Engine Styles */
 
 .booking-engine {

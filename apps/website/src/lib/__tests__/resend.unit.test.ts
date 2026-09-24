@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendSellerSubmissionNotificationEmail } from "../resend";
+import { WISHLIST_EMAIL_SUBJECT } from "@/lib/shop/wishlist";
+import { SITE_URL } from "@/lib/site";
+import { sendSellerSubmissionNotificationEmail, sendWishlistConfirmationEmail } from "../resend";
 
 const mockSend = vi.fn();
 vi.mock("resend", () => ({
@@ -82,5 +84,66 @@ describe("sendSellerSubmissionNotificationEmail", () => {
     await sendSellerSubmissionNotificationEmail(submission, photoUrls);
 
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendWishlistConfirmationEmail", () => {
+  const wish = {
+    email: "guest@example.com",
+    productName: "Oak side table",
+    productSlug: "oak-side-table",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("ADMIN_NOTIFICATION_EMAIL", "owner@example.com");
+    vi.stubEnv("RESEND_FROM_EMAIL", "house@example.com");
+    mockSend.mockResolvedValue({ data: { id: "email-2" }, error: null });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("sends the guest a plain-text note naming and linking the product", async () => {
+    await sendWishlistConfirmationEmail(wish);
+
+    expect(mockSend).toHaveBeenCalledOnce();
+    const message = mockSend.mock.calls[0][0];
+    expect(message).toMatchObject({
+      from: "house@example.com",
+      to: "guest@example.com",
+      replyTo: "owner@example.com",
+      subject: WISHLIST_EMAIL_SUBJECT,
+    });
+    expect(message.react).toBeUndefined();
+    const lines: string[] = message.text.split("\n");
+    expect(lines).toContain("https://issebya.com/shop/oak-side-table");
+    expect(lines).toContain(`${SITE_URL}/shop/oak-side-table`);
+    expect(message.text).toContain("Oak side table");
+  });
+
+  it("omits replyTo when no admin email is configured", async () => {
+    vi.stubEnv("ADMIN_NOTIFICATION_EMAIL", "");
+
+    await sendWishlistConfirmationEmail(wish);
+
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(mockSend.mock.calls[0][0]).not.toHaveProperty("replyTo");
+  });
+
+  it("throws without sending when RESEND_FROM_EMAIL is missing", async () => {
+    vi.stubEnv("RESEND_FROM_EMAIL", "");
+
+    await expect(sendWishlistConfirmationEmail(wish)).rejects.toThrow(
+      "Missing environment variable: RESEND_FROM_EMAIL",
+    );
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("throws when Resend reports an error", async () => {
+    mockSend.mockResolvedValue({ data: null, error: { name: "api_error", message: "down" } });
+
+    await expect(sendWishlistConfirmationEmail(wish)).rejects.toThrow("down");
   });
 });
