@@ -10,6 +10,11 @@
  * Every entry is validated at module scope, so a malformed product throws
  * while this module is being evaluated and fails the build.
  *
+ * Slugs are stable identifiers, not just URLs: `public.shop_wishlist_items`
+ * stores them in `product_slug` (there is no numeric product id). Renaming a
+ * slug orphans every wish recorded against it, so don't rename one casually.
+ * If a rename is unavoidable, migrate those rows in the same PR.
+ *
  * THESE SIX ENTRIES ARE SAMPLE DATA. Replace them with real products by
  * editing this file and the images in `public/shop/`.
  */
