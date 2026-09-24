@@ -14,10 +14,6 @@ export const metadata: Metadata = {
 export default function ShopIndexPage() {
   return (
     <div>
-      <div className="p-4 md:p-12">
-        <h1 className="text-4xl font-hand font-bold">Shop</h1>
-      </div>
-
       <section aria-label="Products" className="bg-shop-ground px-4 py-10 md:px-12 md:py-16">
         <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
           {allProducts.map((product, index) => (
