@@ -34,7 +34,7 @@ Products live in one explicit, zod-validated registry, `src/lib/shop/products.ts
 
 #### Wishlist consent
 
-The "Add to wishlist" button on a product page records the wish in `shop_wishlist_items` and the guest's marketing consent in `shop_wishlist_contacts`. A contact is in one of two states, enforced by a CHECK: subscribed (`marketing_opt_in = true`, `unsubscribed_at` null) or unsubscribed (`marketing_opt_in = false`, `unsubscribed_at` set).
+The "Save to wishlist" button on a product page records the wish in `shop_wishlist_items` and the guest's marketing consent in `shop_wishlist_contacts`. A contact is in one of two states, enforced by a CHECK: subscribed (`marketing_opt_in = true`, `unsubscribed_at` null) or unsubscribed (`marketing_opt_in = false`, `unsubscribed_at` set).
 
 Every confirmation email ends with `https://issebya.com/shop/wishlist/unsubscribe?token=<unsubscribe_token>` and carries it as a `List-Unsubscribe` header. Following the link (a Route Handler, `route.ts`) flips the contact to unsubscribed and answers a 303 to a token-free, noindex result page; nothing is deleted, so the contact and every wished item stay for the owner in Studio. An unknown or malformed token lands on `/shop/wishlist/unsubscribe/invalid`, which answers 404. When an unsubscribed guest wishes again with the box ticked, the contact is re-subscribed and its token rotated, so a link in an old email no longer works.
 

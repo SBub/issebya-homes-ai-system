@@ -6,7 +6,7 @@
 
 ## Overview
 
-Follow-up to the wishlist opt-in (#138, `feature-972c79dc-shop-wishlist-email-optin.md`). The "Add to wishlist" text button and inline form on `/shop/[slug]` gave no visible sign that a save worked. The trigger is now a heart icon that opens a native modal dialog, a successful save shows a proper confirmation panel, and the guest gets a plain-text confirmation email the first time they wish for a piece.
+Follow-up to the wishlist opt-in (#138, `feature-972c79dc-shop-wishlist-email-optin.md`). The original text wishlist button and inline form on `/shop/[slug]` gave no visible sign that a save worked. The trigger is now a heart icon that opens a native modal dialog, a successful save shows a proper confirmation panel, and the guest gets a plain-text confirmation email the first time they wish for a piece.
 
 ## What Was Built
 
