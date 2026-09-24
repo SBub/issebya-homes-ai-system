@@ -211,6 +211,10 @@ procedures, not code documentation) and anything gitignored.
     - When changing the wishlist unsubscribe route, `unsubscribe_token`, or the `shop_wishlist_contacts_consent_state` CHECK
     - When changing the wishlist confirmation email's footer or headers (`List-Unsubscribe`)
     - When building any send to wishlist contacts, or when an unsubscribe link fails or leaks its token
+- `apps/website/app_docs/feature-091cac99-wishlist-trigger-bordered-button.md`
+  - Conditions:
+    - When changing the wishlist trigger's look or its "Save to wishlist" / "Saved to wishlist" labels on `/shop/[slug]`
+    - When a test locating a "Save to wishlist" button hits a strict-mode violation or clicks the wrong one (trigger vs dialog submit)
 - `apps/website/app_docs/feature-b82db496-vercel-preview-final-commit-only.md`
   - Conditions:
     - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit

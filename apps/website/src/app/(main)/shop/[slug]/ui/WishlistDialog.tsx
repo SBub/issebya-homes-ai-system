@@ -4,11 +4,11 @@ import posthog from "posthog-js";
 import { type MouseEvent, useActionState, useId, useRef, useState } from "react";
 import {
   initialWishlistState,
-  WISHLIST_ADD_LABEL,
-  WISHLIST_ADDED_LABEL,
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
+  WISHLIST_SAVE_LABEL,
+  WISHLIST_SAVED_LABEL,
   WISHLIST_SUCCESS_COPY,
   type WishlistFormState,
   wishlistEmailSentCopy,
@@ -49,7 +49,7 @@ type WishlistDialogProps = {
 
 export function WishlistDialog({ productSlug, productName }: WishlistDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const heartRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Whether this open session saved, for the dismissed event.
   const submittedRef = useRef(false);
   // In-memory on purpose: the heart is empty again after a reload.
@@ -81,7 +81,7 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
       had_submitted: submittedRef.current,
     });
     setIsOpen(false);
-    heartRef.current?.focus();
+    triggerRef.current?.focus();
   };
 
   // All content sits in an inner div and the dialog has no padding, so only
@@ -98,15 +98,15 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
   return (
     <>
       <button
-        ref={heartRef}
+        ref={triggerRef}
         type="button"
         onClick={handleOpen}
         aria-pressed={added ? true : undefined}
         aria-haspopup="dialog"
-        className="button-outline inline-flex items-center gap-2 min-h-11 cursor-pointer"
+        className="inline-flex items-center gap-2 min-h-11 px-5 py-3 border border-foreground/60 text-foreground/70 uppercase tracking-[0.2em] text-xs cursor-pointer transition-colors hover:border-foreground hover:text-foreground"
       >
-        <HeartIcon filled={added} className="w-5 h-5" />
-        {added ? WISHLIST_ADDED_LABEL : WISHLIST_ADD_LABEL}
+        <HeartIcon filled={added} className="w-4 h-4 shrink-0" />
+        {added ? WISHLIST_SAVED_LABEL : WISHLIST_SAVE_LABEL}
       </button>
 
       <dialog

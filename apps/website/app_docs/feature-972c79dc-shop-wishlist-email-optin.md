@@ -8,7 +8,7 @@
 
 `/shop` was a static catalogue, so the owner had no way to learn which pieces
 visitors wanted or to reach them later. A product details page now has an
-"Add to wishlist" button that opens an inline form: email, a marketing opt-in
+text wishlist button that opens an inline form: email, a marketing opt-in
 checkbox, and a submit that stays disabled until the box is ticked. A Server
 Action records the consent (with the exact sentence shown) and the wish in two
 service-role-only tables, which the owner reads in Supabase Studio.
@@ -83,7 +83,7 @@ service-role-only tables, which the owner reads in Supabase Studio.
 
 ## How to Use
 
-1. Open any product at `/shop/<slug>` and press "Add to wishlist".
+1. Open any product at `/shop/<slug>` and press "Save to wishlist".
 2. Enter an email and tick "Keep me posted about new pieces and the
    occasional offer from the house." Until it is ticked, "Save to wishlist" is
    disabled and a helper line explains why.

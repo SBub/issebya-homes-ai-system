@@ -50,9 +50,11 @@ export const WISHLIST_ALREADY_UNSUBSCRIBED_COPY = "You're already unsubscribed."
 export const WISHLIST_UNSUBSCRIBE_INVALID_COPY = "This link isn't valid.";
 
 // The trigger's visible text, which is also its accessible name.
-export const WISHLIST_ADD_LABEL = "Add to wishlist";
+// The dialog's submit button shares the "Save to wishlist" name, so tests must
+// scope it to the dialog.
+export const WISHLIST_SAVE_LABEL = "Save to wishlist";
 
-export const WISHLIST_ADDED_LABEL = "Added to wishlist";
+export const WISHLIST_SAVED_LABEL = "Saved to wishlist";
 
 // The guest's confirmation email body. The URLs are passed in rather than
 // built here so this module stays free of site config.

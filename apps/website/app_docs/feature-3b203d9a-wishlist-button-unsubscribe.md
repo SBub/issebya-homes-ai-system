@@ -6,12 +6,12 @@
 
 ## Overview
 
-Follow-up to #143 (see `feature-bcb9a5cf-wishlist-heart-modal-email.md`). The icon-only heart on `/shop/[slug]` becomes a labelled outline button ("Add to wishlist" / "Added to wishlist"), and the confirmation email's "Reply to this email to stop these" promise is replaced by a working unsubscribe link. Clicking it flips the contact to unsubscribed in the database without deleting the contact or any wished item, and re-consenting later rotates the token so an old email's link can never undo the new consent.
+Follow-up to #143 (see `feature-bcb9a5cf-wishlist-heart-modal-email.md`). The icon-only heart on `/shop/[slug]` becomes a labelled outline button (relabelled "Save to wishlist" / "Saved to wishlist" with the bordered uppercase style by #150), and the confirmation email's "Reply to this email to stop these" promise is replaced by a working unsubscribe link. Clicking it flips the contact to unsubscribed in the database without deleting the contact or any wished item, and re-consenting later rotates the token so an old email's link can never undo the new consent.
 
 ## What Was Built
 
 - Labelled wishlist trigger: heart icon plus visible text, which is also the accessible name (no `aria-label`)
-- A shared `.button-outline` CSS recipe, extracted from `.booking-close-button`
+- A shared `.button-outline` CSS recipe, extracted from `.booking-close-button` (since #150 the wishlist trigger uses inline Tailwind, so `.button-outline` is used only by the booking Close button)
 - Schema: per-contact `unsubscribe_token` and `unsubscribed_at`, with a two-state consent CHECK
 - `/shop/wishlist/unsubscribe?token=…` Route Handler that unsubscribes and 303-redirects to a token-free result page
 - Three noindex result pages: `/done`, `/already`, `/invalid` (the last answers a real 404)
@@ -45,7 +45,7 @@ Follow-up to #143 (see `feature-bcb9a5cf-wishlist-heart-modal-email.md`). The ic
 
 ## How to Use
 
-1. On a product page, click "Add to wishlist", enter an email, tick the consent box and save. The button reads "Added to wishlist" with a filled heart.
+1. On a product page, click "Save to wishlist", enter an email, tick the consent box and save. The button reads "Saved to wishlist" with a filled heart.
 2. The confirmation email ends with `If you'd rather not receive these emails, unsubscribe here: <link>`. Mail clients may also offer their own unsubscribe via the `List-Unsubscribe` header.
 3. Following the link lands on "You're unsubscribed. We won't email you about the wishlist any more." Following it again shows "You're already unsubscribed."
 4. Wishing again with the box ticked re-subscribes the guest, sends a fresh email with a new link, and the old link now shows "This link isn't valid." (404).

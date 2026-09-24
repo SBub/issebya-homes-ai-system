@@ -7,12 +7,12 @@ import {
   sellerSuccessCopy,
 } from "@/lib/shop/seller-submission";
 import {
-  WISHLIST_ADD_LABEL,
-  WISHLIST_ADDED_LABEL,
   WISHLIST_ALREADY_UNSUBSCRIBED_COPY,
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
+  WISHLIST_SAVE_LABEL,
+  WISHLIST_SAVED_LABEL,
   WISHLIST_SUCCESS_COPY,
   WISHLIST_UNSUBSCRIBE_INVALID_COPY,
   WISHLIST_UNSUBSCRIBED_COPY,
@@ -107,12 +107,14 @@ test.describe("Wishlist", () => {
   test("wishing the same product twice stores one item and one consent", async ({ page }) => {
     await page.goto(`/shop/${firstProduct.slug}`);
 
-    await page.getByRole("button", { name: WISHLIST_ADD_LABEL }).click();
+    const trigger = page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
+    await expect(trigger).not.toHaveAttribute("aria-pressed");
+    await trigger.click();
     const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Email").fill(email);
 
-    const submit = dialog.getByRole("button", { name: "Save to wishlist" });
+    const submit = dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
     await expect(submit).toBeDisabled();
     await expect(dialog.getByText(WISHLIST_OPT_IN_HELPER)).toBeVisible();
 
@@ -122,20 +124,20 @@ test.describe("Wishlist", () => {
     await expect(panel).toContainText(firstProduct.name);
     await expect(panel).toContainText(WISHLIST_SUCCESS_COPY);
     await expect(panel).toContainText(wishlistEmailSentCopy(email));
-    const addedHeart = page.getByRole("button", { name: WISHLIST_ADDED_LABEL });
-    await expect(addedHeart).toHaveAttribute("aria-pressed", "true");
+    const savedTrigger = page.getByRole("button", { name: WISHLIST_SAVED_LABEL, exact: true });
+    await expect(savedTrigger).toHaveAttribute("aria-pressed", "true");
+    await expect(savedTrigger.locator('svg[data-filled="true"]')).toHaveCount(1);
     await panel.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
 
-    // Second visit: the heart is empty again (in-memory by design), and the
-    // email (and consent) come back from localStorage.
+    // Second visit: the trigger reads "Save to wishlist" again (in-memory by
+    // design), and the email (and consent) come back from localStorage.
     await page.reload();
-    const heart = page.getByRole("button", { name: WISHLIST_ADD_LABEL });
-    await expect(heart).not.toHaveAttribute("aria-pressed");
-    await heart.click();
+    await expect(trigger).not.toHaveAttribute("aria-pressed");
+    await trigger.click();
     await expect(dialog.getByLabel("Email")).toHaveValue(email);
     await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-    await dialog.getByRole("button", { name: "Save to wishlist" }).click();
+    await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
     // Already wished: saved, but no second email, so no "sent a note" line.
     await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
     await expect(dialog.getByRole("status")).not.toContainText(wishlistEmailSentCopy(email));
@@ -155,18 +157,19 @@ test.describe("Wishlist", () => {
     expect(contacts).toEqual([{ marketing_opt_in: true, opt_in_copy: WISHLIST_OPT_IN_COPY }]);
   });
 
-  test("Escape closes the dialog and returns focus to the heart", async ({ page }) => {
+  test("Escape closes the dialog and returns focus to the trigger", async ({ page }) => {
     await page.goto(`/shop/${firstProduct.slug}`);
 
-    const heart = page.getByRole("button", { name: WISHLIST_ADD_LABEL });
-    await heart.click();
+    // Unique while the dialog is closed: its submit only mounts when open.
+    const trigger = page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
+    await trigger.click();
     const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
     await expect(dialog).toBeVisible();
 
     await page.keyboard.press("Escape");
 
     await expect(dialog).toBeHidden();
-    await expect(heart).toBeFocused();
+    await expect(trigger).toBeFocused();
   });
 
   test("a malformed unsubscribe link lands on a token-free 404", async ({ page }) => {
@@ -191,11 +194,11 @@ test.describe("Wishlist", () => {
     };
     const wish = async () => {
       await page.goto(`/shop/${firstProduct.slug}`);
-      await page.getByRole("button", { name: WISHLIST_ADD_LABEL }).click();
+      await page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
       const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
       await dialog.getByLabel("Email").fill(email);
       await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-      await dialog.getByRole("button", { name: "Save to wishlist" }).click();
+      await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
       await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
     };
 
