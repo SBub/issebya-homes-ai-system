@@ -21,18 +21,23 @@ in-band, no DB lookups:
   at the end of the original nudge text; Telegram echoes that text back on
   `reply_to_message`, so the webhook regex-matches it out of the owner's
   reply instead of looking anything up.
+- Booking-link guest phone: the booking-link nudge carries a
+  `Guest: <phone>` line (it can't fit in `callback_data`); Telegram echoes
+  the text back on the button tap, and the webhook regex-reads the number
+  out of it.
 
 ## Routes
 
 - `POST /api/telegram/webhook`: the one Telegram webhook. Handles
   `callback_query` updates (booking link Approve/Reject) and message replies
-  to missing-info nudges. Guarded by Telegram's own
+  to missing-info nudges. Approve/Reject edits the nudge in place; Reject
+  appends what the guest was told and the number to message them on. Guarded by Telegram's own
   `X-Telegram-Bot-Api-Secret-Token` header. Always answers 200 once
   authenticated, since a non-2xx makes Telegram retry the whole update.
 - `POST /api/owner-nudges`: inbound endpoint for GCA's owner-nudge tool.
   Composes and sends the Telegram message for one of three categories
   (`missing_info`, `wants_human`, `send_booking_link`), the last one with
-  inline Approve/Reject buttons. Guarded by `X-API-Key` against
+  inline Approve/Reject buttons and a `Guest: <phone>` line. Guarded by `X-API-Key` against
   `TELEGRAM_ROUTER_API_KEY`.
 - `GET /api/health`: returns `{"ok": true}`. Unauthenticated and
   uninstrumented, the target for the external uptime check that watches this

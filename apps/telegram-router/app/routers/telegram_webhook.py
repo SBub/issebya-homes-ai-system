@@ -32,6 +32,34 @@ MISSING_INFO_REF_REGEX = re.compile(r"\[ref:(\S+)\]\s*$")
 # context, not a failure.
 MISSING_INFO_QUESTION_REGEX = re.compile(r'asked: "([^"]*)"')
 
+# Matches the `Guest: <phone>` line in a send_booking_link nudge's body (see
+# owner_nudges.py). The phone can't ride in callback_data (64-byte limit),
+# so it travels in the message text, which Telegram echoes back on
+# callback_query.message.text. Opaque token, not validated as E.164.
+BOOKING_LINK_GUEST_PHONE_REGEX = re.compile(r"^Guest: (\S+)$", re.MULTILINE)
+
+BOOKING_APPROVED_SUFFIX = "✅ Approved. Link sent to the guest."
+# Mirrors what GCA's system prompt tells the guest on a rejected booking
+# link. Update this if that prompt's wording changes.
+BOOKING_REJECTED_GUEST_TOLD = "Sveta will contact you directly about those dates."
+
+
+def _extract_booking_link_guest_phone(text: str | None) -> str | None:
+    if not text:
+        return None
+    match = BOOKING_LINK_GUEST_PHONE_REGEX.search(text)
+    return match.group(1) if match else None
+
+
+# Falls back to the plain label when no phone line was found (a nudge sent
+# before the `Guest:` line existed, or a callback with no message text).
+def _booking_link_outcome_suffix(approved: bool, phone: str | None) -> str:
+    if phone is None:
+        return "✅ Approved" if approved else "❌ Rejected"
+    if approved:
+        return BOOKING_APPROVED_SUFFIX
+    return f'❌ Rejected. The guest was told: "{BOOKING_REJECTED_GUEST_TOLD}" Please message them: {phone}'
+
 
 # Owner tapped ✅ Approve / ❌ Reject on a send_booking_link nudge (composed in
 # GCA's booking.ts, relayed through .../owner_nudges.py). There's no DB row to
@@ -41,6 +69,11 @@ MISSING_INFO_QUESTION_REGEX = re.compile(r'asked: "([^"]*)"')
 # resends the approval event to GCA; if nothing is still waiting on it,
 # that's a safe no-op there too (see answer_booking_link_approval's own
 # docstring) — so this handler doesn't attempt to detect "already handled".
+#
+# On success the nudge is edited in place. The guest's phone is read back
+# from the nudge's own `Guest: <phone>` line, so a Reject can remind the
+# owner what the guest was just promised and whom to message. Without that
+# line it falls back to the plain ✅ Approved / ❌ Rejected suffix.
 async def _handle_booking_link_decision(
     callback_query_id: str,
     message: TelegramCallbackMessage | None,
@@ -61,7 +94,10 @@ async def _handle_booking_link_decision(
         outcome_label = "✅ Approved" if approved else "❌ Rejected"
         await answer_callback_query(callback_query_id, outcome_label)
         if message is not None:
-            await edit_message_text(message.message_id, f"{message.text or ''}\n\n{outcome_label}")
+            suffix = _booking_link_outcome_suffix(
+                approved, _extract_booking_link_guest_phone(message.text)
+            )
+            await edit_message_text(message.message_id, f"{message.text or ''}\n\n{suffix}")
     except Exception as err:  # noqa: BLE001 -- always falls back to the "Failed" toast
         print(f"[telegram-router] booking-link decision failed: {err}", file=sys.stderr)
         await answer_callback_query(callback_query_id, "Failed — try again")

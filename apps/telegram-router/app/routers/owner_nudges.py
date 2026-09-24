@@ -33,6 +33,11 @@ router = APIRouter()
 #    callback_data instead. `correlation_id` is REQUIRED for this category
 #    specifically (enforced by OwnerNudgeRequest's model validator) —
 #    approval is meaningless without something to correlate it back to.
+#    Carries a `Guest: <phone>` line right after the reason, which the
+#    webhook reads back out of the echoed message text on a button tap
+#    (BOOKING_LINK_GUEST_PHONE_REGEX) so a Reject can tell the owner whom to
+#    contact. The phone can't ride in callback_data (Telegram's 64-byte
+#    limit), so keep this line in exactly this format.
 #
 # Returns `{"ok": True}` on a successful send. Returns `{"ok": False, "error"}`
 # with 500 on a Telegram delivery failure (after the retry-once
@@ -59,7 +64,10 @@ async def post_owner_nudges(
         elif reason_category == "wants_human":
             text = f"🙋 Wants human\nGuest {phone} needs you: {reason}\n\nConversation: {conversation_id}"
         elif reason_category == "send_booking_link":
-            text = f"🔗 Booking link\n{reason}\n\nApprove sending the booking link to the guest?"
+            text = (
+                f"🔗 Booking link\n{reason}\nGuest: {phone}\n\n"
+                "Approve sending the booking link to the guest?"
+            )
         else:
             text = f"Guest {phone} needs you: {reason}\n\nConversation: {conversation_id}"
 
