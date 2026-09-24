@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "uv sync --frozen --no-dev --no-editable --package telegram-router",
-  "buildCommand": "python -c 'import app.main'"
+  "buildCommand": "python -c 'import app.main'",
+  "ignoreCommand": "bash ../../scripts/vercel-ignore.sh"
 }

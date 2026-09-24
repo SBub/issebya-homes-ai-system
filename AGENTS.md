@@ -98,6 +98,18 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
   wants a uv new enough for `uv workspace metadata --frozen`, which 0.10.11 is
   not — so Vercel builds fall back to conservative Python hashing. That is a
   warning, not an error, and not worth breaking the deploy over.
+- Every Vercel project's `vercel.json` sets `ignoreCommand` to
+  `bash ../../scripts/vercel-ignore.sh`, and a new app's `vercel.json` must
+  carry the same line. On a branch whose name contains `-adw-`, only a commit
+  whose message has a line starting with `Deploy-Preview: yes` builds a
+  preview; every other commit on that branch is skipped (Canceled).
+  Production, `develop`, `master` and hand-made branches build as before. The
+  ADW toolkit's document phase adds that trailer to the run's final commit;
+  the string is a shared contract with the toolkit's `git_ops.PREVIEW_TRAILER`,
+  so never change it on one side only. To force a preview by hand:
+  `git commit --allow-empty -m "chore: preview" -m "Deploy-Preview: yes"`.
+  Keep each project's dashboard Ignored Build Step on "Automatic"; a dashboard
+  script would be overridden by `vercel.json` anyway.
 
 ## Environment files
 

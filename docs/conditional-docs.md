@@ -25,7 +25,7 @@ procedures, not code documentation) and anything gitignored.
 - `AGENTS.md`
   - Conditions:
     - Before any change, without exception
-    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention
+    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention, Vercel build-image notes, ADW preview gating (`Deploy-Preview: yes`)
 
 - `README.md`
   - Conditions:
