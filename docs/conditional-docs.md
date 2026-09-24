@@ -25,7 +25,7 @@ procedures, not code documentation) and anything gitignored.
 - `AGENTS.md`
   - Conditions:
     - Before any change, without exception
-    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention
+    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention, Vercel build-image notes, ADW preview gating (`Deploy-Preview: yes`)
 
 - `README.md`
   - Conditions:
@@ -211,6 +211,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the wishlist unsubscribe route, `unsubscribe_token`, or the `shop_wishlist_contacts_consent_state` CHECK
     - When changing the wishlist confirmation email's footer or headers (`List-Unsubscribe`)
     - When building any send to wishlist contacts, or when an unsubscribe link fails or leaks its token
+- `apps/website/app_docs/feature-b82db496-vercel-preview-final-commit-only.md`
+  - Conditions:
+    - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit
+    - When changing `scripts/vercel-ignore.sh`, the `Deploy-Preview: yes` trailer, or any app's `vercel.json` `ignoreCommand`
+    - When adding a new Vercel-deployed app, or when the 100/day deployment cap is hit again
 
 ---
 

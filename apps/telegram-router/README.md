@@ -86,6 +86,9 @@ telegram-router`. Runs in this directory with the builder's virtualenv
   this is a smoke import with the venv's Python, so a missing dependency
   fails the build loudly instead of every request at runtime.
 
+It also sets `ignoreCommand`, which gates previews on ADW branches to the
+run's final commit; see the root `AGENTS.md` (Python workspaces section).
+
 After any deploy, `curl <deployment>/api/health` must return
 `{"ok": true}`. A `FUNCTION_INVOCATION_FAILED` page there means the bundle
 has no dependencies again.

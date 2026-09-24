@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value       | Last Updated                  |
 | ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 19          | Thu Sep 24 14:14:39 WEST 2026 |
-| Longest Streak    | 19          | Thu Sep 24 14:14:39 WEST 2026 |
-| Total Plan Size   | 6406 lines  | Thu Sep 24 14:14:39 WEST 2026 |
-| Largest Plan Size | 698 lines   | Thu Sep 24 14:14:39 WEST 2026 |
-| Total Diff Size   | 20860 lines | Thu Sep 24 14:14:39 WEST 2026 |
-| Largest Diff Size | 2629 lines  | Thu Sep 24 14:14:39 WEST 2026 |
-| Average Presence  | 1.0         | Thu Sep 24 14:14:39 WEST 2026 |
+| Current Streak    | 18          | Thu Sep 24 14:28:28 WEST 2026 |
+| Longest Streak    | 18          | Thu Sep 24 14:28:28 WEST 2026 |
+| Total Plan Size   | 6316 lines  | Thu Sep 24 14:28:28 WEST 2026 |
+| Largest Plan Size | 698 lines   | Thu Sep 24 14:28:28 WEST 2026 |
+| Total Diff Size   | 19943 lines | Thu Sep 24 14:28:28 WEST 2026 |
+| Largest Diff Size | 2629 lines  | Thu Sep 24 14:28:28 WEST 2026 |
+| Average Presence  | 1.0         | Thu Sep 24 14:28:28 WEST 2026 |
 
 ## ADW KPIs
 
@@ -40,4 +40,4 @@ Detailed metrics for individual ADW workflow runs.
 | Thu Sep 24 10:57:48 WEST 2026 | 972c79dc | 138          | /feature    | 1        | 289               | 1128/2/11                       | Thu Sep 24 10:57:48 WEST 2026 | Thu Sep 24 10:57:48 WEST 2026 |
 | Thu Sep 24 11:45:24 WEST 2026 | 7d77143c | 139          | /feature    | 1        | 412               | 2551/16/21                      | Thu Sep 24 11:45:24 WEST 2026 | Thu Sep 24 11:45:24 WEST 2026 |
 | Thu Sep 24 12:09:14 WEST 2026 | bcb9a5cf | 143          | /feature    | 1        | 293               | 953/142/14                      | Thu Sep 24 12:09:14 WEST 2026 | Thu Sep 24 12:09:14 WEST 2026 |
-| Thu Sep 24 14:14:39 WEST 2026 | 3b203d9a | 147          | /feature    | 1        | 371               | 1276/58/25                      | Thu Sep 24 14:14:39 WEST 2026 | Thu Sep 24 14:14:39 WEST 2026 |
+| Thu Sep 24 14:28:28 WEST 2026 | b82db496 | 110          | /chore      | 1        | 281               | 415/2/10                        | Thu Sep 24 14:28:28 WEST 2026 | Thu Sep 24 14:28:28 WEST 2026 |
