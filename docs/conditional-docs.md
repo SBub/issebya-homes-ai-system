@@ -206,6 +206,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing the guest wishlist confirmation email, or when it is sent twice or never arrives
     - When adding another modal dialog to the site (scroll lock, backdrop-click and focus-return patterns)
 
+- `apps/website/app_docs/feature-b82db496-vercel-preview-final-commit-only.md`
+  - Conditions:
+    - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit
+    - When changing `scripts/vercel-ignore.sh`, the `Deploy-Preview: yes` trailer, or any app's `vercel.json` `ignoreCommand`
+    - When adding a new Vercel-deployed app, or when the 100/day deployment cap is hit again
+
 ---
 
 ## apps/guest-communication-agent
