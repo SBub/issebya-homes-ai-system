@@ -25,6 +25,10 @@
  * property that actually matters for this dataset — independent of which
  * tool (if any) got called.
  *
+ * Golden "AI Disclosure" is informational too: two ai-disclosure-* rows x 3
+ * trials is too small a sample to gate a merge on, so those rows' results
+ * are verified in the PR instead.
+ *
  * No CLI-stdout parsing: this imports the two `*.eval.ts` files as modules
  * (which is itself what triggers their real Eval() runs — same as running
  * either file directly via `tsx evals/*.eval.ts`) and awaits each file's
@@ -107,7 +111,7 @@ function printGateResult(result: GateResult): void {
 }
 
 // Informational only — see this file's header comment for why Prompt
-// Injection "Tool Call Match" isn't a blocking gate. Printed for visibility
+// Injection "Tool Call Match" and Golden "AI Disclosure" aren't blocking gates. Printed for visibility
 // (a wild swing is still worth a human glance) without failing the build.
 function printInformationalScore(label: string, scorerName: string, summary: ExperimentSummary) {
   const scoreSummary = summary.scores[scorerName];
@@ -149,6 +153,7 @@ async function main(): Promise<void> {
     "Tool Call Match",
     promptInjection.summary,
   );
+  printInformationalScore("Golden Dataset — AI Disclosure", "AI Disclosure", golden.summary);
 
   const allPassed = results.every((result) => result.pass);
   console.log(`\n${allPassed ? "All gates passed." : "One or more gates FAILED."}`);

@@ -1,6 +1,7 @@
 import { type JSONValue, type ModelMessage } from "ai";
 import { loadPrompt } from "braintrust";
 import type { GetStepTools } from "inngest";
+import { buildFirstTurnLine } from "@/agent/first-turn";
 import { type AgentMemory, loadMemory } from "@/agent/memory";
 import { MODEL, type ModelTurnResult, runModel } from "@/agent/run-model";
 import { runTool, type ToolName } from "@/agent/run-tool";
@@ -172,7 +173,7 @@ export async function runAgentTurn(
   // Cast: see steppedSpan's doc comment (tracing.ts) — step.run()'s return
   // type is narrowed by Inngest's Jsonify transform; loadMemory's real
   // return value is already JSON-safe, so this is a false positive.
-  const { historyMessages, memoryMessage } = (await steppedSpan(
+  const { historyMessages, memoryMessage, hasAssistantHistory } = (await steppedSpan(
     step,
     "load-memory",
     turnAnchor,
@@ -214,8 +215,11 @@ export async function runAgentTurn(
     loadSystemPromptText,
   )) as string;
   // Outside the step on purpose: a turn resumed after a missing_info suspend
-  // gets the real current date on its later model calls.
-  const system = `${promptText}\n\n${buildTodayLine()}`;
+  // gets the real current date on its later model calls. In `system`, not
+  // `messages`, so the first-turn line never counts against the history budget.
+  const system = [promptText, buildTodayLine(), buildFirstTurnLine(hasAssistantHistory)]
+    .filter((line) => line !== null)
+    .join("\n\n");
 
   let stepCount = 0;
   const firedTags: string[] = [];

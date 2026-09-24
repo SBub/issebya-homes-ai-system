@@ -51,6 +51,12 @@ export interface AgentMemory {
   // substituted into the system prompt. `null` (never a placeholder) when
   // there's nothing to say — see buildMemoryMessage.
   memoryMessage: ModelMessage | null;
+  // Computed over every fetched row of this conversation, before watermark
+  // filtering and trimming, so folded or trimmed replies still count. Never
+  // derive it from memoryMessage (role "assistant" but cross-conversation,
+  // per-phone memory) or from historyMessages: either would miss the
+  // disclosure on a returning guest's new conversation.
+  hasAssistantHistory: boolean;
 }
 
 // Matches any http(s) URL — a 2-URL message alone measured 231 tokens (real
@@ -304,6 +310,7 @@ async function loadMemoryState(
   historyMessages: ModelMessage[];
   existingMemory: Awaited<ReturnType<typeof getGuestMemory>>;
   newlyDroppedRows: MessageRow[];
+  hasAssistantHistory: boolean;
 }> {
   const [rows, existingMemory] = await Promise.all([
     loadRecentMessages(conversationId),
@@ -327,7 +334,9 @@ async function loadMemoryState(
   const droppedGroupCount = groups.length - keptGroups.length;
   const newlyDroppedRows = rowGroups.slice(0, droppedGroupCount).flat();
 
-  return { historyMessages, existingMemory, newlyDroppedRows };
+  const hasAssistantHistory = rows.some((r) => r.role === "assistant");
+
+  return { historyMessages, existingMemory, newlyDroppedRows, hasAssistantHistory };
 }
 
 // The fast path. No LLM call, no DB write — memoryMessage is built from
@@ -340,10 +349,9 @@ export async function loadMemory(params: {
   phone: string;
 }): Promise<AgentMemory> {
   const { conversationId, phone } = params;
-  const [{ historyMessages, existingMemory }, recentFolds] = await Promise.all([
-    loadMemoryState(conversationId, phone),
-    loadGuestMemoryFolds(phone),
-  ]);
+  const [{ historyMessages, existingMemory, hasAssistantHistory }, recentFolds] = await Promise.all(
+    [loadMemoryState(conversationId, phone), loadGuestMemoryFolds(phone)],
+  );
 
   return {
     historyMessages,
@@ -352,6 +360,7 @@ export async function loadMemory(params: {
       existingMemory?.preferencesSummary ?? null,
       recentFolds[0] ?? null,
     ),
+    hasAssistantHistory,
   };
 }
 

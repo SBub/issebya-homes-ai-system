@@ -246,6 +246,7 @@ describe("runAgentTurn", () => {
     loadMemoryMock.mockResolvedValue({
       historyMessages: [],
       memoryMessage: null,
+      hasAssistantHistory: true,
     });
     loadPromptMock.mockResolvedValue({
       build: () => ({ messages: [{ role: "system", content: SYSTEM_PROMPT_TEXT }] }),
@@ -284,6 +285,7 @@ describe("runAgentTurn", () => {
     loadMemoryMock.mockResolvedValue({
       historyMessages: history,
       memoryMessage: null,
+      hasAssistantHistory: true,
     });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
@@ -329,7 +331,11 @@ describe("runAgentTurn", () => {
         "User preferences:\nGuest is vegetarian.\n\n" +
         "Summary of earlier conversation:\nAsked about check-in time.",
     };
-    loadMemoryMock.mockResolvedValue({ historyMessages: history, memoryMessage });
+    loadMemoryMock.mockResolvedValue({
+      historyMessages: history,
+      memoryMessage,
+      hasAssistantHistory: true,
+    });
     generateTextMock.mockResolvedValueOnce(textResponse("Sure, here you go."));
 
     await runAgentTurn(
@@ -353,6 +359,92 @@ describe("runAgentTurn", () => {
     // Never substituted into the system prompt string.
     expect(call.system).toBe(EXPECTED_SYSTEM);
     expect(call.system).not.toContain("vegetarian");
+  });
+
+  describe("first-turn line", () => {
+    const FIRST_TURN_LINE =
+      "This is the guest's first message in this conversation. Begin your reply with the AI disclosure described in your instructions.";
+
+    async function runTurn() {
+      return runAgentTurn(
+        { conversationId: "convo-1", phone: "+3519", incomingMessage: "Hi" },
+        { correlationId: "corr-1", traceAnchor: TEST_TRACE_ANCHOR, step },
+      );
+    }
+
+    function systemOf(callIndex: number): string {
+      return (generateTextMock.mock.calls[callIndex] as [{ system: string }])[0].system;
+    }
+
+    it("appends the line after the today line on a first turn, leaving messages untouched", async () => {
+      const history: ModelMessage[] = [{ role: "user", content: "Hi, room free 6-8 October?" }];
+      loadMemoryMock.mockResolvedValue({
+        historyMessages: history,
+        memoryMessage: null,
+        hasAssistantHistory: false,
+      });
+      generateTextMock.mockResolvedValueOnce(textResponse("Hi! I'm an AI concierge."));
+
+      await runTurn();
+
+      const [call] = generateTextMock.mock.calls[0] as [
+        { system: string; messages: ModelMessage[] },
+      ];
+      expect(call.system).toBe(`${EXPECTED_SYSTEM}\n\n${FIRST_TURN_LINE}`);
+      expect(call.messages).toEqual(history);
+    });
+
+    it("appends nothing on a later turn", async () => {
+      loadMemoryMock.mockResolvedValue({
+        historyMessages: [
+          { role: "user", content: "Hi" },
+          { role: "assistant", content: "Hello, I'm an AI concierge." },
+          { role: "user", content: "How much is it?" },
+        ],
+        memoryMessage: null,
+        hasAssistantHistory: true,
+      });
+      generateTextMock.mockResolvedValueOnce(textResponse("€75 a night."));
+
+      await runTurn();
+
+      expect(systemOf(0)).toBe(EXPECTED_SYSTEM);
+      expect(systemOf(0)).not.toContain("first message in this conversation");
+    });
+
+    it("still appends the line when an assistant-role memoryMessage is present", async () => {
+      loadMemoryMock.mockResolvedValue({
+        historyMessages: [{ role: "user", content: "Hi again" }],
+        memoryMessage: { role: "assistant", content: "User preferences:\nGuest is vegetarian." },
+        hasAssistantHistory: false,
+      });
+      generateTextMock.mockResolvedValueOnce(textResponse("Hi! I'm an AI concierge."));
+
+      await runTurn();
+
+      expect(systemOf(0)).toBe(`${EXPECTED_SYSTEM}\n\n${FIRST_TURN_LINE}`);
+    });
+
+    it("passes the line to every model round of the turn, not just the first", async () => {
+      loadMemoryMock.mockResolvedValue({
+        historyMessages: [{ role: "user", content: "How much is room 1?" }],
+        memoryMessage: null,
+        hasAssistantHistory: false,
+      });
+      generateTextMock
+        .mockResolvedValueOnce(
+          toolCallResponse([
+            { toolName: "get_pricing", input: { room: "room1" }, toolCallId: "call_price" },
+          ]),
+        )
+        .mockResolvedValueOnce(textResponse("Hi! I'm an AI concierge. Room 1 is €75."));
+
+      await runTurn();
+
+      expect(generateTextMock).toHaveBeenCalledTimes(2);
+      expect(systemOf(0)).toBe(`${EXPECTED_SYSTEM}\n\n${FIRST_TURN_LINE}`);
+      expect(systemOf(1)).toBe(`${EXPECTED_SYSTEM}\n\n${FIRST_TURN_LINE}`);
+    });
   });
 
   it("returns a sanitized final text reply when the model calls no tools", async () => {
@@ -818,7 +910,11 @@ describe("runAgentTurn", () => {
   it("returns exactly this turn's appended messages as turnMessages, after the loaded history", async () => {
     const history: ModelMessage[] = [{ role: "user", content: "How much is room 1?" }];
     const memoryMessage: ModelMessage = { role: "assistant", content: "User preferences:\nnone" };
-    loadMemoryMock.mockResolvedValue({ historyMessages: history, memoryMessage });
+    loadMemoryMock.mockResolvedValue({
+      historyMessages: history,
+      memoryMessage,
+      hasAssistantHistory: false,
+    });
     generateTextMock
       .mockResolvedValueOnce(
         toolCallResponse([
