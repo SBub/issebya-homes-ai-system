@@ -3,6 +3,21 @@ import { NextResponse } from "next/server";
 const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
 const posthogAssetsHost = posthogHost?.replace(".i.posthog.com", "-assets.i.posthog.com");
 
+// The browser PUTs seller photos straight to Storage through signed upload
+// URLs. `https://*.supabase.co` covers production, but locally (and in the
+// Playwright run) Storage is `http://127.0.0.1:54321`, so the configured
+// origin is allowed explicitly too.
+function originOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+const supabaseOrigin = originOf(process.env.SUPABASE_URL);
+
 /**
  * Security headers proxy.
  *
@@ -46,11 +61,12 @@ export function proxy() {
     // CSS: our styles + inline styles (Tailwind injects styles at runtime)
     "style-src 'self' 'unsafe-inline'",
 
-    // Network requests: our API + Stripe + Sentry + Supabase + PostHog (analytics)
+    // Network requests: our API + Stripe + Sentry + Supabase (incl. Storage uploads) + PostHog (analytics)
     [
       "connect-src 'self' https://api.stripe.com https://*.ingest.de.sentry.io https://*.supabase.co",
       ...(posthogHost ? [posthogHost] : []),
       ...(posthogAssetsHost ? [posthogAssetsHost] : []),
+      ...(supabaseOrigin ? [supabaseOrigin] : []),
     ].join(" "),
 
     // Iframes: only Stripe (for payment form)

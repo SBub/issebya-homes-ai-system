@@ -194,6 +194,12 @@ procedures, not code documentation) and anything gitignored.
     - When renaming a product slug, or building anything that emails wishlist contacts (unsubscribe, offers)
     - When a wishlist save fails, stores a duplicate, or `/shop/[slug]` stops being prerendered or hits a hydration mismatch
 
+- `apps/website/app_docs/feature-7d77143c-shop-seller-submission-form.md`
+  - Conditions:
+    - When changing the `/shop/sell` form, its Server Actions, or the `shop_seller_submissions` table / `seller-submissions` bucket
+    - When adding another browser-to-Supabase-Storage upload, or when an upload fails on a CSP `connect-src` block
+    - When a seller submission is saved but the owner email never arrives, or a finalize is refused over photo paths
+
 ---
 
 ## apps/guest-communication-agent

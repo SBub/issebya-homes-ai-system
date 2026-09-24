@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { allProducts } from "@/lib/shop/products";
+import { SELL_LINK_COPY, SELL_LINK_LABEL } from "@/lib/shop/seller-submission";
 import { SITE_URL } from "@/lib/site";
 import { ProductCard } from "./ui/ProductCard";
 
@@ -23,6 +25,12 @@ export default function ShopIndexPage() {
           ))}
         </ul>
       </section>
+      <p className="px-4 py-6 md:px-12 text-sm">
+        {SELL_LINK_COPY}{" "}
+        <Link href="/shop/sell" className="underline">
+          {SELL_LINK_LABEL}
+        </Link>
+      </p>
     </div>
   );
 }

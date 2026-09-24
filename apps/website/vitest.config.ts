@@ -61,6 +61,7 @@ export default defineConfig({
             "stripe",
             "@supabase/supabase-js",
             "ical.js",
+            "resend",
           ],
         },
         test: {
