@@ -4,6 +4,8 @@ import posthog from "posthog-js";
 import { type MouseEvent, useActionState, useId, useRef, useState } from "react";
 import {
   initialWishlistState,
+  WISHLIST_ADD_LABEL,
+  WISHLIST_ADDED_LABEL,
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
@@ -99,12 +101,12 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
         ref={heartRef}
         type="button"
         onClick={handleOpen}
-        aria-label={added ? "Added to wishlist" : "Add to wishlist"}
         aria-pressed={added ? true : undefined}
         aria-haspopup="dialog"
-        className="inline-flex items-center justify-center min-w-11 min-h-11 cursor-pointer"
+        className="button-outline inline-flex items-center gap-2 min-h-11 cursor-pointer"
       >
-        <HeartIcon filled={added} className="w-6 h-6" />
+        <HeartIcon filled={added} className="w-5 h-5" />
+        {added ? WISHLIST_ADDED_LABEL : WISHLIST_ADD_LABEL}
       </button>
 
       <dialog

@@ -2,6 +2,8 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import {
+  WISHLIST_ADD_LABEL,
+  WISHLIST_ADDED_LABEL,
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
@@ -65,10 +67,13 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-test("the heart starts empty and unpressed", async () => {
+test("the trigger starts labelled Add to wishlist, empty and unpressed", async () => {
   const { heart } = await renderDialog();
 
-  await expect.element(heart).toHaveAttribute("aria-label", "Add to wishlist");
+  // Visible text is the accessible name; there is no aria-label.
+  await expect.element(heart).toHaveAccessibleName(WISHLIST_ADD_LABEL);
+  await expect.element(heart).toHaveTextContent(WISHLIST_ADD_LABEL);
+  await expect.element(heart).not.toHaveAttribute("aria-label");
   await expect.element(heart).not.toHaveAttribute("aria-pressed");
   expect(heart.element().querySelector('svg[data-filled="false"]')).not.toBeNull();
 });
@@ -137,7 +142,9 @@ test("a new save shows the confirmation panel, fills the heart and remembers the
   await expect.element(panel).toHaveTextContent("We've sent a note to guest@example.com.");
 
   await expect.element(heart).toHaveAttribute("aria-pressed", "true");
-  await expect.element(heart).toHaveAttribute("aria-label", "Added to wishlist");
+  await expect.element(heart).toHaveAccessibleName(WISHLIST_ADDED_LABEL);
+  await expect.element(heart).toHaveTextContent(WISHLIST_ADDED_LABEL);
+  await expect.element(heart).not.toHaveAttribute("aria-label");
   expect(heart.element().querySelector('svg[data-filled="true"]')).not.toBeNull();
   expect(mockCapture).toHaveBeenCalledWith("wishlist_item_added", { product_slug: SLUG });
   expect(window.localStorage.getItem("issebya.shop.wishlist.email")).toBe("guest@example.com");
