@@ -10,7 +10,7 @@ Follow-up to the wishlist opt-in (#138, `feature-972c79dc-shop-wishlist-email-op
 
 ## What Was Built
 
-- Heart icon button next to the price: outline before, filled after a successful save in this page session (component state only, empty again after a reload by design)
+- Heart icon button next to the price: outline before, filled after a successful save in this page session (component state only, empty again after a reload by design). Since #150 the trigger is a bordered, uppercase, letter-spaced button with the heart before the text: "Save to wishlist", then "Saved to wishlist" with a filled heart. Its accessible name is the visible text (no `aria-label`); `aria-pressed` is unchanged
 - Native `<dialog>` modal hosting the existing form (same fields, consent logic, honeypot and `localStorage` prefill), dismissible by Close, `Escape` or backdrop click
 - Confirmation panel inside the dialog on success: filled heart, product name, `WISHLIST_SUCCESS_COPY`, a "We've sent a note to <email>." line when the wish is new, and a Close button. Not a toast: no auto-dismiss, not fixed-position
 - `created` flag on the Server Action's state, so the client and the email send both know whether this submit inserted a new wish
@@ -41,9 +41,9 @@ Follow-up to the wishlist opt-in (#138, `feature-972c79dc-shop-wishlist-email-op
 ## How to Use
 
 1. Open any product at `/shop/<slug>`.
-2. Click the heart next to the price. The "Save to your wishlist" dialog opens with focus in the Email field (prefilled if you saved before on this browser).
+2. Click "Save to wishlist" next to the price. The "Save to your wishlist" dialog opens with focus in the Email field (prefilled if you saved before on this browser).
 3. Enter an email, tick the consent checkbox, click "Save to wishlist".
-4. The dialog shows the confirmation panel and the heart fills. On a first-time wish the panel says a note was sent, and the email arrives.
+4. The dialog shows the confirmation panel, and the trigger reads "Saved to wishlist" with a filled heart. On a first-time wish the panel says a note was sent, and the email arrives.
 5. Close with the Close button, `Escape`, or a click outside the dialog.
 
 ## Configuration

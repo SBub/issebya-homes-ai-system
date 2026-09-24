@@ -47,7 +47,7 @@ type WishlistDialogProps = {
 
 export function WishlistDialog({ productSlug, productName }: WishlistDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const heartRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Whether this open session saved, for the dismissed event.
   const submittedRef = useRef(false);
   // In-memory on purpose: the heart is empty again after a reload.
@@ -79,7 +79,7 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
       had_submitted: submittedRef.current,
     });
     setIsOpen(false);
-    heartRef.current?.focus();
+    triggerRef.current?.focus();
   };
 
   // All content sits in an inner div and the dialog has no padding, so only
@@ -96,15 +96,15 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
   return (
     <>
       <button
-        ref={heartRef}
+        ref={triggerRef}
         type="button"
         onClick={handleOpen}
-        aria-label={added ? "Added to wishlist" : "Add to wishlist"}
         aria-pressed={added ? true : undefined}
         aria-haspopup="dialog"
-        className="inline-flex items-center justify-center min-w-11 min-h-11 cursor-pointer"
+        className="inline-flex items-center gap-2 min-h-11 px-5 py-3 border border-foreground/60 text-foreground/70 uppercase tracking-[0.2em] text-xs cursor-pointer transition-colors hover:border-foreground hover:text-foreground"
       >
-        <HeartIcon filled={added} className="w-6 h-6" />
+        <HeartIcon filled={added} className="w-4 h-4 shrink-0" />
+        {added ? "Saved to wishlist" : "Save to wishlist"}
       </button>
 
       <dialog

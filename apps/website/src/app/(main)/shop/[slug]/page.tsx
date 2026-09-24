@@ -66,7 +66,7 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
         <div className="flex flex-col gap-3">
           <p className="uppercase tracking-[0.2em] text-xs">{brand}</p>
           <h1 className="text-price">{name}</h1>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <p className="font-medium">{formatPrice(price)}</p>
             <WishlistDialog productSlug={product.slug} productName={name} />
           </div>

@@ -44,15 +44,17 @@ function success(created: boolean) {
 
 async function renderDialog() {
   const screen = await render(<WishlistDialog productSlug={SLUG} productName={NAME} />);
-  const heart = screen.getByRole("button", { name: /^Add(ed)? to wishlist$/ });
+  // `.first()` is the trigger: the dialog's own "Save to wishlist" submit
+  // renders after it in DOM order, and only while the dialog is open.
+  const trigger = screen.getByRole("button", { name: /^saved? to wishlist$/i }).first();
   const dialog = () => screen.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
-  return { screen, heart, dialog };
+  return { screen, trigger, dialog };
 }
 
-async function saveAs(screen: Awaited<ReturnType<typeof renderDialog>>["screen"]) {
+async function saveAs({ screen, dialog }: Awaited<ReturnType<typeof renderDialog>>) {
   await userEvent.fill(screen.getByLabelText("Email"), "guest@example.com");
   await userEvent.click(screen.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY }));
-  await userEvent.click(screen.getByRole("button", { name: "Save to wishlist" }));
+  await userEvent.click(dialog().getByRole("button", { name: "Save to wishlist" }));
 }
 
 function dialogElement() {
@@ -65,18 +67,21 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-test("the heart starts empty and unpressed", async () => {
-  const { heart } = await renderDialog();
+test("the trigger reads Save to wishlist, unpressed, with an empty heart", async () => {
+  const { screen, trigger } = await renderDialog();
 
-  await expect.element(heart).toHaveAttribute("aria-label", "Add to wishlist");
-  await expect.element(heart).not.toHaveAttribute("aria-pressed");
-  expect(heart.element().querySelector('svg[data-filled="false"]')).not.toBeNull();
+  await expect.element(screen.getByRole("button", { name: /^save to wishlist$/i })).toBeVisible();
+  await expect.element(trigger).not.toHaveAttribute("aria-pressed");
+  await expect.element(trigger).not.toHaveAttribute("aria-label");
+  expect(trigger.element().querySelector('svg[data-filled="false"]')).not.toBeNull();
+  // The heart sits before the text.
+  expect(trigger.element().firstElementChild?.tagName.toLowerCase()).toBe("svg");
 });
 
-test("clicking the heart opens the labelled modal and captures the event", async () => {
-  const { screen, heart, dialog } = await renderDialog();
+test("clicking the trigger opens the labelled modal and captures the event", async () => {
+  const { screen, trigger, dialog } = await renderDialog();
 
-  await userEvent.click(heart);
+  await userEvent.click(trigger);
 
   await expect.element(dialog()).toBeVisible();
   expect(dialogElement().open).toBe(true);
@@ -85,14 +90,14 @@ test("clicking the heart opens the labelled modal and captures the event", async
   expect(mockCapture).toHaveBeenCalledWith("wishlist_form_opened", { product_slug: SLUG });
 });
 
-test("Escape closes the dialog and returns focus to the heart", async () => {
-  const { heart } = await renderDialog();
-  await userEvent.click(heart);
+test("Escape closes the dialog and returns focus to the trigger", async () => {
+  const { trigger } = await renderDialog();
+  await userEvent.click(trigger);
 
   await userEvent.keyboard("{Escape}");
 
   await expect.poll(() => dialogElement().open).toBe(false);
-  await expect.element(heart).toHaveFocus();
+  await expect.element(trigger).toHaveFocus();
   expect(mockCapture).toHaveBeenCalledWith("wishlist_dialog_dismissed", {
     product_slug: SLUG,
     had_submitted: false,
@@ -100,20 +105,20 @@ test("Escape closes the dialog and returns focus to the heart", async () => {
 });
 
 test("the Close button closes the dialog", async () => {
-  const { screen, heart } = await renderDialog();
-  await userEvent.click(heart);
+  const { screen, trigger } = await renderDialog();
+  await userEvent.click(trigger);
 
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
   await expect.poll(() => dialogElement().open).toBe(false);
-  await expect.element(heart).toHaveFocus();
+  await expect.element(trigger).toHaveFocus();
 });
 
 test("submit stays disabled with the helper shown until the opt-in is ticked", async () => {
-  const { screen, heart } = await renderDialog();
-  await userEvent.click(heart);
+  const { screen, trigger, dialog } = await renderDialog();
+  await userEvent.click(trigger);
 
-  const submit = screen.getByRole("button", { name: "Save to wishlist" });
+  const submit = dialog().getByRole("button", { name: "Save to wishlist" });
   await expect.element(submit).toBeDisabled();
   await expect.element(screen.getByText(WISHLIST_OPT_IN_HELPER)).toBeVisible();
 
@@ -125,10 +130,11 @@ test("submit stays disabled with the helper shown until the opt-in is ticked", a
 
 test("a new save shows the confirmation panel, fills the heart and remembers the email", async () => {
   mockAddToWishlist.mockResolvedValue(success(true));
-  const { screen, heart, dialog } = await renderDialog();
-  await userEvent.click(heart);
+  const rendered = await renderDialog();
+  const { screen, trigger, dialog } = rendered;
+  await userEvent.click(trigger);
 
-  await saveAs(screen);
+  await saveAs(rendered);
 
   const panel = dialog().getByRole("status");
   await expect.element(panel).toBeVisible();
@@ -136,9 +142,10 @@ test("a new save shows the confirmation panel, fills the heart and remembers the
   await expect.element(panel).toHaveTextContent(WISHLIST_SUCCESS_COPY);
   await expect.element(panel).toHaveTextContent("We've sent a note to guest@example.com.");
 
-  await expect.element(heart).toHaveAttribute("aria-pressed", "true");
-  await expect.element(heart).toHaveAttribute("aria-label", "Added to wishlist");
-  expect(heart.element().querySelector('svg[data-filled="true"]')).not.toBeNull();
+  const saved = screen.getByRole("button", { name: /^saved to wishlist$/i });
+  await expect.element(saved).toHaveAttribute("aria-pressed", "true");
+  await expect.element(saved).not.toHaveAttribute("aria-label");
+  expect(saved.element().querySelector('svg[data-filled="true"]')).not.toBeNull();
   expect(mockCapture).toHaveBeenCalledWith("wishlist_item_added", { product_slug: SLUG });
   expect(window.localStorage.getItem("issebya.shop.wishlist.email")).toBe("guest@example.com");
 
@@ -149,15 +156,16 @@ test("a new save shows the confirmation panel, fills the heart and remembers the
     product_slug: SLUG,
     had_submitted: true,
   });
-  await expect.element(heart).toHaveAttribute("aria-pressed", "true");
+  await expect.element(trigger).toHaveAttribute("aria-pressed", "true");
 });
 
 test("an already-wished save shows the panel without the email line", async () => {
   mockAddToWishlist.mockResolvedValue(success(false));
-  const { screen, heart, dialog } = await renderDialog();
-  await userEvent.click(heart);
+  const rendered = await renderDialog();
+  const { trigger, dialog } = rendered;
+  await userEvent.click(trigger);
 
-  await saveAs(screen);
+  await saveAs(rendered);
 
   const panel = dialog().getByRole("status");
   await expect.element(panel).toHaveTextContent(WISHLIST_SUCCESS_COPY);
@@ -166,25 +174,26 @@ test("an already-wished save shows the panel without the email line", async () =
 
 test("reopening after a success shows a fresh form while the heart stays filled", async () => {
   mockAddToWishlist.mockResolvedValue(success(true));
-  const { screen, heart } = await renderDialog();
-  await userEvent.click(heart);
-  await saveAs(screen);
+  const rendered = await renderDialog();
+  const { screen, trigger, dialog } = rendered;
+  await userEvent.click(trigger);
+  await saveAs(rendered);
   await userEvent.click(screen.getByRole("status").getByRole("button", { name: "Close" }));
   await expect.poll(() => dialogElement().open).toBe(false);
 
-  await userEvent.click(heart);
+  await userEvent.click(trigger);
 
   await expect.element(screen.getByLabelText("Email")).toHaveValue("guest@example.com");
-  await expect.element(screen.getByRole("button", { name: "Save to wishlist" })).toBeVisible();
-  await expect.element(heart).toHaveAttribute("aria-pressed", "true");
+  await expect.element(dialog().getByRole("button", { name: "Save to wishlist" })).toBeVisible();
+  await expect.element(trigger).toHaveAttribute("aria-pressed", "true");
 });
 
 test("a remembered email and consent prefill the form", async () => {
   window.localStorage.setItem("issebya.shop.wishlist.email", "guest@example.com");
   window.localStorage.setItem("issebya.shop.wishlist.consentEmail", "guest@example.com");
-  const { screen, heart } = await renderDialog();
+  const { screen, trigger } = await renderDialog();
 
-  await userEvent.click(heart);
+  await userEvent.click(trigger);
 
   await expect.element(screen.getByLabelText("Email")).toHaveValue("guest@example.com");
   await expect.element(screen.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY })).toBeChecked();
