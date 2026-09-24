@@ -206,6 +206,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the guest wishlist confirmation email, or when it is sent twice or never arrives
     - When adding another modal dialog to the site (scroll lock, backdrop-click and focus-return patterns)
 
+- `apps/website/app_docs/feature-3b203d9a-wishlist-button-unsubscribe.md`
+  - Conditions:
+    - When changing the wishlist unsubscribe route, `unsubscribe_token`, or the `shop_wishlist_contacts_consent_state` CHECK
+    - When changing the wishlist confirmation email's footer or headers (`List-Unsubscribe`)
+    - When building any send to wishlist contacts, or when an unsubscribe link fails or leaks its token
 - `apps/website/app_docs/feature-b82db496-vercel-preview-final-commit-only.md`
   - Conditions:
     - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit

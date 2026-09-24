@@ -7,6 +7,8 @@ import {
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
+  WISHLIST_SAVE_LABEL,
+  WISHLIST_SAVED_LABEL,
   WISHLIST_SUCCESS_COPY,
   type WishlistFormState,
   wishlistEmailSentCopy,
@@ -104,7 +106,7 @@ export function WishlistDialog({ productSlug, productName }: WishlistDialogProps
         className="inline-flex items-center gap-2 min-h-11 px-5 py-3 border border-foreground/60 text-foreground/70 uppercase tracking-[0.2em] text-xs cursor-pointer transition-colors hover:border-foreground hover:text-foreground"
       >
         <HeartIcon filled={added} className="w-4 h-4 shrink-0" />
-        {added ? "Saved to wishlist" : "Save to wishlist"}
+        {added ? WISHLIST_SAVED_LABEL : WISHLIST_SAVE_LABEL}
       </button>
 
       <dialog

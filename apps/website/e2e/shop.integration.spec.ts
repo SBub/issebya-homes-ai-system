@@ -7,10 +7,15 @@ import {
   sellerSuccessCopy,
 } from "@/lib/shop/seller-submission";
 import {
+  WISHLIST_ALREADY_UNSUBSCRIBED_COPY,
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
+  WISHLIST_SAVE_LABEL,
+  WISHLIST_SAVED_LABEL,
   WISHLIST_SUCCESS_COPY,
+  WISHLIST_UNSUBSCRIBE_INVALID_COPY,
+  WISHLIST_UNSUBSCRIBED_COPY,
   wishlistEmailSentCopy,
 } from "@/lib/shop/wishlist";
 import { createAdminClient, createClient } from "@/lib/shared/supabase";
@@ -102,14 +107,14 @@ test.describe("Wishlist", () => {
   test("wishing the same product twice stores one item and one consent", async ({ page }) => {
     await page.goto(`/shop/${firstProduct.slug}`);
 
-    const trigger = page.getByRole("button", { name: "Save to wishlist", exact: true });
+    const trigger = page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
     await expect(trigger).not.toHaveAttribute("aria-pressed");
     await trigger.click();
     const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Email").fill(email);
 
-    const submit = dialog.getByRole("button", { name: "Save to wishlist", exact: true });
+    const submit = dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
     await expect(submit).toBeDisabled();
     await expect(dialog.getByText(WISHLIST_OPT_IN_HELPER)).toBeVisible();
 
@@ -119,7 +124,7 @@ test.describe("Wishlist", () => {
     await expect(panel).toContainText(firstProduct.name);
     await expect(panel).toContainText(WISHLIST_SUCCESS_COPY);
     await expect(panel).toContainText(wishlistEmailSentCopy(email));
-    const savedTrigger = page.getByRole("button", { name: "Saved to wishlist", exact: true });
+    const savedTrigger = page.getByRole("button", { name: WISHLIST_SAVED_LABEL, exact: true });
     await expect(savedTrigger).toHaveAttribute("aria-pressed", "true");
     await expect(savedTrigger.locator('svg[data-filled="true"]')).toHaveCount(1);
     await panel.getByRole("button", { name: "Close" }).click();
@@ -132,7 +137,7 @@ test.describe("Wishlist", () => {
     await trigger.click();
     await expect(dialog.getByLabel("Email")).toHaveValue(email);
     await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-    await dialog.getByRole("button", { name: "Save to wishlist", exact: true }).click();
+    await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
     // Already wished: saved, but no second email, so no "sent a note" line.
     await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
     await expect(dialog.getByRole("status")).not.toContainText(wishlistEmailSentCopy(email));
@@ -156,7 +161,7 @@ test.describe("Wishlist", () => {
     await page.goto(`/shop/${firstProduct.slug}`);
 
     // Unique while the dialog is closed: its submit only mounts when open.
-    const trigger = page.getByRole("button", { name: "Save to wishlist", exact: true });
+    const trigger = page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true });
     await trigger.click();
     const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
     await expect(dialog).toBeVisible();
@@ -165,6 +170,70 @@ test.describe("Wishlist", () => {
 
     await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();
+  });
+
+  test("a malformed unsubscribe link lands on a token-free 404", async ({ page }) => {
+    const res = await page.goto("/shop/wishlist/unsubscribe?token=nonsense");
+
+    expect(res?.status()).toBe(404);
+    await expect(page).toHaveURL("/shop/wishlist/unsubscribe/invalid");
+    await expect(page.getByText(WISHLIST_UNSUBSCRIBE_INVALID_COPY)).toBeVisible();
+  });
+
+  test("the unsubscribe link opts out, keeps the wish, and dies on re-consent", async ({
+    page,
+  }) => {
+    const supabase = createAdminClient();
+    const readContact = async () => {
+      const { data } = await supabase
+        .from("shop_wishlist_contacts")
+        .select("marketing_opt_in, unsubscribed_at, unsubscribe_token")
+        .eq("email", email)
+        .single();
+      return data;
+    };
+    const wish = async () => {
+      await page.goto(`/shop/${firstProduct.slug}`);
+      await page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
+      await dialog.getByLabel("Email").fill(email);
+      await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
+      await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
+      await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
+    };
+
+    await wish();
+    const oldToken = (await readContact())?.unsubscribe_token as string;
+    const oldLink = `/shop/wishlist/unsubscribe?token=${oldToken}`;
+
+    await page.goto(oldLink);
+    await expect(page).toHaveURL("/shop/wishlist/unsubscribe/done");
+    expect(page.url()).not.toContain("token");
+    await expect(page.getByText(WISHLIST_UNSUBSCRIBED_COPY)).toBeVisible();
+
+    const unsubscribed = await readContact();
+    expect(unsubscribed?.marketing_opt_in).toBe(false);
+    expect(unsubscribed?.unsubscribed_at).not.toBeNull();
+    const { data: items } = await supabase
+      .from("shop_wishlist_items")
+      .select("product_slug")
+      .eq("email", email);
+    expect(items).toEqual([{ product_slug: firstProduct.slug }]);
+
+    await page.goto(oldLink);
+    await expect(page).toHaveURL("/shop/wishlist/unsubscribe/already");
+    await expect(page.getByText(WISHLIST_ALREADY_UNSUBSCRIBED_COPY)).toBeVisible();
+
+    // Consenting again rotates the token, so the old email's link is dead.
+    await wish();
+    const renewed = await readContact();
+    expect(renewed?.marketing_opt_in).toBe(true);
+    expect(renewed?.unsubscribed_at).toBeNull();
+    expect(renewed?.unsubscribe_token).not.toBe(oldToken);
+
+    const res = await page.goto(oldLink);
+    expect(res?.status()).toBe(404);
+    await expect(page).toHaveURL("/shop/wishlist/unsubscribe/invalid");
   });
 
   test("anon cannot read either wishlist table", async () => {

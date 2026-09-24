@@ -5,6 +5,8 @@ import {
   WISHLIST_DIALOG_HEADING,
   WISHLIST_OPT_IN_COPY,
   WISHLIST_OPT_IN_HELPER,
+  WISHLIST_SAVE_LABEL,
+  WISHLIST_SAVED_LABEL,
   WISHLIST_SUCCESS_COPY,
 } from "@/lib/shop/wishlist";
 
@@ -71,6 +73,9 @@ test("the trigger reads Save to wishlist, unpressed, with an empty heart", async
   const { screen, trigger } = await renderDialog();
 
   await expect.element(screen.getByRole("button", { name: /^save to wishlist$/i })).toBeVisible();
+  // Visible text is the accessible name; there is no aria-label.
+  await expect.element(trigger).toHaveAccessibleName(WISHLIST_SAVE_LABEL);
+  await expect.element(trigger).toHaveTextContent(WISHLIST_SAVE_LABEL);
   await expect.element(trigger).not.toHaveAttribute("aria-pressed");
   await expect.element(trigger).not.toHaveAttribute("aria-label");
   expect(trigger.element().querySelector('svg[data-filled="false"]')).not.toBeNull();
@@ -144,8 +149,11 @@ test("a new save shows the confirmation panel, fills the heart and remembers the
 
   const saved = screen.getByRole("button", { name: /^saved to wishlist$/i });
   await expect.element(saved).toHaveAttribute("aria-pressed", "true");
-  await expect.element(saved).not.toHaveAttribute("aria-label");
-  expect(saved.element().querySelector('svg[data-filled="true"]')).not.toBeNull();
+  await expect.element(trigger).toHaveAccessibleName(WISHLIST_SAVED_LABEL);
+  await expect.element(trigger).toHaveTextContent(WISHLIST_SAVED_LABEL);
+  await expect.element(trigger).toHaveAttribute("aria-pressed", "true");
+  await expect.element(trigger).not.toHaveAttribute("aria-label");
+  expect(trigger.element().querySelector('svg[data-filled="true"]')).not.toBeNull();
   expect(mockCapture).toHaveBeenCalledWith("wishlist_item_added", { product_slug: SLUG });
   expect(window.localStorage.getItem("issebya.shop.wishlist.email")).toBe("guest@example.com");
 
