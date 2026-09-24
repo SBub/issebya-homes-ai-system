@@ -188,6 +188,12 @@ procedures, not code documentation) and anything gitignored.
     - When changing `ProductCard` sizing, or the card stops being portrait or its photo collapses at some breakpoint
     - When changing the shared `src/app/ui/Breadcrumb.tsx` or adding another detail route that needs a back trail
 
+- `apps/website/app_docs/feature-972c79dc-shop-wishlist-email-optin.md`
+  - Conditions:
+    - When changing the wishlist form, its consent copy, or the `shop_wishlist_contacts` / `shop_wishlist_items` tables
+    - When renaming a product slug, or building anything that emails wishlist contacts (unsubscribe, offers)
+    - When a wishlist save fails, stores a duplicate, or `/shop/[slug]` stops being prerendered or hits a hydration mismatch
+
 ---
 
 ## apps/guest-communication-agent

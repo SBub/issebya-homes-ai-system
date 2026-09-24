@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/app/ui/Breadcrumb";
 import { allProducts, getProductBySlug } from "@/lib/shop/products";
 import { formatPrice } from "@/lib/shop/schema";
 import { SITE_URL } from "@/lib/site";
+import { WishlistForm } from "./ui/WishlistForm";
 
 export function generateStaticParams() {
   return allProducts.map(({ slug }) => ({ slug }));
@@ -66,6 +67,7 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
           <p className="uppercase tracking-[0.2em] text-xs">{brand}</p>
           <h1 className="text-price">{name}</h1>
           <p className="font-medium">{formatPrice(price)}</p>
+          <WishlistForm productSlug={product.slug} />
           <p className="text-sm leading-relaxed max-w-[65ch] whitespace-pre-line">{details}</p>
         </div>
       </div>
