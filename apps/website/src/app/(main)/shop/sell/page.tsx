@@ -15,10 +15,12 @@ export const metadata: Metadata = {
 // client island; everything it sends goes through its Server Actions.
 export default function SellPage() {
   return (
-    <article className="p-4 md:p-12">
-      <Breadcrumb parent={{ href: "/shop", label: "shop" }} title="Offer a piece" />
+    <article>
+      <div className="px-4 pt-4 md:px-12 md:pt-12">
+        <Breadcrumb parent={{ href: "/shop", label: "shop" }} title="Offer a piece" />
+      </div>
 
-      <div className="bg-shop-card text-foreground p-4 md:p-8 flex flex-col gap-6">
+      <div className="bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12 flex flex-col gap-6">
         <h1 className="text-price">Offer a piece</h1>
         <p className="text-sm leading-relaxed max-w-[65ch]">
           Made something, or found something, that would sit well in the house? Tell us about it and

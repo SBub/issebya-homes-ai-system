@@ -48,10 +48,12 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
   const { brand, name, price, details, image } = product;
 
   return (
-    <article className="p-4 md:p-12">
-      <Breadcrumb parent={{ href: "/shop", label: "shop" }} title={name} />
+    <article>
+      <div className="px-4 pt-4 md:px-12 md:pt-12">
+        <Breadcrumb parent={{ href: "/shop", label: "shop" }} title={name} />
+      </div>
 
-      <div className="grid md:grid-cols-2 gap-8 bg-shop-card text-foreground p-4 md:p-8">
+      <div className="grid md:grid-cols-2 gap-8 bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12">
         <div className="relative w-full aspect-square">
           <Image
             src={image.src}
