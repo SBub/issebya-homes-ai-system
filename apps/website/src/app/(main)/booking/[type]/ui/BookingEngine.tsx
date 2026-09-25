@@ -21,7 +21,7 @@ export async function BookingEngine({ roomType }: BookingEngineProps) {
       blockedDates={blockedDates}
       defaultCheckIn={firstAvailable ? toCalendarDay(firstAvailable.start) : null}
       defaultCheckOut={firstAvailable ? toCalendarDay(firstAvailable.end) : null}
-      error={error ?? null}
+      hasAvailabilityError={Boolean(error)}
       pricing={<BookingPricing />}
     />
   );

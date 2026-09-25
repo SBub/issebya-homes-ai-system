@@ -66,6 +66,7 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
             fill
             className="object-cover"
             sizes="(min-width: 640px) 320px, 100vw"
+            priority
           />
         </div>
       )}

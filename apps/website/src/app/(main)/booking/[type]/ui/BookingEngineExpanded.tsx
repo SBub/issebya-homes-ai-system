@@ -10,6 +10,7 @@ import { addBookingBreadcrumb } from "@/lib/sentry-booking";
 import { COUNTRY_CODES, splitPhoneNumber } from "@/lib/shared/country-codes";
 import { blogReturnPathSchema } from "@/lib/shared/schemas/booking";
 import type { DateRange } from "@/lib/shared/types/booking";
+import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import type { BookingFormState } from "../actions";
 import { submitBooking } from "../actions";
 import { BookingCalendar } from "./BookingCalendar";
@@ -21,7 +22,9 @@ type BookingEngineExpandedProps = {
   onDateSelect: (date: Date) => void;
   onClose: () => void;
   roomType: "room1" | "room2";
-  error: string | null;
+  // Whether the server's iCal fetch had feed failures. Gates the on-brand,
+  // WhatsApp-first fallback copy rendered below — never the raw fetch error.
+  hasAvailabilityError: boolean;
   updateAvailability: (blockedDates: DateRange[]) => void;
 };
 
@@ -32,7 +35,7 @@ export function BookingEngineExpanded({
   onDateSelect,
   onClose,
   roomType,
-  error,
+  hasAvailabilityError,
   updateAvailability,
 }: BookingEngineExpandedProps) {
   const searchParams = useSearchParams();
@@ -331,9 +334,16 @@ export function BookingEngineExpanded({
 
         <input type="hidden" name="personCount" value={personCount} readOnly />
 
-        {(error || bookingError) && (
+        {hasAvailabilityError && (
           <p className="text-red-500 text-sm mb-4" role="alert" aria-live="polite">
-            {error || bookingError}
+            We couldn&apos;t confirm live availability from one of our booking channels just now.
+            Message us on <WhatsAppLink /> before booking to be sure.
+          </p>
+        )}
+
+        {bookingError && (
+          <p className="text-red-500 text-sm mb-4" role="alert" aria-live="polite">
+            {bookingError}
           </p>
         )}
 

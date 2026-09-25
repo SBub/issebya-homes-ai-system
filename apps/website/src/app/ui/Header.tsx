@@ -16,10 +16,14 @@ export default function Header() {
       }`}
     >
       {showLogo && (
+        // A styled link, not a heading: the wordmark is site chrome present on
+        // every page, and reserving <h1> for each page's own primary heading
+        // keeps a single, unambiguous top heading for screen-reader heading
+        // navigation.
         <Link href="/">
-          <h1 className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10">
+          <span className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10 block">
             issebya.homes
-          </h1>
+          </span>
         </Link>
       )}
 

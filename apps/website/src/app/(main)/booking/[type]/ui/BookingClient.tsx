@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fromCalendarDay, isPastDate, isValidDateRange } from "@/lib/date-utils";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
 import type { DateRange } from "@/lib/shared/types/booking";
+import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingEngineExpanded } from "./BookingEngineExpanded";
 
 type BookingClientProps = {
@@ -19,7 +20,10 @@ type BookingClientProps = {
   // (and submit) the previous day for anyone behind UTC.
   defaultCheckIn: string | null;
   defaultCheckOut: string | null;
-  error: string | null;
+  // Whether the server's iCal fetch had feed failures. The specific error
+  // text never reaches the guest — it's engineering detail — this only
+  // gates the on-brand, WhatsApp-first fallback copy rendered below.
+  hasAvailabilityError: boolean;
   // Server Component passed down from BookingEngine (async Server Component)
   // via the Next.js "interleaving" pattern: it renders server-side and is
   // handed to this Client Component as already-resolved output, so it never
@@ -123,7 +127,7 @@ export function BookingClient({
   blockedDates: initialBlockedDates,
   defaultCheckIn,
   defaultCheckOut,
-  error,
+  hasAvailabilityError,
   pricing,
 }: BookingClientProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -246,10 +250,13 @@ export function BookingClient({
   }, []);
 
   // Error state
-  if (error && !checkInDate) {
+  if (hasAvailabilityError && !checkInDate) {
     return (
       <div className="booking-engine-error">
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-red-600">
+          Booking is temporarily unavailable. Please reach out to us on <WhatsAppLink /> to book
+          directly.
+        </p>
       </div>
     );
   }
@@ -279,8 +286,9 @@ export function BookingClient({
               onClick={handleExpand}
               className="booking-date-button"
               aria-label="Select check-in date"
+              aria-describedby="checkin-date-value"
             >
-              <span className="booking-date-value">
+              <span id="checkin-date-value" className="booking-date-value">
                 {checkInDate ? format(checkInDate, "d MMM yyyy") : "Select date"}
               </span>
             </button>
@@ -292,8 +300,9 @@ export function BookingClient({
               onClick={handleExpand}
               className="booking-date-button"
               aria-label="Select check-out date"
+              aria-describedby="checkout-date-value"
             >
-              <span className="booking-date-value">
+              <span id="checkout-date-value" className="booking-date-value">
                 {checkOutDate ? format(checkOutDate, "d MMM yyyy") : "Select date"}
               </span>
             </button>
@@ -321,7 +330,7 @@ export function BookingClient({
           onDateSelect={handleDateSelect}
           onClose={handleClose}
           roomType={roomType}
-          error={error}
+          hasAvailabilityError={hasAvailabilityError}
           updateAvailability={updateAvailability}
         />
       )}
