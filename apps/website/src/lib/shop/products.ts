@@ -32,6 +32,20 @@ const samples = [
   { word: "Six", amount: 7200 },
 ];
 
+// Even-indexed products get three images, odd ones two, starting at the
+// product's own sample file and wrapping, so each product's primary image is
+// unchanged.
+function sampleImages(word: string, index: number) {
+  const count = index % 2 === 0 ? 3 : 2;
+
+  return Array.from({ length: count }, (_, k) => ({
+    src: `/shop/sample-0${((index + k) % 6) + 1}.webp`,
+    alt: `Placeholder image ${k + 1} of ${count} for Sample Product ${word}`,
+    width: 800,
+    height: 800,
+  }));
+}
+
 const products: Product[] = samples.map(({ word, amount }, index) =>
   toProduct({
     slug: `sample-product-${word.toLowerCase()}`,
@@ -40,12 +54,7 @@ const products: Product[] = samples.map(({ word, amount }, index) =>
     price: { amount, currency: "EUR" },
     description: "A placeholder product. A short note about the item will appear here.",
     details: SAMPLE_DETAILS,
-    image: {
-      src: `/shop/sample-0${index + 1}.webp`,
-      alt: `Placeholder image for Sample Product ${word}`,
-      width: 800,
-      height: 800,
-    },
+    images: sampleImages(word, index),
   }),
 );
 
