@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import { notFound } from "next/navigation";
 import { Breadcrumb } from "@/app/ui/Breadcrumb";
 import { allProducts, getProductBySlug } from "@/lib/shop/products";
-import { formatPrice } from "@/lib/shop/schema";
+import { formatPrice, primaryImage } from "@/lib/shop/schema";
 import { SITE_URL } from "@/lib/site";
+import { ProductImageCarousel } from "../ui/ProductImageCarousel";
 import { WishlistDialog } from "./ui/WishlistDialog";
 
 export function generateStaticParams() {
@@ -21,6 +21,7 @@ export async function generateMetadata(props: PageProps<"/shop/[slug]">): Promis
   if (!product) return { title: "Product not found - issebya.homes" };
 
   const url = `${SITE_URL}/shop/${product.slug}`;
+  const og = primaryImage(product);
 
   return {
     title: `${product.name} - issebya.homes`,
@@ -30,7 +31,7 @@ export async function generateMetadata(props: PageProps<"/shop/[slug]">): Promis
       title: product.name,
       description: product.description,
       url,
-      images: [{ url: product.image.src, alt: product.image.alt }],
+      images: [{ url: og.src, alt: og.alt }],
     },
   };
 }
@@ -45,7 +46,7 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
 
   if (!product) notFound();
 
-  const { brand, name, price, details, image } = product;
+  const { brand, name, price, details, images } = product;
 
   return (
     <article>
@@ -55,11 +56,9 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
 
       <div className="grid md:grid-cols-2 gap-8 bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12">
         <div className="relative w-full aspect-square">
-          <Image
-            src={image.src}
-            alt={image.alt}
-            fill
-            className="object-cover"
+          <ProductImageCarousel
+            images={images}
+            slug={product.slug}
             sizes="(min-width: 768px) 50vw, 100vw"
             priority
           />

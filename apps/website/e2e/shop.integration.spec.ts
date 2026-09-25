@@ -31,8 +31,34 @@ test.describe("Shop", () => {
   test("index lists six product cards linking to /shop/…", async ({ page }) => {
     await page.goto("/shop");
 
-    const cards = page.getByRole("region", { name: "Products" }).locator('a[href^="/shop/"]');
-    await expect(cards).toHaveCount(6);
+    const grid = page.getByRole("region", { name: "Products" });
+    await expect(grid.getByRole("article")).toHaveCount(6);
+    for (const product of allProducts) {
+      await expect(grid.getByRole("link", { name: product.name, exact: true })).toHaveAttribute(
+        "href",
+        `/shop/${product.slug}`,
+      );
+    }
+  });
+
+  test("flipping a card's images stays on /shop, then the name opens the product", async ({
+    page,
+  }) => {
+    await page.goto("/shop");
+
+    const card = page.getByRole("region", { name: "Products" }).getByRole("article").first();
+    const img = card.locator("img");
+    await expect(img).toHaveAttribute("alt", firstProduct.images[0].alt);
+
+    await card.getByRole("button", { name: "Next image" }).click();
+    await expect(page).toHaveURL("/shop");
+    await expect(img).toHaveAttribute("alt", firstProduct.images[1].alt);
+
+    await card.getByRole("link", { name: firstProduct.name, exact: true }).click();
+    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`);
+    await expect(
+      page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
+    ).toBeVisible();
   });
 
   test("index has no breadcrumb", async ({ page }) => {
