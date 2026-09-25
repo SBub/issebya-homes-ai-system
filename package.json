@@ -17,6 +17,7 @@
     "start": "turbo run start",
     "dev:webhook-gateway": "tsx scripts/dev-webhook-gateway.ts",
     "dev:adw": "./scripts/dev-adw.sh",
+    "vercel:prune": "tsx scripts/vercel-prune-previews.ts",
     "lint": "turbo run lint && prettier --check .",
     "lint:fix": "turbo run lint:fix && prettier --write .",
     "typecheck": "turbo run typecheck",

@@ -1,0 +1,76 @@
+name: Vercel preview prune
+
+# Why this exists (issue #158): the sbubs-projects Vercel team is on the
+# Hobby plan, whose deployment retention is fixed (30 days, keep 10) and
+# cannot be changed from the dashboard or the API. scripts/vercel-ignore.sh
+# cuts how many previews get built; this job removes the ones nobody can
+# still need, so Deployment Storage stops filling up.
+#
+# What it deletes is decided by scripts/lib/vercel-prune.ts (unit-tested
+# from apps/website): READY previews older than 7 days except the newest
+# preview of a branch still on origin, and CANCELED/ERROR deployments older
+# than 1 day. It never touches a production deployment, and only the three
+# projects hardcoded in scripts/vercel-prune-previews.ts.
+#
+# Dry run by default. The weekly schedule applies; a manual dispatch only
+# deletes when the `apply` box is ticked. To see what would go:
+#   gh workflow run vercel-prune.yml --ref develop
+#
+# VERCEL_TOKEN is a repo secret holding a token scoped to the
+# sbubs-projects team, created by the owner at vercel.com → Account →
+# Tokens. Without it the job fails at `Require VERCEL_TOKEN`, before any
+# API call.
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC; GitHub may start it late, acceptable here
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually delete (default is a dry run)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-prune
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TEAM_ID: team_4M4EY8m8u4o2F7FZl5ia9Al4
+    steps:
+      - name: Require VERCEL_TOKEN
+        # Fail closed, first, so a missing secret is the first thing a reader
+        # of the run sees and costs seconds, not an install.
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::VERCEL_TOKEN is not set. Create a token scoped to the sbubs-projects team (vercel.com → Account → Tokens) and add it as repo secret VERCEL_TOKEN. Refusing to call the Vercel API."
+            exit 1
+          fi
+
+      # Needed for `git ls-remote --heads origin`, which tells the script
+      # which branches still exist.
+      - uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Prune previews
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: yarn tsx scripts/vercel-prune-previews.ts ${{ (github.event_name == 'schedule' || inputs.apply) && '--apply' || '' }}
