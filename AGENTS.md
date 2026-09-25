@@ -110,6 +110,16 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
   `git commit --allow-empty -m "chore: preview" -m "Deploy-Preview: yes"`.
   Keep each project's dashboard Ignored Build Step on "Automatic"; a dashboard
   script would be overridden by `vercel.json` anyway.
+- `.github/workflows/vercel-prune.yml` exists because Hobby's deployment
+  retention is fixed (30 days, keep 10) and cannot be configured. It runs
+  Mondays with `--apply` and deletes READY previews older than 7 days, except
+  the newest preview of a branch still on origin, plus CANCELED/ERROR
+  deployments older than 1 day. It only touches the three projects named in
+  `scripts/vercel-prune-previews.ts` and never touches production. Dry run:
+  dispatch the workflow with `apply` unchecked, or locally
+  `VERCEL_TOKEN=… VERCEL_TEAM_ID=… yarn vercel:prune`. The selection logic is
+  in `scripts/lib/vercel-prune.ts`; change it together with its unit test
+  (`apps/website/src/lib/__tests__/vercel-prune.unit.test.ts`).
 
 ## Environment files
 
