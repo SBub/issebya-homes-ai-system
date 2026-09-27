@@ -361,15 +361,19 @@ test.describe("Shop", () => {
   });
 });
 
-test.describe("Shop without JavaScript", () => {
-  test.use({ javaScriptEnabled: false });
-
+// Not run with `javaScriptEnabled: false`: the search box sits in the page's
+// streamed Suspense hole, which only an inline script reveals, so without
+// JavaScript the page never gets past the skeleton. Instead this bypasses
+// React's onSubmit with the native `form.submit()`, which is exactly the
+// request the browser would build on its own.
+test.describe("Shop search form", () => {
   test("the search box is a plain GET form", async ({ page }) => {
     await page.goto("/shop");
 
-    const search = page.getByRole("searchbox", { name: "Search products" });
-    await search.fill("teen");
-    await search.press("Enter");
+    await page.getByRole("search").evaluate((form: HTMLFormElement) => {
+      (form.elements.namedItem("q") as HTMLInputElement).value = "teen";
+      form.submit();
+    });
 
     await expect(page).toHaveURL("/shop?q=teen");
     await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(

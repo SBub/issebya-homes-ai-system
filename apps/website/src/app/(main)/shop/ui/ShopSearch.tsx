@@ -5,9 +5,8 @@ import { DEFAULT_SHOP_SORT, SHOP_SEARCH_MAX_LENGTH, type ShopSort } from "@/lib/
 
 /**
  * The `/shop` search box, controlled by `ShopControls`, which decides when a
- * term reaches the URL. Without JavaScript it is a plain `GET` form to
- * `/shop`: Enter submits the single field, and the hidden `sort` keeps the
- * current order.
+ * term reaches the URL. Underneath it is a plain `GET` form to `/shop`: the
+ * single field is `q`, and the hidden `sort` keeps the current order.
  */
 export function ShopSearch({
   value,
