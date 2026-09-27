@@ -15,8 +15,9 @@
  * slug orphans every wish recorded against it, so don't rename one casually.
  * If a rename is unavoidable, migrate those rows in the same PR.
  *
- * THESE SIX ENTRIES ARE SAMPLE DATA. Replace them with real products by
- * editing this file and the images in `public/shop/`.
+ * THESE FIFTEEN ENTRIES ARE SAMPLE DATA. Replace them with real products by
+ * editing this file and the images in `public/shop/`. There are fifteen so
+ * `/shop` shows at least three pages of `SHOP_PAGE_SIZE` (6, 6, 3).
  */
 import { assertUniqueProductSlugs, type Product, toProduct } from "./schema";
 
@@ -30,6 +31,15 @@ const samples = [
   { word: "Four", amount: 4800 },
   { word: "Five", amount: 5500 },
   { word: "Six", amount: 7200 },
+  { word: "Seven", amount: 1850 },
+  { word: "Eight", amount: 2900 },
+  { word: "Nine", amount: 3400 },
+  { word: "Ten", amount: 4250 },
+  { word: "Eleven", amount: 6100 },
+  { word: "Twelve", amount: 8800 },
+  { word: "Thirteen", amount: 1500 },
+  { word: "Fourteen", amount: 3900 },
+  { word: "Fifteen", amount: 9600 },
 ];
 
 // Even-indexed products get three images, odd ones two, starting at the

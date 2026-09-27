@@ -184,9 +184,10 @@ test.describe("Booking flow", () => {
   test("user sees error when some iCal feeds fail to fetch", async ({ page, request }) => {
     // getAvailability (src/lib/availability.ts) sets a non-fatal `error`
     // string when some configured iCal feeds fail to fetch/parse, while
-    // still succeeding overall — that string flows down as a prop and is
-    // rendered inside the expanded booking form (see the
-    // `{(error || bookingError) && ...}` block in BookingEngineExpanded.tsx).
+    // still succeeding overall — that string flows down as a prop and, when
+    // present, the expanded booking form shows a guest-facing "couldn't
+    // confirm live availability" notice in its place (see the
+    // `hasAvailabilityError` block in BookingEngineExpanded.tsx).
     //
     // This used to be tested by mocking a client-side /api/availability
     // fetch via page.route(), asserting an error string that actually came
@@ -229,7 +230,7 @@ test.describe("Booking flow", () => {
       // Expand the form — the partial-failure error only renders inside it
       await page.getByLabel("Book selected dates").click();
 
-      await expect(page.getByText(/some availability data could not be fetched/i)).toBeVisible();
+      await expect(page.getByText(/couldn.t confirm live availability/i)).toBeVisible();
     } finally {
       await request.post("/api/e2e-ical-mock", { data: { enabled: false } });
     }

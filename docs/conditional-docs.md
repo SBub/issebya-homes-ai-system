@@ -230,6 +230,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing `ProductImageCarousel`, the product `images` list or `primaryImage`, or the `ProductCard` `<article>`/link structure
     - When an arrow tap or swipe on a `/shop` card navigates, or a card announces two links or none
     - When a test locating shop cards by `a[href^="/shop/"]` finds twice as many, or a browser test rendering a shop page fails on `posthog-js`
+- `apps/website/app_docs/feature-e50e5d95-shop-infinite-scroll-grid.md`
+  - Conditions:
+    - When changing `/shop` pagination, `SHOP_PAGE_SIZE`, the cursor format, `GET /api/shop/products`, or the `shop-products` cache tag
+    - When `/shop` stops prerendering (`next-prerender-current-time`), page one is fetched from the browser, or the grid jumps as the skeleton swaps out
+    - When adding TanStack Query to another route, or a browser test rendering `/shop` fails on `next/cache` or `@tanstack/react-query`
 
 ---
 

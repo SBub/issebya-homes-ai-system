@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { allProducts } from "@/lib/shop/products";
+import { Suspense } from "react";
+import { SHOP_PAGE_SIZE } from "@/lib/shop/pagination";
 import { SELL_LINK_COPY, SELL_LINK_LABEL } from "@/lib/shop/seller-submission";
 import { SITE_URL } from "@/lib/site";
-import { ProductCard } from "./ui/ProductCard";
+import { ProductGridSkeleton } from "./ui/ProductGridSkeleton";
+import { ShopProducts } from "./ui/ShopProducts";
 
 export const metadata: Metadata = {
   title: "Shop - issebya.homes",
@@ -12,7 +14,9 @@ export const metadata: Metadata = {
 };
 
 // Reads nothing from the request (no cookies(), no headers(), no
-// searchParams), so this route stays part of the static shell.
+// searchParams), so the shell stays static. Only the product list sits in
+// <Suspense>: it is the streamed, cached hole, with card-sized placeholders
+// while page one arrives.
 export default function ShopIndexPage() {
   return (
     <div>
@@ -20,13 +24,9 @@ export default function ShopIndexPage() {
         aria-label="Products"
         className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
       >
-        <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {allProducts.map((product) => (
-            <li key={product.slug}>
-              <ProductCard product={product} />
-            </li>
-          ))}
-        </ul>
+        <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
+          <ShopProducts />
+        </Suspense>
       </section>
       <p className="px-4 py-6 md:px-12 text-sm">
         {SELL_LINK_COPY}{" "}

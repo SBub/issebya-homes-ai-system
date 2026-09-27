@@ -18,16 +18,20 @@ import { ProductImageCarousel } from "./ProductImageCarousel";
  * photo's 58% basis resolves, and the grid's default `stretch` keeps every card
  * in a row the same height.
  */
+/**
+ * The card's outer box, shared with `ProductGridSkeleton` so a placeholder
+ * takes exactly the space the card will.
+ */
+export const PRODUCT_CARD_BOX_CLASS =
+  "flex flex-col h-full aspect-[3/5] md:max-lg:aspect-auto md:max-lg:min-h-[26rem] bg-shop-card p-3.5";
+
 export function ProductCard({ product }: { product: Product }) {
   const { slug, brand, name, price, description, images } = product;
   const nameId = `product-${slug}-name`;
   const href = `/shop/${slug}`;
 
   return (
-    <article
-      aria-labelledby={nameId}
-      className="group flex flex-col h-full aspect-[3/5] md:max-lg:aspect-auto md:max-lg:min-h-[26rem] bg-shop-card text-foreground p-3.5"
-    >
+    <article aria-labelledby={nameId} className={`group ${PRODUCT_CARD_BOX_CLASS} text-foreground`}>
       <div className="relative w-full basis-[58%] shrink-0 overflow-hidden">
         <ProductImageCarousel
           images={images}

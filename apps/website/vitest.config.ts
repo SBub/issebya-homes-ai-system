@@ -58,6 +58,7 @@ export default defineConfig({
             "next/cache",
             "next/headers",
             "posthog-js",
+            "@tanstack/react-query",
             "stripe",
             "@supabase/supabase-js",
             "ical.js",
