@@ -57,7 +57,10 @@ test.each<[string, ComponentType]>([
 test("/blog still lists its posts", async () => {
   const { getByRole } = await render(<BlogIndexPage />);
 
-  await expect.element(getByRole("heading", { level: 2, name: POST.title })).toBeVisible();
+  // The post title is a `<span>` labelling the card's link via
+  // `aria-labelledby`, not a heading — same single-h1 rationale as the test
+  // above: the link's accessible name is enough, no heading element needed.
+  await expect.element(getByRole("link", { name: POST.title })).toBeVisible();
 });
 
 // Proves the padded wrapper that held the title is gone too, not just the h1,
