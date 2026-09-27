@@ -16,11 +16,14 @@ export const metadata: Metadata = {
 export default function ShopIndexPage() {
   return (
     <div>
-      <section aria-label="Products" className="bg-shop-ground px-4 py-10 md:px-12 md:py-16">
+      <section
+        aria-label="Products"
+        className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
+      >
         <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {allProducts.map((product, index) => (
+          {allProducts.map((product) => (
             <li key={product.slug}>
-              <ProductCard product={product} position={index + 1} />
+              <ProductCard product={product} />
             </li>
           ))}
         </ul>

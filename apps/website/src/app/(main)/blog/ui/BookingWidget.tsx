@@ -64,9 +64,10 @@ export function BookingWidget() {
   return (
     <aside
       id={BOOKING_WIDGET_ANCHOR_ID}
-      className="my-10 border border-dashed p-4 bg-white"
+      className="my-10 max-w-xl bg-shop-card text-foreground border border-foreground p-4 md:p-8"
       data-testid="booking-widget"
     >
+      <p className="uppercase tracking-[0.2em] text-xs mb-4">Book Your Stay</p>
       <RoomSwitcher room1={roomEngine(BookingType.room1)} room2={roomEngine(BookingType.room2)} />
     </aside>
   );

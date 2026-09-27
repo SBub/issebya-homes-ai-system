@@ -50,28 +50,29 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
   const { title, date, hero, Content } = post;
 
   return (
-    <article className="p-4 md:p-12">
-      <Breadcrumb parent={{ href: "/blog", label: "blog" }} title={title} />
+    <article>
+      <div className="bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12 min-h-screen">
+        <Breadcrumb parent={{ href: "/blog", label: "blog" }} title={title} />
+        <p className="uppercase tracking-[0.2em] text-xs">
+          {format(fromCalendarDay(date), "d MMMM yyyy")}
+        </p>
+        <h1 className="text-price mb-6">{title}</h1>
 
-      <h1 className="text-price">{title}</h1>
-      <p className="text-xs text-gray-600 mt-1 mb-6">
-        {format(fromCalendarDay(date), "d MMMM yyyy")}
-      </p>
-
-      {hero && (
-        <div className="page-decor-photo mb-8">
-          <Image
-            src={hero.src}
-            alt={hero.alt}
-            fill
-            className="object-cover"
-            sizes="(min-width: 640px) 320px, 100vw"
-          />
+        <div className="flow-root">
+          {hero && (
+            <div className="relative float-none sm:float-left w-full sm:w-2/5 aspect-square mb-4 sm:mb-4 sm:mr-6">
+              <Image
+                src={hero.src}
+                alt={hero.alt}
+                fill
+                className="object-cover"
+                sizes="(min-width: 640px) 40vw, 100vw"
+                priority
+              />
+            </div>
+          )}
+          <Content />
         </div>
-      )}
-
-      <div className="max-w-[70ch]">
-        <Content />
       </div>
     </article>
   );

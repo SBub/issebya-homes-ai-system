@@ -46,7 +46,7 @@ const defaultProps = {
   // every timezone the browser might be in.
   defaultCheckIn: "2025-07-17",
   defaultCheckOut: "2025-07-19",
-  error: null,
+  hasAvailabilityError: false,
   // Simulates the Server Component handed down from BookingEngine via the
   // "interleaving" pattern — BookingClient never imports BookingPricing.
   pricing: <div data-testid="mock-pricing">Mock Pricing</div>,
@@ -64,16 +64,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("user sees error message when availability fetch failed and no dates are available", async () => {
+test("user sees on-brand WhatsApp fallback when availability fetch failed and no dates are available", async () => {
   const { getByText } = await render(
     <BookingClient
       {...defaultProps}
       defaultCheckIn={null}
       defaultCheckOut={null}
-      error="Failed to fetch availability data"
+      hasAvailabilityError={true}
     />,
   );
-  await expect.element(getByText("Failed to fetch availability data")).toBeInTheDocument();
+  await expect.element(getByText(/booking is temporarily unavailable/i)).toBeInTheDocument();
 });
 
 test("user sees collapsed view with server-provided default dates", async () => {

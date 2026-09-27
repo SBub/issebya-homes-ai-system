@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { toRoman } from "@/lib/shop/roman";
 import { formatPrice, type Product } from "@/lib/shop/schema";
 import { ProductImageCarousel } from "./ProductImageCarousel";
 
@@ -19,7 +18,7 @@ import { ProductImageCarousel } from "./ProductImageCarousel";
  * photo's 58% basis resolves, and the grid's default `stretch` keeps every card
  * in a row the same height.
  */
-export function ProductCard({ product, position }: { product: Product; position: number }) {
+export function ProductCard({ product }: { product: Product }) {
   const { slug, brand, name, price, description, images } = product;
   const nameId = `product-${slug}-name`;
   const href = `/shop/${slug}`;
@@ -39,7 +38,6 @@ export function ProductCard({ product, position }: { product: Product; position:
       </div>
 
       <div className="flex flex-col gap-1.5 pt-3 text-xs">
-        <span>{toRoman(position)}</span>
         <p className="text-center uppercase tracking-[0.2em] text-[10px]">{brand}</p>
         <div className="flex justify-between gap-2 font-medium text-sm">
           <Link

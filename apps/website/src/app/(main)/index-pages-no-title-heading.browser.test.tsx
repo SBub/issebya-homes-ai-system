@@ -57,7 +57,10 @@ test.each<[string, ComponentType]>([
 test("/blog still lists its posts", async () => {
   const { getByRole } = await render(<BlogIndexPage />);
 
-  await expect.element(getByRole("heading", { level: 2, name: POST.title })).toBeVisible();
+  // The post title is a `<span>` labelling the card's link via
+  // `aria-labelledby`, not a heading — same single-h1 rationale as the test
+  // above: the link's accessible name is enough, no heading element needed.
+  await expect.element(getByRole("link", { name: POST.title })).toBeVisible();
 });
 
 // Proves the padded wrapper that held the title is gone too, not just the h1,
@@ -70,8 +73,10 @@ test("/shop opens directly on the products section", async () => {
   expect(screen.container.firstElementChild?.firstElementChild).toBe(products.element());
 });
 
-test("/contact still shows its photo", async () => {
-  const { getByRole } = await render(<ContactPage />);
+test("/contact shows no title and no photo, only its text", async () => {
+  const { getByRole, getByText } = await render(<ContactPage />);
 
-  await expect.element(getByRole("img", { name: "Front yard and garden entrance" })).toBeVisible();
+  expect(getByRole("heading", { level: 2 }).query()).toBeNull();
+  expect(getByRole("img", { name: "Front yard and garden entrance" }).query()).toBeNull();
+  await expect.element(getByText(/we're here to help/)).toBeVisible();
 });

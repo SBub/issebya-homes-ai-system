@@ -11,15 +11,15 @@ export default function Header() {
 
   return (
     <header
-      className={`flex flex-col sm:flex-row items-center px-6 py-4 md:border-b md:border-gray-300 gap-2 sm:gap-0 ${
+      className={`bg-white flex flex-col sm:flex-row items-center px-6 py-4 md:border-b md:border-gray-300 gap-2 sm:gap-0 ${
         showLogo ? "justify-between" : "justify-center sm:justify-end"
       }`}
     >
       {showLogo && (
         <Link href="/">
-          <h1 className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10">
+          <span className="text-xl sm:text-3xl text-header whitespace-nowrap relative z-10 block">
             issebya.homes
-          </h1>
+          </span>
         </Link>
       )}
 

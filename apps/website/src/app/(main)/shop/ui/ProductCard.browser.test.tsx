@@ -67,26 +67,25 @@ function swipe(target: Element, fromX: number, toX: number) {
   );
 }
 
-test("the card shows numeral, brand, name, price and description", async () => {
-  const { getByText } = await render(<ProductCard product={ONE} position={3} />);
+test("the card shows brand, name, price and description, no roman numeral", async () => {
+  const { getByText } = await render(<ProductCard product={ONE} />);
 
-  await expect.element(getByText("III", { exact: true })).toBeVisible();
   await expect.element(getByText("Test Brand")).toBeVisible();
   await expect.element(getByText("Linen Throw", { exact: true })).toBeVisible();
   await expect.element(getByText("€12.00")).toBeVisible();
   await expect.element(getByText(ONE.description)).toBeVisible();
+  await expect.element(page.getByText(/^[IVXLCDM]+$/)).not.toBeInTheDocument();
 });
 
 // The only link a screen reader meets is the product name. The photo link is
 // an aria-hidden, pointer-only duplicate.
 test("the card is an article whose only accessible link is the product name", async () => {
-  const { getByRole } = await render(<ProductCard product={THREE} position={3} />);
+  const { getByRole } = await render(<ProductCard product={THREE} />);
 
   await expect.element(getByRole("article", { name: "Linen Throw" })).toBeInTheDocument();
   await expect
     .element(getByRole("link", { name: "Linen Throw", exact: true }))
     .toHaveAttribute("href", "/shop/linen-throw");
-  await expect.element(page.getByRole("link", { name: "III" })).not.toBeInTheDocument();
   await expect.element(getByRole("link").nth(1)).not.toBeInTheDocument();
 });
 
@@ -97,7 +96,7 @@ const photo = (screen: { getByRole: typeof page.getByRole }) =>
   screen.getByRole("link", { includeHidden: true }).getByRole("img", { includeHidden: true });
 
 test("a single-image product has no arrows, no live region and no captures", async () => {
-  const { getByRole, getByText } = await render(<ProductCard product={ONE} position={1} />);
+  const { getByRole, getByText } = await render(<ProductCard product={ONE} />);
 
   await expect
     .element(getByRole("img", { name: "A folded linen throw", includeHidden: true }))
@@ -108,7 +107,7 @@ test("a single-image product has no arrows, no live region and no captures", asy
 });
 
 test("next and previous flip through the images and wrap around", async () => {
-  const screen = await render(<ProductCard product={THREE} position={1} />);
+  const screen = await render(<ProductCard product={THREE} />);
   const { getByRole } = screen;
   const img = photo(screen);
   const next = getByRole("button", { name: "Next image" });
@@ -126,13 +125,13 @@ test("next and previous flip through the images and wrap around", async () => {
 });
 
 test("only the current image is rendered", async () => {
-  const { container } = await render(<ProductCard product={THREE} position={1} />);
+  const { container } = await render(<ProductCard product={THREE} />);
 
   expect(container.querySelectorAll("img")).toHaveLength(1);
 });
 
 test("the carousel is labelled and announces the current image", async () => {
-  const { getByRole, getByText } = await render(<ProductCard product={THREE} position={1} />);
+  const { getByRole, getByText } = await render(<ProductCard product={THREE} />);
 
   await expect
     .element(getByRole("group", { name: "Product images" }))
@@ -142,7 +141,7 @@ test("the carousel is labelled and announces the current image", async () => {
 });
 
 test("the arrows are not inside the link", async () => {
-  const { container } = await render(<ProductCard product={THREE} position={1} />);
+  const { container } = await render(<ProductCard product={THREE} />);
 
   const buttons = container.querySelectorAll("button");
   expect(buttons).toHaveLength(2);
@@ -152,7 +151,7 @@ test("the arrows are not inside the link", async () => {
 });
 
 test("an arrow click captures shop_card_image_changed", async () => {
-  const { getByRole } = await render(<ProductCard product={THREE} position={1} />);
+  const { getByRole } = await render(<ProductCard product={THREE} />);
 
   await getByRole("button", { name: "Next image" }).click();
 
@@ -165,7 +164,7 @@ test("an arrow click captures shop_card_image_changed", async () => {
 });
 
 test("a swipe over 50px advances, a shorter one does nothing", async () => {
-  const screen = await render(<ProductCard product={THREE} position={1} />);
+  const screen = await render(<ProductCard product={THREE} />);
   const carousel = screen.getByRole("group", { name: "Product images" }).element();
   const img = photo(screen);
 
@@ -196,7 +195,7 @@ test("an arrow click advances the image without navigating", async () => {
   try {
     const screen = await render(
       <div onClick={outerClick}>
-        <ProductCard product={THREE} position={1} />
+        <ProductCard product={THREE} />
       </div>,
     );
 
