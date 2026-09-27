@@ -36,6 +36,10 @@ const POST = vi.hoisted<BlogPost>(() => ({
 // The real registry imports `.mdx`, which Vite browser mode cannot transform.
 vi.mock("@/lib/blog/posts", () => ({ allPosts: [POST] }));
 
+// The product list pulls in `next/cache` and the server registry. Only the
+// `/shop` shell (Products section first, no h1) is under test here.
+vi.mock("./shop/ui/ShopProducts", () => ({ ShopProducts: () => null }));
+
 import BlogIndexPage from "./blog/page";
 import ContactPage from "./contact/page";
 import ShopIndexPage from "./shop/page";
