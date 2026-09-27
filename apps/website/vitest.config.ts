@@ -51,6 +51,7 @@ export default defineConfig({
             "vitest-browser-react",
             "date-fns",
             "@sentry/nextjs",
+            "@sentry/react",
             "zod",
             "next/image",
             "next/navigation",

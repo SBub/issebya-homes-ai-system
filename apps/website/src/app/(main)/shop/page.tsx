@@ -5,6 +5,7 @@ import { SHOP_PAGE_SIZE } from "@/lib/shop/pagination";
 import { SELL_LINK_COPY, SELL_LINK_LABEL } from "@/lib/shop/seller-submission";
 import { SITE_URL } from "@/lib/site";
 import { ProductGridSkeleton } from "./ui/ProductGridSkeleton";
+import { ShopGridBoundary } from "./ui/ShopGridBoundary";
 import { ShopProducts } from "./ui/ShopProducts";
 
 export const metadata: Metadata = {
@@ -16,7 +17,9 @@ export const metadata: Metadata = {
 // Reads nothing from the request (no cookies(), no headers(), no
 // searchParams), so the shell stays static. Only the product list sits in
 // <Suspense>: it is the streamed, cached hole, with card-sized placeholders
-// while page one arrives.
+// while page one arrives. The error boundary sits outside that <Suspense>, so
+// a first-page error thrown from inside the suspended tree replaces only the
+// grid, and the sell link below still renders.
 export default function ShopIndexPage() {
   return (
     <div>
@@ -24,9 +27,11 @@ export default function ShopIndexPage() {
         aria-label="Products"
         className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
       >
-        <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
-          <ShopProducts />
-        </Suspense>
+        <ShopGridBoundary>
+          <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
+            <ShopProducts />
+          </Suspense>
+        </ShopGridBoundary>
       </section>
       <p className="px-4 py-6 md:px-12 text-sm">
         {SELL_LINK_COPY}{" "}

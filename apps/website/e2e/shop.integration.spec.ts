@@ -72,6 +72,26 @@ test.describe("Shop", () => {
     await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
   });
 
+  // Scope guard for the grid's error boundary: a next-page failure stays with
+  // ProductList's retry line and never escalates to the whole-grid fallback.
+  // Page one comes from the prerendered shell, so blocking the API only hits
+  // the next page.
+  test("a failed next page keeps the cards and does not replace the grid", async ({ page }) => {
+    await page.route("**/api/shop/products**", (route) => route.fulfill({ status: 500 }));
+    await page.goto("/shop");
+
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+
+    await page.getByRole("button", { name: "Load more" }).click();
+
+    // The client keeps TanStack's default three retries (about 7s of backoff)
+    // before the retry line appears.
+    await expect(page.getByText("Couldn't load more products.")).toBeVisible({ timeout: 15000 });
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+    await expect(page.getByText("The shop did not load")).toHaveCount(0);
+  });
+
   test("first page is not fetched from the API", async ({ page }) => {
     const apiRequests: string[] = [];
     page.on("request", (req) => {

@@ -39,6 +39,11 @@ vi.mock("@/lib/blog/posts", () => ({ allPosts: [POST] }));
 // The product list pulls in `next/cache` and the server registry. Only the
 // `/shop` shell (Products section first, no h1) is under test here.
 vi.mock("./shop/ui/ShopProducts", () => ({ ShopProducts: () => null }));
+// Its Sentry boundary is covered by ShopGridBoundary.browser.test.tsx; here it
+// only passes the (empty) grid through.
+vi.mock("./shop/ui/ShopGridBoundary", () => ({
+  ShopGridBoundary: ({ children }: { children: ReactNode }) => children,
+}));
 
 import BlogIndexPage from "./blog/page";
 import ContactPage from "./contact/page";
