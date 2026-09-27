@@ -1,17 +1,22 @@
 import Link from "next/link";
-import { tabStateClasses } from "./tab-styles";
+import { tabClasses } from "./tab-styles";
 
 interface TabLinkProps {
   href: string;
-  isActive: boolean;
+  tabId: string;
   onClick?: () => void;
   children: React.ReactNode;
   className?: string;
 }
 
-export function TabLink({ href, isActive, onClick, children, className = "" }: TabLinkProps) {
+export function TabLink({ href, tabId, onClick, children, className = "" }: TabLinkProps) {
   return (
-    <Link href={href} onClick={onClick} className={`${tabStateClasses(isActive)} ${className}`}>
+    <Link
+      href={href}
+      data-tab-id={tabId}
+      onClick={onClick}
+      className={`${tabClasses()} ${className}`}
+    >
       {children}
     </Link>
   );

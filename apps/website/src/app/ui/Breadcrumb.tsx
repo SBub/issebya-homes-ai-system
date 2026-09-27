@@ -32,9 +32,9 @@ export function Breadcrumb({
 }) {
   return (
     <nav aria-label="Breadcrumb" className="mb-4">
-      <ol className="flex items-center text-xs text-gray-600">
+      <ol className="flex items-center text-xs text-black">
         <li className="shrink-0">
-          <Link href={parent.href} className="underline hover:text-black">
+          <Link href={parent.href} className="underline">
             {parent.label}
           </Link>
         </li>

@@ -31,8 +31,7 @@ import ProductPage from "./[slug]/page";
 import SellPage from "./sell/page";
 
 // Both pages must match the shop index: the yellow card spans the full width
-// of <main> with its padding inside, and only the breadcrumb sits on the page
-// background above it.
+// of <main> with its padding inside.
 test.each<[string, () => Promise<ReactNode>]>([
   [
     "/shop/[slug]",
@@ -68,6 +67,6 @@ test.each<[string, () => Promise<ReactNode>]>([
   expect(cardBox.left).toBe(containerBox.left);
   expect(cardBox.width).toBe(containerBox.width);
 
-  expect(card.contains(nav)).toBe(false);
-  expect(nav.getBoundingClientRect().bottom).toBeLessThanOrEqual(cardBox.top);
+  expect(card.contains(nav)).toBe(true);
+  expect(card.firstElementChild).toBe(nav);
 });

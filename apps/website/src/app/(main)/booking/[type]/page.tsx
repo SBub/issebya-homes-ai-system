@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { ErrorBoundary } from "@sentry/nextjs";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Callout } from "@/app/ui/Callout";
 import { TabsDesktop } from "@/app/ui/TabsDesktop";
 import { TabsMobile } from "@/app/ui/TabsMobile";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
@@ -111,10 +110,10 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
   }
 
   const roomType = type === "room1" ? BookingType.room1 : BookingType.room2;
-  const { title, description, airbnbUrl } = ROOM_CONTENT[type];
+  const { description, airbnbUrl } = ROOM_CONTENT[type];
 
   return (
-    <>
+    <div className="flex flex-col md:flex-row min-h-screen bg-shop-card font-sans">
       <TabsMobile tabs={bookingTabs} activeTabId={type} />
 
       {/* Gallery (top on mobile) */}
@@ -130,12 +129,6 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
       <div className="order-2 md:order-1 md:w-1/2 p-4 md:p-12 space-y-6">
         <TabsDesktop tabs={bookingTabs} activeTabId={type} />
         <div className="space-y-6">
-          <h2 className="text-2xl text-header">
-            {title}
-            <br />
-            with shared spaces
-          </h2>
-
           <ErrorBoundary
             fallback={
               <div className="booking-engine-error">
@@ -151,7 +144,9 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
             </Suspense>
           </ErrorBoundary>
 
-          <p className="text-secondary md:whitespace-nowrap">cap: max 2 persons</p>
+          <p className="text-secondary text-xs">
+            Capacity: max 2 persons. Once a reservation is made, we are unable to provide a refund.
+          </p>
 
           <p className="text-secondary">
             <a
@@ -181,14 +176,12 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
             </a>
           </p>
 
-          <div className="mt-4">
-            <Callout>
-              For special requests or any enquiries, please reach out to us directly on{" "}
-              <WhatsAppLink />.
-            </Callout>
-          </div>
+          <p className="text-secondary">
+            For special requests or any enquiries, please reach out to us directly on{" "}
+            <WhatsAppLink />.
+          </p>
         </div>
       </div>
-    </>
+    </div>
   );
 }

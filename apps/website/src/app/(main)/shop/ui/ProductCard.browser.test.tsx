@@ -35,24 +35,23 @@ const PRODUCT: Product = {
   image: { src: "/shop/sample-01.webp", alt: "A folded linen throw", width: 800, height: 800 },
 };
 
-test("the card shows numeral, brand, name, price and description", async () => {
-  const { getByText } = await render(<ProductCard product={PRODUCT} position={3} />);
+test("the card shows brand, name, price and description, no roman numeral", async () => {
+  const { getByText } = await render(<ProductCard product={PRODUCT} />);
 
-  await expect.element(getByText("III", { exact: true })).toBeVisible();
   await expect.element(getByText("Test Brand")).toBeVisible();
   await expect.element(getByText("Linen Throw", { exact: true })).toBeVisible();
   await expect.element(getByText("€12.00")).toBeVisible();
   await expect.element(getByText(PRODUCT.description)).toBeVisible();
+  await expect.element(page.getByText(/^[IVXLCDM]+$/)).not.toBeInTheDocument();
 });
 
-// The link's accessible name must be the product name alone, not the numeral,
-// the image alt or the description, which is what aria-labelledby guarantees.
+// The link's accessible name must be the product name alone, not the image
+// alt or the description, which is what aria-labelledby guarantees.
 test("the whole card is one link named after the product", async () => {
-  const { getByRole } = await render(<ProductCard product={PRODUCT} position={3} />);
+  const { getByRole } = await render(<ProductCard product={PRODUCT} />);
 
   await expect
     .element(getByRole("link", { name: "Linen Throw", exact: true }))
     .toHaveAttribute("href", "/shop/linen-throw");
-  await expect.element(page.getByRole("link", { name: "III" })).not.toBeInTheDocument();
   await expect.element(getByRole("link").nth(1)).not.toBeInTheDocument();
 });

@@ -1,6 +1,5 @@
 import Image from "next/image";
 import Link from "next/link";
-import { toRoman } from "@/lib/shop/roman";
 import { formatPrice, type Product } from "@/lib/shop/schema";
 
 /**
@@ -8,8 +7,8 @@ import { formatPrice, type Product } from "@/lib/shop/schema";
  * product page.
  *
  * `aria-labelledby` points at the name, so the link's accessible name is the
- * product name alone. Without it a screen reader would read the numeral, the
- * brand, the image alt, the price and the description as one long link name.
+ * product name alone. Without it a screen reader would read the brand, the
+ * image alt, the price and the description as one long link name.
  *
  * A portrait 3:5 card with the photo filling the top 58%, per the design. The
  * one exception is the three-column `md` range (768-1023px), where a 3:5 card
@@ -18,7 +17,7 @@ import { formatPrice, type Product } from "@/lib/shop/schema";
  * photo's 58% basis resolves, and the grid's default `stretch` keeps every card
  * in a row the same height.
  */
-export function ProductCard({ product, position }: { product: Product; position: number }) {
+export function ProductCard({ product }: { product: Product }) {
   const { slug, brand, name, price, description, image } = product;
   const nameId = `product-${slug}-name`;
 
@@ -39,7 +38,6 @@ export function ProductCard({ product, position }: { product: Product; position:
       </div>
 
       <div className="flex flex-col gap-1.5 pt-3 text-xs">
-        <span>{toRoman(position)}</span>
         <p className="text-center uppercase tracking-[0.2em] text-[10px]">{brand}</p>
         <div className="flex justify-between gap-2 font-medium text-sm">
           <span id={nameId} className="group-hover:underline underline-offset-4">

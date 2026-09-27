@@ -49,30 +49,29 @@ export default async function ProductPage(props: PageProps<"/shop/[slug]">) {
 
   return (
     <article>
-      <div className="px-4 pt-4 md:px-12 md:pt-12">
+      <div className="bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12 min-h-screen">
         <Breadcrumb parent={{ href: "/shop", label: "shop" }} title={name} />
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-8 bg-shop-card text-foreground px-4 py-8 md:px-12 md:py-12">
-        <div className="relative w-full aspect-square">
-          <Image
-            src={image.src}
-            alt={image.alt}
-            fill
-            className="object-cover"
-            sizes="(min-width: 768px) 50vw, 100vw"
-            priority
-          />
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <p className="uppercase tracking-[0.2em] text-xs">{brand}</p>
-          <h1 className="text-price">{name}</h1>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="font-medium">{formatPrice(price)}</p>
-            <WishlistDialog productSlug={product.slug} productName={name} />
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="relative w-full aspect-square">
+            <Image
+              src={image.src}
+              alt={image.alt}
+              fill
+              className="object-cover"
+              sizes="(min-width: 768px) 50vw, 100vw"
+              priority
+            />
           </div>
-          <p className="text-sm leading-relaxed max-w-[65ch] whitespace-pre-line">{details}</p>
+
+          <div className="flex flex-col gap-3">
+            <p className="uppercase tracking-[0.2em] text-xs">{brand}</p>
+            <h1 className="text-price">{name}</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="font-medium">{formatPrice(price)}</p>
+              <WishlistDialog productSlug={product.slug} productName={name} />
+            </div>
+            <p className="text-sm leading-relaxed max-w-[65ch] whitespace-pre-line">{details}</p>
+          </div>
         </div>
       </div>
     </article>

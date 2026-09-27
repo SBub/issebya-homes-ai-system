@@ -13,6 +13,13 @@
   /* The shop's two palette values, named once: grid ground and card. */
   --color-shop-ground: #6f6f6f;
   --color-shop-card: #f1eac8;
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@property --ripple-r {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
 }
 
 @utility text-secondary {
@@ -41,6 +48,20 @@
    instead of each page inventing its own scale. */
 @utility page-decor-photo {
   @apply relative w-full sm:max-w-xs aspect-[4/3];
+}
+
+@utility press-spring {
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    opacity 150ms ease,
+    transform 150ms var(--ease-spring);
+  &:active {
+    transform: scale(0.97);
+    transition-duration: 100ms, 100ms, 100ms, 100ms, 60ms;
+    transition-timing-function: ease, ease, ease, ease, ease-out;
+  }
 }
 
 /*
@@ -97,7 +118,7 @@ body:has(dialog[open]) {
 }
 
 .booking-date-button {
-  @apply flex-1 min-w-0 px-3 py-2 border border-foreground bg-background transition-colors cursor-pointer;
+  @apply flex-1 min-w-0 px-3 py-2 border border-foreground bg-white press-spring cursor-pointer;
 }
 
 .booking-date-value {
@@ -109,7 +130,7 @@ body:has(dialog[open]) {
 }
 
 .booking-book-button {
-  @apply flex-none px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
+  @apply flex-none px-4 py-2 border border-foreground bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 press-spring disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center;
 }
 
 /* Pricing info in collapsed state */
@@ -118,22 +139,18 @@ body:has(dialog[open]) {
 }
 
 .booking-price-per-night {
-  @apply text-price;
+  @apply font-medium text-sm uppercase;
 }
 
 .booking-discount-info {
   @apply text-xs text-gray-600;
 }
 
-.booking-cancellation-notice {
-  @apply text-secondary md:whitespace-nowrap;
-}
-
 /* Expanded State */
 
 .booking-engine-expanded {
-  @apply border border-foreground p-4 bg-background mt-4;
-  animation: expandDown 0.3s ease-out;
+  @apply border border-foreground p-4 bg-white mt-4;
+  animation: expandDown 380ms var(--ease-spring);
 }
 
 @keyframes expandDown {
@@ -181,7 +198,7 @@ body:has(dialog[open]) {
 }
 
 .booking-person-button {
-  @apply w-6 h-6 flex items-center justify-center border border-black bg-white text-sm font-bold cursor-pointer;
+  @apply w-6 h-6 flex items-center justify-center border border-black bg-white text-sm font-bold press-spring cursor-pointer;
 }
 
 .booking-person-button:hover:not(:disabled) {
@@ -289,15 +306,15 @@ body:has(dialog[open]) {
 /* The site's outline button, shared by the booking Close button and the shop
    wishlist trigger. */
 .button-outline {
-  @apply px-4 py-2 border border-foreground bg-background text-foreground font-sans text-sm capitalize tracking-wide hover:bg-foreground hover:text-background transition-colors;
+  @apply px-4 py-2 border border-foreground bg-background text-foreground font-sans text-sm capitalize tracking-wide hover:bg-foreground hover:text-background press-spring;
 }
 
 .booking-close-button {
-  @apply flex-1;
+  @apply flex-1 bg-white;
 }
 
 .booking-book-button-expanded {
-  @apply flex-1 px-4 py-2 bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply flex-1 px-4 py-2 bg-foreground text-background font-sans text-sm capitalize tracking-wide hover:opacity-80 press-spring disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 /* Calendar Styles */
@@ -319,7 +336,7 @@ body:has(dialog[open]) {
 }
 
 .calendar-nav-button {
-  @apply px-3 py-1 hover:bg-foreground hover:text-background transition-colors border border-foreground;
+  @apply px-3 py-1 hover:bg-foreground hover:text-background press-spring border border-foreground;
 }
 
 /* Two months container */
@@ -363,7 +380,7 @@ body:has(dialog[open]) {
 }
 
 .calendar-date-available {
-  @apply cursor-pointer border border-transparent hover:border-foreground transition-colors;
+  @apply cursor-pointer border border-transparent hover:border-foreground press-spring;
 }
 
 .calendar-date-blocked {
@@ -385,11 +402,21 @@ body:has(dialog[open]) {
    selected check-in): keep the hatched fill, but restore the pointer and hover
    border so the guest can tell it really is clickable. */
 .calendar-date-checkout-boundary.calendar-date-clickable {
-  @apply cursor-pointer border border-transparent hover:border-foreground transition-colors;
+  @apply cursor-pointer border border-transparent hover:border-foreground press-spring;
 }
 
 .calendar-date-selected {
-  @apply bg-foreground text-background font-semibold;
+  --ripple-r: 80px;
+  background: radial-gradient(
+    circle at var(--ripple-x, 50%) var(--ripple-y, 50%),
+    var(--color-foreground) var(--ripple-r),
+    transparent var(--ripple-r)
+  );
+  color: var(--color-background);
+  font-weight: 600;
+  transition:
+    --ripple-r 420ms var(--ease-spring),
+    color 420ms ease;
 }
 
 .calendar-date:disabled {

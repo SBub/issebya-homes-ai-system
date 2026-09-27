@@ -166,11 +166,18 @@ export function BookingCalendar({
     return true;
   };
 
-  // Handle date click
-  const handleDateClick = (date: Date, monthContext: Date) => {
-    if (isDateClickable(date, monthContext)) {
-      onDateSelect(date);
+  const handleDateClick = (
+    date: Date,
+    monthContext: Date,
+    event?: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    if (!isDateClickable(date, monthContext)) return;
+    if (event) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      event.currentTarget.style.setProperty("--ripple-x", `${event.clientX - rect.left}px`);
+      event.currentTarget.style.setProperty("--ripple-y", `${event.clientY - rect.top}px`);
     }
+    onDateSelect(date);
   };
 
   // Keyboard navigation handler
@@ -204,7 +211,7 @@ export function BookingCalendar({
             <button
               key={index}
               type="button"
-              onClick={() => handleDateClick(date, month)}
+              onClick={(e) => handleDateClick(date, month, e)}
               onKeyDown={(e) => handleKeyDown(e, date, month)}
               className={getDateClasses(date, month)}
               disabled={!isClickable}

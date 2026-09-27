@@ -85,7 +85,7 @@ export default function Gallery({ images, roomType }: Props) {
           sizes="(min-width: 768px) 50vw, 100vw"
         />
       </div>
-      <div className="text-center break-words my-2 md:my-4 px-4 text-secondary">
+      <div className="text-center break-words my-2 md:my-4 px-4 text-xs uppercase">
         {images[imageIndex].label}
       </div>
 

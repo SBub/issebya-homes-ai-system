@@ -1,8 +1,9 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import posthog from "posthog-js";
-import { tabStateClasses } from "@/app/ui/tab-styles";
+import { TabIndicator } from "@/app/ui/TabIndicator";
+import { tabClasses } from "@/app/ui/tab-styles";
 
 interface RoomSwitcherProps {
   room1: ReactNode;
@@ -45,12 +46,19 @@ type RoomId = (typeof ROOMS)[number]["id"];
  */
 export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
   const [activeRoom, setActiveRoom] = useState<RoomId>("room1");
+  const listRef = useRef<HTMLDivElement>(null);
 
   const panels: Record<RoomId, ReactNode> = { room1, room2 };
 
   return (
     <div>
-      <div role="tablist" aria-label="Choose a room" className="flex border-b">
+      <div
+        ref={listRef}
+        role="tablist"
+        aria-label="Choose a room"
+        className="relative flex border-b"
+      >
+        <TabIndicator containerRef={listRef} activeId={activeRoom} />
         {ROOMS.map(({ id, label }, index) => {
           const isActive = id === activeRoom;
           const isLast = index === ROOMS.length - 1;
@@ -61,6 +69,7 @@ export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
               type="button"
               role="tab"
               id={`blog-room-tab-${id}`}
+              data-tab-id={id}
               aria-selected={isActive}
               aria-controls="blog-room-panel"
               onClick={() => {
@@ -68,7 +77,7 @@ export function RoomSwitcher({ room1, room2 }: RoomSwitcherProps) {
                 posthog.capture("room_tab_clicked", { room_type: id });
                 setActiveRoom(id);
               }}
-              className={`w-1/2 px-3 py-1.5 text-center sm:w-auto sm:px-6 sm:py-2 ${tabStateClasses(isActive)} ${!isLast ? "border-r border-black" : ""}`}
+              className={`w-1/2 px-3 py-1.5 text-center sm:w-auto sm:px-6 sm:py-2 ${tabClasses()} ${!isLast ? "border-r border-black" : ""}`}
             >
               {label}
             </button>

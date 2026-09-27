@@ -22,8 +22,6 @@ type BookingEngineExpandedProps = {
   onDateSelect: (date: Date) => void;
   onClose: () => void;
   roomType: "room1" | "room2";
-  // Whether the server's iCal fetch had feed failures. Gates the on-brand,
-  // WhatsApp-first fallback copy rendered below — never the raw fetch error.
   hasAvailabilityError: boolean;
   updateAvailability: (blockedDates: DateRange[]) => void;
 };

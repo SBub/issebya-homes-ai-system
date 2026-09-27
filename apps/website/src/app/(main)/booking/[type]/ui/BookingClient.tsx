@@ -20,9 +20,6 @@ type BookingClientProps = {
   // (and submit) the previous day for anyone behind UTC.
   defaultCheckIn: string | null;
   defaultCheckOut: string | null;
-  // Whether the server's iCal fetch had feed failures. The specific error
-  // text never reaches the guest — it's engineering detail — this only
-  // gates the on-brand, WhatsApp-first fallback copy rendered below.
   hasAvailabilityError: boolean;
   // Server Component passed down from BookingEngine (async Server Component)
   // via the Next.js "interleaving" pattern: it renders server-side and is

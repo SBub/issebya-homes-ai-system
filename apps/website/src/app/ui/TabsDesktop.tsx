@@ -1,6 +1,8 @@
 "use client";
 
+import { useRef } from "react";
 import posthog from "posthog-js";
+import { TabIndicator } from "./TabIndicator";
 import { TabLink } from "./TabLink";
 
 export interface Tab {
@@ -15,16 +17,19 @@ interface TabsDesktopProps {
 }
 
 export function TabsDesktop({ tabs, activeTabId }: TabsDesktopProps) {
+  const listRef = useRef<HTMLDivElement>(null);
+
   return (
     <div className="hidden md:block mb-6">
-      <div className="flex border-b">
+      <div ref={listRef} className="relative flex border-b">
+        <TabIndicator containerRef={listRef} activeId={activeTabId} />
         {tabs.map((tab, index) => {
           const isLast = index === tabs.length - 1;
           return (
             <TabLink
               key={tab.id}
               href={tab.href}
-              isActive={activeTabId === tab.id}
+              tabId={tab.id}
               onClick={() => {
                 if (tab.id !== activeTabId) {
                   posthog.capture("room_tab_clicked", { room_type: tab.id });

@@ -70,8 +70,10 @@ test("/shop opens directly on the products section", async () => {
   expect(screen.container.firstElementChild?.firstElementChild).toBe(products.element());
 });
 
-test("/contact still shows its photo", async () => {
-  const { getByRole } = await render(<ContactPage />);
+test("/contact shows no title and no photo, only its text", async () => {
+  const { getByRole, getByText } = await render(<ContactPage />);
 
-  await expect.element(getByRole("img", { name: "Front yard and garden entrance" })).toBeVisible();
+  expect(getByRole("heading", { level: 2 }).query()).toBeNull();
+  expect(getByRole("img", { name: "Front yard and garden entrance" }).query()).toBeNull();
+  await expect.element(getByText(/we're here to help/)).toBeVisible();
 });
