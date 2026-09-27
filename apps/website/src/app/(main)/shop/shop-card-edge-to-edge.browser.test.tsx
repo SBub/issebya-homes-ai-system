@@ -26,6 +26,9 @@ vi.mock("next/image", () => ({
 // already have their own browser tests. Only the page layout is under test.
 vi.mock("./[slug]/ui/WishlistDialog", () => ({ WishlistDialog: () => null }));
 vi.mock("./sell/ui/SellerForm", () => ({ SellerForm: () => null }));
+// The product page's image carousel is a client island that captures to
+// PostHog; keep the layout test off the real SDK.
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 
 import ProductPage from "./[slug]/page";
 import SellPage from "./sell/page";

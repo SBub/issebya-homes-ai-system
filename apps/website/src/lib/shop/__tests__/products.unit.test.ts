@@ -18,11 +18,18 @@ describe("product registry", () => {
 
   // A typo in an image path would otherwise only show up as a broken image
   // in production.
-  it.each(allProducts.map(({ image }) => image.src))("%s exists under public/", (src) => {
-    expect(src.startsWith("/shop/")).toBe(true);
-    // The path comes from the checked-in registry, not from user input.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    expect(existsSync(`${publicDir}${src}`)).toBe(true);
+  it.each(allProducts.flatMap(({ images }) => images.map(({ src }) => src)))(
+    "%s exists under public/",
+    (src) => {
+      expect(src.startsWith("/shop/")).toBe(true);
+      // The path comes from the checked-in registry, not from user input.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      expect(existsSync(`${publicDir}${src}`)).toBe(true);
+    },
+  );
+
+  it.each(allProducts)("$slug has 2 or 3 images", ({ images }) => {
+    expect([2, 3]).toContain(images.length);
   });
 
   it("finds a product by slug", () => {

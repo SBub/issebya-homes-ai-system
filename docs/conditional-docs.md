@@ -25,7 +25,7 @@ procedures, not code documentation) and anything gitignored.
 - `AGENTS.md`
   - Conditions:
     - Before any change, without exception
-    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention, Vercel build-image notes, ADW preview gating (`Deploy-Preview: yes`)
+    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention, Vercel build-image notes, ADW preview gating (`Deploy-Preview: yes`), the weekly Vercel preview prune job
 
 - `README.md`
   - Conditions:
@@ -225,6 +225,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the padding, width or breadcrumb placement around the yellow `bg-shop-card` block on `/shop/[slug]` or `/shop/sell`
     - When grey page background shows around a shop card, or `shop-card-edge-to-edge.browser.test.tsx` fails
     - When giving another shop page (e.g. the wishlist unsubscribe message) the same edge-to-edge card layout
+- `apps/website/app_docs/feature-e9bc2126-shop-card-image-carousel.md`
+  - Conditions:
+    - When changing `ProductImageCarousel`, the product `images` list or `primaryImage`, or the `ProductCard` `<article>`/link structure
+    - When an arrow tap or swipe on a `/shop` card navigates, or a card announces two links or none
+    - When a test locating shop cards by `a[href^="/shop/"]` finds twice as many, or a browser test rendering a shop page fails on `posthog-js`
 
 ---
 

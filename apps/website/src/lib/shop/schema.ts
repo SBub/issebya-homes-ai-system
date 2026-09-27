@@ -8,6 +8,15 @@ import { z } from "zod";
  * a broken card or page.
  */
 
+// Local files only: next/image needs explicit dimensions for a string src,
+// and keeping images under /shop/ rules out hotlinked third-party assets.
+const imageSchema = z.object({
+  src: z.string().startsWith("/shop/", "Product image src must be under /shop/"),
+  alt: z.string().trim().min(1, "Product image alt text is required"),
+  width: z.number().int().positive("Product image width must be a positive integer"),
+  height: z.number().int().positive("Product image height must be a positive integer"),
+});
+
 const productSchema = z.object({
   // Same ReDoS-safe split as the blog slug: a flat character-class regex plus
   // a refine, instead of a nested quantifier that
@@ -36,17 +45,22 @@ const productSchema = z.object({
     .max(240, "Product description is too long"),
   // Page copy, uncapped.
   details: z.string().trim().min(1, "Product details are required"),
-  // Local files only: next/image needs explicit dimensions for a string src,
-  // and keeping images under /shop/ rules out hotlinked third-party assets.
-  image: z.object({
-    src: z.string().startsWith("/shop/", "Product image src must be under /shop/"),
-    alt: z.string().trim().min(1, "Product image alt text is required"),
-    width: z.number().int().positive("Product image width must be a positive integer"),
-    height: z.number().int().positive("Product image height must be a positive integer"),
-  }),
+  images: z
+    .array(imageSchema)
+    .min(1, "A product needs at least one image")
+    .max(8, "A product has at most eight images"),
 });
 
 export type Product = z.infer<typeof productSchema>;
+export type ProductImage = z.infer<typeof imageSchema>;
+
+/**
+ * The image used wherever one image stands for the product (OG metadata).
+ * `images` is `min(1)`, so it always exists.
+ */
+export function primaryImage(product: Pick<Product, "images">): ProductImage {
+  return product.images[0];
+}
 
 /**
  * `parse`, not `safeParse`: this runs at module scope in `products.ts`, so a

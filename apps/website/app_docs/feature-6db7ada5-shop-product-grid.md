@@ -74,3 +74,4 @@ None. No environment variables or database access. The palette colours are in `g
 - `feature-437bcd03-blog-breadcrumb-trail.md` still refers to `blog/ui/Breadcrumb.tsx`. The component now lives at `src/app/ui/Breadcrumb.tsx`.
 - Card numerals come from grid position, not from the product, so reordering the registry renumbers the cards.
 - The card first shipped near-square. A review patch restored the 3:5 portrait card with the 58% image block the issue asked for.
+- Superseded in part by `feature-e9bc2126-shop-card-image-carousel.md`: the card is now an `<article>`, not one big link (the product name is the link), and `image` became an `images` list of 1 to 8.
