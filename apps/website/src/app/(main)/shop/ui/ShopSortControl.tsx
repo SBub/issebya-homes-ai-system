@@ -20,9 +20,10 @@ const SORT_LABELS: Record<ShopSort, string> = {
  * it in (no `useSearchParams`, which would need its own Suspense boundary and
  * duplicate the source of truth); this only writes the URL.
  *
- * `useOptimistic` shows the new choice at once, while `router.replace` fetches
- * the server render for it inside the transition. The default sort replaces
- * to the bare pathname, so it never adds a query string.
+ * `useOptimistic` shows the new choice at once, while `router.push` fetches the
+ * server render for it inside the transition. Pushing (not replacing) gives
+ * each choice a history entry, so back/forward restore the previous order. The
+ * default sort pushes the bare pathname, so it never adds a query string.
  */
 export function ShopSortControl({ sort }: { sort: ShopSort }) {
   const router = useRouter();
@@ -36,7 +37,7 @@ export function ShopSortControl({ sort }: { sort: ShopSort }) {
 
     startTransition(() => {
       setShown(next);
-      router.replace(next === DEFAULT_SHOP_SORT ? pathname : `${pathname}?sort=${next}`, {
+      router.push(next === DEFAULT_SHOP_SORT ? pathname : `${pathname}?sort=${next}`, {
         scroll: false,
       });
     });

@@ -43,7 +43,7 @@ async function fetchProductsPage(
  * The query key carries the sort, so switching sort is a new query that
  * starts at a fresh page one, with no effect and no manual cache reset. The
  * server prefetch for the new sort arrives with the RSC payload of the
- * `router.replace` that changed it, so that page one is normally hydrated
+ * `router.push` that changed it, so that page one is normally hydrated
  * rather than fetched.
  *
  * `useSuspenseInfiniteQuery` rather than `useInfiniteQuery` (same options):

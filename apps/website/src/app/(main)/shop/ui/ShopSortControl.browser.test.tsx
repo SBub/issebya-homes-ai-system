@@ -2,9 +2,9 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 // The control only writes the URL; the router is not under test.
-const mockReplace = vi.fn();
+const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: mockReplace }),
+  useRouter: () => ({ push: mockPush }),
   usePathname: () => "/shop",
 }));
 
@@ -16,7 +16,7 @@ vi.mock("posthog-js", () => ({
 import { ShopSortControl } from "./ShopSortControl";
 
 beforeEach(() => {
-  mockReplace.mockClear();
+  mockPush.mockClear();
   mockCapture.mockClear();
 });
 
@@ -34,7 +34,7 @@ test("choosing Oldest first puts the sort in the URL and reports it", async () =
 
   await screen.getByLabelText("Sort").selectOptions("Oldest first");
 
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop?sort=oldest", { scroll: false });
+  expect(mockPush).toHaveBeenCalledExactlyOnceWith("/shop?sort=oldest", { scroll: false });
   expect(mockCapture).toHaveBeenCalledExactlyOnceWith("shop_sort_changed", { sort: "oldest" });
 });
 
@@ -43,6 +43,6 @@ test("choosing Newest first returns to the clean /shop URL", async () => {
 
   await screen.getByLabelText("Sort").selectOptions("Newest first");
 
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
+  expect(mockPush).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
   expect(mockCapture).toHaveBeenCalledExactlyOnceWith("shop_sort_changed", { sort: "newest" });
 });
