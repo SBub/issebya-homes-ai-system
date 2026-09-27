@@ -235,6 +235,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing `/shop` pagination, `SHOP_PAGE_SIZE`, the cursor format, `GET /api/shop/products`, or the `shop-products` cache tag
     - When `/shop` stops prerendering (`next-prerender-current-time`), page one is fetched from the browser, or the grid jumps as the skeleton swaps out
     - When adding TanStack Query to another route, or a browser test rendering `/shop` fails on `next/cache` or `@tanstack/react-query`
+- `apps/website/app_docs/feature-c6bea914-shop-grid-error-boundary.md`
+  - Conditions:
+    - When changing how `/shop` handles a failed product load, `ShopGridBoundary`/`ShopGridError`, or the `area=shop` Sentry tags
+    - When "Try again" on a suspense query drops straight back into the fallback, or you add another error boundary around a TanStack suspense query
+    - When a browser test importing `@sentry/nextjs` fails on `process` / `next/router`
 
 ---
 
