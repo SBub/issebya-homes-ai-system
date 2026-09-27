@@ -23,6 +23,7 @@ const validProduct: Product = {
   description: "A light throw for cool evenings on the terrace.",
   details: "Washed linen, 130 x 170 cm.",
   images: [validImage],
+  createdAt: "2026-05-03",
 };
 
 describe("toProduct", () => {
@@ -85,6 +86,21 @@ describe("toProduct", () => {
     expect(() => toProduct({ ...validProduct, description: "a".repeat(241) })).toThrow(
       /description is too long/,
     );
+  });
+
+  it("throws when createdAt is missing", () => {
+    expect(() => toProduct({ ...validProduct, createdAt: undefined })).toThrow();
+  });
+
+  it.each(["2026-9-1", "2026-09-01T00:00:00Z", "01-09-2026", "2026-02-30"])(
+    "throws when createdAt is %s",
+    (createdAt) => {
+      expect(() => toProduct({ ...validProduct, createdAt })).toThrow(/calendar day/);
+    },
+  );
+
+  it("accepts a leap day as createdAt", () => {
+    expect(toProduct({ ...validProduct, createdAt: "2024-02-29" }).createdAt).toBe("2024-02-29");
   });
 
   it("throws when input is not an object at all", () => {

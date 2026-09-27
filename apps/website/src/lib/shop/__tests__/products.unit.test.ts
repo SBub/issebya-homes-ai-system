@@ -6,8 +6,8 @@ import { allProducts, getProductBySlug } from "../products";
 const publicDir = fileURLToPath(new URL("../../../../public", import.meta.url));
 
 describe("product registry", () => {
-  it("holds the six sample products", () => {
-    expect(allProducts).toHaveLength(6);
+  it("holds the fifteen sample products", () => {
+    expect(allProducts).toHaveLength(15);
   });
 
   it("has unique slugs", () => {
@@ -30,6 +30,13 @@ describe("product registry", () => {
 
   it.each(allProducts)("$slug has 2 or 3 images", ({ images }) => {
     expect([2, 3]).toContain(images.length);
+  });
+
+  // The sample data has to exercise the slug tie-break of the /shop sort.
+  it("has at least two products sharing a createdAt", () => {
+    const days = allProducts.map(({ createdAt }) => createdAt);
+
+    expect(new Set(days).size).toBeLessThan(days.length);
   });
 
   it("finds a product by slug", () => {

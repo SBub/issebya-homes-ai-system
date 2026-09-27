@@ -36,9 +36,18 @@ const POST = vi.hoisted<BlogPost>(() => ({
 // The real registry imports `.mdx`, which Vite browser mode cannot transform.
 vi.mock("@/lib/blog/posts", () => ({ allPosts: [POST] }));
 
+// The product list pulls in `next/cache` and the server registry. Only the
+// `/shop` shell (Products section first, no h1) is under test here.
+vi.mock("./shop/ui/ShopProducts", () => ({ ShopProducts: () => null }));
+
 import BlogIndexPage from "./blog/page";
 import ContactPage from "./contact/page";
-import ShopIndexPage from "./shop/page";
+import ShopPage from "./shop/page";
+
+// `ShopProducts` is mocked, so the searchParams promise is never awaited.
+const ShopIndexPage = () => (
+  <ShopPage params={Promise.resolve({})} searchParams={Promise.resolve({})} />
+);
 
 // The header's site name is the page's only h1 and it lives in the layout, so
 // none of these page components may render one of their own: the active nav

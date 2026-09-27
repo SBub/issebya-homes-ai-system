@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { allProducts } from "@/lib/shop/products";
+import { Suspense } from "react";
+import { SHOP_PAGE_SIZE } from "@/lib/shop/pagination";
 import { SELL_LINK_COPY, SELL_LINK_LABEL } from "@/lib/shop/seller-submission";
 import { SITE_URL } from "@/lib/site";
-import { ProductCard } from "./ui/ProductCard";
+import { ProductGridSkeleton } from "./ui/ProductGridSkeleton";
+import { ShopProducts } from "./ui/ShopProducts";
 
 export const metadata: Metadata = {
   title: "Shop - issebya.homes",
@@ -11,22 +13,22 @@ export const metadata: Metadata = {
   alternates: { canonical: `${SITE_URL}/shop` },
 };
 
-// Reads nothing from the request (no cookies(), no headers(), no
-// searchParams), so this route stays part of the static shell.
-export default function ShopIndexPage() {
+// The page itself reads nothing from the request (no cookies(), no headers(),
+// and it never awaits searchParams), so the shell stays static. It passes the
+// searchParams promise into the product list, the one <Suspense> hole, which
+// awaits it for `sort`: only the hole is dynamic, with card-sized
+// placeholders while page one arrives. The canonical stays /shop, since the
+// sort variants are the same content.
+export default function ShopIndexPage({ searchParams }: PageProps<"/shop">) {
   return (
     <div>
       <section
         aria-label="Products"
         className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
       >
-        <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {allProducts.map((product) => (
-            <li key={product.slug}>
-              <ProductCard product={product} />
-            </li>
-          ))}
-        </ul>
+        <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
+          <ShopProducts searchParams={searchParams} />
+        </Suspense>
       </section>
       <p className="px-4 py-6 md:px-12 text-sm">
         {SELL_LINK_COPY}{" "}
