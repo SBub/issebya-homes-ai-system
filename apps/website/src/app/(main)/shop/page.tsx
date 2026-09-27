@@ -13,11 +13,13 @@ export const metadata: Metadata = {
   alternates: { canonical: `${SITE_URL}/shop` },
 };
 
-// Reads nothing from the request (no cookies(), no headers(), no
-// searchParams), so the shell stays static. Only the product list sits in
-// <Suspense>: it is the streamed, cached hole, with card-sized placeholders
-// while page one arrives.
-export default function ShopIndexPage() {
+// The page itself reads nothing from the request (no cookies(), no headers(),
+// and it never awaits searchParams), so the shell stays static. It passes the
+// searchParams promise into the product list, the one <Suspense> hole, which
+// awaits it for `sort`: only the hole is dynamic, with card-sized
+// placeholders while page one arrives. The canonical stays /shop, since the
+// sort variants are the same content.
+export default function ShopIndexPage({ searchParams }: PageProps<"/shop">) {
   return (
     <div>
       <section
@@ -25,7 +27,7 @@ export default function ShopIndexPage() {
         className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
       >
         <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
-          <ShopProducts />
+          <ShopProducts searchParams={searchParams} />
         </Suspense>
       </section>
       <p className="px-4 py-6 md:px-12 text-sm">

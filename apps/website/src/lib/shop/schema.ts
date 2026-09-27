@@ -17,6 +17,16 @@ const imageSchema = z.object({
   height: z.number().int().positive("Product image height must be a positive integer"),
 });
 
+/**
+ * A calendar day, `"yyyy-MM-dd"`, kept as a string. `z.iso.date()` rejects
+ * impossible days (`2026-02-30`) as well as bad shapes. Being zero-padded, the
+ * string sorts lexicographically in chronological order, so it is compared as
+ * a string and never parsed with `new Date`.
+ */
+export const calendarDaySchema = z.iso.date({
+  error: "Product createdAt must be a calendar day (yyyy-MM-dd)",
+});
+
 const productSchema = z.object({
   // Same ReDoS-safe split as the blog slug: a flat character-class regex plus
   // a refine, instead of a nested quantifier that
@@ -49,6 +59,8 @@ const productSchema = z.object({
     .array(imageSchema)
     .min(1, "A product needs at least one image")
     .max(8, "A product has at most eight images"),
+  // The day the product was added: `/shop` sorts on it (then on slug).
+  createdAt: calendarDaySchema,
 });
 
 export type Product = z.infer<typeof productSchema>;

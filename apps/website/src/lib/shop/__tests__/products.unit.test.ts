@@ -32,6 +32,13 @@ describe("product registry", () => {
     expect([2, 3]).toContain(images.length);
   });
 
+  // The sample data has to exercise the slug tie-break of the /shop sort.
+  it("has at least two products sharing a createdAt", () => {
+    const days = allProducts.map(({ createdAt }) => createdAt);
+
+    expect(new Set(days).size).toBeLessThan(days.length);
+  });
+
   it("finds a product by slug", () => {
     const [first] = allProducts;
 

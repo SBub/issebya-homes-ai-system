@@ -33,6 +33,7 @@ const PRODUCT: Product = {
   description: "A light throw for cool evenings on the terrace.",
   details: "Washed linen, 130 x 170 cm.",
   images: [{ src: "/shop/sample-01.webp", alt: "A folded linen throw", width: 800, height: 800 }],
+  createdAt: "2026-05-03",
 };
 
 test("renders count card-sized boxes, hidden, with one loading status", async () => {
