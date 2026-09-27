@@ -6,8 +6,8 @@ import { allProducts, getProductBySlug } from "../products";
 const publicDir = fileURLToPath(new URL("../../../../public", import.meta.url));
 
 describe("product registry", () => {
-  it("holds the six sample products", () => {
-    expect(allProducts).toHaveLength(6);
+  it("holds the fifteen sample products", () => {
+    expect(allProducts).toHaveLength(15);
   });
 
   it("has unique slugs", () => {

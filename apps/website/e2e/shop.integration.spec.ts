@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import { SHOP_PAGE_SIZE } from "@/lib/shop/pagination";
 import { allProducts } from "@/lib/shop/products";
 import {
   SELLER_CONTACT_CONSENT_COPY,
@@ -28,17 +29,71 @@ import { SITE_URL } from "@/lib/site";
 const [firstProduct] = allProducts;
 
 test.describe("Shop", () => {
-  test("index lists six product cards linking to /shop/…", async ({ page }) => {
+  test("index shows the first six product cards linking to /shop/…", async ({ page }) => {
     await page.goto("/shop");
 
     const grid = page.getByRole("region", { name: "Products" });
-    await expect(grid.getByRole("article")).toHaveCount(6);
-    for (const product of allProducts) {
+    await expect(grid.getByRole("article")).toHaveCount(SHOP_PAGE_SIZE);
+    for (const product of allProducts.slice(0, SHOP_PAGE_SIZE)) {
       await expect(grid.getByRole("link", { name: product.name, exact: true })).toHaveAttribute(
         "href",
         `/shop/${product.slug}`,
       );
     }
+  });
+
+  test("scrolling loads the next pages of products", async ({ page }) => {
+    await page.goto("/shop");
+
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    const sentinel = page.getByTestId("shop-products-sentinel");
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(allProducts.length);
+
+    await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+    const last = allProducts[allProducts.length - 1];
+    await expect(page.getByRole("link", { name: last.name, exact: true })).toHaveAttribute(
+      "href",
+      `/shop/${last.slug}`,
+    );
+  });
+
+  test("Load more button loads the next page", async ({ page }) => {
+    await page.goto("/shop");
+
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+
+    await page.getByRole("button", { name: "Load more" }).click();
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
+  });
+
+  test("first page is not fetched from the API", async ({ page }) => {
+    const apiRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
+    });
+
+    await page.goto("/shop");
+    await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
+      SHOP_PAGE_SIZE,
+    );
+
+    expect(apiRequests).toEqual([]);
+  });
+
+  test("the products API pages with an opaque cursor", async ({ request }) => {
+    const res = await request.get("/api/shop/products");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.items).toHaveLength(SHOP_PAGE_SIZE);
+    expect(body.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    expect((await request.get("/api/shop/products?limit=30")).status()).toBe(400);
   });
 
   test("flipping a card's images stays on /shop, then the name opens the product", async ({

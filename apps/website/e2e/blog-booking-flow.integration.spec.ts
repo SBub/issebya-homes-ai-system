@@ -20,7 +20,8 @@ test.describe("Blog with an inline booking widget", () => {
     // Newest-first ordering is covered one layer down, in
     // src/lib/blog/__tests__/schema.unit.test.ts, so with a single post the
     // index only has to render it and route to it.
-    await page.getByRole("heading", { name: POST_TITLE }).click();
+    // Each card is a single link labelled by the post title (PostCard.tsx).
+    await page.getByRole("link", { name: POST_TITLE }).click();
     await expect(page).toHaveURL(WIDGET_POST);
     await expect(page.getByRole("heading", { level: 1, name: POST_TITLE })).toBeVisible();
   });
@@ -137,7 +138,7 @@ test.describe("Blog breadcrumb trail", () => {
     await trail.getByRole("link", { name: "blog" }).click();
     await page.waitForURL("**/blog");
 
-    await expect(page.getByRole("heading", { name: POST_TITLE })).toBeVisible();
+    await expect(page.getByRole("link", { name: POST_TITLE })).toBeVisible();
   });
 
   // The index is the root of the trail, so it shows none. This also proves the
