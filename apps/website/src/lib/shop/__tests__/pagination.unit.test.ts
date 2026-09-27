@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  CursorSearchMismatchError,
   CursorSortMismatchError,
   decodeCursor,
   encodeCursor,
+  filterByName,
+  SHOP_PAGE_SIZE,
   type ShopSort,
   selectPage,
+  shopHref,
   shopProductsQueryKey,
+  shopSearchSchema,
   sortProducts,
   UnknownCursorError,
 } from "../pagination";
@@ -31,11 +36,11 @@ const slugs = (items: readonly Product[]) => items.map(({ slug }) => slug);
 const numbered = (...ns: number[]) => ns.map((n) => `product-${pad(n)}`);
 
 /** Every page of `products` in `sort`, following `nextCursor` to the end. */
-function walk(products: readonly Product[], sort: ShopSort, limit = 6): Product[][] {
+function walk(products: readonly Product[], sort: ShopSort, limit = 6, q = ""): Product[][] {
   const pages: Product[][] = [];
   let cursor: string | null = null;
   do {
-    const page = selectPage(products, cursor, limit, sort);
+    const page = selectPage(products, cursor, limit, sort, q);
     pages.push(page.items);
     cursor = page.nextCursor;
   } while (cursor !== null);
@@ -81,9 +86,9 @@ describe("selectPage", () => {
     ["newest", [numbered(15, 14, 13, 12, 11, 10), numbered(9, 8, 7, 6, 5, 4), numbered(3, 2, 1)]],
     ["oldest", [numbered(1, 2, 3, 4, 5, 6), numbered(7, 8, 9, 10, 11, 12), numbered(13, 14, 15)]],
   ])("pages %s through to a short last page with no cursor", (sort, expected) => {
-    const first = selectPage(fifteen, null, 6, sort);
-    const second = selectPage(fifteen, first.nextCursor, 6, sort);
-    const third = selectPage(fifteen, second.nextCursor, 6, sort);
+    const first = selectPage(fifteen, null, 6, sort, "");
+    const second = selectPage(fifteen, first.nextCursor, 6, sort, "");
+    const third = selectPage(fifteen, second.nextCursor, 6, sort, "");
 
     expect([slugs(first.items), slugs(second.items), slugs(third.items)]).toEqual(expected);
     expect(first.nextCursor).not.toBeNull();
@@ -94,7 +99,13 @@ describe("selectPage", () => {
     "never hands out a cursor to an empty page on an exact multiple (%s)",
     (sort) => {
       const twelve = fifteen.slice(0, 12);
-      const second = selectPage(twelve, selectPage(twelve, null, 6, sort).nextCursor, 6, sort);
+      const second = selectPage(
+        twelve,
+        selectPage(twelve, null, 6, sort, "").nextCursor,
+        6,
+        sort,
+        "",
+      );
 
       expect(second.items).toHaveLength(6);
       expect(second.nextCursor).toBeNull();
@@ -102,7 +113,11 @@ describe("selectPage", () => {
   );
 
   it("returns an empty last page for an empty registry", () => {
-    expect(selectPage([], null, 6, "newest")).toEqual({ items: [], nextCursor: null });
+    expect(selectPage([], null, 6, "newest", "")).toEqual({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    });
   });
 
   // Items 6, 7 and 8 share a day, in both orders, so the page boundary falls
@@ -147,9 +162,9 @@ describe("selectPage", () => {
       ["newest", product("brand-new", "2026-12-31")],
       ["oldest", product("ancient", "2025-01-01")],
     ])("%s: an item added before the bookmark shifts nothing", (sort, added) => {
-      const { nextCursor } = selectPage(fifteen, null, 6, sort);
-      const pageTwoBefore = selectPage(fifteen, nextCursor, 6, sort);
-      const pageTwoAfter = selectPage([...fifteen, added], nextCursor, 6, sort);
+      const { nextCursor } = selectPage(fifteen, null, 6, sort, "");
+      const pageTwoBefore = selectPage(fifteen, nextCursor, 6, sort, "");
+      const pageTwoAfter = selectPage([...fifteen, added], nextCursor, 6, sort, "");
 
       expect(slugs(pageTwoAfter.items)).toEqual(slugs(pageTwoBefore.items));
     });
@@ -157,12 +172,12 @@ describe("selectPage", () => {
     it.each<ShopSort>(["newest", "oldest"])(
       "%s: removing the bookmarked item itself still continues after it",
       (sort) => {
-        const first = selectPage(fifteen, null, 6, sort);
+        const first = selectPage(fifteen, null, 6, sort, "");
         const bookmarked = first.items.at(-1)?.slug;
         const without = fifteen.filter(({ slug }) => slug !== bookmarked);
 
-        const pageTwoBefore = selectPage(fifteen, first.nextCursor, 6, sort);
-        const pageTwoAfter = selectPage(without, first.nextCursor, 6, sort);
+        const pageTwoBefore = selectPage(fifteen, first.nextCursor, 6, sort, "");
+        const pageTwoAfter = selectPage(without, first.nextCursor, 6, sort, "");
 
         expect(slugs(pageTwoAfter.items)).toEqual(slugs(pageTwoBefore.items));
         expect(slugs(pageTwoAfter.items)).not.toContain(bookmarked);
@@ -173,11 +188,12 @@ describe("selectPage", () => {
     it("continues after the bookmark tuple when its slug is unknown", () => {
       const cursor = encodeCursor({
         sort: "newest",
+        q: "",
         createdAt: "2026-01-10",
         slug: "zz-gone",
       });
 
-      expect(slugs(selectPage(fifteen, cursor, 6, "newest").items)).toEqual(
+      expect(slugs(selectPage(fifteen, cursor, 6, "newest", "").items)).toEqual(
         numbered(9, 8, 7, 6, 5, 4),
       );
     });
@@ -185,10 +201,15 @@ describe("selectPage", () => {
 });
 
 describe("cursor codec", () => {
-  const bookmark = { sort: "oldest", createdAt: "2026-05-03", slug: "sample-product-one" } as const;
+  const bookmark = {
+    sort: "oldest",
+    q: "",
+    createdAt: "2026-05-03",
+    slug: "sample-product-one",
+  } as const;
 
-  it("round-trips { sort, createdAt, slug }", () => {
-    expect(decodeCursor(encodeCursor(bookmark), "oldest")).toEqual(bookmark);
+  it("round-trips { sort, q, createdAt, slug }", () => {
+    expect(decodeCursor(encodeCursor(bookmark), "oldest", "")).toEqual(bookmark);
   });
 
   it("is opaque and base64url-safe", () => {
@@ -201,8 +222,8 @@ describe("cursor codec", () => {
   it("rejects a cursor handed out for another sort", () => {
     const cursor = encodeCursor({ ...bookmark, sort: "newest" });
 
-    expect(() => decodeCursor(cursor, "oldest")).toThrow(CursorSortMismatchError);
-    expect(() => selectPage(fifteen, cursor, 6, "oldest")).toThrow(CursorSortMismatchError);
+    expect(() => decodeCursor(cursor, "oldest", "")).toThrow(CursorSortMismatchError);
+    expect(() => selectPage(fifteen, cursor, 6, "oldest", "")).toThrow(CursorSortMismatchError);
   });
 
   const base64 = (text: string) => btoa(text).replace(/=+$/, "");
@@ -215,10 +236,162 @@ describe("cursor codec", () => {
     ["an empty slug", base64(JSON.stringify({ ...bookmark, slug: "" }))],
     ["an unknown sort", base64(JSON.stringify({ ...bookmark, sort: "price" }))],
   ])("rejects %s with UnknownCursorError", (_label, cursor) => {
-    expect(() => decodeCursor(cursor, "oldest")).toThrow(UnknownCursorError);
+    expect(() => decodeCursor(cursor, "oldest", "")).toThrow(UnknownCursorError);
   });
 });
 
-it("keys the query on the page size and the sort", () => {
-  expect(shopProductsQueryKey("oldest")).toEqual(["shop", "products", 6, "oldest"]);
+it("keys the query on the page size, the sort and the search term", () => {
+  expect(shopProductsQueryKey("oldest", "")).toEqual(["shop", "products", 6, "oldest", ""]);
+  expect(shopProductsQueryKey("newest", "teen")).toEqual([
+    "shop",
+    "products",
+    SHOP_PAGE_SIZE,
+    "newest",
+    "teen",
+  ]);
+});
+
+describe("filterByName", () => {
+  const catalogue = [
+    product("Thirteen", "2026-01-13"),
+    product("Fourteen", "2026-01-14"),
+    product("Fifteen", "2026-01-15"),
+    product("One", "2026-01-01"),
+    { ...product("Lamp", "2026-01-02"), name: "Product Chair", brand: "Teen Brand" },
+    { ...product("Rug", "2026-01-03"), description: "A teen rug." },
+  ];
+  const names = (items: readonly Product[]) => items.map(({ name }) => name);
+
+  it("matches the name case-insensitively", () => {
+    expect(names(filterByName(catalogue, "TEEN"))).toEqual([
+      "Product Thirteen",
+      "Product Fourteen",
+      "Product Fifteen",
+    ]);
+    expect(filterByName(catalogue, "teen")).toEqual(filterByName(catalogue, "TEEN"));
+  });
+
+  it("trims the term", () => {
+    expect(filterByName(catalogue, "  teen ")).toEqual(filterByName(catalogue, "teen"));
+  });
+
+  it.each(["", "   "])("returns everything for %j", (q) => {
+    const result = filterByName(catalogue, q);
+
+    expect(result).toEqual(catalogue);
+    expect(result).not.toBe(catalogue);
+  });
+
+  it("returns nothing when no name matches", () => {
+    expect(filterByName(catalogue, "lamp")).toEqual([]);
+  });
+
+  it("ignores brand and description", () => {
+    expect(names(filterByName(catalogue, "teen"))).not.toContain("Product Chair");
+    expect(names(filterByName(catalogue, "teen"))).not.toContain("Product Rug");
+  });
+
+  it("does not mutate its input", () => {
+    const input = [...catalogue];
+    filterByName(input, "teen");
+
+    expect(input).toEqual(catalogue);
+  });
+});
+
+describe("selectPage with a search term", () => {
+  // `product-01`..`product-15` all contain "product"; the ones with a 1 in
+  // their number are 01, 10..15.
+  const ones = numbered(15, 14, 13, 12, 11, 10, 1);
+
+  it("pages the matches only, with no duplicates or gaps", () => {
+    const pages = walk(fifteen, "newest", 3, "1");
+
+    expect(pages.flatMap(slugs)).toEqual(ones);
+    expect(pages.map((page) => page.length)).toEqual([3, 3, 1]);
+  });
+
+  it("reports the match count as total on every page", () => {
+    const first = selectPage(fifteen, null, 3, "newest", "1");
+    const second = selectPage(fifteen, first.nextCursor, 3, "newest", "1");
+    const third = selectPage(fifteen, second.nextCursor, 3, "newest", "1");
+
+    expect([first.total, second.total, third.total]).toEqual([7, 7, 7]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it("reports the whole catalogue as total without a term", () => {
+    expect(selectPage(fifteen, null, 6, "newest", "").total).toBe(15);
+  });
+
+  it("returns an empty page for a term with no matches", () => {
+    expect(selectPage(fifteen, null, 6, "newest", "lamp")).toEqual({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    });
+  });
+
+  it("hands out no cursor when the matches exactly fill one page", () => {
+    const page = selectPage(fifteen, null, 7, "newest", "1");
+
+    expect(slugs(page.items)).toEqual(ones);
+    expect(page.nextCursor).toBeNull();
+  });
+});
+
+describe("cursor search term", () => {
+  const cursorFor = (q: string) => selectPage(fifteen, null, 3, "newest", q).nextCursor as string;
+
+  it("rejects a cursor handed out for another term", () => {
+    expect(() => decodeCursor(cursorFor("1"), "newest", "0")).toThrow(CursorSearchMismatchError);
+    expect(() => selectPage(fifteen, cursorFor("1"), 3, "newest", "0")).toThrow(
+      CursorSearchMismatchError,
+    );
+  });
+
+  it("rejects a cursor for a term when there is none", () => {
+    expect(() => decodeCursor(cursorFor("1"), "newest", "")).toThrow(CursorSearchMismatchError);
+  });
+
+  it("reads a bookmark without q as the unfiltered list", () => {
+    const legacy = btoa(
+      JSON.stringify({ sort: "newest", createdAt: "2026-01-10", slug: "product-10" }),
+    ).replace(/=+$/, "");
+
+    expect(decodeCursor(legacy, "newest", "").q).toBe("");
+    expect(slugs(selectPage(fifteen, legacy, 6, "newest", "").items)).toEqual(
+      numbered(9, 8, 7, 6, 5, 4),
+    );
+  });
+});
+
+describe("shopHref", () => {
+  it.each<[ShopSort, string, string]>([
+    ["newest", "", "/shop"],
+    ["newest", "teen", "/shop?q=teen"],
+    ["oldest", "", "/shop?sort=oldest"],
+    ["oldest", "teen", "/shop?sort=oldest&q=teen"],
+    ["newest", "   ", "/shop"],
+    ["newest", "  teen ", "/shop?q=teen"],
+  ])("builds sort=%s q=%j as %s", (sort, q, expected) => {
+    expect(shopHref("/shop", { sort, q })).toBe(expected);
+  });
+
+  it("round-trips a term with a space and an ampersand", () => {
+    const href = shopHref("/shop", { sort: "newest", q: "tea & cake" });
+
+    expect(new URL(href, "https://issebya.homes").searchParams.get("q")).toBe("tea & cake");
+  });
+});
+
+describe("shopSearchSchema", () => {
+  it("trims", () => {
+    expect(shopSearchSchema.parse("  teen ")).toBe("teen");
+  });
+
+  it("accepts 60 characters after trimming and rejects 61", () => {
+    expect(shopSearchSchema.safeParse(` ${"a".repeat(60)} `).success).toBe(true);
+    expect(shopSearchSchema.safeParse("a".repeat(61)).success).toBe(false);
+  });
 });

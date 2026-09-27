@@ -1,27 +1,9 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
-
-// The control only writes the URL; the router is not under test.
-const mockPush = vi.fn();
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockPush }),
-  usePathname: () => "/shop",
-}));
-
-const mockCapture = vi.fn();
-vi.mock("posthog-js", () => ({
-  default: { capture: (...args: unknown[]) => mockCapture(...args) },
-}));
-
 import { ShopSortControl } from "./ShopSortControl";
 
-beforeEach(() => {
-  mockPush.mockClear();
-  mockCapture.mockClear();
-});
-
 test("shows the sort it was given", async () => {
-  const screen = await render(<ShopSortControl sort="newest" />);
+  const screen = await render(<ShopSortControl value="newest" onChange={vi.fn()} busy={false} />);
 
   await expect.element(screen.getByLabelText("Sort")).toHaveValue("newest");
   await expect
@@ -29,20 +11,17 @@ test("shows the sort it was given", async () => {
     .toHaveProperty("selected", true);
 });
 
-test("choosing Oldest first puts the sort in the URL and reports it", async () => {
-  const screen = await render(<ShopSortControl sort="newest" />);
+test("choosing Oldest first reports it once", async () => {
+  const onChange = vi.fn();
+  const screen = await render(<ShopSortControl value="newest" onChange={onChange} busy={false} />);
 
   await screen.getByLabelText("Sort").selectOptions("Oldest first");
 
-  expect(mockPush).toHaveBeenCalledExactlyOnceWith("/shop?sort=oldest", { scroll: false });
-  expect(mockCapture).toHaveBeenCalledExactlyOnceWith("shop_sort_changed", { sort: "oldest" });
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("oldest");
 });
 
-test("choosing Newest first returns to the clean /shop URL", async () => {
-  const screen = await render(<ShopSortControl sort="oldest" />);
+test("busy marks the select", async () => {
+  const screen = await render(<ShopSortControl value="newest" onChange={vi.fn()} busy />);
 
-  await screen.getByLabelText("Sort").selectOptions("Newest first");
-
-  expect(mockPush).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
-  expect(mockCapture).toHaveBeenCalledExactlyOnceWith("shop_sort_changed", { sort: "newest" });
+  await expect.element(screen.getByLabelText("Sort")).toHaveAttribute("aria-busy", "true");
 });

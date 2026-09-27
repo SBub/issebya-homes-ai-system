@@ -17,16 +17,26 @@ export const shopSortSchema = z.enum(SHOP_SORTS);
 export type ShopSort = z.infer<typeof shopSortSchema>;
 export const DEFAULT_SHOP_SORT: ShopSort = "newest";
 
+/** Longest search term the page and the API accept, after trimming. */
+export const SHOP_SEARCH_MAX_LENGTH = 60;
+
+/** A search term. The empty string is valid and means "no filter". */
+export const shopSearchSchema = z.string().trim().max(SHOP_SEARCH_MAX_LENGTH);
+
 /**
- * The query key for one sort of the grid, shared by the server prefetch and
- * `ProductList`. The sort is in the key, so a new sort is a new query that
- * starts at its own page one.
+ * The query key for one sort and search term of the grid, shared by the server
+ * prefetch and `ProductList`. Both are in the key, so a new sort or a new term
+ * is a new query that starts at its own page one.
  */
-export function shopProductsQueryKey(sort: ShopSort) {
-  return ["shop", "products", SHOP_PAGE_SIZE, sort] as const;
+export function shopProductsQueryKey(sort: ShopSort, q: string) {
+  return ["shop", "products", SHOP_PAGE_SIZE, sort, q] as const;
 }
 
-export type ProductsPage = { items: Product[]; nextCursor: string | null };
+/**
+ * One page of the grid. `total` is the number of products matching the
+ * search term (the whole catalogue when there is none), not this page's size.
+ */
+export type ProductsPage = { items: Product[]; nextCursor: string | null; total: number };
 
 /** A cursor that does not decode to a valid bookmark. */
 export class UnknownCursorError extends Error {
@@ -41,6 +51,14 @@ export class CursorSortMismatchError extends Error {
   constructor() {
     super("Cursor is for a different sort");
     this.name = "CursorSortMismatchError";
+  }
+}
+
+/** A well-formed cursor handed out for a different search term than the request's. */
+export class CursorSearchMismatchError extends Error {
+  constructor() {
+    super("Cursor is for a different search");
+    this.name = "CursorSearchMismatchError";
   }
 }
 
@@ -66,6 +84,31 @@ function compareProducts(a: SortKey, b: SortKey, sort: ShopSort): number {
   return sort === "newest" ? newest : -newest;
 }
 
+/**
+ * The products whose name contains the trimmed term, case-insensitively. An
+ * empty term matches everything. Only `name` is searched. Always a new array;
+ * the input is never mutated.
+ */
+export function filterByName(products: readonly Product[], q: string): Product[] {
+  const term = q.trim().toLowerCase();
+  if (term === "") return [...products];
+  return products.filter((product) => product.name.toLowerCase().includes(term));
+}
+
+/**
+ * `/shop` with `sort` and `q` as query parameters, each left out at its
+ * default, so changing one control never drops the other's value.
+ * `URLSearchParams` encodes a space as `+`, which `searchParams` decodes back.
+ */
+export function shopHref(pathname: string, { sort, q }: { sort: ShopSort; q: string }): string {
+  const params = new URLSearchParams();
+  if (sort !== DEFAULT_SHOP_SORT) params.set("sort", sort);
+  const term = q.trim();
+  if (term !== "") params.set("q", term);
+  const query = params.toString();
+  return query === "" ? pathname : `${pathname}?${query}`;
+}
+
 /** A sorted copy of `products`; the input is never mutated. */
 export function sortProducts(products: readonly Product[], sort: ShopSort): Product[] {
   return [...products].sort((a, b) => compareProducts(a, b, sort));
@@ -87,6 +130,9 @@ function fromBase64Url(encoded: string): string {
 
 const cursorBookmarkSchema = z.object({
   sort: shopSortSchema,
+  // Defaulted so a cursor handed out before search existed stays valid for
+  // the unfiltered list instead of becoming a 400.
+  q: z.string().max(SHOP_SEARCH_MAX_LENGTH).default(""),
   createdAt: calendarDaySchema,
   slug: z.string().min(1),
 });
@@ -94,20 +140,21 @@ const cursorBookmarkSchema = z.object({
 /** The last item a page showed, in the order it was shown. */
 type CursorBookmark = z.infer<typeof cursorBookmarkSchema>;
 
-/** An opaque cursor: `base64url(JSON.stringify({ sort, createdAt, slug }))`. */
+/** An opaque cursor: `base64url(JSON.stringify({ sort, q, createdAt, slug }))`. */
 export function encodeCursor(bookmark: CursorBookmark): string {
   return toBase64Url(JSON.stringify(bookmark));
 }
 
 /**
  * The bookmark a cursor carries. Throws `UnknownCursorError` on garbage and
- * `CursorSortMismatchError` when it was handed out for another sort.
+ * `CursorSortMismatchError` / `CursorSearchMismatchError` when it was handed
+ * out for another sort or another search term.
  *
  * The route calls this before the cached `getProductsPage`: an error thrown
  * inside a `"use cache"` scope loses its class on the way out, so the route
  * could not tell a bad cursor (400) from a real failure (500).
  */
-export function decodeCursor(cursor: string, sort: ShopSort): CursorBookmark {
+export function decodeCursor(cursor: string, sort: ShopSort, q: string): CursorBookmark {
   let json: unknown;
   try {
     json = JSON.parse(fromBase64Url(cursor));
@@ -118,11 +165,14 @@ export function decodeCursor(cursor: string, sort: ShopSort): CursorBookmark {
   const parsed = cursorBookmarkSchema.safeParse(json);
   if (!parsed.success) throw new UnknownCursorError();
   if (parsed.data.sort !== sort) throw new CursorSortMismatchError();
+  if (parsed.data.q !== q) throw new CursorSearchMismatchError();
   return parsed.data;
 }
 
 /**
- * The only code that sorts and slices the registry. Keyset by
+ * The only code that filters, sorts and slices the registry. The search
+ * filter runs first, so paging walks the matches only and never misses one
+ * that is not loaded yet. Keyset by
  * `(createdAt, slug)` in `sort` order, never an offset: a page is the items
  * that compare strictly after the bookmark tuple. The bookmarked product does
  * not have to exist any more, so an item inserted before the bookmark, or the
@@ -136,12 +186,13 @@ export function selectPage(
   cursor: string | null,
   limit: number,
   sort: ShopSort,
+  q: string,
 ): ProductsPage {
-  const sorted = sortProducts(products, sort);
+  const sorted = sortProducts(filterByName(products, q), sort);
 
   let start = 0;
   if (cursor !== null) {
-    const bookmark = decodeCursor(cursor, sort);
+    const bookmark = decodeCursor(cursor, sort, q);
     const index = sorted.findIndex((product) => compareProducts(product, bookmark, sort) > 0);
     start = index === -1 ? sorted.length : index;
   }
@@ -150,8 +201,8 @@ export function selectPage(
   const last = items.at(-1);
   const nextCursor =
     last && start + limit < sorted.length
-      ? encodeCursor({ sort, createdAt: last.createdAt, slug: last.slug })
+      ? encodeCursor({ sort, q, createdAt: last.createdAt, slug: last.slug })
       : null;
 
-  return { items, nextCursor };
+  return { items, nextCursor, total: sorted.length };
 }

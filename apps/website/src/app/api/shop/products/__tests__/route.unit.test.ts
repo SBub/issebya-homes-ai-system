@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   encodeCursor,
+  filterByName,
   type ProductsPage,
   type ShopSort,
   sortProducts,
@@ -98,6 +99,7 @@ describe("GET /api/shop/products", () => {
   it("continues after a cursor whose product has left the registry", async () => {
     const cursor = encodeCursor({
       sort: "newest",
+      q: "",
       createdAt: "2026-05-03",
       slug: "sample-product-t",
     });
@@ -127,9 +129,57 @@ describe("GET /api/shop/products", () => {
     expect(seen).toEqual(expected.map(({ slug }) => slug));
   });
 
-  it("responds with exactly items and nextCursor", async () => {
+  it("responds with exactly items, nextCursor and total", async () => {
     const { body } = await get();
 
-    expect(Object.keys(body).sort()).toEqual(["items", "nextCursor"]);
+    expect(Object.keys(body).sort()).toEqual(["items", "nextCursor", "total"]);
+    expect(body.total).toBe(allProducts.length);
+  });
+
+  describe("search", () => {
+    const teen = sortProducts(filterByName(allProducts, "teen"), "newest");
+
+    it.each(["?q=teen", "?q=%20teen%20", "?q=TEEN"])(
+      "returns only the matching products for %s",
+      async (query) => {
+        const { items, nextCursor, total } = await getPage(query);
+
+        expect(items.map(({ slug }) => slug)).toEqual(teen.map(({ slug }) => slug));
+        expect(total).toBe(3);
+        expect(nextCursor).toBeNull();
+      },
+    );
+
+    it.each(["?q=", ""])("treats %j as no search", async (query) => {
+      const { total } = await getPage(query);
+
+      expect(total).toBe(allProducts.length);
+    });
+
+    it("rejects a term over 60 characters with 400", async () => {
+      const { status, body } = await get(`?q=${"a".repeat(61)}`);
+
+      expect(status).toBe(400);
+      expect(body).toEqual({ error: "Invalid query" });
+    });
+
+    it("pages through the matches with a cursor carrying the term", async () => {
+      const first = await getPage("?q=product&limit=10");
+      const second = await getPage(`?q=product&limit=10&cursor=${first.nextCursor}`);
+
+      expect([...first.items, ...second.items].map(({ slug }) => slug)).toEqual(
+        newest.map(({ slug }) => slug),
+      );
+      expect(second.nextCursor).toBeNull();
+    });
+
+    it("rejects a cursor from another term with 400", async () => {
+      const { nextCursor } = await getPage("?q=product");
+      const { status, body } = await get(`?q=teen&cursor=${nextCursor}`);
+
+      expect(status).toBe(400);
+      expect(body).toEqual({ error: "Cursor is for a different search" });
+      expect(mockCaptureException).not.toHaveBeenCalled();
+    });
   });
 });

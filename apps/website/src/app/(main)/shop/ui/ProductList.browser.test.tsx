@@ -56,7 +56,7 @@ const products: Product[] = Array.from({ length: 15 }, (_, i) =>
   createdAt: `2026-01-${nn}`,
 }));
 
-const page1 = selectPage(products, null, 6, "newest");
+const page1 = selectPage(products, null, 6, "newest", "");
 
 // --- Doubles ---
 
@@ -103,7 +103,8 @@ function servePage(input: RequestInfo | URL): Response {
   const cursor = url.searchParams.get("cursor");
   const limit = Number(url.searchParams.get("limit"));
   const sort = shopSortSchema.parse(url.searchParams.get("sort") ?? "newest");
-  return Response.json(selectPage(products, cursor, limit, sort));
+  const q = url.searchParams.get("q") ?? "";
+  return Response.json(selectPage(products, cursor, limit, sort, q));
 }
 
 let fetchSpy: MockInstance<typeof fetch>;
@@ -125,10 +126,14 @@ afterEach(() => {
 /**
  * Newest page one as the server hands it over: dehydrated, then hydrated
  * here. `rerenderWithSort` swaps the list's `sort` inside the same client.
+ * `q` seeds page one of that term instead of the unfiltered one.
  */
-async function renderHydrated() {
+async function renderHydrated(q = "") {
   const server = new QueryClient();
-  server.setQueryData(shopProductsQueryKey("newest"), { pages: [page1], pageParams: [null] });
+  server.setQueryData(shopProductsQueryKey("newest", q), {
+    pages: [selectPage(products, null, 6, "newest", q)],
+    pageParams: [null],
+  });
   const state = dehydrate(server);
 
   // The real client, minus TanStack's automatic retries, so a failed page
@@ -140,7 +145,7 @@ async function renderHydrated() {
     <QueryClientProvider client={client}>
       <HydrationBoundary state={state}>
         <Suspense fallback={null}>
-          <ProductList sort={sort} />
+          <ProductList sort={sort} q={q} />
         </Suspense>
       </HydrationBoundary>
     </QueryClientProvider>
@@ -240,7 +245,7 @@ test("a skeleton shows below the cards while the next page is in flight", async 
   await expect.element(screen.getByRole("status")).toHaveTextContent("Loading products");
   expect(articles(screen).all()).toHaveLength(6);
 
-  const page2: ProductsPage = selectPage(products, page1.nextCursor, 6, "newest");
+  const page2: ProductsPage = selectPage(products, page1.nextCursor, 6, "newest", "");
   release(Response.json(page2));
 
   await expect.element(articles(screen).nth(11)).toBeVisible();
@@ -267,8 +272,26 @@ test("switching sort fetches page one of the new order, then pages it with its o
   await screen.getByRole("button", { name: "Load more" }).click();
 
   await expect.element(articles(screen).nth(11)).toBeVisible();
-  const oldestPage1 = selectPage(products, null, 6, "oldest");
+  const oldestPage1 = selectPage(products, null, 6, "oldest", "");
   const nextUrl = new URL(String(fetchSpy.mock.calls[1][0]), window.location.origin);
   expect(nextUrl.searchParams.get("sort")).toBe("oldest");
   expect(nextUrl.searchParams.get("cursor")).toBe(oldestPage1.nextCursor);
+});
+
+test("inside a search, page two asks for the same term with the filtered cursor", async () => {
+  // `Product 01`, `Product 10`..`Product 15` contain a 1; 7 matches, so two pages.
+  const filteredPage1 = selectPage(products, null, 6, "newest", "1");
+  const screen = await renderHydrated("1");
+  await expect.element(articles(screen).nth(5)).toBeVisible();
+  expect(fetchSpy).not.toHaveBeenCalled();
+
+  await screen.getByRole("button", { name: "Load more" }).click();
+
+  await expect.element(articles(screen).nth(6)).toBeVisible();
+  expect(articles(screen).all()).toHaveLength(7);
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
+  const url = new URL(String(fetchSpy.mock.calls[0][0]), window.location.origin);
+  expect(url.searchParams.get("q")).toBe("1");
+  expect(url.searchParams.get("cursor")).toBe(filteredPage1.nextCursor);
+  await expect.element(screen.getByRole("button", { name: "Load more" })).not.toBeInTheDocument();
 });

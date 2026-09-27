@@ -19,13 +19,15 @@ const NEXT_PAGE_SKELETON_COUNT = Math.min(SHOP_PAGE_SIZE, 3);
 async function fetchProductsPage(
   cursor: string | null,
   sort: ShopSort,
+  q: string,
   signal: AbortSignal,
 ): Promise<ProductsPage> {
-  // Relative URL: this only ever runs in the browser. The default sort is
-  // left out, matching the page's own URL convention.
+  // Relative URL: this only ever runs in the browser. The default sort and
+  // an empty term are left out, matching the page's own URL convention.
   const params = new URLSearchParams({ limit: String(SHOP_PAGE_SIZE) });
   if (cursor !== null) params.set("cursor", cursor);
   if (sort !== DEFAULT_SHOP_SORT) params.set("sort", sort);
+  if (q !== "") params.set("q", q);
 
   const res = await fetch(`/api/shop/products?${params}`, { signal });
   if (!res.ok) throw new Error(`Products request failed: ${res.status}`);
@@ -40,11 +42,11 @@ async function fetchProductsPage(
  * hydrated cache), and only pages 2+ are fetched here, from
  * `GET /api/shop/products`.
  *
- * The query key carries the sort, so switching sort is a new query that
- * starts at a fresh page one, with no effect and no manual cache reset. The
- * server prefetch for the new sort arrives with the RSC payload of the
- * `router.push` that changed it, so that page one is normally hydrated
- * rather than fetched.
+ * The query key carries the sort and the search term, so switching either is
+ * a new query that starts at a fresh page one, with no effect and no manual
+ * cache reset. The server prefetch for the new sort or term arrives with the
+ * RSC payload of the navigation that changed it, so that page one is normally
+ * hydrated rather than fetched.
  *
  * `useSuspenseInfiniteQuery` rather than `useInfiniteQuery` (same options):
  * the server hands over page one as a still-pending query, and only the
@@ -56,13 +58,13 @@ async function fetchProductsPage(
  * often past the hour's `staleTime` on arrival. Refetching it on mount would
  * be exactly the page-one client fetch the prefetch exists to avoid.
  */
-export function ProductList({ sort }: { sort: ShopSort }) {
+export function ProductList({ sort, q }: { sort: ShopSort; q: string }) {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } =
     useSuspenseInfiniteQuery({
-      queryKey: shopProductsQueryKey(sort),
+      queryKey: shopProductsQueryKey(sort, q),
       initialPageParam: null as string | null,
       getNextPageParam: (last: ProductsPage) => last.nextCursor,
-      queryFn: ({ pageParam, signal }) => fetchProductsPage(pageParam, sort, signal),
+      queryFn: ({ pageParam, signal }) => fetchProductsPage(pageParam, sort, q, signal),
       refetchOnMount: false,
     });
 
