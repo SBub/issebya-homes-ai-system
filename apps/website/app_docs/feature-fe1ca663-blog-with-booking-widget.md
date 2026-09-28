@@ -12,7 +12,7 @@
 
 - `/blog`: an index listing every post newest first, with title, date and description.
 - `/blog/[slug]`: one post per MDX file, prerendered via `generateStaticParams`, with per-post `generateMetadata` (canonical URL, Open Graph `article` tags, optional hero image).
-- `<BookingWidget />`: a Server Component available to every post with no import, rendering `<BookingEngine>` for `room1` and `room2` behind the same `ErrorBoundary` + `Suspense`/`BookingEngineSkeleton` pair that `booking/[type]/page.tsx` uses.
+- `<BookingWidget />`: a Server Component available to every post with no import, rendering `<GuardedBookingEngine>` for `room1` and `room2`, the same component `booking/[type]/page.tsx` uses (Sentry `ErrorBoundary` with the WhatsApp fallback, around `Suspense`/`BookingEngineSkeleton`, around `<BookingEngine>`).
 - `<RoomSwitcher>`: a small `"use client"` tablist that toggles which of the two prerendered engines is on screen. Both engines arrive as `ReactNode` props, so switching is pure client state and issues no request.
 - A validated post registry: `zod`-checked frontmatter expressed as `export const meta = {...}` inside each `.mdx` file, so a malformed post fails the build.
 - `sitemap.ts` and `robots.ts`, plus a single `SITE_URL` constant now also feeding `layout.tsx`'s `metadataBase` and Open Graph URLs.
