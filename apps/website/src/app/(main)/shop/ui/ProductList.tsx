@@ -3,7 +3,13 @@
 import { useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import posthog from "posthog-js";
 import { useCallback } from "react";
-import { type ProductsPage, SHOP_PAGE_SIZE, SHOP_PRODUCTS_QUERY_KEY } from "@/lib/shop/pagination";
+import {
+  DEFAULT_SHOP_SORT,
+  type ProductsPage,
+  SHOP_PAGE_SIZE,
+  type ShopSort,
+  shopProductsQueryKey,
+} from "@/lib/shop/pagination";
 import { ProductCard } from "./ProductCard";
 import { PRODUCT_GRID_CLASS, ProductGridSkeleton } from "./ProductGridSkeleton";
 
@@ -12,11 +18,14 @@ const NEXT_PAGE_SKELETON_COUNT = Math.min(SHOP_PAGE_SIZE, 3);
 
 async function fetchProductsPage(
   cursor: string | null,
+  sort: ShopSort,
   signal: AbortSignal,
 ): Promise<ProductsPage> {
-  // Relative URL: this only ever runs in the browser, for pages 2+.
+  // Relative URL: this only ever runs in the browser. The default sort is
+  // left out, matching the page's own URL convention.
   const params = new URLSearchParams({ limit: String(SHOP_PAGE_SIZE) });
   if (cursor !== null) params.set("cursor", cursor);
+  if (sort !== DEFAULT_SHOP_SORT) params.set("sort", sort);
 
   const res = await fetch(`/api/shop/products?${params}`, { signal });
   if (!res.ok) throw new Error(`Products request failed: ${res.status}`);
@@ -31,6 +40,12 @@ async function fetchProductsPage(
  * hydrated cache), and only pages 2+ are fetched here, from
  * `GET /api/shop/products`.
  *
+ * The query key carries the sort, so switching sort is a new query that
+ * starts at a fresh page one, with no effect and no manual cache reset. The
+ * server prefetch for the new sort arrives with the RSC payload of the
+ * `router.push` that changed it, so that page one is normally hydrated
+ * rather than fetched.
+ *
  * `useSuspenseInfiniteQuery` rather than `useInfiniteQuery` (same options):
  * the server hands over page one as a still-pending query, and only the
  * suspense variant suspends on it into the list's `<Suspense>` skeleton. The
@@ -41,13 +56,13 @@ async function fetchProductsPage(
  * often past the hour's `staleTime` on arrival. Refetching it on mount would
  * be exactly the page-one client fetch the prefetch exists to avoid.
  */
-export function ProductList() {
+export function ProductList({ sort }: { sort: ShopSort }) {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } =
     useSuspenseInfiniteQuery({
-      queryKey: SHOP_PRODUCTS_QUERY_KEY,
+      queryKey: shopProductsQueryKey(sort),
       initialPageParam: null as string | null,
       getNextPageParam: (last: ProductsPage) => last.nextCursor,
-      queryFn: ({ pageParam, signal }) => fetchProductsPage(pageParam, signal),
+      queryFn: ({ pageParam, signal }) => fetchProductsPage(pageParam, sort, signal),
       refetchOnMount: false,
     });
 

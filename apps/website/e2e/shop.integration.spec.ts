@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { SHOP_PAGE_SIZE } from "@/lib/shop/pagination";
+import { SHOP_PAGE_SIZE, sortProducts } from "@/lib/shop/pagination";
 import { allProducts } from "@/lib/shop/products";
 import {
   SELLER_CONTACT_CONSENT_COPY,
@@ -26,15 +26,23 @@ import { SITE_URL } from "@/lib/site";
 // local DB, each under its own unique email, and delete that contact
 // afterwards (its items cascade). The Playwright server runs with
 // E2E_MOCK_RESEND=true, so a new wish never emails these addresses.
-const [firstProduct] = allProducts;
+const newest = sortProducts(allProducts, "newest");
+const oldest = sortProducts(allProducts, "oldest");
+const [firstProduct] = newest;
 
 test.describe("Shop", () => {
-  test("index shows the first six product cards linking to /shop/…", async ({ page }) => {
+  test("index shows the six newest product cards, in order, linking to /shop/…", async ({
+    page,
+  }) => {
     await page.goto("/shop");
 
     const grid = page.getByRole("region", { name: "Products" });
     await expect(grid.getByRole("article")).toHaveCount(SHOP_PAGE_SIZE);
-    for (const product of allProducts.slice(0, SHOP_PAGE_SIZE)) {
+    const expected = newest.slice(0, SHOP_PAGE_SIZE);
+    await expect(grid.getByRole("article").getByRole("link")).toHaveText(
+      expected.map(({ name }) => name),
+    );
+    for (const product of expected) {
       await expect(grid.getByRole("link", { name: product.name, exact: true })).toHaveAttribute(
         "href",
         `/shop/${product.slug}`,
@@ -55,7 +63,7 @@ test.describe("Shop", () => {
     await expect(cards).toHaveCount(allProducts.length);
 
     await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
-    const last = allProducts[allProducts.length - 1];
+    const last = newest[newest.length - 1];
     await expect(page.getByRole("link", { name: last.name, exact: true })).toHaveAttribute(
       "href",
       `/shop/${last.slug}`,
@@ -94,6 +102,63 @@ test.describe("Shop", () => {
     expect(body.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
 
     expect((await request.get("/api/shop/products?limit=30")).status()).toBe(400);
+
+    const oldestRes = await request.get("/api/shop/products?sort=oldest");
+    expect(oldestRes.status()).toBe(200);
+    expect((await oldestRes.json()).items[0].slug).toBe(oldest[0].slug);
+
+    const crossSort = await request.get(`/api/shop/products?sort=oldest&cursor=${body.nextCursor}`);
+    expect(crossSort.status()).toBe(400);
+    expect((await request.get("/api/shop/products?sort=bogus")).status()).toBe(400);
+  });
+
+  test("sort control switches order and keeps it in the URL", async ({ page }) => {
+    await page.goto("/shop");
+
+    const grid = page.getByRole("region", { name: "Products" });
+    const cards = grid.getByRole("article");
+    const cardLinks = cards.getByRole("link");
+    const sort = page.getByLabel("Sort");
+    await expect(cardLinks.first()).toHaveText(newest[0].name);
+
+    await sort.selectOption({ label: "Oldest first" });
+    await expect(page).toHaveURL("/shop?sort=oldest");
+    await expect(cardLinks.first()).toHaveText(oldest[0].name);
+
+    const sentinel = page.getByTestId("shop-products-sentinel");
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(allProducts.length);
+    await expect(cardLinks).toHaveText(oldest.map(({ name }) => name));
+
+    await sort.selectOption({ label: "Newest first" });
+    await expect(page).toHaveURL("/shop");
+    await expect(cardLinks.first()).toHaveText(newest[0].name);
+
+    await page.goBack();
+    await expect(page).toHaveURL("/shop?sort=oldest");
+    await expect(cardLinks.first()).toHaveText(oldest[0].name);
+  });
+
+  test("a shared oldest link opens in that order without an API call for page one", async ({
+    page,
+  }) => {
+    const apiRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
+    });
+
+    await page.goto("/shop?sort=oldest");
+
+    const cardLinks = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .getByRole("link");
+    await expect(cardLinks).toHaveText(oldest.slice(0, SHOP_PAGE_SIZE).map(({ name }) => name));
+    await expect(page.getByLabel("Sort")).toHaveValue("oldest");
+    expect(apiRequests).toEqual([]);
   });
 
   test("flipping a card's images stays on /shop, then the name opens the product", async ({

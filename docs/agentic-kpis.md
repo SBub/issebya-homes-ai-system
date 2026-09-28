@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value       | Last Updated                  |
 | ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 24          | Sun Sep 27 15:56:43 WEST 2026 |
-| Longest Streak    | 24          | Sun Sep 27 15:56:43 WEST 2026 |
-| Total Plan Size   | 7579 lines  | Sun Sep 27 15:56:43 WEST 2026 |
-| Largest Plan Size | 698 lines   | Sun Sep 27 15:56:43 WEST 2026 |
-| Total Diff Size   | 23731 lines | Sun Sep 27 15:56:43 WEST 2026 |
-| Largest Diff Size | 2629 lines  | Sun Sep 27 15:56:43 WEST 2026 |
-| Average Presence  | 1.0         | Sun Sep 27 15:56:43 WEST 2026 |
+| Current Streak    | 25          | Sun Sep 27 16:29:14 WEST 2026 |
+| Longest Streak    | 25          | Sun Sep 27 16:29:14 WEST 2026 |
+| Total Plan Size   | 7915 lines  | Sun Sep 27 16:29:14 WEST 2026 |
+| Largest Plan Size | 698 lines   | Sun Sep 27 16:29:14 WEST 2026 |
+| Total Diff Size   | 26181 lines | Sun Sep 27 16:29:14 WEST 2026 |
+| Largest Diff Size | 2629 lines  | Sun Sep 27 16:29:14 WEST 2026 |
+| Average Presence  | 1.0         | Sun Sep 27 16:29:14 WEST 2026 |
 
 ## ADW KPIs
 
@@ -46,3 +46,4 @@ Detailed metrics for individual ADW workflow runs.
 | Fri Sep 25 09:56:10 WEST 2026 | e9bc2126 | 156          | /feature    | 1        | 244               | 732/61/11                       | Fri Sep 25 09:56:10 WEST 2026 | Fri Sep 25 09:56:10 WEST 2026 |
 | Fri Sep 25 10:15:21 WEST 2026 | dc773936 | 158          | /chore      | 1        | 349               | 896/2/9                         | Fri Sep 25 10:15:21 WEST 2026 | Fri Sep 25 10:15:21 WEST 2026 |
 | Sun Sep 27 15:56:43 WEST 2026 | e50e5d95 | 163          | /feature    | 1        | 353               | 1393/27/25                      | Sun Sep 27 15:56:43 WEST 2026 | Sun Sep 27 15:56:43 WEST 2026 |
+| Sun Sep 27 16:29:14 WEST 2026 | bdeb9a75 | 165          | /feature    | 1        | 336               | 2405/45/34                      | Sun Sep 27 16:29:14 WEST 2026 | Sun Sep 27 16:29:14 WEST 2026 |

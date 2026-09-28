@@ -45,6 +45,7 @@ const ONE: Product = {
   description: "A light throw for cool evenings on the terrace.",
   details: "Washed linen, 130 x 170 cm.",
   images: [image("A folded linen throw", 1)],
+  createdAt: "2026-05-03",
 };
 
 const THREE: Product = {
