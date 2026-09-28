@@ -245,6 +245,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `/shop` search box, `ShopControls`, the debounce, or `q` in the cursor, query key or `GET /api/shop/products`
     - When the `/shop` grid flashes its skeleton or unmounts the old cards on a search or sort change
     - When the search box overwrites typed text, navigates twice, or a sort change drops the search term
+- `apps/website/app_docs/feature-12e4efa7-shop-grid-error-boundary.md`
+  - Conditions:
+    - When changing what wraps the `/shop` grid's `<Suspense>`, `ShopGridBoundary`, `ShopGridError`, or adding a `shop/error.tsx`
+    - When `/shop` goes blank on a failed page one, or "Try again" leaves the fallback stuck instead of reloading the grid
+    - When adding a Sentry `ErrorBoundary` with a render-prop fallback or `beforeCapture` under a Server Component page, or a browser test fails importing `@sentry/nextjs`
 
 ---
 

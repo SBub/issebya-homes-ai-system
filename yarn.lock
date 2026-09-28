@@ -13035,6 +13035,7 @@ __metadata:
     "@next/mdx": "npm:^16.3.5"
     "@playwright/test": "npm:^1.58.2"
     "@sentry/nextjs": "npm:^10"
+    "@sentry/react": "npm:10.70.0"
     "@supabase/supabase-js": "npm:^2.49.8"
     "@tailwindcss/postcss": "npm:^4"
     "@tailwindcss/vite": "npm:^4.1.18"

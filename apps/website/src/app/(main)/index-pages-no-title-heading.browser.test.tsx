@@ -40,6 +40,12 @@ vi.mock("@/lib/blog/posts", () => ({ allPosts: [POST] }));
 // `/shop` shell (Products section first, no h1) is under test here.
 vi.mock("./shop/ui/ShopProducts", () => ({ ShopProducts: () => null }));
 
+// The grid's error boundary imports `@sentry/nextjs`, which reaches for
+// `process` at import time. It renders nothing of its own on the happy path.
+vi.mock("./shop/ui/ShopGridBoundary", () => ({
+  ShopGridBoundary: ({ children }: { children: ReactNode }) => children,
+}));
+
 import BlogIndexPage from "./blog/page";
 import ContactPage from "./contact/page";
 import ShopPage from "./shop/page";

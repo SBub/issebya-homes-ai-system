@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value       | Last Updated                  |
 | ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 26          | Sun Sep 27 21:21:39 WEST 2026 |
-| Longest Streak    | 26          | Sun Sep 27 21:21:39 WEST 2026 |
-| Total Plan Size   | 8233 lines  | Sun Sep 27 21:21:39 WEST 2026 |
-| Largest Plan Size | 698 lines   | Sun Sep 27 21:21:39 WEST 2026 |
-| Total Diff Size   | 28867 lines | Sun Sep 27 21:21:39 WEST 2026 |
-| Largest Diff Size | 2686 lines  | Sun Sep 27 21:21:39 WEST 2026 |
-| Average Presence  | 1.0         | Sun Sep 27 21:21:39 WEST 2026 |
+| Current Streak    | 27          | Mon Sep 28 10:08:26 WEST 2026 |
+| Longest Streak    | 27          | Mon Sep 28 10:08:26 WEST 2026 |
+| Total Plan Size   | 8448 lines  | Mon Sep 28 10:08:26 WEST 2026 |
+| Largest Plan Size | 698 lines   | Mon Sep 28 10:08:26 WEST 2026 |
+| Total Diff Size   | 29338 lines | Mon Sep 28 10:08:26 WEST 2026 |
+| Largest Diff Size | 2686 lines  | Mon Sep 28 10:08:26 WEST 2026 |
+| Average Presence  | 1.0         | Mon Sep 28 10:08:26 WEST 2026 |
 
 ## ADW KPIs
 
@@ -48,3 +48,4 @@ Detailed metrics for individual ADW workflow runs.
 | Sun Sep 27 15:56:43 WEST 2026 | e50e5d95 | 163          | /feature    | 1        | 353               | 1393/27/25                      | Sun Sep 27 15:56:43 WEST 2026 | Sun Sep 27 15:56:43 WEST 2026 |
 | Sun Sep 27 16:29:14 WEST 2026 | bdeb9a75 | 165          | /feature    | 1        | 336               | 2405/45/34                      | Sun Sep 27 16:29:14 WEST 2026 | Sun Sep 27 16:29:14 WEST 2026 |
 | Sun Sep 27 21:21:39 WEST 2026 | 86c52a82 | 167          | /feature    | 1        | 318               | 2488/198/30                     | Sun Sep 27 21:21:39 WEST 2026 | Sun Sep 27 21:21:39 WEST 2026 |
+| Mon Sep 28 10:08:26 WEST 2026 | 12e4efa7 | 169          | /feature    | 1        | 215               | 467/4/11                        | Mon Sep 28 10:08:26 WEST 2026 | Mon Sep 28 10:08:26 WEST 2026 |

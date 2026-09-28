@@ -49,3 +49,6 @@ trees/
 # ./.next/types/routes.d.ts (build), so tracking it turns every build into a diff.
 # One pattern, unanchored, so it covers all three Next apps.
 next-env.d.ts
+
+# impeccable plugin hook cache
+.impeccable/
