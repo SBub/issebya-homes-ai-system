@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { SHOP_PAGE_SIZE, sortProducts } from "@/lib/shop/pagination";
+import { filterByName, SHOP_PAGE_SIZE, sortProducts } from "@/lib/shop/pagination";
 import { allProducts } from "@/lib/shop/products";
 import {
   SELLER_CONTACT_CONSENT_COPY,
@@ -29,6 +29,9 @@ import { SITE_URL } from "@/lib/site";
 const newest = sortProducts(allProducts, "newest");
 const oldest = sortProducts(allProducts, "oldest");
 const [firstProduct] = newest;
+const teenNewest = sortProducts(filterByName(allProducts, "teen"), "newest");
+const teenOldest = sortProducts(filterByName(allProducts, "teen"), "oldest");
+const names = (products: readonly { name: string }[]) => products.map(({ name }) => name);
 
 test.describe("Shop", () => {
   test("index shows the six newest product cards, in order, linking to /shop/…", async ({
@@ -110,6 +113,18 @@ test.describe("Shop", () => {
     const crossSort = await request.get(`/api/shop/products?sort=oldest&cursor=${body.nextCursor}`);
     expect(crossSort.status()).toBe(400);
     expect((await request.get("/api/shop/products?sort=bogus")).status()).toBe(400);
+
+    const teenRes = await request.get("/api/shop/products?q=teen");
+    expect(teenRes.status()).toBe(200);
+    const teen = await teenRes.json();
+    expect(teen.items).toHaveLength(3);
+    expect(teen.total).toBe(3);
+    expect(teen.nextCursor).toBeNull();
+
+    const product = await (await request.get("/api/shop/products?q=product")).json();
+    const crossSearch = await request.get(`/api/shop/products?q=teen&cursor=${product.nextCursor}`);
+    expect(crossSearch.status()).toBe(400);
+    expect((await request.get(`/api/shop/products?q=${"a".repeat(61)}`)).status()).toBe(400);
   });
 
   test("sort control switches order and keeps it in the URL", async ({ page }) => {
@@ -159,6 +174,113 @@ test.describe("Shop", () => {
     await expect(cardLinks).toHaveText(oldest.slice(0, SHOP_PAGE_SIZE).map(({ name }) => name));
     await expect(page.getByLabel("Sort")).toHaveValue("oldest");
     expect(apiRequests).toEqual([]);
+  });
+
+  test("search narrows the grid after a pause and keeps the term in the URL", async ({ page }) => {
+    await page.goto("/shop");
+
+    const cardLinks = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .getByRole("link");
+    const search = page.getByRole("searchbox", { name: "Search products" });
+    await expect(cardLinks).toHaveCount(SHOP_PAGE_SIZE);
+
+    await search.pressSequentially("teen");
+    await expect(page).toHaveURL("/shop?q=teen");
+    await expect(cardLinks).toHaveText(names(teenNewest));
+
+    await search.fill("");
+    await expect(page).toHaveURL("/shop");
+    await expect(cardLinks).toHaveCount(SHOP_PAGE_SIZE);
+  });
+
+  test("Enter applies the search immediately", async ({ page }) => {
+    await page.goto("/shop");
+
+    const search = page.getByRole("searchbox", { name: "Search products" });
+    await search.pressSequentially("teen");
+    await search.press("Enter");
+
+    await expect(page).toHaveURL("/shop?q=teen");
+    await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
+      3,
+    );
+  });
+
+  test("a shared search link streams its results without an API call", async ({ page }) => {
+    const apiRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
+    });
+
+    await page.goto("/shop?sort=oldest&q=teen");
+
+    const cardLinks = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .getByRole("link");
+    await expect(cardLinks).toHaveText(names(teenOldest));
+    await expect(page.getByRole("searchbox", { name: "Search products" })).toHaveValue("teen");
+    await expect(page.getByLabel("Sort")).toHaveValue("oldest");
+    expect(apiRequests).toEqual([]);
+  });
+
+  test("searching keeps infinite scroll working inside the results", async ({ page }) => {
+    const apiRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
+    });
+
+    await page.goto("/shop?q=product");
+
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    const sentinel = page.getByTestId("shop-products-sentinel");
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE);
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
+    await sentinel.scrollIntoViewIfNeeded();
+    await expect(cards).toHaveCount(allProducts.length);
+
+    expect(apiRequests.length).toBeGreaterThan(0);
+    for (const url of apiRequests) {
+      expect(new URL(url).searchParams.get("q")).toBe("product");
+    }
+  });
+
+  test("a term with no matches shows the empty message and Clear restores the grid", async ({
+    page,
+  }) => {
+    await page.goto("/shop");
+
+    const search = page.getByRole("searchbox", { name: "Search products" });
+    await search.pressSequentially("lamp");
+
+    await expect(
+      page.getByText('Nothing matches "lamp". Try another word or clear the search.'),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Clear" }).click();
+
+    await expect(page).toHaveURL("/shop");
+    await expect(search).toHaveValue("");
+    await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
+      SHOP_PAGE_SIZE,
+    );
+  });
+
+  test("changing sort keeps the search", async ({ page }) => {
+    await page.goto("/shop?q=teen");
+
+    const cardLinks = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .getByRole("link");
+    await expect(cardLinks).toHaveText(names(teenNewest));
+
+    await page.getByLabel("Sort").selectOption({ label: "Oldest first" });
+
+    await expect(page).toHaveURL("/shop?sort=oldest&q=teen");
+    await expect(cardLinks).toHaveText(names(teenOldest));
   });
 
   test("flipping a card's images stays on /shop, then the name opens the product", async ({
@@ -236,6 +358,27 @@ test.describe("Shop", () => {
     for (const { slug } of allProducts) {
       expect(body).toContain(`${SITE_URL}/shop/${slug}</loc>`);
     }
+  });
+});
+
+// Not run with `javaScriptEnabled: false`: the search box sits in the page's
+// streamed Suspense hole, which only an inline script reveals, so without
+// JavaScript the page never gets past the skeleton. Instead this bypasses
+// React's onSubmit with the native `form.submit()`, which is exactly the
+// request the browser would build on its own.
+test.describe("Shop search form", () => {
+  test("the search box is a plain GET form", async ({ page }) => {
+    await page.goto("/shop");
+
+    await page.getByRole("search").evaluate((form: HTMLFormElement) => {
+      (form.elements.namedItem("q") as HTMLInputElement).value = "teen";
+      form.submit();
+    });
+
+    await expect(page).toHaveURL("/shop?q=teen");
+    await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
+      3,
+    );
   });
 });
 

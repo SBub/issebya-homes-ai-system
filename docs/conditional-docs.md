@@ -240,6 +240,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `/shop` sort order, the `sort` param, the `(createdAt, slug)` cursor tuple, or a product's `createdAt`
     - When adding a new sort (price, name) or a filter to the `/shop` grid
     - When `/shop` pages duplicate or skip items, a cursor 400s after a sort switch, or the sort select and grid disagree
+- `apps/website/app_docs/feature-86c52a82-shop-debounced-search.md`
+  - Conditions:
+    - When changing the `/shop` search box, `ShopControls`, the debounce, or `q` in the cursor, query key or `GET /api/shop/products`
+    - When the `/shop` grid flashes its skeleton or unmounts the old cards on a search or sort change
+    - When the search box overwrites typed text, navigates twice, or a sort change drops the search term
 
 ---
 

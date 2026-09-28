@@ -16,9 +16,10 @@ export const metadata: Metadata = {
 // The page itself reads nothing from the request (no cookies(), no headers(),
 // and it never awaits searchParams), so the shell stays static. It passes the
 // searchParams promise into the product list, the one <Suspense> hole, which
-// awaits it for `sort`: only the hole is dynamic, with card-sized
-// placeholders while page one arrives. The canonical stays /shop, since the
-// sort variants are the same content.
+// awaits it for `sort` and `q`: only the hole is dynamic, with card-sized
+// placeholders while page one first arrives (a later search or sort change
+// keeps the old cards instead, see ShopControls). The canonical stays /shop,
+// since the sort and search variants are the same content.
 export default function ShopIndexPage({ searchParams }: PageProps<"/shop">) {
   return (
     <div>

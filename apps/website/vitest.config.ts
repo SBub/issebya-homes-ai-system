@@ -66,7 +66,11 @@ export default defineConfig({
           ],
         },
         test: {
-          include: ["src/app/**/*.browser.test.tsx", "src/ui/**/*.browser.test.tsx"],
+          include: [
+            "src/app/**/*.browser.test.tsx",
+            "src/lib/**/*.browser.test.tsx",
+            "src/ui/**/*.browser.test.tsx",
+          ],
           name: "browser",
           browser: {
             enabled: true,
