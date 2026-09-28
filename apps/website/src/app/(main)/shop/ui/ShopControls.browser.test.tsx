@@ -105,7 +105,7 @@ test("Enter applies the term at once, and the debounce does not apply it again",
   await searchbox(screen).click();
   await userEvent.keyboard("lam{Enter}");
 
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop?q=lam", { scroll: false });
+  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop?q=lam", { scroll: false }]]);
   await wait(400);
   expect(mockReplace).toHaveBeenCalledTimes(1);
 });
@@ -118,7 +118,7 @@ test("Escape empties the box and returns to /shop at once", async () => {
   await userEvent.keyboard("{Escape}");
 
   await expect.element(searchbox(screen)).toHaveValue("");
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
+  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop", { scroll: false }]]);
 });
 
 test("deleting every character returns to /shop without waiting for the debounce", async () => {
@@ -127,7 +127,7 @@ test("deleting every character returns to /shop without waiting for the debounce
   await searchbox(screen).click();
   await userEvent.keyboard("{End}{Backspace}{Backspace}");
 
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
+  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop", { scroll: false }]]);
 });
 
 test("a search keeps the sort", async () => {
@@ -146,7 +146,7 @@ test("a sort change keeps the search and reports the sort", async () => {
 
   await screen.getByLabelText("Sort").selectOptions("Newest first");
 
-  expect(mockPush).toHaveBeenCalledExactlyOnceWith("/shop?q=teen", { scroll: false });
+  await expect.poll(() => mockPush.mock.calls).toEqual([["/shop?q=teen", { scroll: false }]]);
   expect(mockCapture).toHaveBeenCalledExactlyOnceWith("shop_sort_changed", { sort: "newest" });
   expect(mockReplace).not.toHaveBeenCalled();
 });
@@ -209,7 +209,7 @@ test("a term with no matches shows the empty message, and Clear returns to /shop
   await screen.getByRole("button", { name: "Clear" }).click();
 
   await expect.element(searchbox(screen)).toHaveValue("");
-  expect(mockReplace).toHaveBeenCalledExactlyOnceWith("/shop", { scroll: false });
+  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop", { scroll: false }]]);
 });
 
 test("reports an applied term once, with its match count", async () => {
@@ -219,7 +219,9 @@ test("reports an applied term once, with its match count", async () => {
   await userEvent.keyboard("teen");
 
   await expect.element(screen.getByText("teen 1")).toBeVisible();
-  expect(mockCapture.mock.calls).toEqual([["shop_search_applied", { length: 4, results: 3 }]]);
+  await expect
+    .poll(() => mockCapture.mock.calls)
+    .toEqual([["shop_search_applied", { length: 4, results: 3 }]]);
 
   await userEvent.keyboard("{Escape}");
 
