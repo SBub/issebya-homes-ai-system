@@ -46,6 +46,12 @@ vi.mock("./shop/ui/ShopGridBoundary", () => ({
   ShopGridBoundary: ({ children }: { children: ReactNode }) => children,
 }));
 
+// The live controls call `useRouter` and `useSearchParams`, which need the
+// Next app router. Only the section around them is under test here.
+vi.mock("./shop/ui/ShopControls", () => ({
+  ShopControls: ({ children }: { children: ReactNode }) => children,
+}));
+
 import BlogIndexPage from "./blog/page";
 import ContactPage from "./contact/page";
 import ShopPage from "./shop/page";

@@ -2,16 +2,14 @@ import { type DehydratedState, dehydrate, HydrationBoundary } from "@tanstack/re
 import { cacheLife, cacheTag } from "next/cache";
 import { getProductsPage } from "@/lib/shop/pages";
 import {
-  DEFAULT_SHOP_SORT,
+  parseShopParams,
   SHOP_PAGE_SIZE,
   type ShopSort,
   shopProductsQueryKey,
-  shopSearchSchema,
-  shopSortSchema,
 } from "@/lib/shop/pagination";
 import { makeShopQueryClient } from "@/lib/shop/query-client";
 import { ProductList } from "./ProductList";
-import { ShopControls } from "./ShopControls";
+import { ShopResults } from "./ShopResults";
 
 /**
  * Page one of `sort` and `q`, prefetched through `getProductsPage` directly
@@ -47,25 +45,22 @@ async function getFirstPageState(sort: ShopSort, q: string): Promise<DehydratedS
  * page one. This whole component is the page's Suspense hole: awaiting
  * `searchParams` here is what makes it (and only it) dynamic.
  *
- * Both are parsed leniently: a hand-typed `?sort=foo`, an over-long `?q=` or
- * a repeated one shows the default order or the full grid rather than an
- * error. The controls and the dimmed grid wrapper sit outside the
- * `HydrationBoundary` but inside the hole, so their values always match the
- * list inside them.
+ * Both are parsed leniently by `parseShopParams`, the same parser the
+ * controls use on the client, so the two always agree. The controls
+ * themselves are in the static shell, outside this hole; what depends on page
+ * one stays in here: `ShopResults`, with the empty state and the match count.
  */
 export async function ShopProducts({ searchParams }: Pick<PageProps<"/shop">, "searchParams">) {
-  const params = await searchParams;
-  const sort = shopSortSchema.catch(DEFAULT_SHOP_SORT).parse(params.sort);
-  const q = shopSearchSchema.catch("").parse(params.q);
+  const { sort, q } = parseShopParams(await searchParams);
 
   // The same cache entry the prefetch below fills, so no extra work.
   const { total } = await getProductsPage(null, SHOP_PAGE_SIZE, sort, q);
 
   return (
-    <ShopControls sort={sort} q={q} total={total}>
+    <ShopResults q={q} total={total}>
       <HydrationBoundary state={await getFirstPageState(sort, q)}>
         <ProductList sort={sort} q={q} />
       </HydrationBoundary>
-    </ShopControls>
+    </ShopResults>
   );
 }

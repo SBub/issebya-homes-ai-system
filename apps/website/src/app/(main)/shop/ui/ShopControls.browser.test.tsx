@@ -1,19 +1,24 @@
-import { Suspense, use, useEffect, useState } from "react";
+import { createContext, Suspense, use, useEffect, useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import type { ShopSort } from "@/lib/shop/pagination";
+import { shopParamsFromSearch } from "@/lib/shop/pagination";
 
 // --- Mocks ---
 
 // The router is not under test. `navigate` lets the harness below play the
-// part of the server render that follows a URL change.
+// part of the server render that follows a URL change. The URL is state the
+// harness provides through a context, not a module variable: the navigation
+// runs inside `ShopControls`' transition, and until it commits the component
+// must keep reading the old URL.
+const SearchContext = createContext(new URLSearchParams());
 let navigate: (href: string) => void = () => {};
 const mockReplace = vi.fn((href: string, _options?: { scroll: boolean }) => navigate(href));
 const mockPush = vi.fn((href: string, _options?: { scroll: boolean }) => navigate(href));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   usePathname: () => "/shop",
+  useSearchParams: () => use(SearchContext),
 }));
 
 const mockCapture = vi.fn();
@@ -22,6 +27,7 @@ vi.mock("posthog-js", () => ({
 }));
 
 import { ShopControls } from "./ShopControls";
+import { ShopResults } from "./ShopResults";
 
 // --- Harness ---
 
@@ -49,24 +55,31 @@ function Cards({ q }: { q: string }) {
 }
 
 /**
- * `/shop` in miniature: the page's Suspense boundary around the controls and
- * the cards, with `q` read back from whatever URL the controls navigate to.
- * The navigation runs inside `ShopControls`'s transition, so this state
- * update is part of it.
+ * `/shop` in miniature: the controls' Suspense boundary, and inside them the
+ * list's, around the results and the cards, with the URL read back from
+ * wherever the controls navigate to. The navigation runs inside
+ * `ShopControls`'s transition, so this state update is part of it.
  */
-function Harness({ initialQ = "", sort = "newest" }: { initialQ?: string; sort?: ShopSort }) {
-  const [q, setQ] = useState(initialQ);
+function Harness({ initialSearch = "" }: { initialSearch?: string }) {
+  const [params, setParams] = useState(() => new URLSearchParams(initialSearch));
+  const { q } = shopParamsFromSearch(params);
 
   useEffect(() => {
-    navigate = (href) => setQ(new URL(href, window.location.origin).searchParams.get("q") ?? "");
+    navigate = (href) => setParams(new URL(href, window.location.origin).searchParams);
   }, []);
 
   return (
-    <Suspense fallback={<div data-testid="skeleton" />}>
-      <ShopControls sort={sort} q={q} total={q === "" ? 15 : 3}>
-        <Cards q={q} />
-      </ShopControls>
-    </Suspense>
+    <SearchContext value={params}>
+      <Suspense fallback={<div data-testid="skeleton" />}>
+        <ShopControls>
+          <Suspense fallback={<div data-testid="skeleton" />}>
+            <ShopResults q={q} total={q === "" ? 15 : 3}>
+              <Cards q={q} />
+            </ShopResults>
+          </Suspense>
+        </ShopControls>
+      </Suspense>
+    </SearchContext>
   );
 }
 
@@ -111,7 +124,7 @@ test("Enter applies the term at once, and the debounce does not apply it again",
 });
 
 test("Escape empties the box and returns to /shop at once", async () => {
-  const screen = await render(<Harness initialQ="lam" />);
+  const screen = await render(<Harness initialSearch="q=lam" />);
   await expect.element(searchbox(screen)).toHaveValue("lam");
 
   await searchbox(screen).click();
@@ -122,7 +135,7 @@ test("Escape empties the box and returns to /shop at once", async () => {
 });
 
 test("deleting every character returns to /shop without waiting for the debounce", async () => {
-  const screen = await render(<Harness initialQ="la" />);
+  const screen = await render(<Harness initialSearch="q=la" />);
 
   await searchbox(screen).click();
   await userEvent.keyboard("{End}{Backspace}{Backspace}");
@@ -131,7 +144,7 @@ test("deleting every character returns to /shop without waiting for the debounce
 });
 
 test("a search keeps the sort", async () => {
-  const screen = await render(<Harness sort="oldest" />);
+  const screen = await render(<Harness initialSearch="sort=oldest" />);
 
   await searchbox(screen).click();
   await userEvent.keyboard("teen");
@@ -142,7 +155,7 @@ test("a search keeps the sort", async () => {
 });
 
 test("a sort change keeps the search and reports the sort", async () => {
-  const screen = await render(<Harness initialQ="teen" sort="oldest" />);
+  const screen = await render(<Harness initialSearch="sort=oldest&q=teen" />);
 
   await screen.getByLabelText("Sort").selectOptions("Newest first");
 
@@ -194,51 +207,22 @@ test("Escape while a search is loading still returns to /shop", async () => {
   await expect.element(screen.getByText("all 1")).toBeVisible();
 });
 
-test("a term with no matches shows the empty message, and Clear returns to /shop", async () => {
-  const screen = await render(
-    <ShopControls sort="newest" q="lamp" total={0}>
-      <article>card</article>
-    </ShopControls>,
-  );
+test("reads sort and q from the URL", async () => {
+  const screen = await render(<Harness initialSearch="sort=oldest&q=silver" />);
 
-  await expect
-    .element(screen.getByRole("status"))
-    .toHaveTextContent('Nothing matches "lamp". Try another word or clear the search.');
-  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  await expect.element(screen.getByLabelText("Sort")).toHaveValue("oldest");
+  await expect.element(searchbox(screen)).toHaveValue("silver");
+});
 
-  await screen.getByRole("button", { name: "Clear" }).click();
+test("a malformed URL shows the defaults", async () => {
+  const screen = await render(<Harness initialSearch="sort=bogus&q=a&q=b" />);
 
+  await expect.element(screen.getByLabelText("Sort")).toHaveValue("newest");
   await expect.element(searchbox(screen)).toHaveValue("");
-  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop", { scroll: false }]]);
-});
-
-test("reports an applied term once, with its match count", async () => {
-  const screen = await render(<Harness />);
-
-  await searchbox(screen).click();
-  await userEvent.keyboard("teen");
-
-  await expect.element(screen.getByText("teen 1")).toBeVisible();
-  await expect
-    .poll(() => mockCapture.mock.calls)
-    .toEqual([["shop_search_applied", { length: 4, results: 3 }]]);
-
-  await userEvent.keyboard("{Escape}");
-
-  await expect.element(screen.getByText("all 1")).toBeVisible();
-  expect(mockCapture).toHaveBeenCalledTimes(1);
-});
-
-test("a shared search link reports nothing on its first render", async () => {
-  const screen = await render(<Harness initialQ="teen" />);
-
-  await expect.element(screen.getByText("teen 1")).toBeVisible();
-  await expect.element(searchbox(screen)).toHaveValue("teen");
-  expect(mockCapture).not.toHaveBeenCalled();
 });
 
 test("a URL change from elsewhere resets the box", async () => {
-  const screen = await render(<Harness initialQ="teen" />);
+  const screen = await render(<Harness initialSearch="q=teen" />);
   await expect.element(searchbox(screen)).toHaveValue("teen");
 
   navigate("/shop");

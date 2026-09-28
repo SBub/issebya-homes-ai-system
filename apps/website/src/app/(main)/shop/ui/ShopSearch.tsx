@@ -7,6 +7,7 @@ import { DEFAULT_SHOP_SORT, SHOP_SEARCH_MAX_LENGTH, type ShopSort } from "@/lib/
  * The `/shop` search box, controlled by `ShopControls`, which decides when a
  * term reaches the URL. Underneath it is a plain `GET` form to `/shop`: the
  * single field is `q`, and the hidden `sort` keeps the current order.
+ * `disabled` is for `ShopControlsFallback`, before the URL is known.
  */
 export function ShopSearch({
   value,
@@ -15,6 +16,7 @@ export function ShopSearch({
   onSubmit,
   onEscape,
   busy,
+  disabled,
 }: {
   value: string;
   sort: ShopSort;
@@ -22,6 +24,7 @@ export function ShopSearch({
   onSubmit: () => void;
   onEscape: () => void;
   busy: boolean;
+  disabled?: boolean;
 }) {
   const id = useId();
 
@@ -49,6 +52,7 @@ export function ShopSearch({
         autoComplete="off"
         value={value}
         aria-busy={busy}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           // Handled here rather than left to the browser's own search-clear,

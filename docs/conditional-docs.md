@@ -245,6 +245,7 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `/shop` search box, `ShopControls`, the debounce, or `q` in the cursor, query key or `GET /api/shop/products`
     - When the `/shop` grid flashes its skeleton or unmounts the old cards on a search or sort change
     - When the search box overwrites typed text, navigates twice, or a sort change drops the search term
+    - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")
 - `apps/website/app_docs/feature-12e4efa7-shop-grid-error-boundary.md`
   - Conditions:
     - When changing what wraps the `/shop` grid's `<Suspense>`, `ShopGridBoundary`, `ShopGridError`, or adding a `shop/error.tsx`

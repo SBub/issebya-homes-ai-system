@@ -13,8 +13,9 @@ import { ShopGridError } from "./ShopGridError";
  * A client wrapper because the fallback render prop and `beforeCapture` are
  * functions, which the server `page.tsx` cannot pass to Sentry's client
  * `ErrorBoundary`. It sits outside the grid's `<Suspense>` so it catches a
- * throw from anything under it, and the page passes its server children
- * through as `children`.
+ * throw from anything under it, and inside `ShopControls`' grid wrapper, so
+ * the search box and sort stay usable when page one fails. The page passes
+ * its server children through as `children`.
  *
  * Page one can fail in two places, and "Try again" has to recover both:
  * - on the client, when the suspense query rejects. React Query keeps the
