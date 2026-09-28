@@ -33,6 +33,9 @@ const [firstProduct] = newest;
 const carouselProduct = newest.find((product) => product.images.length > 1);
 const silverNewest = sortProducts(filterByName(allProducts, "silver"), "newest");
 const silverOldest = sortProducts(filterByName(allProducts, "silver"), "oldest");
+// A term broad enough to need more than two pages of results.
+const WIDE_TERM = "e";
+const wideMatches = filterByName(allProducts, WIDE_TERM);
 const names = (products: readonly { name: string }[]) => products.map(({ name }) => name);
 
 test.describe("Shop", () => {
@@ -119,11 +122,11 @@ test.describe("Shop", () => {
     const teenRes = await request.get("/api/shop/products?q=silver");
     expect(teenRes.status()).toBe(200);
     const teen = await teenRes.json();
-    expect(teen.items).toHaveLength(3);
-    expect(teen.total).toBe(3);
+    expect(teen.items).toHaveLength(silverNewest.length);
+    expect(teen.total).toBe(silverNewest.length);
     expect(teen.nextCursor).toBeNull();
 
-    const product = await (await request.get("/api/shop/products?q=product")).json();
+    const product = await (await request.get(`/api/shop/products?q=${WIDE_TERM}`)).json();
     const crossSearch = await request.get(
       `/api/shop/products?q=silver&cursor=${product.nextCursor}`,
     );
@@ -208,7 +211,7 @@ test.describe("Shop", () => {
 
     await expect(page).toHaveURL("/shop?q=silver");
     await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
-      3,
+      silverNewest.length,
     );
   });
 
@@ -236,7 +239,7 @@ test.describe("Shop", () => {
       if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
     });
 
-    await page.goto("/shop?q=product");
+    await page.goto(`/shop?q=${WIDE_TERM}`);
 
     const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
     const sentinel = page.getByTestId("shop-products-sentinel");
@@ -244,11 +247,11 @@ test.describe("Shop", () => {
     await sentinel.scrollIntoViewIfNeeded();
     await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
     await sentinel.scrollIntoViewIfNeeded();
-    await expect(cards).toHaveCount(allProducts.length);
+    await expect(cards).toHaveCount(wideMatches.length);
 
     expect(apiRequests.length).toBeGreaterThan(0);
     for (const url of apiRequests) {
-      expect(new URL(url).searchParams.get("q")).toBe("product");
+      expect(new URL(url).searchParams.get("q")).toBe(WIDE_TERM);
     }
   });
 
@@ -258,10 +261,10 @@ test.describe("Shop", () => {
     await page.goto("/shop");
 
     const search = page.getByRole("searchbox", { name: "Search products" });
-    await search.pressSequentially("lamp");
+    await search.pressSequentially("teapot");
 
     await expect(
-      page.getByText('Nothing matches "lamp". Try another word or clear the search.'),
+      page.getByText('Nothing matches "teapot". Try another word or clear the search.'),
     ).toBeVisible();
     await page.getByRole("button", { name: "Clear" }).click();
 
@@ -386,7 +389,7 @@ test.describe("Shop search form", () => {
 
     await expect(page).toHaveURL("/shop?q=silver");
     await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
-      3,
+      silverNewest.length,
     );
   });
 });

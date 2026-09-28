@@ -67,6 +67,20 @@ test.describe("Blog with an inline booking widget", () => {
     ]);
   });
 
+  // At `sm`+ the hero is floated left. The widget must clear it, or its box
+  // starts beside the photo and the photo covers its top-left corner.
+  test("the widget starts below the floated hero photo on desktop", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(WIDGET_POST);
+
+    const heroBox = await page.locator("article img").first().boundingBox();
+    const widgetBox = await page.getByTestId("booking-widget").boundingBox();
+
+    expect(heroBox).not.toBeNull();
+    expect(widgetBox).not.toBeNull();
+    expect(widgetBox!.y).toBeGreaterThanOrEqual(heroBox!.y + heroBox!.height);
+  });
+
   test("switching rooms issues no request", async ({ page }) => {
     await page.goto(WIDGET_POST);
     await expect(page.getByLabel("Book selected dates")).toBeVisible();
