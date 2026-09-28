@@ -5,10 +5,13 @@ import {
   decodeCursor,
   encodeCursor,
   filterByName,
+  parseShopParams,
   SHOP_PAGE_SIZE,
+  SHOP_SEARCH_MAX_LENGTH,
   type ShopSort,
   selectPage,
   shopHref,
+  shopParamsFromSearch,
   shopProductsQueryKey,
   shopSearchSchema,
   sortProducts,
@@ -393,5 +396,46 @@ describe("shopSearchSchema", () => {
   it("accepts 60 characters after trimming and rejects 61", () => {
     expect(shopSearchSchema.safeParse(` ${"a".repeat(60)} `).success).toBe(true);
     expect(shopSearchSchema.safeParse("a".repeat(61)).success).toBe(false);
+  });
+});
+
+describe("parseShopParams", () => {
+  it.each<[string, string | string[] | undefined]>([
+    ["missing", undefined],
+    ["bogus", "bogus"],
+    ["repeated", ["oldest", "newest"]],
+  ])("falls back to the default sort when it is %s", (_case, sort) => {
+    expect(parseShopParams({ sort }).sort).toBe("newest");
+  });
+
+  it("trims the term", () => {
+    expect(parseShopParams({ q: "  silver " }).q).toBe("silver");
+  });
+
+  it("drops an over-long or repeated term", () => {
+    expect(parseShopParams({ q: "a".repeat(SHOP_SEARCH_MAX_LENGTH + 1) }).q).toBe("");
+    expect(parseShopParams({ q: ["a", "b"] }).q).toBe("");
+  });
+});
+
+describe("shopParamsFromSearch", () => {
+  it("reads sort and q", () => {
+    expect(shopParamsFromSearch(new URLSearchParams("sort=oldest&q=silver"))).toEqual({
+      sort: "oldest",
+      q: "silver",
+    });
+  });
+
+  // The record Next builds for the server from the same query string.
+  it.each<[string, { sort?: string | string[]; q?: string | string[] }]>([
+    ["", {}],
+    ["sort=oldest", { sort: "oldest" }],
+    ["sort=bogus&q=teen", { sort: "bogus", q: "teen" }],
+    ["q=a&q=b", { q: ["a", "b"] }],
+    ["sort=oldest&sort=newest", { sort: ["oldest", "newest"] }],
+    ["q=+tea+%26+cake+", { q: " tea & cake " }],
+    [`q=${"a".repeat(SHOP_SEARCH_MAX_LENGTH + 1)}`, { q: "a".repeat(SHOP_SEARCH_MAX_LENGTH + 1) }],
+  ])("agrees with the server for %j", (query, record) => {
+    expect(shopParamsFromSearch(new URLSearchParams(query))).toEqual(parseShopParams(record));
   });
 });

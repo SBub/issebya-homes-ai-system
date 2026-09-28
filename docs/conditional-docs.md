@@ -255,6 +255,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `BookingWidget` aside's classes, the blog hero float, or the post's `flow-root` container
     - When a blog widget or other block overlaps the floated hero photo, or `BookingWidget.browser.test.tsx` fails
     - When writing a browser test that renders `BookingWidget` and fails on `posthog-js`, `@/lib/blog/return-path` or `GuardedBookingEngine`
+- `apps/website/app_docs/feature-8ad2fc3b-shop-controls-static-shell.md`
+  - Conditions:
+    - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")
+    - When the `/shop` controls are missing from the prerendered HTML, or the cards jump down when page one arrives
+    - When the sort select or search box shows a different value than the list, or a browser test rendering `/shop` fails on `useSearchParams`
 
 ---
 

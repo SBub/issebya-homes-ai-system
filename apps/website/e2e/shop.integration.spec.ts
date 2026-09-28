@@ -315,6 +315,110 @@ test.describe("Shop", () => {
     ).toBeVisible();
   });
 
+  test("the controls are in the page HTML", async ({ request }) => {
+    // The dev server does not split the static shell from the streamed hole,
+    // so this only proves the controls are in the first HTML response; the
+    // production build's `◐ /shop` is what proves they are in the shell.
+    const html = await (await request.get("/shop")).text();
+
+    expect(html).toContain('aria-label="Search products"');
+  });
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 800 },
+  ]) {
+    test.describe(`at ${viewport.width} px`, () => {
+      test.use({ viewport });
+
+      // Records, on the first frame where the skeleton is on screen, where the
+      // search box and the first grid slot are, and sums every layout shift
+      // inside the products section. Whether that skeleton frame was caught
+      // (page one can arrive in the same frame) is not observable from here,
+      // so both checks run: the positions when they were recorded, and a zero
+      // layout-shift sum either way. Under `next dev`, `useSearchParams` does
+      // not suspend, so the controls' fallback never renders and this cannot
+      // fail on the dev server; run it against `next start` (PORT set to it)
+      // to exercise the prerendered shell.
+      test("controls and the first grid slot do not move when page one arrives", async ({
+        page,
+      }) => {
+        await page.addInitScript(() => {
+          type Box = { top: number; left: number };
+          const w = window as unknown as {
+            __skeleton?: { search: Box; slot: Box };
+            __shift: number;
+          };
+          w.__shift = 0;
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries() as unknown as {
+              value: number;
+              hadRecentInput: boolean;
+              sources?: { node?: Node | null }[];
+            }[]) {
+              if (entry.hadRecentInput) continue;
+              const section = document.querySelector('section[aria-label="Products"]');
+              const inSection = (entry.sources ?? []).some(
+                ({ node }) => node && section?.contains(node),
+              );
+              if (inSection) w.__shift += entry.value;
+            }
+          }).observe({ type: "layout-shift", buffered: true });
+
+          const box = (el: Element): Box => {
+            const { top, left } = el.getBoundingClientRect();
+            return { top: top + window.scrollY, left: left + window.scrollX };
+          };
+          const poll = () => {
+            const search = document.querySelector('input[aria-label="Search products"]');
+            const slot = document.querySelector('ul[aria-hidden="true"] > li');
+            if (search && slot) {
+              w.__skeleton = { search: box(search), slot: box(slot) };
+              return;
+            }
+            if (!document.querySelector("article")) requestAnimationFrame(poll);
+          };
+          requestAnimationFrame(poll);
+        });
+
+        await page.goto("/shop");
+        const grid = page.getByRole("region", { name: "Products" });
+        await expect(grid.getByRole("article")).toHaveCount(SHOP_PAGE_SIZE);
+
+        const recorded = await page.evaluate(() => {
+          const w = window as unknown as {
+            __skeleton?: {
+              search: { top: number; left: number };
+              slot: { top: number; left: number };
+            };
+          };
+          return w.__skeleton ?? null;
+        });
+        if (recorded) {
+          const search = await page
+            .getByRole("searchbox", { name: "Search products" })
+            .boundingBox();
+          const slot = await grid
+            .locator("li", { has: page.getByRole("article") })
+            .first()
+            .boundingBox();
+          const scroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+          expect(Math.abs((search?.y ?? 0) + scroll.y - recorded.search.top)).toBeLessThanOrEqual(
+            1,
+          );
+          expect(Math.abs((search?.x ?? 0) + scroll.x - recorded.search.left)).toBeLessThanOrEqual(
+            1,
+          );
+          expect(Math.abs((slot?.y ?? 0) + scroll.y - recorded.slot.top)).toBeLessThanOrEqual(1);
+          expect(Math.abs((slot?.x ?? 0) + scroll.x - recorded.slot.left)).toBeLessThanOrEqual(1);
+        }
+        expect(await page.evaluate(() => (window as unknown as { __shift: number }).__shift)).toBe(
+          0,
+        );
+      });
+    });
+  }
+
   test("index has no breadcrumb", async ({ page }) => {
     await page.goto("/shop");
 
@@ -373,9 +477,10 @@ test.describe("Shop", () => {
   });
 });
 
-// Not run with `javaScriptEnabled: false`: the search box sits in the page's
-// streamed Suspense hole, which only an inline script reveals, so without
-// JavaScript the page never gets past the skeleton. Instead this bypasses
+// Not run with `javaScriptEnabled: false`: the search box is in the static
+// shell, but disabled until hydration (it is the controls' Suspense fallback),
+// and the list sits in a streamed hole only an inline script reveals, so
+// without JavaScript nothing can be typed or found. Instead this bypasses
 // React's onSubmit with the native `form.submit()`, which is exactly the
 // request the browser would build on its own.
 test.describe("Shop search form", () => {

@@ -23,6 +23,38 @@ export const SHOP_SEARCH_MAX_LENGTH = 60;
 /** A search term. The empty string is valid and means "no filter". */
 export const shopSearchSchema = z.string().trim().max(SHOP_SEARCH_MAX_LENGTH);
 
+/** `sort` and `q` as Next hands them to a page: absent, once, or repeated. */
+type RawShopParams = { sort?: string | string[]; q?: string | string[] };
+
+/**
+ * `sort` and `q` parsed leniently: a hand-typed `?sort=foo`, an over-long
+ * `?q=` or a repeated parameter falls back to the default order or the full
+ * grid rather than an error. The server list and the client controls both go
+ * through here, so they can never disagree about the URL.
+ */
+export function parseShopParams(params: RawShopParams): { sort: ShopSort; q: string } {
+  return {
+    sort: shopSortSchema.catch(DEFAULT_SHOP_SORT).parse(params.sort),
+    q: shopSearchSchema.catch("").parse(params.q),
+  };
+}
+
+/**
+ * `parseShopParams` over a `URLSearchParams` (the client's `useSearchParams`),
+ * rebuilding the record shape Next gives the server: a key present once is a
+ * string, present more than once a `string[]`, absent `undefined`.
+ */
+export function shopParamsFromSearch(search: Pick<URLSearchParams, "getAll">): {
+  sort: ShopSort;
+  q: string;
+} {
+  const raw = (key: string) => {
+    const values = search.getAll(key);
+    return values.length === 0 ? undefined : values.length === 1 ? values[0] : values;
+  };
+  return parseShopParams({ sort: raw("sort"), q: raw("q") });
+}
+
 /**
  * The query key for one sort and search term of the grid, shared by the server
  * prefetch and `ProductList`. Both are in the key, so a new sort or a new term
