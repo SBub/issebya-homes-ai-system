@@ -86,17 +86,29 @@ beforeEach(() => {
 // --- Tests ---
 
 test("typing shows every key at once and replaces the URL once, after a pause", async () => {
-  const screen = await render(<Harness />);
+  // Fake timers: the pause between keystrokes is a browser round trip, and on
+  // a loaded machine it can outlast the real 300 ms debounce.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const screen = await render(<Harness />);
 
-  await searchbox(screen).click();
-  await userEvent.keyboard("l");
-  await expect.element(searchbox(screen)).toHaveValue("l");
-  expect(mockReplace).not.toHaveBeenCalled();
-  await userEvent.keyboard("am");
+    await searchbox(screen).click();
+    await userEvent.keyboard("l");
+    await expect.element(searchbox(screen)).toHaveValue("l");
+    expect(mockReplace).not.toHaveBeenCalled();
+    await userEvent.keyboard("am");
+    await expect.element(searchbox(screen)).toHaveValue("lam");
 
-  await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop?q=lam", { scroll: false }]]);
-  await wait(400);
-  expect(mockReplace).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(299);
+    expect(mockReplace).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    await expect.poll(() => mockReplace.mock.calls).toEqual([["/shop?q=lam", { scroll: false }]]);
+    vi.advanceTimersByTime(400);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("Enter applies the term at once, and the debounce does not apply it again", async () => {
