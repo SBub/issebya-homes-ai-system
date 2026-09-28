@@ -88,7 +88,7 @@ const room1Props = {
   blockedDates: room1Blocked,
   defaultCheckIn: toCalendarDay(dayOfNextMonth(2)),
   defaultCheckOut: toCalendarDay(dayOfNextMonth(4)),
-  error: null,
+  hasAvailabilityError: false,
   pricing: <div data-testid="room1-pricing">room 1 pricing</div>,
 };
 
@@ -97,7 +97,7 @@ const room2Props = {
   blockedDates: room2Blocked,
   defaultCheckIn: toCalendarDay(dayOfNextMonth(5)),
   defaultCheckOut: toCalendarDay(dayOfNextMonth(7)),
-  error: null,
+  hasAvailabilityError: false,
   pricing: <div data-testid="room2-pricing">room 2 pricing</div>,
 };
 

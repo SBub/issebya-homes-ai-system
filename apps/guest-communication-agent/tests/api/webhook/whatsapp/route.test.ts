@@ -47,6 +47,13 @@ vi.mock("@/agent/run-guest-turn.js", () => ({
   GUEST_TURN_REQUESTED_EVENT,
 }));
 
+// No tracer provider is registered in this suite, so startTraceRoot yields
+// OTel's invalid anchor and reports the gap through Sentry.
+const captureMessageMock = vi.fn();
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: captureMessageMock,
+}));
+
 const { POST } = await import("@/app/api/webhook/whatsapp/route.js");
 
 function makeRequest(body: Record<string, string>): NextRequest {
@@ -71,6 +78,8 @@ describe("POST /api/webhook/whatsapp", () => {
     recordMessageMock.mockReset();
     inngestSendMock.mockReset();
     afterMock.mockClear();
+    captureMessageMock.mockClear();
+    vi.spyOn(console, "error").mockImplementation(() => {});
 
     getOrCreateActiveConversationMock.mockResolvedValue({ conversationId: "convo-1" });
     recordMessageMock.mockResolvedValue("msg-user-1");
@@ -79,6 +88,7 @@ describe("POST /api/webhook/whatsapp", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+    vi.restoreAllMocks();
   });
 
   it("records the inbound message, then sends GUEST_TURN_REQUESTED_EVENT with the recorded message id as triggerMessageId and a freshly generated correlationId", async () => {
@@ -117,6 +127,10 @@ describe("POST /api/webhook/whatsapp", () => {
     const body = await res.text();
     expect(res.status).toBe(200);
     expect(body).toBe("<Response></Response>");
+    expect(captureMessageMock).toHaveBeenCalledWith(
+      expect.stringContaining("webhook.turn"),
+      expect.anything(),
+    );
   });
 
   it("rejects requests with an invalid Twilio signature", async () => {

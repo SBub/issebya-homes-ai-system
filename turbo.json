@@ -34,6 +34,14 @@
     "test": {
       "outputs": []
     },
+    "website#test": {
+      "outputs": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/scripts/vercel-ignore.sh",
+        "$TURBO_ROOT$/scripts/lib/vercel-prune.ts"
+      ]
+    },
     "typecheck": {
       "outputs": []
     },

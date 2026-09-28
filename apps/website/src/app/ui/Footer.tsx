@@ -5,16 +5,17 @@ import { InstagramLink } from "@/app/ui/InstagramLink";
 
 export default function Footer() {
   return (
-    <footer className="w-full px-6 py-2 text-sm text-gray-600 flex flex-col items-center mt-12">
+    <footer className="bg-white w-full border-t border-gray-300 px-6 py-3 text-sm text-gray-600 flex flex-row flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
       <InstagramLink />
-      <div className="flex gap-3">
-        <Link href="/terms-and-conditions" className="text-secondary-link">
-          Terms & Conditions
-        </Link>
-        <Link href="/privacy-policy" className="text-secondary-link">
-          Privacy Policy
-        </Link>
-      </div>
+      <Link
+        href="/terms-and-conditions"
+        className="text-secondary hover:underline underline-offset-4"
+      >
+        Terms & Conditions
+      </Link>
+      <Link href="/privacy-policy" className="text-secondary hover:underline underline-offset-4">
+        Privacy Policy
+      </Link>
       <Copyright />
     </footer>
   );

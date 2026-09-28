@@ -25,7 +25,7 @@ procedures, not code documentation) and anything gitignored.
 - `AGENTS.md`
   - Conditions:
     - Before any change, without exception
-    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention
+    - Covers: yarn-only, conventional commits, no `Co-Authored-By`, lefthook, the four-file doc convention, Vercel build-image notes, ADW preview gating (`Deploy-Preview: yes`), the weekly Vercel preview prune job
 
 - `README.md`
   - Conditions:
@@ -127,7 +127,7 @@ procedures, not code documentation) and anything gitignored.
 
 - `apps/website/app_docs/feature-675f0da1-restore-booking-engine-skeleton.md`
   - Conditions:
-    - When changing the `<Suspense>` boundary or fallback around `BookingEngine` in `booking/[type]/page.tsx`
+    - When changing the `<Suspense>` boundary or fallback around `BookingEngine` in `GuardedBookingEngine.tsx`
     - When changing `BookingClient`'s collapsed-state DOM/classes and needing to know what else must stay visually in sync
     - When tempted to skeleton `BookingPricing` or use interactive elements for a loading placeholder
 
@@ -169,6 +169,97 @@ procedures, not code documentation) and anything gitignored.
     - When a `*.browser.test.tsx` passes locally but fails in CI with `Vitest failed to find the runner`, or a `new dependencies optimized` line appears in the run
     - When changing the website's `test` / `test:browser` scripts, `browser.instances`, or `optimizeDeps.include` in `vitest.config.ts`
     - When deciding whether a new test should gate, or wondering why an `e2e/` spec never runs in CI
+
+- `apps/website/app_docs/feature-f72316fa-booking-og-metadata.md`
+  - Conditions:
+    - When a WhatsApp (or other) link preview for a `/booking/[type]` URL shows the home card, the wrong room, or no image
+    - When changing `generateMetadata` on `/booking/[type]`, adding a room, or replacing a `public/og/booking-*.jpg` share image
+    - When `/booking/room1` or `/booking/room2` stops showing as prerendered in the build route table
+
+- `apps/website/app_docs/feature-78e55892-booking-close-scroll-target.md`
+  - Conditions:
+    - When changing where `BookingClient` scrolls on expand or close, or adding a sticky/fixed header that could cover `.booking-engine`
+    - When opening or closing the booking calendar leaves the guest at the page top, the gallery, or the top of a blog post instead of the date row
+    - When a Playwright assertion after a smooth scroll passes or fails regardless of where the page ends up
+
+- `apps/website/app_docs/feature-6db7ada5-shop-product-grid.md`
+  - Conditions:
+    - When replacing the sample products or images, or adding a field to the product schema in `src/lib/shop/`
+    - When changing `ProductCard` sizing, or the card stops being portrait or its photo collapses at some breakpoint
+    - When changing the shared `src/app/ui/Breadcrumb.tsx` or adding another detail route that needs a back trail
+
+- `apps/website/app_docs/feature-972c79dc-shop-wishlist-email-optin.md`
+  - Conditions:
+    - When changing the wishlist form, its consent copy, or the `shop_wishlist_contacts` / `shop_wishlist_items` tables
+    - When renaming a product slug, or building anything that emails wishlist contacts (unsubscribe, offers)
+    - When a wishlist save fails, stores a duplicate, or `/shop/[slug]` stops being prerendered or hits a hydration mismatch
+
+- `apps/website/app_docs/feature-7d77143c-shop-seller-submission-form.md`
+  - Conditions:
+    - When changing the `/shop/sell` form, its Server Actions, or the `shop_seller_submissions` table / `seller-submissions` bucket
+    - When adding another browser-to-Supabase-Storage upload, or when an upload fails on a CSP `connect-src` block
+    - When a seller submission is saved but the owner email never arrives, or a finalize is refused over photo paths
+
+- `apps/website/app_docs/feature-bcb9a5cf-wishlist-heart-modal-email.md`
+  - Conditions:
+    - When changing the wishlist heart button, its `<dialog>`, or the confirmation panel on `/shop/[slug]`
+    - When changing the guest wishlist confirmation email, or when it is sent twice or never arrives
+    - When adding another modal dialog to the site (scroll lock, backdrop-click and focus-return patterns)
+
+- `apps/website/app_docs/feature-3b203d9a-wishlist-button-unsubscribe.md`
+  - Conditions:
+    - When changing the wishlist unsubscribe route, `unsubscribe_token`, or the `shop_wishlist_contacts_consent_state` CHECK
+    - When changing the wishlist confirmation email's footer or headers (`List-Unsubscribe`)
+    - When building any send to wishlist contacts, or when an unsubscribe link fails or leaks its token
+- `apps/website/app_docs/feature-091cac99-wishlist-trigger-bordered-button.md`
+  - Conditions:
+    - When changing the wishlist trigger's look or its "Save to wishlist" / "Saved to wishlist" labels on `/shop/[slug]`
+    - When a test locating a "Save to wishlist" button hits a strict-mode violation or clicks the wrong one (trigger vs dialog submit)
+- `apps/website/app_docs/feature-b82db496-vercel-preview-final-commit-only.md`
+  - Conditions:
+    - When a Vercel preview on an `-adw-` branch shows Canceled, or never builds for the run's final commit
+    - When changing `scripts/vercel-ignore.sh`, the `Deploy-Preview: yes` trailer, or any app's `vercel.json` `ignoreCommand`
+    - When adding a new Vercel-deployed app, or when the 100/day deployment cap is hit again
+- `apps/website/app_docs/feature-ebada8f2-shop-card-edge-to-edge.md`
+  - Conditions:
+    - When changing the padding, width or breadcrumb placement around the yellow `bg-shop-card` block on `/shop/[slug]` or `/shop/sell`
+    - When grey page background shows around a shop card, or `shop-card-edge-to-edge.browser.test.tsx` fails
+    - When giving another shop page (e.g. the wishlist unsubscribe message) the same edge-to-edge card layout
+- `apps/website/app_docs/feature-e9bc2126-shop-card-image-carousel.md`
+  - Conditions:
+    - When changing `ProductImageCarousel`, the product `images` list or `primaryImage`, or the `ProductCard` `<article>`/link structure
+    - When an arrow tap or swipe on a `/shop` card navigates, or a card announces two links or none
+    - When a test locating shop cards by `a[href^="/shop/"]` finds twice as many, or a browser test rendering a shop page fails on `posthog-js`
+- `apps/website/app_docs/feature-e50e5d95-shop-infinite-scroll-grid.md`
+  - Conditions:
+    - When changing `/shop` pagination, `SHOP_PAGE_SIZE`, the cursor format, `GET /api/shop/products`, or the `shop-products` cache tag
+    - When `/shop` stops prerendering (`next-prerender-current-time`), page one is fetched from the browser, or the grid jumps as the skeleton swaps out
+    - When adding TanStack Query to another route, or a browser test rendering `/shop` fails on `next/cache` or `@tanstack/react-query`
+- `apps/website/app_docs/feature-bdeb9a75-shop-server-side-sort.md`
+  - Conditions:
+    - When changing the `/shop` sort order, the `sort` param, the `(createdAt, slug)` cursor tuple, or a product's `createdAt`
+    - When adding a new sort (price, name) or a filter to the `/shop` grid
+    - When `/shop` pages duplicate or skip items, a cursor 400s after a sort switch, or the sort select and grid disagree
+- `apps/website/app_docs/feature-86c52a82-shop-debounced-search.md`
+  - Conditions:
+    - When changing the `/shop` search box, `ShopControls`, the debounce, or `q` in the cursor, query key or `GET /api/shop/products`
+    - When the `/shop` grid flashes its skeleton or unmounts the old cards on a search or sort change
+    - When the search box overwrites typed text, navigates twice, or a sort change drops the search term
+- `apps/website/app_docs/feature-12e4efa7-shop-grid-error-boundary.md`
+  - Conditions:
+    - When changing what wraps the `/shop` grid's `<Suspense>`, `ShopGridBoundary`, `ShopGridError`, or adding a `shop/error.tsx`
+    - When `/shop` goes blank on a failed page one, or "Try again" leaves the fallback stuck instead of reloading the grid
+    - When adding a Sentry `ErrorBoundary` with a render-prop fallback or `beforeCapture` under a Server Component page, or a browser test fails importing `@sentry/nextjs`
+- `apps/website/app_docs/feature-a93e052d-blog-widget-clear-float.md`
+  - Conditions:
+    - When changing the `BookingWidget` aside's classes, the blog hero float, or the post's `flow-root` container
+    - When a blog widget or other block overlaps the floated hero photo, or `BookingWidget.browser.test.tsx` fails
+    - When writing a browser test that renders `BookingWidget` and fails on `posthog-js`, `@/lib/blog/return-path` or `GuardedBookingEngine`
+- `apps/website/app_docs/feature-8ad2fc3b-shop-controls-static-shell.md`
+  - Conditions:
+    - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")
+    - When the `/shop` controls are missing from the prerendered HTML, or the cards jump down when page one arrives
+    - When the sort select or search box shows a different value than the list, or a browser test rendering `/shop` fails on `useSearchParams`
 
 ---
 

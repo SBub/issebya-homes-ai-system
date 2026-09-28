@@ -1,24 +1,15 @@
-import { Suspense } from "react";
-import { ErrorBoundary } from "@sentry/nextjs";
-import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BOOKING_WIDGET_ANCHOR_ID } from "@/lib/blog/return-path";
 import { BookingType } from "@/lib/shared/types/booking";
-import { BookingEngine } from "../../booking/[type]/ui/BookingEngine";
-import { BookingEngineSkeleton } from "../../booking/[type]/ui/BookingEngineSkeleton";
+import { GuardedBookingEngine } from "../../booking/[type]/ui/GuardedBookingEngine";
 import { RoomSwitcher } from "./RoomSwitcher";
 
 /**
  * The booking engine, inline in an article.
  *
  * This is a Server Component and an arrangement of existing parts, not a
- * second booking implementation. Each room's node is built exactly as
- * `booking/[type]/page.tsx` builds it: a Sentry `<ErrorBoundary>` with the
- * WhatsApp fallback, wrapping a `<Suspense fallback={<BookingEngineSkeleton/>}>`,
- * wrapping the real `<BookingEngine>`. That `Suspense` boundary is not
- * decorative: `BookingClient` calls `useSearchParams()` and needs one to stay
- * out of the way of static rendering, and the restore-booking-engine-skeleton
- * entry in `app_docs` records why the fallback is the skeleton rather than
- * `null`.
+ * second booking implementation. Each room's node is `<GuardedBookingEngine>`,
+ * the same component `booking/[type]/page.tsx` renders; see it for why the
+ * boundary and the skeleton fallback are there.
  *
  * Both nodes are passed to the client switcher as props, the same
  * server-into-client interleaving `BookingEngine` already uses for
@@ -40,34 +31,22 @@ import { RoomSwitcher } from "./RoomSwitcher";
  * the confirmation page's back link point at `/blog/<slug>#book`. A post must
  * therefore render at most one widget — two would be duplicate ids and the
  * browser would land on the first.
+ *
+ * The `<aside>` clears floats, so a post can place it after a floated hero
+ * photo and its whole box still starts below the photo.
  */
-function roomEngine(roomType: BookingType) {
-  return (
-    <ErrorBoundary
-      fallback={
-        <div className="booking-engine-error">
-          <p className="text-sm text-red-600">
-            Booking is temporarily unavailable. Please reach out to us on <WhatsAppLink /> to book
-            directly.
-          </p>
-        </div>
-      }
-    >
-      <Suspense fallback={<BookingEngineSkeleton />}>
-        <BookingEngine roomType={roomType} />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
 export function BookingWidget() {
   return (
     <aside
       id={BOOKING_WIDGET_ANCHOR_ID}
-      className="my-10 border border-dashed p-4 bg-white"
+      className="my-10 clear-both max-w-xl bg-shop-card text-foreground border border-foreground p-4 md:p-8"
       data-testid="booking-widget"
     >
-      <RoomSwitcher room1={roomEngine(BookingType.room1)} room2={roomEngine(BookingType.room2)} />
+      <p className="uppercase tracking-[0.2em] text-xs mb-4">Book Your Stay</p>
+      <RoomSwitcher
+        room1={<GuardedBookingEngine roomType={BookingType.room1} />}
+        room2={<GuardedBookingEngine roomType={BookingType.room2} />}
+      />
     </aside>
   );
 }

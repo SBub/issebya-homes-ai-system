@@ -6,7 +6,13 @@ import { FALLBACK_REPLY_TEXT, runAgentTurn } from "@/agent/run-agent-turn";
 import { finalizeTurnMessages } from "@/agent/turn-messages";
 import { recordMessage, updateMessageDeliveryStatus } from "@/lib/conversations";
 import { inngest } from "@/lib/inngest";
-import { markSpanFailed, steppedSpan, type TraceAnchor } from "@/lib/tracing";
+import {
+  isValidTraceAnchor,
+  markSpanFailed,
+  reportUntracedAnchor,
+  steppedSpan,
+  type TraceAnchor,
+} from "@/lib/tracing";
 import { sendWhatsAppMessage } from "@/lib/twilio-send";
 
 // Delivery orchestrator for one guest turn (runGuestTurn) plus its Inngest
@@ -94,18 +100,28 @@ export async function runGuestTurn(params: RunGuestTurnParams): Promise<void> {
     async () => {},
   );
 
-  // traceAnchor.traceId is stored on the row so it doubles as a working
-  // pointer into Braintrust/Axiom for this turn.
+  // traceAnchor.traceId is stored on the row, only when valid (see
+  // isValidTraceAnchor, tracing.ts), so it doubles as a working pointer into
+  // Braintrust/Axiom for this turn.
+  async function recordReply() {
+    const traceId = isValidTraceAnchor(traceAnchor) ? traceAnchor.traceId : undefined;
+    if (traceId === undefined) {
+      reportUntracedAnchor("run-guest-turn.record-reply", {
+        conversationId,
+        correlationId,
+        triggerMessageId,
+      });
+    }
+    return recordMessage(conversationId, "assistant", replyText, traceId, { turnMessages });
+  }
+
   const replyMessageId = await steppedSpan(
     step,
     "record-reply",
     traceAnchor,
     "record-reply",
     { "gca.conversation_id": conversationId },
-    () =>
-      recordMessage(conversationId, "assistant", replyText, traceAnchor.traceId, {
-        turnMessages,
-      }),
+    recordReply,
   );
 
   async function sendGuestWhatsAppReply(span: Span) {

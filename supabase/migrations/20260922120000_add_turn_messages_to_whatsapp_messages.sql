@@ -1,15 +1,14 @@
 -- Persisted tool history per assistant reply (issue #113): the turn's
 -- ModelMessage tail, replayed verbatim for recent turns by memory.ts.
 --
--- Written to be re-runnable. The first prod apply (2026-09-23, run
--- 35798075273) failed at the unique index because prod already held
--- assistant rows sharing a trace_id — the duplicate writes from retried
--- record-reply steps that the index exists to prevent — and rolled the
--- whole migration back while the new code was already deployed. The column
--- was then added by hand to restore service, so `if not exists` is
--- load-bearing, and the duplicates are removed here before the index is
--- created, keeping the earliest row per trace (same content; the reply the
--- guest received).
+-- Written to be re-runnable. The first prod apply (2026-09-22/23, run
+-- 35798075273) failed at the unique index because prod held 11 assistant
+-- rows sharing one trace_id: the all-zero OTel-invalid id written by
+-- untraced webhook instances, i.e. 11 distinct replies, not retried writes.
+-- The migration rolled back and deployed code ran without the column for
+-- about 12 h; the column arrived when PR #119's push run applied this
+-- migration. The delete below removed 10 of those distinct replies (test
+-- data) when it ran. `if not exists` is harmless on a re-run.
 
 alter table public.whatsapp_messages
   add column if not exists turn_messages jsonb;

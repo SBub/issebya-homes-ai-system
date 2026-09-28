@@ -1,4 +1,13 @@
-import { type Attributes, context, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
+import {
+  type Attributes,
+  context,
+  isValidSpanId,
+  isValidTraceId,
+  type Span,
+  SpanStatusCode,
+  trace,
+} from "@opentelemetry/api";
+import * as Sentry from "@sentry/nextjs";
 import type { GetStepTools } from "inngest";
 import type { inngest } from "@/lib/inngest";
 import { createAdminClient } from "@/lib/supabase";
@@ -22,6 +31,35 @@ function getTracer() {
 export interface TraceAnchor {
   traceId: string;
   spanId: string;
+}
+
+// LANDMINE (canonical explanation): with no tracer provider registered in
+// the process, OTel hands out a non-recording span whose ids are the
+// all-zero INVALID_SPAN_CONTEXT sentinel. That means "no trace", not an
+// identifier: every untraced turn shares it, so it must never be stored as
+// an id or used as a dedupe key (whatsapp_messages' assistant trace_id
+// index). Check with isValidTraceAnchor, report with reportUntracedAnchor.
+export function isValidTraceAnchor(anchor: TraceAnchor): boolean {
+  return isValidTraceId(anchor.traceId) && isValidSpanId(anchor.spanId);
+}
+
+export function reportUntracedAnchor(
+  site: string,
+  details: Record<string, string | undefined>,
+): void {
+  try {
+    console.error(
+      `[tracing] invalid trace anchor at ${site} — no tracer provider registered in this instance`,
+      details,
+    );
+    Sentry.captureMessage(`[tracing] invalid trace anchor at ${site}`, {
+      level: "error",
+      tags: { "gca.trace_gap_site": site },
+      extra: details,
+    });
+  } catch (err) {
+    console.error(`[tracing] reportUntracedAnchor threw at ${site}:`, err);
+  }
 }
 
 // Braintrust doesn't expose the OTel trace id anywhere in its UI directly,
@@ -64,6 +102,9 @@ export async function startTraceRoot<T>(
   return getTracer().startActiveSpan(name, { attributes }, async (span) => {
     stampTraceId(span);
     const { traceId, spanId } = span.spanContext();
+    if (!isValidTraceAnchor({ traceId, spanId })) {
+      reportUntracedAnchor(name, {});
+    }
     try {
       const result = await fn(span);
       return { anchor: { traceId, spanId }, result };

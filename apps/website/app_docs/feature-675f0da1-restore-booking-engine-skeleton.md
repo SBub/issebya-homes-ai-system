@@ -32,7 +32,7 @@ The `<Suspense>` boundary wrapping the async `BookingEngine` Server Component on
 
 ## How to Use
 
-No consumer-facing API: `BookingEngineSkeleton` is only used as the `fallback` of the `<Suspense>` boundary in `apps/website/src/app/(main)/booking/[type]/page.tsx`. It renders automatically whenever `BookingEngine`'s cached `getAvailability` call hasn't resolved yet (cold cache, or a streaming gap under Partial Prerendering).
+No consumer-facing API: `BookingEngineSkeleton` is only used as the `fallback` of the `<Suspense>` boundary in `apps/website/src/app/(main)/booking/[type]/ui/GuardedBookingEngine.tsx`. It renders automatically whenever `BookingEngine`'s cached `getAvailability` call hasn't resolved yet (cold cache, or a streaming gap under Partial Prerendering).
 
 ## Configuration
 
@@ -42,8 +42,9 @@ None.
 
 - `apps/website/src/app/(main)/booking/[type]/ui/BookingEngineSkeleton.browser.test.tsx` renders `<BookingEngineSkeleton />` in isolation (Vitest browser mode) and asserts the pulsing dates row exists, contains three placeholder cells (check-in, check-out, book), and that real `BookingPricing` text ("per night") renders underneath.
 - Run `yarn turbo run test --filter=website` to execute it alongside the rest of the workspace's tests.
-- The `Suspense` wiring itself is not separately tested: forcing the fallback to trigger deterministically would require an artificial delay that tests the delay rather than the wiring, and the `fallback={...}` prop is a one-line, statically-typed JSX change already guarded by `tsc`.
+- The `Suspense` wiring is covered by `GuardedBookingEngine.browser.test.tsx`, which stubs `BookingEngine` to suspend and asserts the skeleton renders (issue #173).
 
 ## Notes
 
 - This mirrors the markup previously removed in `67c3ca7` (`refactor(website): convert booking engine and checkout to Server Components/Actions, drop React Query`), updated for `BookingClient`'s current three-cell layout instead of the old two-cell one.
+- The `<Suspense fallback={<BookingEngineSkeleton />}>` now lives in `apps/website/src/app/(main)/booking/[type]/ui/GuardedBookingEngine.tsx`, used by both `booking/[type]/page.tsx` and the blog `BookingWidget` (issue #173).

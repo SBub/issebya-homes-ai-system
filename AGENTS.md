@@ -98,6 +98,28 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
   wants a uv new enough for `uv workspace metadata --frozen`, which 0.10.11 is
   not — so Vercel builds fall back to conservative Python hashing. That is a
   warning, not an error, and not worth breaking the deploy over.
+- Every Vercel project's `vercel.json` sets `ignoreCommand` to
+  `bash ../../scripts/vercel-ignore.sh`, and a new app's `vercel.json` must
+  carry the same line. On a branch whose name contains `-adw-`, only a commit
+  whose message has a line starting with `Deploy-Preview: yes` builds a
+  preview; every other commit on that branch is skipped (Canceled).
+  Production, `develop`, `master` and hand-made branches build as before. The
+  ADW toolkit's document phase adds that trailer to the run's final commit;
+  the string is a shared contract with the toolkit's `git_ops.PREVIEW_TRAILER`,
+  so never change it on one side only. To force a preview by hand:
+  `git commit --allow-empty -m "chore: preview" -m "Deploy-Preview: yes"`.
+  Keep each project's dashboard Ignored Build Step on "Automatic"; a dashboard
+  script would be overridden by `vercel.json` anyway.
+- `.github/workflows/vercel-prune.yml` exists because Hobby's deployment
+  retention is fixed (30 days, keep 10) and cannot be configured. It runs
+  Mondays with `--apply` and deletes READY previews older than 7 days, except
+  the newest preview of a branch still on origin, plus CANCELED/ERROR
+  deployments older than 1 day. It only touches the three projects named in
+  `scripts/vercel-prune-previews.ts` and never touches production. Dry run:
+  dispatch the workflow with `apply` unchecked, or locally
+  `VERCEL_TOKEN=… VERCEL_TEAM_ID=… yarn vercel:prune`. The selection logic is
+  in `scripts/lib/vercel-prune.ts`; change it together with its unit test
+  (`apps/website/src/lib/__tests__/vercel-prune.unit.test.ts`).
 
 ## Environment files
 

@@ -7,7 +7,9 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fromCalendarDay, isPastDate, isValidDateRange } from "@/lib/date-utils";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
+import { BOOKING_UNAVAILABLE_COPY } from "@/lib/shared/booking-copy";
 import type { DateRange } from "@/lib/shared/types/booking";
+import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingEngineExpanded } from "./BookingEngineExpanded";
 
 type BookingClientProps = {
@@ -19,7 +21,7 @@ type BookingClientProps = {
   // (and submit) the previous day for anyone behind UTC.
   defaultCheckIn: string | null;
   defaultCheckOut: string | null;
-  error: string | null;
+  hasAvailabilityError: boolean;
   // Server Component passed down from BookingEngine (async Server Component)
   // via the Next.js "interleaving" pattern: it renders server-side and is
   // handed to this Client Component as already-resolved output, so it never
@@ -123,7 +125,7 @@ export function BookingClient({
   blockedDates: initialBlockedDates,
   defaultCheckIn,
   defaultCheckOut,
-  error,
+  hasAvailabilityError,
   pricing,
 }: BookingClientProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -171,14 +173,19 @@ export function BookingClient({
     addBookingBreadcrumb("Booking engine initialized", { roomType });
   }, [roomType]);
 
+  // Expanding and closing land on the same place: the engine container, with
+  // the collapsed date row at the top of the viewport. One helper so the two
+  // targets can't drift apart again (close used to jump to the page top, which
+  // is the gallery on mobile and the article's top in a blog post).
+  const scrollEngineIntoView = useCallback(() => {
+    containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   useEffect(() => {
-    if (isExpanded && containerRef.current) {
-      containerRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
+    if (isExpanded) {
+      scrollEngineIntoView();
     }
-  }, [isExpanded]);
+  }, [isExpanded, scrollEngineIntoView]);
 
   const validateRange = useCallback(
     (checkIn: Date, checkOut: Date): boolean => {
@@ -226,11 +233,11 @@ export function BookingClient({
     addBookingBreadcrumb("User expanded booking calendar", { roomType });
   }, [roomType]);
 
-  // Handle close
+  // Handle close: return to the date row, the same target expand scrolls to
   const handleClose = useCallback(() => {
     setIsExpanded(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+    scrollEngineIntoView();
+  }, [scrollEngineIntoView]);
 
   // Applies a freshly-fetched availability snapshot (e.g. after a
   // dates_unavailable checkout retry) and clears the now-invalid selection.
@@ -241,10 +248,14 @@ export function BookingClient({
   }, []);
 
   // Error state
-  if (error && !checkInDate) {
+  if (hasAvailabilityError && !checkInDate) {
     return (
       <div className="booking-engine-error">
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-red-600">
+          {BOOKING_UNAVAILABLE_COPY.lead}
+          <WhatsAppLink />
+          {BOOKING_UNAVAILABLE_COPY.tail}
+        </p>
       </div>
     );
   }
@@ -274,8 +285,9 @@ export function BookingClient({
               onClick={handleExpand}
               className="booking-date-button"
               aria-label="Select check-in date"
+              aria-describedby="checkin-date-value"
             >
-              <span className="booking-date-value">
+              <span id="checkin-date-value" className="booking-date-value">
                 {checkInDate ? format(checkInDate, "d MMM yyyy") : "Select date"}
               </span>
             </button>
@@ -287,8 +299,9 @@ export function BookingClient({
               onClick={handleExpand}
               className="booking-date-button"
               aria-label="Select check-out date"
+              aria-describedby="checkout-date-value"
             >
-              <span className="booking-date-value">
+              <span id="checkout-date-value" className="booking-date-value">
                 {checkOutDate ? format(checkOutDate, "d MMM yyyy") : "Select date"}
               </span>
             </button>
@@ -316,7 +329,7 @@ export function BookingClient({
           onDateSelect={handleDateSelect}
           onClose={handleClose}
           roomType={roomType}
-          error={error}
+          hasAvailabilityError={hasAvailabilityError}
           updateAvailability={updateAvailability}
         />
       )}

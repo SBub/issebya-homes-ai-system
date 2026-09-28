@@ -1,3 +1,4 @@
+import { isValidTraceId } from "@opentelemetry/api";
 import type { StoredTurnMessages } from "@/agent/turn-messages";
 import { createAdminClient } from "./supabase";
 import { withSpan } from "./tracing";
@@ -73,13 +74,13 @@ async function findAssistantMessageIdByTrace(traceId: string): Promise<string> {
   return data.id;
 }
 
-// `traceId` is omitted (not written as null) when absent — matches
-// whatsapp_messages.trace_id's nullable convention (holds a real OTel trace
-// id, see startTraceRoot in src/lib/tracing.ts). Returns the new row's id,
+// `trace_id` is written only for an OTel-valid `traceId` and omitted
+// otherwise (see isValidTraceAnchor's landmine in src/lib/tracing.ts: the
+// all-zero sentinel is shared by every untraced turn). Returns the new row's id,
 // passed through as RunAgentTurnConfig.triggerMessageId (the guest's real
 // original message id, distinct from a tool's own paraphrase).
 //
-// An assistant row with a trace id is unique per trace (partial unique
+// An assistant row with a valid trace id is unique per trace (partial unique
 // index whatsapp_messages_assistant_trace_id_key), so an Inngest retry of
 // record-reply whose earlier insert already landed returns that row's id
 // instead of failing. Select-after-conflict rather than upsert: PostgREST's
@@ -97,8 +98,14 @@ export async function recordMessage(
     async () => {
       const supabase = createAdminClient();
       const insert: Record<string, unknown> = { conversation_id: conversationId, role, content };
-      if (traceId !== undefined) {
-        insert.trace_id = traceId;
+      const dedupeTraceId = traceId !== undefined && isValidTraceId(traceId) ? traceId : undefined;
+      if (traceId !== undefined && dedupeTraceId === undefined) {
+        console.error(
+          `[conversations] recordMessage got an invalid trace id "${traceId}"; storing null`,
+        );
+      }
+      if (dedupeTraceId !== undefined) {
+        insert.trace_id = dedupeTraceId;
       }
       if (options?.turnMessages !== undefined) {
         insert.turn_messages = options.turnMessages;
@@ -108,8 +115,8 @@ export async function recordMessage(
         .insert(insert)
         .select("id")
         .single();
-      if (error?.code === UNIQUE_VIOLATION && role === "assistant" && traceId !== undefined) {
-        return findAssistantMessageIdByTrace(traceId);
+      if (error?.code === UNIQUE_VIOLATION && role === "assistant" && dedupeTraceId !== undefined) {
+        return findAssistantMessageIdByTrace(dedupeTraceId);
       }
       if (error || !data) {
         throw new Error(

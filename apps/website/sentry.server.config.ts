@@ -3,6 +3,7 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import * as Sentry from "@sentry/nextjs";
+import { scrubUnsubscribeToken } from "@/lib/shop/unsubscribe";
 
 Sentry.init({
   // eslint-disable-next-line no-secrets/no-secrets -- Sentry DSN is intentionally public (client-side)
@@ -17,4 +18,9 @@ Sentry.init({
   // Enable sending user PII (Personally Identifiable Information)
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
+
+  // With every request traced and PII on, a wishlist unsubscribe request
+  // would otherwise ship its token in the request URL and span data.
+  beforeSend: (event) => scrubUnsubscribeToken(event),
+  beforeSendTransaction: (event) => scrubUnsubscribeToken(event),
 });

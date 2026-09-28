@@ -51,6 +51,7 @@ export default defineConfig({
             "vitest-browser-react",
             "date-fns",
             "@sentry/nextjs",
+            "@sentry/react",
             "zod",
             "next/image",
             "next/navigation",
@@ -58,13 +59,19 @@ export default defineConfig({
             "next/cache",
             "next/headers",
             "posthog-js",
+            "@tanstack/react-query",
             "stripe",
             "@supabase/supabase-js",
             "ical.js",
+            "resend",
           ],
         },
         test: {
-          include: ["src/app/**/*.browser.test.tsx", "src/ui/**/*.browser.test.tsx"],
+          include: [
+            "src/app/**/*.browser.test.tsx",
+            "src/lib/**/*.browser.test.tsx",
+            "src/ui/**/*.browser.test.tsx",
+          ],
           name: "browser",
           browser: {
             enabled: true,

@@ -4,7 +4,7 @@
  * 48e31bec-a623-423a-af24-a51258bfabf1) through executors.ts's
  * singleTurnWithMocks (real model, real gca-system prompt, tool calls
  * captured but never executed) and scores each row with evaluators.ts's
- * toolCallMatch. Distinct from scripts/braintrust-scorers/, which holds
+ * toolCallMatch, plus aiDisclosure on the rows that set that expectation. Distinct from scripts/braintrust-scorers/, which holds
  * ONLINE scorer Functions registered against real production traces — this
  * is an OFFLINE eval, run locally/in CI against the dataset, not wired into
  * Braintrust's online-scoring automation at all.
@@ -36,7 +36,7 @@
  *   npx braintrust eval --env-file=.env evals/golden-dataset.eval.ts
  */
 import { Eval, initDataset } from "braintrust";
-import { toolCallMatch } from "./evaluators";
+import { aiDisclosure, toolCallMatch } from "./evaluators";
 import { singleTurnWithMocks } from "./executors";
 import type { EvalInput, ExpectedShape } from "./types";
 
@@ -67,7 +67,7 @@ export const evalResult = Eval<
 >(PROJECT, {
   data: dataset,
   task: singleTurnWithMocks,
-  scores: [toolCallMatch],
+  scores: [toolCallMatch, aiDisclosure],
   // Runs each row 3x — deepseek-v4-pro is genuinely non-deterministic (see
   // docs/braintrust-online-eval-testing.md section 18h's 100%/75%/50%/75%
   // spread across separate single-trial runs), so a single trial per row

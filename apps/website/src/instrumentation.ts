@@ -19,7 +19,7 @@ export async function register() {
  * itself — invisible to Playwright's browser-level `page.route()` — without
  * ever touching real Stripe/iCal infrastructure.
  *
- * Strictly opt-in via two env vars, both set only in playwright.config.ts's
+ * Strictly opt-in via three env vars, all set only in playwright.config.ts's
  * `webServer.env` for the Playwright-spawned server: unset (the default for
  * `yarn dev` and production), this is a no-op with zero behavior change.
  *
@@ -53,12 +53,18 @@ export async function register() {
  *   `getAvailability` shortly after the dev server boots (before this flag
  *   is ever set), and that result then serves every later navigation for
  *   the rest of the cache's lifetime.
+ * - `E2E_MOCK_RESEND`: mocks `POST https://api.resend.com/emails` with a fake
+ *   accepted email. `.env.development` carries a real `RESEND_API_KEY` and
+ *   `ADMIN_NOTIFICATION_EMAIL`, so without this the seller submission spec
+ *   (e2e/shop.integration.spec.ts) would email the owner on every run. The
+ *   Resend SDK sends through the global `fetch`, so `FetchInterceptor` sees it.
  */
 async function registerE2EMocks(): Promise<void> {
   const mockStripe = process.env.E2E_MOCK_STRIPE === "true";
   const mockIcalFailure = process.env.E2E_MOCK_ICAL_FAILURE === "true";
+  const mockResend = process.env.E2E_MOCK_RESEND === "true";
 
-  if (!mockStripe && !mockIcalFailure) return;
+  if (!mockStripe && !mockIcalFailure && !mockResend) return;
 
   // webpackIgnore skips bundling this dynamic import entirely (supported by
   // both webpack and Turbopack per next.config.js's turbopack docs) — without
@@ -139,7 +145,13 @@ async function registerE2EMocks(): Promise<void> {
     );
   }
 
-  // onUnhandledRequest: "bypass" — only Stripe/the targeted iCal feed above
+  if (mockResend) {
+    handlers.push(
+      http.post("https://api.resend.com/emails", () => HttpResponse.json({ id: "e2e-email" })),
+    );
+  }
+
+  // onUnhandledRequest: "bypass" — only Stripe/the targeted iCal feed/Resend above
   // are intercepted; real Supabase traffic and everything else passes
   // through untouched.
   new SetupServerApi(handlers, [new FetchInterceptor()]).listen({

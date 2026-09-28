@@ -72,6 +72,15 @@ BOOKING_NUDGE_MESSAGE = {
     ),
 }
 
+BOOKING_NUDGE_MESSAGE_WITH_PHONE = {
+    "message_id": 77,
+    "text": (
+        "🔗 Booking link\nAna wants to book room1 from 2026-09-01 to 2026-09-05.\n"
+        "Guest: +351920742845\n\n"
+        "Approve sending the booking link to the guest?"
+    ),
+}
+
 
 class TestBookingApproveReject:
     async def test_approve_relays_acks_and_edits(
@@ -151,8 +160,95 @@ class TestBookingApproveReject:
         mocks["answer_owner_nudge"].assert_not_called()
         mocks["send_guest_message"].assert_not_called()
 
+    async def test_reject_with_phone_edits_in_reminder_and_number(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        mocks["answer_booking_link_approval"].return_value = {"ok": True}
+
+        res = await client.post(
+            WEBHOOK_URL,
+            json=_callback_body("booking_reject:corr-abc-123", BOOKING_NUDGE_MESSAGE_WITH_PHONE),
+            headers=HEADERS,
+        )
+
+        assert res.status_code == 200
+        mocks["answer_callback_query"].assert_called_once_with("cbq-1", "❌ Rejected")
+        edited = mocks["edit_message_text"].call_args[0][1]
+        assert edited.startswith(str(BOOKING_NUDGE_MESSAGE_WITH_PHONE["text"]))
+        assert 'The guest was told: "Sveta will contact you directly about those dates."' in edited
+        assert edited.endswith("Please message them: +351920742845")
+
+    async def test_approve_with_phone_edits_in_approved_suffix(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        mocks["answer_booking_link_approval"].return_value = {"ok": True}
+
+        await client.post(
+            WEBHOOK_URL,
+            json=_callback_body("booking_approve:corr-abc-123", BOOKING_NUDGE_MESSAGE_WITH_PHONE),
+            headers=HEADERS,
+        )
+
+        edited = mocks["edit_message_text"].call_args[0][1]
+        assert edited.endswith("\n\n✅ Approved. Link sent to the guest.")
+
+    async def test_reject_without_phone_line_falls_back_to_plain_suffix(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        mocks["answer_booking_link_approval"].return_value = {"ok": True}
+
+        await client.post(
+            WEBHOOK_URL,
+            json=_callback_body("booking_reject:corr-abc-123", BOOKING_NUDGE_MESSAGE),
+            headers=HEADERS,
+        )
+
+        edited = mocks["edit_message_text"].call_args[0][1]
+        assert edited.endswith("\n\n❌ Rejected")
+        assert "Please message them" not in edited
+
+    async def test_approve_without_phone_line_falls_back_to_plain_suffix(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        mocks["answer_booking_link_approval"].return_value = {"ok": True}
+
+        await client.post(
+            WEBHOOK_URL,
+            json=_callback_body("booking_approve:corr-abc-123", BOOKING_NUDGE_MESSAGE),
+            headers=HEADERS,
+        )
+
+        edited = mocks["edit_message_text"].call_args[0][1]
+        assert edited.endswith("\n\n✅ Approved")
+
+    async def test_callback_message_without_text_still_200(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        mocks["answer_booking_link_approval"].return_value = {"ok": True}
+
+        res = await client.post(
+            WEBHOOK_URL,
+            json=_callback_body("booking_reject:corr-abc-123", {"message_id": 77}),
+            headers=HEADERS,
+        )
+
+        assert res.status_code == 200
+        mocks["edit_message_text"].assert_called_once_with(77, "\n\n❌ Rejected")
+
 
 class TestReplyToOwnerNudge:
+    async def test_reply_to_booking_link_nudge_falls_through(
+        self, client: httpx.AsyncClient, mocks: dict
+    ) -> None:
+        res = await client.post(
+            WEBHOOK_URL,
+            json=_reply_body("ok", str(BOOKING_NUDGE_MESSAGE_WITH_PHONE["text"])),
+            headers=HEADERS,
+        )
+
+        assert res.status_code == 200
+        mocks["answer_owner_nudge"].assert_not_called()
+
     async def test_non_reply_falls_through(self, client: httpx.AsyncClient, mocks: dict) -> None:
         res = await client.post(
             WEBHOOK_URL, json=_reply_body("just a normal message"), headers=HEADERS

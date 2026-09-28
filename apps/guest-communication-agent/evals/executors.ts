@@ -2,6 +2,7 @@ import { generateText, type ModelMessage, stepCountIs, type ToolSet } from "ai";
 import { loadPrompt, traced } from "braintrust";
 import { checkAvailability } from "@/agent/tools/availability";
 import { sendBookingLink } from "@/agent/tools/booking";
+import { buildFirstTurnLine, hasAssistantMessage } from "@/agent/first-turn";
 import { buildHistoryMessages } from "@/agent/memory";
 import { buildTodayLine, getCurrentDate } from "@/agent/tools/current-date";
 import { missingInfo } from "@/agent/tools/missing-info";
@@ -158,10 +159,22 @@ export function evalMessages(input: EvalInput): ModelMessage[] {
  */
 export async function singleTurnWithMocks(input: EvalInput): Promise<SingleTurnResult> {
   const compiled = await loadCompiledSystemPrompt(input.contextBlock);
-  // Same today line runAgentTurn appends after the Braintrust prompt.
-  const system = `${compiled.messages[0].content as string}\n\n${buildTodayLine(input.today)}`;
+  const messages = evalMessages(input);
+  const firstTurn = input.firstTurn ?? !hasAssistantMessage(messages);
+  // Eval-only: GCA_EVAL_DISABLE_FIRST_TURN_LINE=1 drops the first-turn line,
+  // to prove the ai-disclosure rows catch its absence.
+  const firstTurnLine =
+    process.env.GCA_EVAL_DISABLE_FIRST_TURN_LINE === "1" ? null : buildFirstTurnLine(!firstTurn);
+  // Same today and first-turn lines runAgentTurn appends after the Braintrust prompt.
+  const system = [
+    compiled.messages[0].content as string,
+    buildTodayLine(input.today),
+    firstTurnLine,
+  ]
+    .filter((line) => line !== null)
+    .join("\n\n");
 
-  const result = await generateTextWithPromptSpan(compiled, system, evalMessages(input));
+  const result = await generateTextWithPromptSpan(compiled, system, messages);
 
   const toolCalls = result.toolCalls.map((call) => ({
     toolName: call.toolName,

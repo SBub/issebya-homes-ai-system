@@ -111,6 +111,8 @@ export default defineConfig({
       // e2e/booking-flow.integration.spec.ts.
       E2E_MOCK_STRIPE: "true",
       E2E_MOCK_ICAL_FAILURE: "true",
+      // The seller submission spec must not email the owner on every run.
+      E2E_MOCK_RESEND: "true",
     },
   },
   projects: process.env.CI

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toolCallMatch } from "../../evals/evaluators";
+import { aiDisclosure, toolCallMatch } from "../../evals/evaluators";
 import type { SingleTurnResult } from "../../evals/types";
 
 // Covers the expectedAlternative acceptance path when expected.toolCall
@@ -94,5 +94,60 @@ describe("toolCallMatch", () => {
       });
       expect(score.score).toBe(1);
     });
+  });
+});
+
+describe("aiDisclosure", () => {
+  function reply(text: string): SingleTurnResult {
+    return { toolCalls: [], toolNames: [], text };
+  }
+
+  function score(text: string, aiDisclosureExpectation?: "present" | "absent") {
+    return aiDisclosure({
+      output: reply(text),
+      expected: {
+        toolCall: null,
+        expectedAlternative: "text-only",
+        aiDisclosure: aiDisclosureExpectation,
+      },
+    });
+  }
+
+  it("skips rows with no disclosure expectation", () => {
+    expect(score("Hi! I'm an AI concierge.")).toBeNull();
+  });
+
+  it("extends a bare leading greeting into the next sentence", () => {
+    expect(
+      score("Hi! I'm Issebya's AI concierge. Both rooms are free October 6-8.", "present")?.score,
+    ).toBe(1);
+  });
+
+  it("scores 0 for the 2026-09-23 prod reply with no introduction", () => {
+    expect(
+      score("Both rooms are free October 6-8. Here's a quick comparison...", "present")?.score,
+    ).toBe(0);
+  });
+
+  it("matches AI case-insensitively", () => {
+    expect(score("Hello, I'm an ai assistant for Issebya Homes.", "present")?.score).toBe(1);
+  });
+
+  it("does not match 'ai' inside another word", () => {
+    expect(score("I'd be glad to help with availability.", "present")?.score).toBe(0);
+  });
+
+  it("only checks the opening for 'present'", () => {
+    expect(
+      score("Both rooms are free October 6-8. By the way, I'm an AI assistant.", "present")?.score,
+    ).toBe(0);
+  });
+
+  it("scores 'absent' on the whole reply", () => {
+    expect(score("Room 1 is €95 a night.", "absent")?.score).toBe(1);
+    expect(score("As an AI concierge, I can tell you it's €95.", "absent")?.score).toBe(0);
+    expect(score("Room 1 is €95 a night. I'm an AI concierge, by the way.", "absent")?.score).toBe(
+      0,
+    );
   });
 });

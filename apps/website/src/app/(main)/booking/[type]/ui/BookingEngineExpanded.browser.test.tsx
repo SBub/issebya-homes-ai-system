@@ -58,7 +58,7 @@ const defaultProps = {
   onDateSelect: vi.fn(),
   onClose: vi.fn(),
   roomType: "room1" as const,
-  error: null,
+  hasAvailabilityError: false,
   updateAvailability: vi.fn(),
 };
 
@@ -288,12 +288,12 @@ test("booking from the booking page sends no return path", async () => {
   expect(mockSubmitBooking.mock.calls[0][RETURN_TO_ARG]).toBeNull();
 });
 
-test("user sees error message passed from parent", async () => {
+test("user sees on-brand WhatsApp fallback when an availability feed failed", async () => {
   const { getByText } = await render(
-    <BookingEngineExpanded {...defaultProps} error="Something went wrong" />,
+    <BookingEngineExpanded {...defaultProps} hasAvailabilityError={true} />,
   );
 
-  await expect.element(getByText("Something went wrong")).toBeInTheDocument();
+  await expect.element(getByText(/couldn.t confirm live availability/i)).toBeInTheDocument();
 });
 
 test("tourist tax info link is present", async () => {

@@ -40,6 +40,43 @@ specs/                      # Feature implementation specifications
 scripts/                    # Dev utility scripts (start.ts)
 ```
 
+## Shop grid error boundary
+
+`/shop` wraps the grid's `<Suspense>` in `ShopGridBoundary` (`shop/ui/`), a
+Sentry `ErrorBoundary` inside `ShopControls`' grid wrapper, so a failed page one
+shows a short message, a WhatsApp link and "Try again" under a still-usable
+search box and sort, while the page header and the sell link keep rendering. Events carry the tags `area: shop` and
+`surface: product-grid`.
+
+It is a `"use client"` wrapper because its fallback render prop and
+`beforeCapture` are functions, which the server `page.tsx` cannot pass across
+the RSC boundary. Retry covers both places page one can fail: `onReset` clears
+React Query's error reset boundary (a rejected suspense query would otherwise
+re-throw its cached error), and the retry runs `router.refresh()` together with
+`resetError()` in one transition (a throw in `ShopProducts` would otherwise
+re-render the same errored RSC chunk). Next-page failures never reach it;
+`ProductList` keeps its own retry line. There is deliberately no
+`shop/error.tsx`: the boundary is scoped to the grid, not the whole segment.
+
+## Shop controls in the static shell
+
+`/shop` has two `<Suspense>` boundaries. The outer one wraps `ShopControls`,
+which reads `sort` and `q` from the URL with `useSearchParams` (parsed by the
+same `parseShopParams` the server uses, via `shopParamsFromSearch`). In a
+prerendered route that makes it render nothing in the shell but its nearest
+fallback, so the fallback, `ShopControlsFallback`, is the same search form and
+sort select, disabled, around the same grid wrapper and the grid skeleton. The
+prerendered HTML therefore already has the controls at their final size, and
+the row shares an explicit min height (`SHOP_CONTROLS_ROW_CLASS`, measured: two
+lines below a ~500 px viewport, one above). The inner boundary is the list
+(`ShopProducts`, which awaits `searchParams`). What depends on page one, the
+empty state and the `shop_search_applied` match count, lives in there as
+`ShopResults`, and reaches back to `ShopControls` through a context for
+`clear` and for the "did the visitor ask for this term" check.
+
+`next dev` does not suspend on `useSearchParams`, so the fallback only ever
+shows in a production build; check layout stability with `next start`.
+
 ## Testing
 
 | Type              | Files                                                           | What to test                                                                                     |

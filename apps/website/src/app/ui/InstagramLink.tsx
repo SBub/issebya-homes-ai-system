@@ -7,7 +7,6 @@ export function InstagramLink() {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Instagram"
-      className="mb-4"
     >
       <Image
         src="/instagram.webp"

@@ -23,6 +23,12 @@ them:
   `_handle_owner_nudge_reply` regex-matches it out (`MISSING_INFO_REF_REGEX`).
   Treat the ref token as opaque, non-whitespace, not assumed to be
   UUID-shaped.
+- `send_booking_link` also carries the guest's phone in-band, as a
+  `Guest: <phone>` line in the nudge text (composed in `owner_nudges.py`,
+  read back from `callback_query.message.text` by
+  `BOOKING_LINK_GUEST_PHONE_REGEX`). That line's format is load-bearing.
+  Don't turn it into a `[ref:...]` tag, and keep the plain
+  `✅ Approved` / `❌ Rejected` fallback for nudges sent without it.
 - `wants_human` never gets a ref tag. It's a one-way notification; no reply
   is ever expected, so a reply to it just falls through to the noop branch.
 

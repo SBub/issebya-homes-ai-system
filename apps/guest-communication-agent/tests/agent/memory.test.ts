@@ -377,6 +377,112 @@ describe("loadMemory", () => {
   });
 });
 
+describe("loadMemory hasAssistantHistory", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadGuestMemoryFoldsMock.mockResolvedValue([]);
+    getGuestMemoryMock.mockResolvedValue(null);
+  });
+
+  it("is false when the only row is the incoming guest message", async () => {
+    loadRecentMessagesMock.mockResolvedValue([
+      messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
+    ]);
+
+    const result = await loadMemory({ conversationId: "convo-f1", phone: "+351900000101" });
+
+    expect(result.hasAssistantHistory).toBe(false);
+  });
+
+  it("is false when the guest double-texted before any reply", async () => {
+    loadRecentMessagesMock.mockResolvedValue([
+      messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
+      messageRow("msg-2", "user", 50, "2026-08-01T00:00:10Z"),
+    ]);
+
+    const result = await loadMemory({ conversationId: "convo-f2", phone: "+351900000102" });
+
+    expect(result.hasAssistantHistory).toBe(false);
+  });
+
+  it("is true when a prior assistant row with replayed turn_messages exists", async () => {
+    const reply: MessageRow = {
+      ...messageRow("msg-2", "assistant", 50, "2026-08-01T00:01:00Z"),
+      turn_messages: {
+        schema_version: 1,
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "tool-call", toolCallId: "c1", toolName: "get_pricing", input: {} }],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "c1",
+                toolName: "get_pricing",
+                output: { type: "json", value: { pricePerNight: 75 } },
+              },
+            ],
+          },
+          { role: "assistant", content: "Room 1 is 75 EUR a night." },
+        ],
+      },
+    };
+    loadRecentMessagesMock.mockResolvedValue([
+      messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
+      reply,
+      messageRow("msg-3", "user", 50, "2026-08-01T00:02:00Z"),
+    ]);
+
+    const result = await loadMemory({ conversationId: "convo-f3", phone: "+351900000103" });
+
+    expect(result.hasAssistantHistory).toBe(true);
+  });
+
+  it("is true when the only assistant row is already folded, before the watermark", async () => {
+    loadRecentMessagesMock.mockResolvedValue([
+      messageRow("msg-0", "user", 50, "2026-08-01T00:00:00Z"),
+      messageRow("msg-1", "assistant", 50, "2026-08-01T00:01:00Z"),
+      messageRow("msg-2", "user", 50, "2026-08-01T00:02:00Z"),
+    ]);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: "msg-1",
+      preferencesSummary: null,
+    });
+
+    const result = await loadMemory({ conversationId: "convo-f4", phone: "+351900000104" });
+
+    expect(result.historyMessages.some((m) => m.role === "assistant")).toBe(false);
+    expect(result.hasAssistantHistory).toBe(true);
+  });
+
+  it("is false for a returning guest's wiped conversation, despite an assistant-role memoryMessage", async () => {
+    loadRecentMessagesMock.mockResolvedValue([
+      messageRow("msg-1", "user", 50, "2026-08-01T00:00:00Z"),
+    ]);
+    getGuestMemoryMock.mockResolvedValue({
+      summarizedThroughMessageId: "msg-old",
+      preferencesSummary: "Guest is vegetarian.",
+    });
+    loadGuestMemoryFoldsMock.mockResolvedValue([
+      {
+        id: "fold-1",
+        summaryText: "Asked about Room 2 in August.",
+        messageIdFrom: "msg-a",
+        messageIdTo: "msg-old",
+        createdAt: "2026-07-01T00:00:00Z",
+      },
+    ]);
+
+    const result = await loadMemory({ conversationId: "convo-f5", phone: "+351900000105" });
+
+    expect(result.memoryMessage?.role).toBe("assistant");
+    expect(result.hasAssistantHistory).toBe(false);
+  });
+});
+
 describe("foldMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();

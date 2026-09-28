@@ -41,7 +41,7 @@ The `getAvailability` helper itself declares its own cache scope with `"use cach
 
 Note the `defaultCheckIn`/`defaultCheckOut` props: a calendar day crossing a server/client boundary travels as a `"yyyy-MM-dd"` string, never as a `Date`. Passing the server-built `Date` down would let the browser re-read a server instant in the guest's timezone and shift the default day. See `AGENTS.md` for the rule and `src/lib/date-utils.ts` for the two conversion helpers.
 
-The caller (`src/app/(main)/booking/[type]/page.tsx`) wraps this Server Component in `<Suspense>` and an `<ErrorBoundary>` so a slow or failing read degrades gracefully without blocking the rest of the page.
+The caller (`GuardedBookingEngine`, rendered by `src/app/(main)/booking/[type]/page.tsx` and the blog `BookingWidget`) wraps this Server Component in `<Suspense>` and an `<ErrorBoundary>` so a slow or failing read degrades gracefully without blocking the rest of the page.
 
 ### Why this instead of a client-side query library?
 
