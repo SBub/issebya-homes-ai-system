@@ -50,14 +50,14 @@ describe("GET /api/shop/products", () => {
 
     expect(items).toHaveLength(6);
     expect(items[0].slug).toBe(newest[0].slug);
-    expect(items[0].slug).toBe("sample-product-fourteen");
+    expect(items[0].slug).toBe(newest[0].slug);
     expect(typeof nextCursor).toBe("string");
   });
 
   it("returns the oldest product first for sort=oldest", async () => {
     const { items } = await getPage("?sort=oldest");
 
-    expect(items[0].slug).toBe("sample-product-twelve");
+    expect(items[0].slug).toBe(oldest[0].slug);
   });
 
   it.each(["?cursor=", "?sort="])("treats %s as the newest first page", async (query) => {
@@ -97,17 +97,26 @@ describe("GET /api/shop/products", () => {
   });
 
   it("continues after a cursor whose product has left the registry", async () => {
+    // A bookmark for a product that no longer exists still names a position:
+    // same day as `anchor`, slug sorting just after it, so the page resumes
+    // with whatever follows `anchor` in newest order.
+    const anchorIndex = 4;
+    const anchor = newest[anchorIndex];
     const cursor = encodeCursor({
       sort: "newest",
       q: "",
-      createdAt: "2026-05-03",
-      slug: "sample-product-t",
+      createdAt: anchor.createdAt,
+      slug: `${anchor.slug}-gone`,
     });
     const { items } = await getPage(`?cursor=${cursor}`);
 
     expect(items.map(({ slug }) => slug)).toEqual(
       newest
-        .slice(newest.findIndex(({ slug }) => slug === "sample-product-thirteen"))
+        .filter(
+          (product) =>
+            product.createdAt < anchor.createdAt ||
+            (product.createdAt === anchor.createdAt && product.slug > `${anchor.slug}-gone`),
+        )
         .slice(0, 6)
         .map(({ slug }) => slug),
     );
@@ -137,15 +146,16 @@ describe("GET /api/shop/products", () => {
   });
 
   describe("search", () => {
-    const teen = sortProducts(filterByName(allProducts, "teen"), "newest");
+    const silver = sortProducts(filterByName(allProducts, "silver"), "newest");
+    const broad = sortProducts(filterByName(allProducts, "a"), "newest");
 
-    it.each(["?q=teen", "?q=%20teen%20", "?q=TEEN"])(
+    it.each(["?q=silver", "?q=%20silver%20", "?q=SILVER"])(
       "returns only the matching products for %s",
       async (query) => {
         const { items, nextCursor, total } = await getPage(query);
 
-        expect(items.map(({ slug }) => slug)).toEqual(teen.map(({ slug }) => slug));
-        expect(total).toBe(3);
+        expect(items.map(({ slug }) => slug)).toEqual(silver.map(({ slug }) => slug));
+        expect(total).toBe(silver.length);
         expect(nextCursor).toBeNull();
       },
     );
@@ -164,18 +174,18 @@ describe("GET /api/shop/products", () => {
     });
 
     it("pages through the matches with a cursor carrying the term", async () => {
-      const first = await getPage("?q=product&limit=10");
-      const second = await getPage(`?q=product&limit=10&cursor=${first.nextCursor}`);
+      const first = await getPage("?q=a&limit=10");
+      const second = await getPage(`?q=a&limit=10&cursor=${first.nextCursor}`);
 
       expect([...first.items, ...second.items].map(({ slug }) => slug)).toEqual(
-        newest.map(({ slug }) => slug),
+        broad.map(({ slug }) => slug),
       );
       expect(second.nextCursor).toBeNull();
     });
 
     it("rejects a cursor from another term with 400", async () => {
-      const { nextCursor } = await getPage("?q=product");
-      const { status, body } = await get(`?q=teen&cursor=${nextCursor}`);
+      const { nextCursor } = await getPage("?q=a&limit=10");
+      const { status, body } = await get(`?q=silver&cursor=${nextCursor}`);
 
       expect(status).toBe(400);
       expect(body).toEqual({ error: "Cursor is for a different search" });
