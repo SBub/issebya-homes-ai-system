@@ -31,12 +31,15 @@ import { RoomSwitcher } from "./RoomSwitcher";
  * the confirmation page's back link point at `/blog/<slug>#book`. A post must
  * therefore render at most one widget — two would be duplicate ids and the
  * browser would land on the first.
+ *
+ * The `<aside>` clears floats, so a post can place it after a floated hero
+ * photo and its whole box still starts below the photo.
  */
 export function BookingWidget() {
   return (
     <aside
       id={BOOKING_WIDGET_ANCHOR_ID}
-      className="my-10 max-w-xl bg-shop-card text-foreground border border-foreground p-4 md:p-8"
+      className="my-10 clear-both max-w-xl bg-shop-card text-foreground border border-foreground p-4 md:p-8"
       data-testid="booking-widget"
     >
       <p className="uppercase tracking-[0.2em] text-xs mb-4">Book Your Stay</p>
