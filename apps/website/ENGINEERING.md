@@ -40,6 +40,24 @@ specs/                      # Feature implementation specifications
 scripts/                    # Dev utility scripts (start.ts)
 ```
 
+## Shop grid error boundary
+
+`/shop` wraps the grid's `<Suspense>` in `ShopGridBoundary` (`shop/ui/`), a
+Sentry `ErrorBoundary` inside the products section, so a failed page one shows
+a short message, a WhatsApp link and "Try again" while the page header and the
+sell link keep rendering. Events carry the tags `area: shop` and
+`surface: product-grid`.
+
+It is a `"use client"` wrapper because its fallback render prop and
+`beforeCapture` are functions, which the server `page.tsx` cannot pass across
+the RSC boundary. Retry covers both places page one can fail: `onReset` clears
+React Query's error reset boundary (a rejected suspense query would otherwise
+re-throw its cached error), and the retry runs `router.refresh()` together with
+`resetError()` in one transition (a throw in `ShopProducts` would otherwise
+re-render the same errored RSC chunk). Next-page failures never reach it;
+`ProductList` keeps its own retry line. There is deliberately no
+`shop/error.tsx`: the boundary is scoped to the grid, not the whole segment.
+
 ## Testing
 
 | Type              | Files                                                           | What to test                                                                                     |
