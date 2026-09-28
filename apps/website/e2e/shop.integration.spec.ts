@@ -29,8 +29,13 @@ import { SITE_URL } from "@/lib/site";
 const newest = sortProducts(allProducts, "newest");
 const oldest = sortProducts(allProducts, "oldest");
 const [firstProduct] = newest;
-const teenNewest = sortProducts(filterByName(allProducts, "teen"), "newest");
-const teenOldest = sortProducts(filterByName(allProducts, "teen"), "oldest");
+// The card carousel only renders arrows for a product with more than one image.
+const carouselProduct = newest.find((product) => product.images.length > 1);
+const silverNewest = sortProducts(filterByName(allProducts, "silver"), "newest");
+const silverOldest = sortProducts(filterByName(allProducts, "silver"), "oldest");
+// A term broad enough to need more than two pages of results.
+const WIDE_TERM = "e";
+const wideMatches = filterByName(allProducts, WIDE_TERM);
 const names = (products: readonly { name: string }[]) => products.map(({ name }) => name);
 
 test.describe("Shop", () => {
@@ -114,15 +119,17 @@ test.describe("Shop", () => {
     expect(crossSort.status()).toBe(400);
     expect((await request.get("/api/shop/products?sort=bogus")).status()).toBe(400);
 
-    const teenRes = await request.get("/api/shop/products?q=teen");
+    const teenRes = await request.get("/api/shop/products?q=silver");
     expect(teenRes.status()).toBe(200);
     const teen = await teenRes.json();
-    expect(teen.items).toHaveLength(3);
-    expect(teen.total).toBe(3);
+    expect(teen.items).toHaveLength(silverNewest.length);
+    expect(teen.total).toBe(silverNewest.length);
     expect(teen.nextCursor).toBeNull();
 
-    const product = await (await request.get("/api/shop/products?q=product")).json();
-    const crossSearch = await request.get(`/api/shop/products?q=teen&cursor=${product.nextCursor}`);
+    const product = await (await request.get(`/api/shop/products?q=${WIDE_TERM}`)).json();
+    const crossSearch = await request.get(
+      `/api/shop/products?q=silver&cursor=${product.nextCursor}`,
+    );
     expect(crossSearch.status()).toBe(400);
     expect((await request.get(`/api/shop/products?q=${"a".repeat(61)}`)).status()).toBe(400);
   });
@@ -186,9 +193,9 @@ test.describe("Shop", () => {
     const search = page.getByRole("searchbox", { name: "Search products" });
     await expect(cardLinks).toHaveCount(SHOP_PAGE_SIZE);
 
-    await search.pressSequentially("teen");
-    await expect(page).toHaveURL("/shop?q=teen");
-    await expect(cardLinks).toHaveText(names(teenNewest));
+    await search.pressSequentially("silver");
+    await expect(page).toHaveURL("/shop?q=silver");
+    await expect(cardLinks).toHaveText(names(silverNewest));
 
     await search.fill("");
     await expect(page).toHaveURL("/shop");
@@ -199,12 +206,12 @@ test.describe("Shop", () => {
     await page.goto("/shop");
 
     const search = page.getByRole("searchbox", { name: "Search products" });
-    await search.pressSequentially("teen");
+    await search.pressSequentially("silver");
     await search.press("Enter");
 
-    await expect(page).toHaveURL("/shop?q=teen");
+    await expect(page).toHaveURL("/shop?q=silver");
     await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
-      3,
+      silverNewest.length,
     );
   });
 
@@ -214,14 +221,14 @@ test.describe("Shop", () => {
       if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
     });
 
-    await page.goto("/shop?sort=oldest&q=teen");
+    await page.goto("/shop?sort=oldest&q=silver");
 
     const cardLinks = page
       .getByRole("region", { name: "Products" })
       .getByRole("article")
       .getByRole("link");
-    await expect(cardLinks).toHaveText(names(teenOldest));
-    await expect(page.getByRole("searchbox", { name: "Search products" })).toHaveValue("teen");
+    await expect(cardLinks).toHaveText(names(silverOldest));
+    await expect(page.getByRole("searchbox", { name: "Search products" })).toHaveValue("silver");
     await expect(page.getByLabel("Sort")).toHaveValue("oldest");
     expect(apiRequests).toEqual([]);
   });
@@ -232,7 +239,7 @@ test.describe("Shop", () => {
       if (req.url().includes("/api/shop/products")) apiRequests.push(req.url());
     });
 
-    await page.goto("/shop?q=product");
+    await page.goto(`/shop?q=${WIDE_TERM}`);
 
     const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
     const sentinel = page.getByTestId("shop-products-sentinel");
@@ -240,11 +247,11 @@ test.describe("Shop", () => {
     await sentinel.scrollIntoViewIfNeeded();
     await expect(cards).toHaveCount(SHOP_PAGE_SIZE * 2);
     await sentinel.scrollIntoViewIfNeeded();
-    await expect(cards).toHaveCount(allProducts.length);
+    await expect(cards).toHaveCount(wideMatches.length);
 
     expect(apiRequests.length).toBeGreaterThan(0);
     for (const url of apiRequests) {
-      expect(new URL(url).searchParams.get("q")).toBe("product");
+      expect(new URL(url).searchParams.get("q")).toBe(WIDE_TERM);
     }
   });
 
@@ -254,10 +261,10 @@ test.describe("Shop", () => {
     await page.goto("/shop");
 
     const search = page.getByRole("searchbox", { name: "Search products" });
-    await search.pressSequentially("lamp");
+    await search.pressSequentially("teapot");
 
     await expect(
-      page.getByText('Nothing matches "lamp". Try another word or clear the search.'),
+      page.getByText('Nothing matches "teapot". Try another word or clear the search.'),
     ).toBeVisible();
     await page.getByRole("button", { name: "Clear" }).click();
 
@@ -269,37 +276,42 @@ test.describe("Shop", () => {
   });
 
   test("changing sort keeps the search", async ({ page }) => {
-    await page.goto("/shop?q=teen");
+    await page.goto("/shop?q=silver");
 
     const cardLinks = page
       .getByRole("region", { name: "Products" })
       .getByRole("article")
       .getByRole("link");
-    await expect(cardLinks).toHaveText(names(teenNewest));
+    await expect(cardLinks).toHaveText(names(silverNewest));
 
     await page.getByLabel("Sort").selectOption({ label: "Oldest first" });
 
-    await expect(page).toHaveURL("/shop?sort=oldest&q=teen");
-    await expect(cardLinks).toHaveText(names(teenOldest));
+    await expect(page).toHaveURL("/shop?sort=oldest&q=silver");
+    await expect(cardLinks).toHaveText(names(silverOldest));
   });
 
   test("flipping a card's images stays on /shop, then the name opens the product", async ({
     page,
   }) => {
+    test.skip(!carouselProduct, "no product in the registry has more than one image");
+    const product = carouselProduct!;
     await page.goto("/shop");
 
-    const card = page.getByRole("region", { name: "Products" }).getByRole("article").first();
+    const card = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .filter({ has: page.getByRole("link", { name: product.name, exact: true }) });
     const img = card.locator("img");
-    await expect(img).toHaveAttribute("alt", firstProduct.images[0].alt);
+    await expect(img).toHaveAttribute("alt", product.images[0].alt);
 
     await card.getByRole("button", { name: "Next image" }).click();
     await expect(page).toHaveURL("/shop");
-    await expect(img).toHaveAttribute("alt", firstProduct.images[1].alt);
+    await expect(img).toHaveAttribute("alt", product.images[1].alt);
 
-    await card.getByRole("link", { name: firstProduct.name, exact: true }).click();
-    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`);
+    await card.getByRole("link", { name: product.name, exact: true }).click();
+    await expect(page).toHaveURL(`/shop/${product.slug}`);
     await expect(
-      page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
+      page.getByRole("heading", { level: 1, name: product.name, exact: true }),
     ).toBeVisible();
   });
 
@@ -476,13 +488,13 @@ test.describe("Shop search form", () => {
     await page.goto("/shop");
 
     await page.getByRole("search").evaluate((form: HTMLFormElement) => {
-      (form.elements.namedItem("q") as HTMLInputElement).value = "teen";
+      (form.elements.namedItem("q") as HTMLInputElement).value = "silver";
       form.submit();
     });
 
-    await expect(page).toHaveURL("/shop?q=teen");
+    await expect(page).toHaveURL("/shop?q=silver");
     await expect(page.getByRole("region", { name: "Products" }).getByRole("article")).toHaveCount(
-      3,
+      silverNewest.length,
     );
   });
 });

@@ -250,6 +250,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing what wraps the `/shop` grid's `<Suspense>`, `ShopGridBoundary`, `ShopGridError`, or adding a `shop/error.tsx`
     - When `/shop` goes blank on a failed page one, or "Try again" leaves the fallback stuck instead of reloading the grid
     - When adding a Sentry `ErrorBoundary` with a render-prop fallback or `beforeCapture` under a Server Component page, or a browser test fails importing `@sentry/nextjs`
+- `apps/website/app_docs/feature-a93e052d-blog-widget-clear-float.md`
+  - Conditions:
+    - When changing the `BookingWidget` aside's classes, the blog hero float, or the post's `flow-root` container
+    - When a blog widget or other block overlaps the floated hero photo, or `BookingWidget.browser.test.tsx` fails
+    - When writing a browser test that renders `BookingWidget` and fails on `posthog-js`, `@/lib/blog/return-path` or `GuardedBookingEngine`
 - `apps/website/app_docs/feature-8ad2fc3b-shop-controls-static-shell.md`
   - Conditions:
     - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")

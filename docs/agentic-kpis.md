@@ -8,13 +8,13 @@ Summary metrics across all ADW runs.
 
 | Metric            | Value       | Last Updated                  |
 | ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 28          | Mon Sep 28 11:29:04 WEST 2026 |
-| Longest Streak    | 28          | Mon Sep 28 11:29:04 WEST 2026 |
-| Total Plan Size   | 8645 lines  | Mon Sep 28 11:29:04 WEST 2026 |
-| Largest Plan Size | 698 lines   | Mon Sep 28 11:29:04 WEST 2026 |
-| Total Diff Size   | 30796 lines | Mon Sep 28 11:29:04 WEST 2026 |
-| Largest Diff Size | 2686 lines  | Mon Sep 28 11:29:04 WEST 2026 |
-| Average Presence  | 1.0         | Mon Sep 28 11:29:04 WEST 2026 |
+| Current Streak    | 28          | Mon Sep 28 11:59:48 WEST 2026 |
+| Longest Streak    | 28          | Mon Sep 28 11:59:48 WEST 2026 |
+| Total Plan Size   | 8771 lines  | Mon Sep 28 11:59:48 WEST 2026 |
+| Largest Plan Size | 698 lines   | Mon Sep 28 11:59:48 WEST 2026 |
+| Total Diff Size   | 31041 lines | Mon Sep 28 11:59:48 WEST 2026 |
+| Largest Diff Size | 2686 lines  | Mon Sep 28 11:59:48 WEST 2026 |
+| Average Presence  | 1.0         | Mon Sep 28 11:59:48 WEST 2026 |
 
 ## ADW KPIs
 
@@ -50,3 +50,4 @@ Detailed metrics for individual ADW workflow runs.
 | Sun Sep 27 21:21:39 WEST 2026 | 86c52a82 | 167          | /feature    | 1        | 318               | 2488/198/30                     | Sun Sep 27 21:21:39 WEST 2026 | Sun Sep 27 21:21:39 WEST 2026 |
 | Mon Sep 28 10:08:26 WEST 2026 | 12e4efa7 | 169          | /feature    | 1        | 215               | 467/4/11                        | Mon Sep 28 10:08:26 WEST 2026 | Mon Sep 28 10:08:26 WEST 2026 |
 | Mon Sep 28 11:29:04 WEST 2026 | 8ad2fc3b | 176          | /chore      | 1        | 197               | 947/511/37                      | Mon Sep 28 11:29:04 WEST 2026 | Mon Sep 28 11:29:04 WEST 2026 |
+| Mon Sep 28 11:59:48 WEST 2026 | a93e052d | 184          | /bug        | 1        | 126               | 223/22/6                        | Mon Sep 28 11:59:48 WEST 2026 | Mon Sep 28 11:59:48 WEST 2026 |
