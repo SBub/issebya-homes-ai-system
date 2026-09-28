@@ -1,5 +1,3 @@
-import { Suspense } from "react";
-import { ErrorBoundary } from "@sentry/nextjs";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { TabsDesktop } from "@/app/ui/TabsDesktop";
@@ -8,9 +6,8 @@ import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
 import { SITE_URL } from "@/lib/site";
 import { room1Images, room2Images } from "@/utils/images";
-import { BookingEngine } from "./ui/BookingEngine";
-import { BookingEngineSkeleton } from "./ui/BookingEngineSkeleton";
 import Gallery from "./ui/Gallery";
+import { GuardedBookingEngine } from "./ui/GuardedBookingEngine";
 
 const bookingTabs = [
   {
@@ -129,20 +126,7 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
       <div className="order-2 md:order-1 md:w-1/2 p-4 md:p-12 space-y-6">
         <TabsDesktop tabs={bookingTabs} activeTabId={type} />
         <div className="space-y-6">
-          <ErrorBoundary
-            fallback={
-              <div className="booking-engine-error">
-                <p className="text-sm text-red-600">
-                  Booking is temporarily unavailable. Please reach out to us on <WhatsAppLink /> to
-                  book directly.
-                </p>
-              </div>
-            }
-          >
-            <Suspense fallback={<BookingEngineSkeleton />}>
-              <BookingEngine roomType={roomType} />
-            </Suspense>
-          </ErrorBoundary>
+          <GuardedBookingEngine roomType={roomType} />
 
           <p className="text-secondary text-xs">
             Capacity: max 2 persons. Once a reservation is made, we are unable to provide a refund.

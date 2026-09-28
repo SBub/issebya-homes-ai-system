@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fromCalendarDay, isPastDate, isValidDateRange } from "@/lib/date-utils";
 import { addBookingBreadcrumb, setBookingContext } from "@/lib/sentry-booking";
+import { BOOKING_UNAVAILABLE_COPY } from "@/lib/shared/booking-copy";
 import type { DateRange } from "@/lib/shared/types/booking";
 import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { BookingEngineExpanded } from "./BookingEngineExpanded";
@@ -251,8 +252,9 @@ export function BookingClient({
     return (
       <div className="booking-engine-error">
         <p className="text-sm text-red-600">
-          Booking is temporarily unavailable. Please reach out to us on <WhatsAppLink /> to book
-          directly.
+          {BOOKING_UNAVAILABLE_COPY.lead}
+          <WhatsAppLink />
+          {BOOKING_UNAVAILABLE_COPY.tail}
         </p>
       </div>
     );
