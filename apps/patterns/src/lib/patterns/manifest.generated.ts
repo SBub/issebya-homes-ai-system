@@ -2,7 +2,8 @@
 // Do not edit by hand; the registry validates every entry at module scope.
 import * as doc0 from "@content/infinite-scrolling.mdx";
 import * as doc1 from "@content/server-prefetch-hydration.mdx";
-import * as doc2 from "@content/suspense-without-flash.mdx";
+import * as doc2 from "@content/sse-route-handler.mdx";
+import * as doc3 from "@content/suspense-without-flash.mdx";
 
 export const manifest = [
   {
@@ -16,8 +17,13 @@ export const manifest = [
     Content: doc1.default,
   },
   {
-    slug: "suspense-without-flash",
+    slug: "sse-route-handler",
     meta: doc2.frontmatter,
     Content: doc2.default,
+  },
+  {
+    slug: "suspense-without-flash",
+    meta: doc3.frontmatter,
+    Content: doc3.default,
   },
 ] as const;
