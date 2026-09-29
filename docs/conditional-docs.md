@@ -260,6 +260,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")
     - When the `/shop` controls are missing from the prerendered HTML, or the cards jump down when page one arrives
     - When the sort select or search box shows a different value than the list, or a browser test rendering `/shop` fails on `useSearchParams`
+- `apps/website/app_docs/feature-9190fc91-stretched-link-product-card.md`
+  - Conditions:
+    - When changing the `ProductCard` name link's `after:*` classes, the photo wrapper's `z-10`, or the stacking/positioning of anything inside a `/shop` card
+    - When the description/price area of a `/shop` card stops navigating, or swipe or an arrow on a card photo navigates instead of flipping
+    - When tempted to make card text selectable with `pointer-events`, or a Playwright click on card text fails with "intercepts pointer events"
 
 ---
 
