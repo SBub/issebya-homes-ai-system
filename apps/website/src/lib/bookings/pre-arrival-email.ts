@@ -41,8 +41,8 @@ function formatArrivalDate(day: string): string {
   });
 }
 
-export function preArrivalEmailSubject(checkIn: string): string {
-  return `Your stay at issebya.homes starts on ${formatArrivalDate(checkIn)}`;
+export function preArrivalEmailSubject(): string {
+  return "Your stay at issebya.homes is coming soon";
 }
 
 export function greetingLine(guestName: string | null): string {

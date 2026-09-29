@@ -170,7 +170,7 @@ IMPORTANT: Execute every step in order, top to bottom.
   - `CONTACT_LINE = "If anything changes, reply to this email or write to Sveta on WhatsApp."`
   - `SIGN_OFF = "See you soon,"`, `SIGNATURE = "issebya.homes"`
 - `export function formatArrivalDate(day: string): string` → `fromCalendarDay(day).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })` (e.g. "Wednesday, 1 October"; verify the exact en-GB output in the test and adjust expectation, not the format options).
-- `export function preArrivalEmailSubject(checkIn: string)` → `` `Your stay at issebya.homes starts on ${formatArrivalDate(checkIn)}` ``.
+- `export function preArrivalEmailSubject()` → `"Your stay at issebya.homes is coming soon"` (fixed by issue #197's content contract).
 - `export function greetingLine(guestName: string | null)` → `Hello <first>,` or `Hello,` (uses `firstName` from `pre-arrival.ts`).
 - `export function checkInLine(checkIn)` → `` `Check-in: ${date}, from 3 pm. There is no self check-in: Sveta meets you at the house at the time you agree with her, so please reply with your expected arrival time.` ``
 - `export function checkOutLine(checkOut)` → `` `Check-out: ${date}, by 11 am.` ``
@@ -190,7 +190,7 @@ IMPORTANT: Execute every step in order, top to bottom.
 - Add a JSDoc explaining: guest pre-arrival email; owner in `bcc` so she sees what went out and in `replyTo` so replies reach her; throws on missing env or Resend `{ error }` so the cron route can release the claim and report.
 - Signature: `sendPreArrivalEmail({ email, guestName, roomType, checkIn, checkOut }): Promise<void>`.
 - Throw `Missing environment variable: RESEND_FROM_EMAIL` / `ADMIN_NOTIFICATION_EMAIL` if unset (the bcc is a contract, so a missing owner address is a failure, not a silent skip).
-- `resend.emails.send({ from, to: email, bcc: adminEmail, replyTo: adminEmail, subject: preArrivalEmailSubject(checkIn), react: PreArrivalEmail(props), text: preArrivalEmailText(props) })` with `roomLabel = formatRoomType(roomType)`.
+- `resend.emails.send({ from, to: email, bcc: adminEmail, replyTo: adminEmail, subject: preArrivalEmailSubject(), react: PreArrivalEmail(props), text: preArrivalEmailText(props) })` with `roomLabel = formatRoomType(roomType)`.
 - On `{ error }` throw `Resend failed to send the pre-arrival email: ${error.message}`.
 
 ### 8. Route `src/app/api/cron/pre-arrival/route.ts`
@@ -247,7 +247,7 @@ IMPORTANT: Execute every step in order, top to bottom.
 ### 11. Unit tests: copy and template `src/lib/bookings/__tests__/pre-arrival-email.unit.test.ts`
 
 - Props `{ guestName: "Anna Silva", roomLabel: "Room 1", checkIn: "2026-10-01", checkOut: "2026-10-04" }`.
-- `preArrivalEmailSubject("2026-10-01")` === `"Your stay at issebya.homes starts on Wednesday, 1 October"` (adjust only if en-GB emits a different separator; assert the actual en-GB string).
+- `preArrivalEmailSubject()` === `"Your stay at issebya.homes is coming soon"`.
 - `preArrivalEmailText(props)` contains: `"Hello Anna,"`, the intro line, `"Check-in: Wednesday, 1 October, from 3 pm."`, `"Check-out: Saturday, 4 October, by 11 am."`, `"Room: Room 1, ground floor"`, `"Rua do Lagarto 5, 2705-044 Almoçageme, Portugal. Enter through the blue gate."`, both map URLs, `"Please do not park next to the shop Amor Plat Terra."`, the contact line, the WhatsApp URL, `"See you soon,"` and `"issebya.homes"`.
 - With `guestName: null` the text starts with `"Hello,"`.
 - Negative content: `text.toLowerCase()` does not contain `"tax"`, `"total"`, `"€"`, `"/booking/confirmation"`, or `"—"` (em dash).
@@ -340,7 +340,7 @@ IMPORTANT: Execute every step in order, top to bottom.
 - The claim uses `... where id = $1 and pre_arrival_email_sent_at is null` and runs before sending; two concurrent invocations send once (unit-proved; negative check performed and reverted).
 - A failed send resets `pre_arrival_email_sent_at` to null, calls Sentry `captureException`, and appears in `failed`.
 - Logs contain booking ids, never guest emails.
-- Email: subject `Your stay at issebya.homes starts on <Weekday, D Month>`; body lines exactly as in the issue; `text:` alternative with the same content; `bcc` and `replyTo` = `ADMIN_NOTIFICATION_EMAIL`; from `RESEND_FROM_EMAIL`; no price, tax, total, confirmation URL, em dash, emoji or bold.
+- Email: subject `Your stay at issebya.homes is coming soon`; body lines exactly as in the issue; `text:` alternative with the same content; `bcc` and `replyTo` = `ADMIN_NOTIFICATION_EMAIL`; from `RESEND_FROM_EMAIL`; no price, tax, total, confirmation URL, em dash, emoji or bold.
 - `apps/website/vercel.json` has the cron `0 7 * * *` on `/api/cron/pre-arrival` and keeps `ignoreCommand`.
 - Root `AGENTS.md` has the crons line; `docs/conditional-docs.md` has the new entry; `environment-setup.md` documents `CRON_SECRET`.
 - All validation commands pass.

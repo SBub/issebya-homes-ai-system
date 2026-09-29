@@ -26,7 +26,7 @@ export function PreArrivalEmail(props: PreArrivalEmailProps) {
     <html>
       <head>
         <meta charSet="utf-8" />
-        <title>{preArrivalEmailSubject(props.checkIn)}</title>
+        <title>{preArrivalEmailSubject()}</title>
       </head>
       <body
         style={{

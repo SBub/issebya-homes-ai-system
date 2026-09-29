@@ -17,10 +17,8 @@ const props = {
 };
 
 describe("preArrivalEmailSubject", () => {
-  it("names the check-in day", () => {
-    expect(preArrivalEmailSubject("2026-10-01")).toBe(
-      "Your stay at issebya.homes starts on Thursday 1 October",
-    );
+  it("uses the fixed subject from the issue", () => {
+    expect(preArrivalEmailSubject()).toBe("Your stay at issebya.homes is coming soon");
   });
 });
 

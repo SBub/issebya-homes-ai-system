@@ -195,7 +195,7 @@ describe("sendPreArrivalEmail", () => {
       to: "guest@example.com",
       bcc: "owner@example.com",
       replyTo: "owner@example.com",
-      subject: "Your stay at issebya.homes starts on Thursday 1 October",
+      subject: "Your stay at issebya.homes is coming soon",
     });
     expect(message.text).toBe(
       preArrivalEmailText({

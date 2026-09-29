@@ -256,7 +256,7 @@ export async function sendPreArrivalEmail({
     to: email,
     bcc: adminEmail,
     replyTo: adminEmail,
-    subject: preArrivalEmailSubject(checkIn),
+    subject: preArrivalEmailSubject(),
     react: PreArrivalEmail(props),
     text: preArrivalEmailText(props),
   });
