@@ -1,5 +1,9 @@
 # Live booking confirmation via Server-Sent Events
 
+**ADW ID:** b1dafbec
+**Date:** 2026-09-29
+**Specification:** specs/issue-193-adw-b1dafbec-sdlc_planner-live-booking-confirmation-sse.md
+
 After Stripe Checkout the guest lands on `/booking/confirmation?session=<id>`.
 The page shows the booking's post-payment steps as they happen, without a
 refresh: `Payment received`, `Booking confirmed`, `Confirmation sent to <email>`,
