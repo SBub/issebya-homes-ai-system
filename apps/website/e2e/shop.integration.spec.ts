@@ -706,7 +706,17 @@ test.describe("Seller submission", () => {
   test("the shop links to the sell page", async ({ page }) => {
     await page.goto("/shop");
 
-    await page.getByRole("link", { name: "Offer it here." }).click();
+    // The link sits under the grid, so scrolling to it trips infinite scroll,
+    // and each new page pushes it down. Let the grid finish growing first, or
+    // the click lands where the link was a moment ago and nothing happens.
+    const sellLink = page.getByRole("link", { name: "Offer it here." });
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    await expect(async () => {
+      await sellLink.scrollIntoViewIfNeeded();
+      await expect(cards).toHaveCount(allProducts.length, { timeout: 1000 });
+    }).toPass();
+
+    await sellLink.click();
 
     await expect(page).toHaveURL("/shop/sell");
     await expect(page.getByRole("heading", { level: 1, name: "Offer a piece" })).toBeVisible();
