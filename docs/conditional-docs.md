@@ -326,6 +326,24 @@ procedures, not code documentation) and anything gitignored.
 
 ---
 
+## apps/patterns
+
+- `apps/patterns/AGENTS.md` — always, for any change under that app
+- `apps/patterns/README.md`
+  - Conditions:
+    - When adding or editing a pattern doc, or changing the frontmatter contract, the section order or the generated files
+- `apps/patterns/content/INDEX.md`
+  - Conditions:
+    - When planning UI data flow, Suspense, caching, pagination or forms in any Next app in this repo
+    - Generated; lists every pattern doc with a "read when" line. Read the matching `content/<slug>.mdx` files from there
+- `apps/patterns/app_docs/feature-066a1da6-patterns-library-app.md`
+  - Conditions:
+    - When changing how `apps/patterns` loads, validates or routes docs (registry, generated manifest, MDX plugins in `next.config.ts`)
+    - When a pattern doc fails the build or tests, or `INDEX.md`/the manifest reports as stale
+    - When a `/p/<slug>` page overflows horizontally on mobile
+
+---
+
 ## Cross-cutting constraints
 
 - `scripts/dev-webhook-gateway.ts` (read the file header)
