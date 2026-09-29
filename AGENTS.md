@@ -143,5 +143,8 @@ either webhook app.
 worktree its own server instead of testing whatever is already on 3000. Don't
 hardcode a port there, and don't assume 3000 is the one under test.
 
+`apps/patterns` is the same: not behind the webhook gateway, defaults to 3004,
+honours `PORT`.
+
 The repository runs a single shared local Supabase instance. Never reset it as
 part of a task.
