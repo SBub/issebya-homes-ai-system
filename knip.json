@@ -13,7 +13,7 @@
     },
     "apps/patterns": {
       "next": true,
-      "entry": ["src/**/*.unit.test.ts", "scripts/**/*.ts"],
+      "entry": ["src/**/*.unit.test.ts", "src/**/*.browser.test.tsx", "scripts/**/*.ts"],
       "project": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
       "ignoreDependencies": [
         "tailwindcss",
