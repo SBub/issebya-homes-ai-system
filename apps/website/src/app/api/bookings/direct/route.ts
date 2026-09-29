@@ -21,6 +21,11 @@ function flattenGuestEmail<T extends { guest_contacts?: EmbeddedGuestContact }>(
   return { ...rest, email: contact?.email ?? null };
 }
 
+// The step timestamps seed the confirmation page's live timeline
+// (ConfirmationTimeline); `access_token` is what it streams further steps by.
+const BOOKING_COLUMNS =
+  "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, status, created_at, confirmed_at, guest_email_sent_at, owner_email_sent_at, guest_contacts(email)";
+
 export async function GET(request: NextRequest) {
   const sessionId = request.nextUrl.searchParams.get("session");
 
@@ -55,9 +60,7 @@ export async function GET(request: NextRequest) {
           const supabase = createAdminClient();
           const { data, error: queryError } = await supabase
             .from("bookings")
-            .select(
-              "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, status, created_at, guest_contacts(email)",
-            )
+            .select(BOOKING_COLUMNS)
             .eq("stripe_session_id", sessionId)
             .in("status", ["pending", "confirmed"])
             .single();
@@ -86,9 +89,10 @@ export async function GET(request: NextRequest) {
                 if (session.payment_status === "paid") {
                   // Payment succeeded but webhook didn't update - recover
                   const supabase = createAdminClient();
+                  const confirmedAt = new Date().toISOString();
                   const { error: updateError } = await supabase
                     .from("bookings")
-                    .update({ status: "confirmed" })
+                    .update({ status: "confirmed", confirmed_at: confirmedAt })
                     .eq("stripe_session_id", sessionId)
                     .eq("status", "pending");
 
@@ -117,6 +121,7 @@ export async function GET(request: NextRequest) {
                     data: { sessionId },
                   });
                   booking.status = "confirmed";
+                  booking.confirmed_at = confirmedAt;
                   return { success: true };
                 } else {
                   return {
@@ -196,15 +201,14 @@ export async function GET(request: NextRequest) {
               guest_contact_id: guestContactId,
               stripe_session_id: sessionId,
               status: "confirmed",
+              confirmed_at: new Date().toISOString(),
             };
 
             const supabase = createAdminClient();
             const { data: newBooking, error: insertError } = await supabase
               .from("bookings")
               .insert(bookingData)
-              .select(
-                "access_token, room_type, check_in, check_out, nights, person_count, base_price, tourist_tax, total_amount, status, created_at, guest_contacts(email)",
-              )
+              .select(BOOKING_COLUMNS)
               .single();
 
             if (insertError) {

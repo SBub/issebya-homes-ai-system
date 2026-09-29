@@ -58,6 +58,9 @@ type BookingRow = {
   total_amount: number;
   status: string;
   created_at: string;
+  confirmed_at?: string | null;
+  guest_email_sent_at?: string | null;
+  owner_email_sent_at?: string | null;
   guest_contacts: { email: string } | null;
 };
 
@@ -81,7 +84,9 @@ const baseBooking: BookingRow = {
  * first `from("bookings")` call in the GET handler. The recovery-path update
  * (`.update(...).eq(...).eq(...)`, no further chaining — its result is
  * awaited directly) is the second, only reached when the booking is
- * "pending" and Stripe reports it as paid.
+ * "pending" and Stripe reports it as paid. The Stripe-fallback insert
+ * (`.insert(...).select(...).single()`) is the second call instead when the
+ * lookup finds no row.
  */
 function setupSupabaseMocks(
   initialBooking: BookingRow | null,
@@ -108,9 +113,19 @@ function setupSupabaseMocks(
           eq: vi.fn().mockResolvedValue({ error: updateError }),
         }),
       }),
+      insert: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({
+            data: { ...baseBooking, status: "confirmed" },
+            error: null,
+          }),
+        }),
+      }),
     };
   });
 }
+
+const ISO_TIMESTAMP = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
 // --- Tests ---
 
@@ -186,5 +201,58 @@ describe("GET /api/bookings/direct", () => {
 
     expect(res.status).toBe(500);
     expect(mockRevalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("stamps confirmed_at when recovering a pending booking to confirmed", async () => {
+    setupSupabaseMocks({
+      ...baseBooking,
+      status: "pending",
+      confirmed_at: null,
+      guest_email_sent_at: null,
+      owner_email_sent_at: null,
+    });
+    mockStripeRetrieve.mockResolvedValue({ payment_status: "paid" });
+
+    const { GET } = await import("../route");
+    const res = await GET(makeRequest("cs_test_123"));
+
+    expect(res.status).toBe(200);
+    const updateFn = mockSupabaseFrom.mock.results[1].value.update;
+    expect(updateFn).toHaveBeenCalledWith({ status: "confirmed", confirmed_at: ISO_TIMESTAMP });
+
+    // The page seeds its timeline from this response, so the in-memory row
+    // must carry the same timestamp the update wrote.
+    const json = await res.json();
+    expect(json.booking.confirmed_at).toBe(updateFn.mock.calls[0][0].confirmed_at);
+    expect(json.booking.access_token).toBe("tok_abc123");
+  });
+
+  it("stamps confirmed_at on the Stripe-fallback insert", async () => {
+    setupSupabaseMocks(null, { message: "No rows found" });
+    mockStripeRetrieve.mockResolvedValue({
+      payment_status: "paid",
+      metadata: {
+        roomType: "room1",
+        checkIn: "2025-07-01",
+        checkOut: "2025-07-03",
+        nights: "2",
+        personCount: "2",
+        basePrice: "195",
+        touristTax: "12",
+        total: "207",
+        email: "guest@example.com",
+        phone: "+14155552671",
+        guestName: "Guest Example",
+      },
+    });
+
+    const { GET } = await import("../route");
+    const res = await GET(makeRequest("cs_test_123"));
+
+    expect(res.status).toBe(200);
+    const insertFn = mockSupabaseFrom.mock.results[1].value.insert;
+    expect(insertFn).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "confirmed", confirmed_at: ISO_TIMESTAMP }),
+    );
   });
 });

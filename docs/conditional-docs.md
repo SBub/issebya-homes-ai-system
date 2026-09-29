@@ -265,6 +265,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `ProductCard` name link's `after:*` classes, the photo wrapper's `z-10`, or the stacking/positioning of anything inside a `/shop` card
     - When the description/price area of a `/shop` card stops navigating, or swipe or an arrow on a card photo navigates instead of flipping
     - When tempted to make card text selectable with `pointer-events`, or a Playwright click on card text fails with "intercepts pointer events"
+- `apps/website/app_docs/feature-b1dafbec-live-booking-confirmation-sse.md`
+  - Conditions:
+    - When adding a live status page or an SSE route
+    - When changing the booking confirmation page, the Stripe webhook's confirm/email steps, or the `bookings` step timestamps (`confirmed_at`, `guest_email_sent_at`, `owner_email_sent_at`)
+    - When the confirmation timeline stops at "Booking confirmed" or shows the "taking longer than usual" line
 
 ---
 

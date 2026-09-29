@@ -5,13 +5,16 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay } from "@/lib/date-utils";
+import { ConfirmationTimeline } from "./ui/ConfirmationTimeline";
 
 export const metadata: Metadata = {
   title: "Booking Confirmed – Issebya Homes",
 };
 
 type BookingData = {
-  access_token: string;
+  // Absent when /api/bookings/direct could not insert and answered from Stripe
+  // alone; the timeline then renders statically.
+  access_token?: string;
   room_type: string;
   check_in: string;
   check_out: string;
@@ -23,6 +26,9 @@ type BookingData = {
   email: string;
   status: string;
   created_at: string;
+  confirmed_at?: string | null;
+  guest_email_sent_at?: string | null;
+  owner_email_sent_at?: string | null;
 };
 
 const roomImages: Record<string, string> = {
@@ -139,8 +145,16 @@ export default async function BookingConfirmationPage({
             </div>
 
             <div className="pt-4 text-secondary">
-              A confirmation email has been sent to{" "}
-              <span className="font-bold">{booking.email}</span>
+              <ConfirmationTimeline
+                token={booking.access_token ?? null}
+                email={booking.email}
+                initial={{
+                  status: booking.status,
+                  confirmed_at: booking.confirmed_at ?? null,
+                  guest_email_sent_at: booking.guest_email_sent_at ?? null,
+                  owner_email_sent_at: booking.owner_email_sent_at ?? null,
+                }}
+              />
             </div>
 
             <p className="text-secondary">

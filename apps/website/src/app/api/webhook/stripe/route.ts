@@ -7,6 +7,23 @@ import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { stripe } from "@/lib/stripe";
 
+type EmailStepColumn = "guest_email_sent_at" | "owner_email_sent_at";
+
+// Records that an email step succeeded, for the confirmation page's live
+// timeline. Best effort: a failed write is reported but never changes the
+// webhook's response, so Stripe does not retry a booking that is confirmed.
+async function markStep(accessToken: string, column: EmailStepColumn) {
+  try {
+    const { error } = await createAdminClient()
+      .from("bookings")
+      .update({ [column]: new Date().toISOString() })
+      .eq("access_token", accessToken);
+    if (error) throw error;
+  } catch (err) {
+    captureException(err, { tags: { "booking.step": column } });
+  }
+}
+
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const sig = request.headers.get("stripe-signature");
@@ -141,6 +158,7 @@ export async function POST(request: NextRequest) {
               .update({
                 status: "confirmed",
                 payment_intent: paymentIntentId,
+                confirmed_at: new Date().toISOString(),
               })
               .eq("stripe_session_id", session.id)
               .eq("status", "pending")
@@ -171,6 +189,7 @@ export async function POST(request: NextRequest) {
                 stripe_session_id: session.id,
                 payment_intent: paymentIntentId,
                 status: "confirmed",
+                confirmed_at: new Date().toISOString(),
               })
               .select("access_token")
               .single();
@@ -225,6 +244,7 @@ export async function POST(request: NextRequest) {
               try {
                 await sendBookingConfirmationEmail(bookingEmailData, origin);
                 emailSpan?.setAttribute("email.sent", true);
+                await markStep(booking.access_token, "guest_email_sent_at");
               } catch (emailError) {
                 emailSpan?.setStatus({ code: 2, message: "Email send failed" });
                 captureException(emailError, {
@@ -248,6 +268,7 @@ export async function POST(request: NextRequest) {
               try {
                 await sendBookingNotificationEmail(bookingEmailData);
                 emailSpan?.setAttribute("email.sent", true);
+                await markStep(booking.access_token, "owner_email_sent_at");
               } catch (emailError) {
                 emailSpan?.setStatus({
                   code: 2,

@@ -96,39 +96,54 @@ function makeCheckoutCompletedEvent(metadata: Record<string, string> | null = va
   };
 }
 
+// The email-step timestamp writes (`update({ <column>: iso }).eq("access_token", …)`)
+// share the `update` mock with the confirm update; a payload without `status`
+// is a step write and resolves through this.
+const mockStepEq = vi.fn();
+
+const ISO_TIMESTAMP = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
 /** Supabase mock: update finds and confirms a pending booking */
 function mockSuccessfulUpdate() {
   mockSupabaseFrom.mockReturnValue({
-    update: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { access_token: "tok_abc123" },
-              error: null,
+    update: vi.fn((payload: Record<string, unknown>) =>
+      "status" in payload
+        ? {
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({
+                    data: { access_token: "tok_abc123" },
+                    error: null,
+                  }),
+                }),
+              }),
             }),
-          }),
-        }),
-      }),
-    }),
+          }
+        : { eq: mockStepEq },
+    ),
   });
 }
 
 /** Supabase mock: update finds nothing, fallback insert succeeds */
 function mockFallbackInsert() {
   mockSupabaseFrom.mockReturnValue({
-    update: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: null,
-              error: { code: "PGRST116", message: "No rows found" },
+    update: vi.fn((payload: Record<string, unknown>) =>
+      "status" in payload
+        ? {
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({
+                    data: null,
+                    error: { code: "PGRST116", message: "No rows found" },
+                  }),
+                }),
+              }),
             }),
-          }),
-        }),
-      }),
-    }),
+          }
+        : { eq: mockStepEq },
+    ),
     insert: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         single: vi.fn().mockResolvedValue({
@@ -143,18 +158,22 @@ function mockFallbackInsert() {
 /** Supabase mock: update finds nothing, insert fails with duplicate */
 function mockDuplicateInsert() {
   mockSupabaseFrom.mockReturnValue({
-    update: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: null,
-              error: { code: "PGRST116", message: "No rows found" },
+    update: vi.fn((payload: Record<string, unknown>) =>
+      "status" in payload
+        ? {
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({
+                    data: null,
+                    error: { code: "PGRST116", message: "No rows found" },
+                  }),
+                }),
+              }),
             }),
-          }),
-        }),
-      }),
-    }),
+          }
+        : { eq: mockStepEq },
+    ),
     insert: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         single: vi.fn().mockResolvedValue({
@@ -171,6 +190,7 @@ function mockDuplicateInsert() {
 describe("POST /api/webhook/stripe", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockStepEq.mockResolvedValue({ error: null });
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
   });
 
@@ -333,5 +353,88 @@ describe("POST /api/webhook/stripe", () => {
 
     // Webhook should still succeed even if emails fail
     expect(res.status).toBe(200);
+  });
+
+  it("stamps confirmed_at in the same update that confirms the pending booking", async () => {
+    mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
+    mockSuccessfulUpdate();
+    mockSendConfirmation.mockResolvedValue(undefined);
+    mockSendNotification.mockResolvedValue(undefined);
+
+    const { POST } = await import("../route");
+    await POST(makeWebhookRequest("{}", "sig_valid"));
+
+    const updateFn = mockSupabaseFrom.mock.results[0].value.update;
+    expect(updateFn).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "confirmed", confirmed_at: ISO_TIMESTAMP }),
+    );
+  });
+
+  it("stamps confirmed_at on the fallback insert", async () => {
+    mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
+    mockFallbackInsert();
+    mockSendConfirmation.mockResolvedValue(undefined);
+    mockSendNotification.mockResolvedValue(undefined);
+
+    const { POST } = await import("../route");
+    await POST(makeWebhookRequest("{}", "sig_valid"));
+
+    const insertFn = mockSupabaseFrom.mock.results[0].value.insert;
+    expect(insertFn).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "confirmed", confirmed_at: ISO_TIMESTAMP }),
+    );
+  });
+
+  it("stamps each email step by access_token after its send succeeds", async () => {
+    mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
+    mockSuccessfulUpdate();
+    mockSendConfirmation.mockResolvedValue(undefined);
+    mockSendNotification.mockResolvedValue(undefined);
+
+    const { POST } = await import("../route");
+    await POST(makeWebhookRequest("{}", "sig_valid"));
+
+    const updatePayloads = mockSupabaseFrom.mock.results.flatMap((r) =>
+      r.value.update.mock.calls.map((c: unknown[]) => c[0]),
+    );
+    expect(updatePayloads).toContainEqual({ guest_email_sent_at: ISO_TIMESTAMP });
+    expect(updatePayloads).toContainEqual({ owner_email_sent_at: ISO_TIMESTAMP });
+    expect(mockStepEq).toHaveBeenCalledTimes(2);
+    expect(mockStepEq).toHaveBeenNthCalledWith(1, "access_token", "tok_abc123");
+    expect(mockStepEq).toHaveBeenNthCalledWith(2, "access_token", "tok_abc123");
+  });
+
+  it("does not stamp the guest email when its send fails, but still stamps the owner email", async () => {
+    mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
+    mockSuccessfulUpdate();
+    mockSendConfirmation.mockRejectedValue(new Error("Resend is down"));
+    mockSendNotification.mockResolvedValue(undefined);
+
+    const { POST } = await import("../route");
+    const res = await POST(makeWebhookRequest("{}", "sig_valid"));
+
+    expect(res.status).toBe(200);
+    expect(mockSendNotification).toHaveBeenCalledOnce();
+    const updatePayloads = mockSupabaseFrom.mock.results.flatMap((r) =>
+      r.value.update.mock.calls.map((c: unknown[]) => c[0]),
+    );
+    expect(updatePayloads).not.toContainEqual({ guest_email_sent_at: ISO_TIMESTAMP });
+    expect(updatePayloads).toContainEqual({ owner_email_sent_at: ISO_TIMESTAMP });
+  });
+
+  it("still returns 200 when a step timestamp write fails", async () => {
+    mockConstructEvent.mockReturnValue(makeCheckoutCompletedEvent());
+    mockSuccessfulUpdate();
+    mockSendConfirmation.mockResolvedValue(undefined);
+    mockSendNotification.mockResolvedValue(undefined);
+    mockStepEq.mockResolvedValue({ error: { message: "db down" } });
+
+    const { POST } = await import("../route");
+    const res = await POST(makeWebhookRequest("{}", "sig_valid"));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true });
+    // Both sends still happened; the failed stamp did not abort the second.
+    expect(mockSendNotification).toHaveBeenCalledOnce();
   });
 });
