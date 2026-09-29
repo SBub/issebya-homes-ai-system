@@ -1,6 +1,8 @@
 import { Resend } from "resend";
 import { BookingConfirmationEmail } from "@/app/emails/BookingConfirmationEmail";
 import { BookingNotificationEmail } from "@/app/emails/BookingNotificationEmail";
+import { PreArrivalEmail } from "@/app/emails/PreArrivalEmail";
+import { preArrivalEmailSubject, preArrivalEmailText } from "@/lib/bookings/pre-arrival-email";
 import {
   formatCents,
   SELLER_CONDITION_LABELS,
@@ -209,5 +211,57 @@ export async function sendWishlistConfirmationEmail({
 
   if (error) {
     throw new Error(`Resend failed to send the wishlist confirmation email: ${error.message}`);
+  }
+}
+
+/**
+ * Sends a guest the pre-arrival email (address, parking, check-in and
+ * check-out arrangements), two days before check-in. The owner is in `bcc` so
+ * she sees exactly what went out, and in `replyTo` so the guest's reply with
+ * an arrival time reaches her. Throws on missing env or a Resend `{ error }`
+ * so the cron route can release its claim on the booking and report it.
+ */
+export async function sendPreArrivalEmail({
+  email,
+  guestName,
+  roomType,
+  checkIn,
+  checkOut,
+}: {
+  email: string;
+  guestName: string | null;
+  roomType: string;
+  checkIn: string;
+  checkOut: string;
+}): Promise<void> {
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+  if (!fromEmail) {
+    throw new Error("Missing environment variable: RESEND_FROM_EMAIL");
+  }
+
+  // The owner copy is part of the contract, so a missing address is a failed
+  // send rather than a silent skip.
+  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+
+  if (!adminEmail) {
+    throw new Error("Missing environment variable: ADMIN_NOTIFICATION_EMAIL");
+  }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const props = { guestName, roomLabel: formatRoomType(roomType), checkIn, checkOut };
+
+  const { error } = await resend.emails.send({
+    from: fromEmail,
+    to: email,
+    bcc: adminEmail,
+    replyTo: adminEmail,
+    subject: preArrivalEmailSubject(checkIn),
+    react: PreArrivalEmail(props),
+    text: preArrivalEmailText(props),
+  });
+
+  if (error) {
+    throw new Error(`Resend failed to send the pre-arrival email: ${error.message}`);
   }
 }

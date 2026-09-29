@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { preArrivalEmailText } from "@/lib/bookings/pre-arrival-email";
 import { WISHLIST_EMAIL_SUBJECT } from "@/lib/shop/wishlist";
 import { SITE_URL } from "@/lib/site";
-import { sendSellerSubmissionNotificationEmail, sendWishlistConfirmationEmail } from "../resend";
+import {
+  sendPreArrivalEmail,
+  sendSellerSubmissionNotificationEmail,
+  sendWishlistConfirmationEmail,
+} from "../resend";
 
 const mockSend = vi.fn();
 vi.mock("resend", () => ({
@@ -157,5 +162,66 @@ describe("sendWishlistConfirmationEmail", () => {
     mockSend.mockResolvedValue({ data: null, error: { name: "api_error", message: "down" } });
 
     await expect(sendWishlistConfirmationEmail(wish)).rejects.toThrow("down");
+  });
+});
+
+describe("sendPreArrivalEmail", () => {
+  const booking = {
+    email: "guest@example.com",
+    guestName: "Anna Silva",
+    roomType: "room1",
+    checkIn: "2026-10-01",
+    checkOut: "2026-10-04",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("ADMIN_NOTIFICATION_EMAIL", "owner@example.com");
+    vi.stubEnv("RESEND_FROM_EMAIL", "house@example.com");
+    mockSend.mockResolvedValue({ data: { id: "email-1" }, error: null });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("sends the guest the email with the owner in bcc and reply-to", async () => {
+    await sendPreArrivalEmail(booking);
+
+    expect(mockSend).toHaveBeenCalledOnce();
+    const message = mockSend.mock.calls[0][0];
+    expect(message).toMatchObject({
+      from: "house@example.com",
+      to: "guest@example.com",
+      bcc: "owner@example.com",
+      replyTo: "owner@example.com",
+      subject: "Your stay at issebya.homes starts on Thursday 1 October",
+    });
+    expect(message.text).toBe(
+      preArrivalEmailText({
+        guestName: "Anna Silva",
+        roomLabel: "Room 1",
+        checkIn: "2026-10-01",
+        checkOut: "2026-10-04",
+      }),
+    );
+    expect(message.react).toBeDefined();
+  });
+
+  it("throws when Resend returns an error", async () => {
+    mockSend.mockResolvedValue({ data: null, error: { message: "rate limited" } });
+
+    await expect(sendPreArrivalEmail(booking)).rejects.toThrow(
+      "Resend failed to send the pre-arrival email: rate limited",
+    );
+  });
+
+  it("throws without sending when the owner address is unset", async () => {
+    vi.stubEnv("ADMIN_NOTIFICATION_EMAIL", "");
+
+    await expect(sendPreArrivalEmail(booking)).rejects.toThrow(
+      "Missing environment variable: ADMIN_NOTIFICATION_EMAIL",
+    );
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });
