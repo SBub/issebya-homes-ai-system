@@ -315,6 +315,30 @@ test.describe("Shop", () => {
     ).toBeVisible();
   });
 
+  // A coordinate click, not `locator.click()`: at the description's centre the
+  // name link's stretched `::after` is on top, which Playwright's actionability
+  // check reports as "intercepts pointer events". That is the behaviour under
+  // test, and a mouse click there is what a visitor does. That the arrows
+  // still do not navigate is the flipping test above.
+  test("pressing a card's description opens the product", async ({ page }) => {
+    await page.goto("/shop");
+
+    const description = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .first()
+      .getByText(firstProduct.description);
+    await description.scrollIntoViewIfNeeded();
+    const box = await description.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`);
+    await expect(
+      page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
+    ).toBeVisible();
+  });
+
   test("the controls are in the page HTML", async ({ request }) => {
     // The dev server does not split the static shell from the streamed hole,
     // so this only proves the controls are in the first HTML response; the

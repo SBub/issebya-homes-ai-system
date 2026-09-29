@@ -210,3 +210,41 @@ test("an arrow click advances the image without navigating", async () => {
     document.removeEventListener("click", record, true);
   }
 });
+
+// Hit-testing needs the card inside the viewport: `elementFromPoint` returns
+// null for points outside it, and a full-width 3:5 card can be taller.
+const hit = (el: Element) => {
+  const r = el.getBoundingClientRect();
+  return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+};
+
+// The name link's `::after` covers the card; hit-testing a pseudo-element
+// returns its originating element, the name `<a>`.
+test("the description and price press through to the name link", async () => {
+  const { getByText } = await render(
+    <div style={{ width: 300 }}>
+      <ProductCard product={THREE} />
+    </div>,
+  );
+
+  for (const text of [THREE.description, "€12.00", "Test Brand"]) {
+    expect(hit(getByText(text).element())?.closest("a")?.id).toBe("product-linen-throw-name");
+  }
+});
+
+test("the photo stays on top of the stretched link", async () => {
+  const screen = await render(
+    <div style={{ width: 300 }}>
+      <ProductCard product={THREE} />
+    </div>,
+  );
+  const group = screen.getByRole("group", { name: "Product images" }).element();
+
+  const photoHit = hit(photo(screen).element());
+  expect(photoHit).not.toBeNull();
+  expect(group.contains(photoHit)).toBe(true);
+  expect(photoHit?.closest("a")?.id).not.toBe("product-linen-throw-name");
+
+  const next = screen.getByRole("button", { name: "Next image" }).element();
+  expect(next.contains(hit(next))).toBe(true);
+});
