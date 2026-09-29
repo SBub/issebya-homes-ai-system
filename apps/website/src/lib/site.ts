@@ -15,3 +15,9 @@
  * canonical, the sitemap and robots together.
  */
 export const SITE_URL = "https://issebya.com";
+
+/** The owner's WhatsApp chat link, shared by the site footer link and guest emails. */
+export const WHATSAPP_URL = "https://wa.me/351920742845";
+
+/** The same WhatsApp number, formatted for display next to that link. */
+export const WHATSAPP_DISPLAY_NUMBER = "+351 920 742 845";

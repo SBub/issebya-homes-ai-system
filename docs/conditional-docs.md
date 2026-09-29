@@ -98,6 +98,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding a table, column, or query
     - IMPORTANT: read before writing any migration
 
+- `apps/website/app_docs/feature-6d199710-pre-arrival-email-cron.md`
+  - Conditions:
+    - When adding a scheduled job (Vercel Cron) or a guest email
+    - When changing the pre-arrival email, its copy, `pre_arrival_email_sent_at`, or `/api/cron/pre-arrival`
+    - When a guest did not get, or got twice, their pre-arrival email
+
 - `apps/website/app_docs/database/production-migrations.md`
   - Conditions:
     - When a schema change has to reach production
