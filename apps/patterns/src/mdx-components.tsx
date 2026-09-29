@@ -17,7 +17,7 @@ const components = {
     <h3 className="text-xl font-bold mt-6 mb-2">{children}</h3>
   ),
   p: ({ children }: { children?: ReactNode }) => (
-    <p className="text-sm leading-relaxed mb-4">{children}</p>
+    <p className="text-sm leading-relaxed mb-4 [overflow-wrap:anywhere]">{children}</p>
   ),
   a: ({ children, ...props }: { children?: ReactNode; href?: string }) => (
     <a {...props} className="text-secondary-link">
@@ -30,14 +30,18 @@ const components = {
   ol: ({ children }: { children?: ReactNode }) => (
     <ol className="list-decimal pl-5 text-sm leading-relaxed mb-4 space-y-1">{children}</ol>
   ),
-  li: ({ children }: { children?: ReactNode }) => <li>{children}</li>,
+  li: ({ children }: { children?: ReactNode }) => (
+    <li className="[overflow-wrap:anywhere]">{children}</li>
+  ),
   // Inline code only. Code blocks arrive already highlighted by
   // rehype-pretty-code, which marks its own <code> with data attributes.
   code: ({ children, ...props }: { children?: ReactNode }) =>
     "data-language" in props ? (
       <code {...props}>{children}</code>
     ) : (
-      <code className="rounded-sm bg-white/70 px-1 py-0.5 text-[0.85em]">{children}</code>
+      <code className="rounded-sm bg-white/70 px-1 py-0.5 text-[0.85em] [overflow-wrap:anywhere]">
+        {children}
+      </code>
     ),
 } satisfies MDXComponents;
 
