@@ -1,0 +1,153 @@
+---
+title: Infinite scrolling
+kind: composite
+summary: A long sorted or filtered list should load page by page as the visitor scrolls, with page one from the server and a button when the observer cannot help.
+tags:
+  - pagination
+  - intersection-observer
+uses:
+  - server-prefetch-hydration
+  - suspense-without-flash
+code:
+  - path: apps/website/src/lib/shop/pagination.ts
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Keyset pagination on (createdAt, slug), the opaque base64url cursor and the shared query key.
+  - path: apps/website/src/app/(main)/shop/ui/ProductList.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: The sentinel callback ref, the Load more button and the retry line for next-page errors.
+  - path: apps/website/src/app/api/shop/products/route.ts
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Pages 2 and on; decodes the cursor outside the cache so a bad cursor is a 400.
+verifiedIn:
+  - 164
+  - 166
+  - 168
+updated: 2026-09-29
+---
+
+## Problem
+
+A catalogue that grows past one screen needs paging. Numbered pages break the browsing flow. Offset pagination duplicates or skips items when the list changes between two requests.
+
+## Mechanism
+
+Page one comes from the server, prefetched and hydrated into the client query cache. Pages 2 and on come from an API route that the client calls with a cursor.
+
+The cursor is a keyset bookmark: the `(createdAt, slug)` of the last item shown, in the current sort order. A page is the items that compare strictly after it, so an insert or a removal elsewhere in the list never shifts what comes next. The slug is the tie-breaker that makes the order total. The cursor is opaque to the client: base64url JSON that also carries the sort and the search term, so a cursor from one list is rejected by another.
+
+The sort and the search term are in the query key. Changing either starts a new query at its own page one, and the transition keeps the old cards on screen until it arrives.
+
+An invisible sentinel after the last card is watched by an `IntersectionObserver` with a `400px` root margin, so the next page starts loading before the visitor reaches the end. A "Load more" button is always there while a next page exists, for when the observer never fires. A failed next page shows a retry line in place of the button.
+
+## Combines
+
+<Combines />
+
+## Pattern
+
+Excerpt from apps/website/src/lib/shop/pagination.ts, trimmed.
+
+```ts
+export function encodeCursor(bookmark: CursorBookmark): string {
+  return toBase64Url(JSON.stringify(bookmark));
+}
+
+export function decodeCursor(cursor: string, sort: ShopSort, q: string): CursorBookmark {
+  // Throws UnknownCursorError, CursorSortMismatchError or CursorSearchMismatchError.
+}
+
+export function selectPage(
+  products: readonly Product[],
+  cursor: string | null,
+  limit: number,
+  sort: ShopSort,
+  q: string,
+): ProductsPage {
+  const sorted = sortProducts(filterByName(products, q), sort);
+
+  let start = 0;
+  if (cursor !== null) {
+    const bookmark = decodeCursor(cursor, sort, q);
+    const index = sorted.findIndex((product) => compareProducts(product, bookmark, sort) > 0);
+    start = index === -1 ? sorted.length : index;
+  }
+
+  const items = sorted.slice(start, start + limit);
+  const last = items.at(-1);
+  const nextCursor =
+    last && start + limit < sorted.length
+      ? encodeCursor({ sort, q, createdAt: last.createdAt, slug: last.slug })
+      : null;
+
+  return { items, nextCursor, total: sorted.length };
+}
+```
+
+Excerpt from apps/website/src/app/api/shop/products/route.ts, trimmed.
+
+```ts
+// Checked here, outside the cache: see `decodeCursor`. A bad cursor never
+// reaches `getProductsPage`, so it never becomes a cache entry either.
+if (cursor !== undefined) {
+  try {
+    decodeCursor(cursor, sort, q);
+  } catch (error) {
+    if (error instanceof UnknownCursorError) {
+      return NextResponse.json({ error: "Unknown cursor" }, { status: 400 });
+    }
+    throw error;
+  }
+}
+```
+
+Excerpt from apps/website/src/app/(main)/shop/ui/ProductList.tsx, trimmed.
+
+```tsx
+const canLoadMore = hasNextPage && !isFetchingNextPage;
+const sentinelRef = useCallback(
+  (sentinel: HTMLDivElement | null) => {
+    if (!sentinel || !canLoadMore) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          observer.disconnect();
+          void loadMore();
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  },
+  [canLoadMore, loadMore],
+);
+
+{
+  hasNextPage && !isFetchNextPageError && (
+    <div className="mt-8 flex justify-center">
+      <button type="button" onClick={loadMore} disabled={isFetchingNextPage}>
+        Load more
+      </button>
+    </div>
+  );
+}
+```
+
+## Pitfalls
+
+- Offset pagination duplicates or skips items when one is inserted or removed between two requests. Page by a keyset bookmark instead.
+- A keyset needs a tie-breaker. Without the unique slug, items sharing a `createdAt` could swap between requests and be duplicated or skipped across pages.
+- Decode the cursor in the route, before the cached page function. An error thrown inside a `"use cache"` scope loses its class on the way out, so the route could not tell a bad cursor (400) from a real failure (500).
+- Return `nextCursor: null` when a page reaches the end. Otherwise a list whose length is an exact multiple of the page size hands out a cursor to an empty trailing page.
+- Re-arm the observer only when "can load more" changes, not on every render. The callback ref depends on `canLoadMore` and `loadMore` alone, so the observer is recreated twice per page.
+- Put the sort and the search term in the query key. A change then starts a fresh page one with no effect and no manual cache reset.
+
+## When not to use
+
+- Small, fixed lists. Render them whole.
+- Content people need to reach the footer of, or to deep-link into a particular page of. Numbered pages or a plain "Load more" serve them better.
+
+## Code
+
+<CodeLinks />

@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f0eeea;
+  --foreground: #000000;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-work);
+  --font-hand: var(--font-hand);
+  /* The shop's two palette values, as in apps/website. */
+  --color-shop-ground: #6f6f6f;
+  --color-shop-card: #f1eac8;
+}
+
+@utility text-secondary {
+  @apply text-sm leading-relaxed text-foreground font-sans;
+}
+
+@utility text-secondary-link {
+  @apply text-secondary underline hover:text-gray-900 underline-offset-4;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* rehype-pretty-code output: a highlighted <pre> inside a <figure>. The code
+   scrolls inside its own box, so a long line never scrolls the page. */
+figure[data-rehype-pretty-code-figure] {
+  @apply mb-4;
+}
+
+figure[data-rehype-pretty-code-figure] pre {
+  @apply overflow-x-auto rounded-sm border border-gray-300 py-3 text-xs leading-relaxed;
+}
+
+figure[data-rehype-pretty-code-figure] pre [data-line] {
+  @apply px-4;
+}

@@ -1,0 +1,116 @@
+---
+title: Suspense without the flash
+kind: atom
+summary: A page has a slow or request-dependent part and must keep a static shell, a stable layout and the old content on screen while it updates.
+tags:
+  - suspense
+  - transitions
+  - error-boundary
+code:
+  - path: apps/website/src/app/(main)/shop/page.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Static shell with two Suspense boundaries, fallbacks sized like the content, the error boundary between them.
+  - path: apps/website/src/app/(main)/shop/ui/ShopControls.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Every URL change in a transition; isPending dims the grid and sets aria-busy.
+  - path: apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Error boundary outside the Suspense hole; retry runs router.refresh() and resetError() in one transition.
+verifiedIn:
+  - 164
+  - 166
+  - 168
+  - 174
+  - 182
+updated: 2026-09-29
+---
+
+## Problem
+
+A skeleton flashes on every sort or search, even though the old results were fine to look at. When the real content arrives it is a different size from the placeholder, and the page jumps.
+
+## Mechanism
+
+A component that is not ready suspends: during render it throws a promise (a thenable), and React shows the nearest `<Suspense>` fallback until that promise settles. `use()` is React's sanctioned way to read a promise in render and suspend on it.
+
+Under Cache Components, everything that does not read the request renders into the static shell. Only the component that awaits `searchParams` (or cookies, or headers) becomes a dynamic hole, and its `<Suspense>` fallback is what the prerendered HTML holds in its place.
+
+After a boundary has revealed its content once, an update wrapped in a transition does not replace it with the fallback again. React keeps the old content on screen until the new render is ready. `useTransition` gives you `isPending` for that window, so the old content can be dimmed and marked `aria-busy`. When the UI needs no pending state, a bare `startTransition` is enough.
+
+An error boundary around the Suspense hole catches a failed render there, and nothing outside it is lost.
+
+## Pattern
+
+Excerpt from apps/website/src/app/(main)/shop/page.tsx, trimmed.
+
+```tsx
+<Suspense
+  fallback={
+    <ShopControlsFallback>
+      <ProductGridSkeleton count={SHOP_PAGE_SIZE} />
+    </ShopControlsFallback>
+  }
+>
+  <ShopControls>
+    <ShopGridBoundary>
+      <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
+        <ShopProducts searchParams={searchParams} />
+      </Suspense>
+    </ShopGridBoundary>
+  </ShopControls>
+</Suspense>
+```
+
+Excerpt from apps/website/src/app/(main)/shop/ui/ShopControls.tsx, trimmed.
+
+```tsx
+const [isPending, startTransition] = useTransition();
+
+startTransition(() => {
+  router.replace(shopHref(pathname, { sort: shownSort, q: term }), { scroll: false });
+});
+
+<div
+  data-testid="shop-grid"
+  aria-busy={isPending || undefined}
+  className={`${SHOP_GRID_WRAPPER_CLASS} ${isPending ? "opacity-50" : ""}`}
+>
+  {children}
+</div>;
+```
+
+Excerpt from apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx, trimmed.
+
+```tsx
+<ErrorBoundary
+  onReset={reset}
+  fallback={({ resetError }) => (
+    <ShopGridError
+      onRetry={() =>
+        startTransition(() => {
+          router.refresh();
+          resetError();
+        })
+      }
+    />
+  )}
+>
+  {children}
+</ErrorBoundary>
+```
+
+## Pitfalls
+
+- A fallback that is not sized like the content causes the jump it was meant to prevent. The shop's controls fallback is the same row, disabled, and the grid skeleton renders `SHOP_PAGE_SIZE` card-sized placeholders.
+- Reading `searchParams`, cookies or headers above the boundary makes the whole page dynamic. The shop's page component passes the `searchParams` promise down unawaited; only `ShopProducts` awaits it.
+- Retrying a server-side failure needs `router.refresh()` as well as `resetError()`. Resetting alone re-renders the same errored RSC payload. A client query that rejected also needs `useQueryErrorResetBoundary`'s `reset`, or React Query re-throws the cached error on remount.
+- Next-page errors never reach the boundary. In suspense mode a query with data does not throw, so the list needs its own retry line for them.
+
+## When not to use
+
+- Content that is static anyway. With nothing to wait for, a boundary only adds a fallback nobody sees.
+- First load, where showing the skeleton is the right answer. A transition only keeps content that a boundary has already revealed.
+
+## Code
+
+<CodeLinks />

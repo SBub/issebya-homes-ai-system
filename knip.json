@@ -11,6 +11,17 @@
         "eslint-plugin-security"
       ]
     },
+    "apps/patterns": {
+      "next": true,
+      "entry": ["src/**/*.unit.test.ts", "scripts/**/*.ts"],
+      "project": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
+      "ignoreDependencies": [
+        "tailwindcss",
+        "eslint-config-prettier",
+        "eslint-plugin-no-secrets",
+        "eslint-plugin-security"
+      ]
+    },
     "apps/website": {
       "next": true,
       "entry": ["src/**/*.unit.test.ts", "src/**/*.browser.test.tsx", "e2e/**/*.ts"],
