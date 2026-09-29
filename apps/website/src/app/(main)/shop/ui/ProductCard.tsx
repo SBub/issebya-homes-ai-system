@@ -7,9 +7,18 @@ import { ProductImageCarousel } from "./ProductImageCarousel";
  *
  * The card is an `<article>`, not one big link: the carousel's arrows are
  * buttons, and a button inside an `<a>` is invalid HTML that navigates on
- * every tap. The product name is the card's link and carries its accessible
- * name; `aria-labelledby` names the article after it too. The photo is a
- * second, pointer-only link to the same page (see `ProductImageCarousel`).
+ * every tap. The product name is still the card's single accessible link and
+ * carries its accessible name; `aria-labelledby` names the article after it
+ * too. Its `::after` stretches over the whole article (a "stretched link"), so
+ * a press on the brand, price, description or padding lands on the name link.
+ *
+ * The photo wrapper is `z-10`, above that overlay, so over the photo the
+ * carousel keeps the pointer: its second, pointer-only link to the same page
+ * (see `ProductImageCarousel`), its arrows and its touch swipe. If the overlay
+ * covered the photo, touch events would target the name `<a>` outside the
+ * carousel and swipe would break. The trade-off is that the text below the
+ * photo cannot be selected by dragging. That is deliberate: a `pointer-events`
+ * workaround reopens the dead area this pattern closes.
  *
  * A portrait 3:5 card with the photo filling the top 58%, per the design. The
  * one exception is the three-column `md` range (768-1023px), where a 3:5 card
@@ -31,8 +40,11 @@ export function ProductCard({ product }: { product: Product }) {
   const href = `/shop/${slug}`;
 
   return (
-    <article aria-labelledby={nameId} className={`group ${PRODUCT_CARD_BOX_CLASS} text-foreground`}>
-      <div className="relative w-full basis-[58%] shrink-0 overflow-hidden">
+    <article
+      aria-labelledby={nameId}
+      className={`group relative ${PRODUCT_CARD_BOX_CLASS} text-foreground`}
+    >
+      <div className="relative z-10 w-full basis-[58%] shrink-0 overflow-hidden">
         <ProductImageCarousel
           images={images}
           slug={slug}
@@ -47,7 +59,7 @@ export function ProductCard({ product }: { product: Product }) {
           <Link
             href={href}
             id={nameId}
-            className="group-hover:underline hover:underline underline-offset-4"
+            className="group-hover:underline hover:underline underline-offset-4 after:absolute after:inset-0 after:content-['']"
           >
             {name}
           </Link>
