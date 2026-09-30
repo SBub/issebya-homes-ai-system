@@ -20,19 +20,21 @@ updated: 2026-09-30
 
 ## Problem
 
-Some values live outside React: whether the browser is online, a media query, a socket, an event stream, a store from another library. A component that shows one has to subscribe, read, and re-render when it changes. Done by hand with `useEffect` and `useState`, the first render shows a guess until the effect runs, the read and the subscribe happen in separate steps so a change between them is lost, and two components reading the same store in one render can show different values.
+Some values live outside React. Whether the browser is online. A media query. An open event stream. A store from another library. A component that shows one of these has to subscribe to it, read it, and re-render when it changes.
+
+You can do that by hand with `useEffect` and `useState`. Three things go wrong. The first render shows a guess, because the effect has not run yet. The read and the subscribe happen in separate steps, so a change between them is lost. And two components reading the same store in one render can show different values. React calls that tearing: one screen shows two versions of the same value.
 
 ## Mechanism
 
-`useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)` returns the store's current value and re-renders the component when it changes. The three functions divide the work.
+Call `useSyncExternalStore` with three functions. It returns the store's current value and re-renders the component when that value changes.
 
-`getSnapshot` reads the value. React calls it during render and again before commit, to check that nothing changed in between. While the store has not changed, every call must return the same value by `Object.is`: a primitive, or the same object reference. When the store changes, `getSnapshot` returns a different value and React re-renders. A store that holds an object keeps the last snapshot and replaces it, whole, when something changes; it never mutates it in place.
+`getSnapshot` reads the value. React calls it on every render, and again before commit to check that nothing changed in between. While the store has not changed, every call must return the same value by `Object.is`. A primitive is fine. An object must be the same reference. So a store that holds an object keeps the last snapshot and replaces it whole when something changes. It never mutates it in place.
 
-`subscribe` registers a callback and returns the function that removes it. React calls it after the component mounts and calls the returned function on unmount. When the store changes, the store calls the callback; React then calls `getSnapshot`, compares the result with the last one, and re-renders only when it differs. If a different `subscribe` function arrives on a re-render, React unsubscribes and subscribes again with the new one, so `subscribe` lives outside the component, or in `useCallback` when it closes over a prop.
+`subscribe` registers a callback and returns a function that removes it. React calls `subscribe` after the component mounts and calls the returned function on unmount. When the store changes, the store calls the callback. React then calls `getSnapshot`, compares the result with the last one, and re-renders only when it differs. If you pass a different `subscribe` function on a re-render, React unsubscribes and subscribes again. So keep `subscribe` outside the component, or in `useCallback` when it closes over a prop.
 
-`getServerSnapshot` is the value for server rendering and for hydration on the client. Both renders must produce the same markup, so it returns a fixed value that needs no browser API. After hydration React switches to `getSnapshot`, and when that differs the component re-renders once. Without it, rendering the component on the server throws.
+`getServerSnapshot` is the value for server rendering and for hydration on the client. Both must produce the same markup, so it returns a fixed value that needs no browser API. After hydration, React switches to `getSnapshot`. If that value differs, the component re-renders once. Without `getServerSnapshot`, rendering the component on the server throws.
 
-The value is read in render, straight from the store: no render mixes an old and a new value, which is the "sync" in the name. In return, a store change during a transition is applied as a blocking update, and a render must not suspend on the value it returns.
+The "sync" in the name means React reads the value in render, straight from the store. No render mixes an old and a new value. Two things follow. A store change during a transition is applied as a blocking update. And a render must not suspend on the value the hook returns.
 
 ## Pattern
 
@@ -60,7 +62,7 @@ export function getServerSnapshot() {
 }
 ```
 
-`navigator.onLine` is a boolean, so `getSnapshot` needs no cache: two reads of the same state are equal by `Object.is`. The server has no `navigator`, and the fixed `true` gives the server and the hydrating client the same markup.
+`navigator.onLine` is a boolean, so `getSnapshot` needs no cache. Two reads of the same state are equal by `Object.is`. The server has no `navigator`, so `getServerSnapshot` returns a fixed `true`. The server and the hydrating client render the same markup.
 
 The component calls the hook with the three functions and renders the value.
 
@@ -77,7 +79,7 @@ export function OnlineIndicator() {
 }
 ```
 
-There is no effect and no state. React subscribes after mount, reads `navigator.onLine` on every render, and re-renders when an `online` or `offline` event fires; the unsubscribe runs on unmount.
+There is no effect and no state. React subscribes after mount and reads `navigator.onLine` on every render. When an `online` or `offline` event fires, React re-renders. On unmount, React runs the unsubscribe.
 
 A page mounts the indicator.
 
@@ -89,11 +91,11 @@ export default function Page() {
 }
 ```
 
-The page is a Server Component and prerenders with "Online" in the HTML, from `getServerSnapshot`. A browser that is offline re-renders to "Offline" right after hydration.
+The page is a Server Component. It prerenders with "Online" in the HTML, from `getServerSnapshot`. A browser that is offline re-renders to "Offline" right after hydration.
 
 ### The same shape over a stream
 
-A store whose value is an object, or whose source has to be opened and closed, keeps the same three functions and adds two things: it holds the last snapshot and replaces it only when something changed, and its `subscribe` opens the source on the first listener and closes it when the last one leaves. [Server-Sent Events from a Route Handler](/p/sse-route-handler) has that store in full, `app/progress-store.ts`, together with the route it reads from. Its component is the indicator above with an object in place of the boolean.
+A store can hold an object instead of a boolean, and its source may need to be opened and closed. The three functions stay the same. The store adds two things. It keeps the last snapshot and replaces it only when something changes. Its `subscribe` opens the source for the first listener and closes it when the last one leaves. [Server-Sent Events from a Route Handler](/p/sse-route-handler) has that store in full, `app/progress-store.ts`, with the route it reads from. Its component is the indicator above with an object in place of the boolean.
 
 ```tsx title="app/ProgressView.tsx"
 "use client";
@@ -118,7 +120,7 @@ Every render destructures one snapshot, so `percent` and `status` always come fr
 
 The console says `The result of getSnapshot should be cached to avoid an infinite loop`, then `Maximum update depth exceeded`.
 
-🔴 `getSnapshot` builds a new object on every call. Two calls in one render are not equal by `Object.is`, so React sees a change on every read and renders again. This is `getSnapshot` in the stream store.
+🔴 `getSnapshot` builds a new object on every call. Two calls in one render are not equal by `Object.is`. React sees a change on every read and renders again, without end. This is `getSnapshot` in the stream store.
 
 ```ts title="app/progress-store.ts"
 export function getSnapshot() {
@@ -126,7 +128,7 @@ export function getSnapshot() {
 }
 ```
 
-✅ Return the object the store holds, and replace it in `update` when an event arrives. Two reads between events give the same reference.
+✅ Return the object the store holds. Replace it in `update` when an event arrives. Two reads between events give the same reference.
 
 ```ts title="app/progress-store.ts"
 function update(patch: Partial<typeof initial>) {
@@ -141,7 +143,7 @@ export function getSnapshot() {
 
 The stream closes and reopens on every render.
 
-🔴 `subscribe` is created inside the component. Every render passes a new function, so React unsubscribes and subscribes again each time, and a store that closes its source on the last unsubscribe closes and reopens it. This is the hook call in `ProgressView`.
+🔴 `subscribe` is created inside the component. Every render passes a new function, so React unsubscribes and subscribes again. A store that closes its source on the last unsubscribe closes and reopens it each time. This is the hook call in `ProgressView`.
 
 ```tsx title="app/ProgressView.tsx"
 export function ProgressView() {
@@ -167,24 +169,24 @@ export function ProgressView() {
 
 ### In this repo
 
-- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-store.ts) is the stream store: `update` replaces the snapshot and notifies, `subscribe` returns an unsubscribe that closes the `EventSource` when the last listener leaves, `getServerSnapshot` returns the fixed initial object.
-- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/demos/SseProgressDemo.tsx) is the component: one `useSyncExternalStore` call with the module-level functions, then a render from the snapshot; its buttons call the store's `run` and `disconnect`.
+- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-store.ts) is the stream store. `update` replaces the snapshot and notifies the listeners. `subscribe` returns an unsubscribe that closes the `EventSource` when the last listener leaves. `getServerSnapshot` returns the fixed initial object.
+- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/demos/SseProgressDemo.tsx) is the component. It makes one `useSyncExternalStore` call with the module-level functions and renders from the snapshot. Its buttons call the store's `run` and `disconnect`.
 
 ## Pitfalls
 
 - **`The result of getSnapshot should be cached to avoid an infinite loop`, then `Maximum update depth exceeded`.** `getSnapshot` returns a new object or array on every call. Keep the last snapshot in the store and return it until something changes. See Wrong and right above.
-- **The component re-subscribes on every render, or the stream reopens on every render.** `subscribe` is created inside the component. Move it to module level, or wrap it in `useCallback` when it depends on a prop. See Wrong and right above.
-- **Hydration mismatch, or `Missing getServerSnapshot, which is required for server-rendered content`.** The component renders on the server with no `getServerSnapshot`, or with one that reads a browser API. Return a fixed value that the server and the hydrating client both produce, and let the browser correct it after hydration.
-- **The store changed but the screen did not.** The store mutated the snapshot in place and returned the same reference, so `Object.is` saw no change. Replace the object.
-- **The source opens twice in development.** Strict Mode mounts, unmounts and mounts again, so `subscribe` runs, its unsubscribe runs, and it runs once more. The unsubscribe must undo everything, including closing a source; then the second run is clean. Production mounts once.
-- **A transition stopped keeping the old screen on.** The store changed during a non-blocking transition, and React applied that update as blocking. Keep store updates out of transitions, or accept the blocking update.
+- **The component re-subscribes on every render, or the stream reopens on every render.** `subscribe` is created inside the component. Move it to module level. When it depends on a prop, wrap it in `useCallback`. See Wrong and right above.
+- **Hydration mismatch, or `Missing getServerSnapshot, which is required for server-rendered content`.** The component renders on the server without `getServerSnapshot`, or with one that reads a browser API. Return a fixed value that the server and the hydrating client both produce. Let the browser correct it after hydration.
+- **The store changed but the screen did not.** The store mutated the snapshot in place and returned the same reference. `Object.is` saw no change. Replace the object instead.
+- **The source opens twice in development.** Strict Mode mounts, unmounts and mounts the component again. So `subscribe` runs, its unsubscribe runs, and `subscribe` runs once more. Make the unsubscribe undo everything, including closing a source. Then the second run is clean. Production mounts once.
+- **A transition stopped keeping the old screen on.** The store changed during a transition, and React applied that update as blocking. Keep store updates out of transitions, or accept the blocking update.
 
 ## When not to use
 
-- State that React owns: a form field, an open menu, a selected tab. Use `useState`.
-- A value derived from props or state. Compute it in render, with `useMemo` when it is expensive.
-- Data fetched from a server. A query library (React Query, SWR) or `use(promise)` handles loading, errors and caching; a store snapshot has none of that, and a render must not suspend on a store value.
-- A store from a library that already ships a hook (`useSelector`, `useStore`). It calls `useSyncExternalStore` for you.
+- State that React owns. A form field, an open menu, a selected tab. Use `useState`.
+- A value derived from props or state. Compute it in render. Use `useMemo` when it is expensive.
+- Data fetched from a server. A query library such as React Query or SWR, or `use(promise)`, handles loading, errors and caching. A store snapshot has none of that, and a render must not suspend on a store value.
+- A store from a library that already ships a hook, such as `useSelector` or `useStore`. That hook calls `useSyncExternalStore` for you.
 
 ## Code
 
