@@ -1,3 +1,6 @@
+import { addBreadcrumb } from "@sentry/nextjs";
+import type { PostgrestError } from "@supabase/supabase-js";
+
 import { createAdminClient } from "@/lib/shared/supabase";
 
 interface UpsertGuestContactParams {
@@ -37,6 +40,13 @@ function buildFields({
   };
 }
 
+type AdminClient = ReturnType<typeof createAdminClient>;
+type Fields = ReturnType<typeof buildFields>;
+type WriteFields = Fields | Omit<Fields, "phone">;
+
+type Target =
+  { kind: "insert"; fields: Fields } | { kind: "update"; id: string; fields: WriteFields };
+
 /**
  * Upserts a guest_contacts row and returns its id, so bookings can link via
  * guest_contact_id instead of duplicating guest identity fields onto the
@@ -46,91 +56,126 @@ function buildFields({
  * `guest_contacts` has independent UNIQUE constraints on both `phone` and
  * `email` (see 20260821160000_link_bookings_to_guest_contacts.sql, which
  * added the email one during the bookings/guest_contacts backfill). A plain
- * `.upsert(..., { onConflict: "phone" })` only guards the phone constraint —
- * a guest with a pre-existing phone-less row keyed by email (e.g. from that
- * backfill, or simply a past booking under the same email but no phone at
- * the time) collides on guest_contacts_email_key the moment they book again
- * with a real phone number, since Postgres tries the INSERT branch and hits
- * the OTHER unique constraint. Confirmed in production: Sentry issue
- * JAVASCRIPT-NEXTJS-1E, "duplicate key value violates unique constraint
- * guest_contacts_email_key".
+ * `.upsert(..., { onConflict: "phone" })` only guards the phone constraint,
+ * which is what caused Sentry issue JAVASCRIPT-NEXTJS-1E ("duplicate key
+ * value violates unique constraint guest_contacts_email_key").
  *
- * Fixed by looking the row up by phone OR email first, then updating that
- * row if found, only falling back to INSERT for a genuinely new guest.
+ * A guest can also legitimately be split across two rows: GCA creates
+ * phone-keyed rows from WhatsApp, bookings and the backfill create
+ * email-keyed ones. So the row is resolved by email first, then by phone,
+ * as two exact lookups. When they hit two different rows, the email row is
+ * the booking's contact (bookings.guest_contact_id) and is updated without
+ * `phone`, since another row owns it. The phone row is never touched, because
+ * GCA keys WhatsApp history by phone; a warning with both ids is logged so
+ * the owner can merge them by hand in Studio.
+ *
+ * A unique violation on either write (a concurrent insert, or a lookup gone
+ * stale) triggers one re-resolution and one retry. Not a paranoid retry
+ * loop — this is a low-traffic two-room B&B, one retry covers the realistic
+ * window.
  */
 export async function upsertGuestContact(params: UpsertGuestContactParams): Promise<string> {
   const supabase = createAdminClient();
   const fields = buildFields(params);
 
-  const { data: existing, error: lookupError } = await supabase
-    .from("guest_contacts")
-    .select("id, phone, email")
-    .or(`phone.eq.${params.phone},email.eq.${params.email}`)
-    .limit(1)
-    .maybeSingle();
+  let result = await write(supabase, await resolveTarget(supabase, params, fields));
 
-  if (lookupError) {
-    throw lookupError;
+  if (result.error?.code === UNIQUE_VIOLATION) {
+    result = await write(supabase, await resolveTarget(supabase, params, fields));
   }
 
-  if (existing) {
-    return updateExisting(supabase, existing.id, fields);
+  if (result.error) {
+    throw result.error;
   }
 
-  const { data: inserted, error: insertError } = await supabase
-    .from("guest_contacts")
-    .insert(fields)
-    .select("id")
-    .single();
-
-  if (!insertError) {
-    return inserted.id;
+  if (!result.id) {
+    throw new Error("guest_contacts write returned no row");
   }
 
-  // Race: another request inserted a matching phone/email between our
-  // lookup and this insert. Not a paranoid retry loop — this is a low-
-  // traffic two-room B&B, one retry-as-update is enough to cover the
-  // realistic window, not a high-concurrency system needing backoff.
-  if (insertError.code === UNIQUE_VIOLATION) {
-    const { data: retryExisting, error: retryLookupError } = await supabase
-      .from("guest_contacts")
-      .select("id")
-      .or(`phone.eq.${params.phone},email.eq.${params.email}`)
-      .limit(1)
-      .maybeSingle();
-
-    if (retryLookupError || !retryExisting) {
-      throw retryLookupError ?? insertError;
-    }
-
-    return updateExisting(supabase, retryExisting.id, fields);
-  }
-
-  throw insertError;
+  return result.id;
 }
 
-async function updateExisting(
-  supabase: ReturnType<typeof createAdminClient>,
-  id: string,
-  fields: ReturnType<typeof buildFields>,
-): Promise<string> {
-  // Merge, don't blindly overwrite: the incoming call is the guest's
-  // current stated phone/email/name, so it wins over whatever's stored —
-  // this is the same "guest just told us their info again" case as a
-  // returning guest updating their number, not a conflict to resolve
-  // between two different guests (that scenario doesn't arise here: the
-  // row was found precisely because phone OR email already matched this
-  // guest's own identity).
+async function findByEmail(supabase: AdminClient, email: string) {
   const { data, error } = await supabase
     .from("guest_contacts")
-    .update(fields)
-    .eq("id", id)
-    .select("id")
-    .single();
+    .select("id, phone, email")
+    .eq("email", email)
+    .maybeSingle();
 
-  if (error || !data) {
-    throw error ?? new Error("guest_contacts update returned no row");
+  if (error) {
+    throw error;
   }
 
-  return data.id;
+  return data;
+}
+
+async function findByPhone(supabase: AdminClient, phone: string) {
+  const { data, error } = await supabase
+    .from("guest_contacts")
+    .select("id, phone, email")
+    .eq("phone", phone)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+async function resolveTarget(
+  supabase: AdminClient,
+  params: UpsertGuestContactParams,
+  fields: Fields,
+): Promise<Target> {
+  // Sequential on purpose: email first, then phone.
+  const emailRow = await findByEmail(supabase, params.email);
+  const phoneRow = await findByPhone(supabase, params.phone);
+
+  if (emailRow && phoneRow && emailRow.id !== phoneRow.id) {
+    const emailRowId = emailRow.id;
+    const phoneRowId = phoneRow.id;
+    // Ids only: no phone, email or name in logs.
+    console.warn(
+      "[guest-contacts] phone and email belong to different rows; linked to email row, phone left on its own row",
+      { emailRowId, phoneRowId },
+    );
+    addBreadcrumb({
+      category: "guest_contacts",
+      level: "warning",
+      message: "split guest contact",
+      data: { emailRowId, phoneRowId },
+    });
+
+    const { phone: _phone, ...withoutPhone } = fields;
+    return { kind: "update", id: emailRowId, fields: withoutPhone };
+  }
+
+  // Same row, or only one of the keys is taken: the other key is free, so
+  // the incoming phone/email/name (the guest's current stated details) is
+  // written in full onto that row.
+  const existing = emailRow ?? phoneRow;
+  if (existing) {
+    return { kind: "update", id: existing.id, fields };
+  }
+
+  return { kind: "insert", fields };
+}
+
+async function write(
+  supabase: AdminClient,
+  target: Target,
+): Promise<{ id?: string; error?: PostgrestError }> {
+  const query =
+    target.kind === "update"
+      ? supabase.from("guest_contacts").update(target.fields).eq("id", target.id)
+      : supabase.from("guest_contacts").insert(target.fields);
+
+  const { data, error } = await query.select("id").single();
+
+  if (error) {
+    return { error };
+  }
+
+  return { id: data?.id };
 }
