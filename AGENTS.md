@@ -120,6 +120,10 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
   `VERCEL_TOKEN=… VERCEL_TEAM_ID=… yarn vercel:prune`. The selection logic is
   in `scripts/lib/vercel-prune.ts`; change it together with its unit test
   (`apps/website/src/lib/__tests__/vercel-prune.unit.test.ts`).
+- Scheduled jobs are Vercel Cron entries in each app's own `vercel.json`
+  (`crons`). They run only against the production deployment, never on
+  previews or locally, so a new cron's first real run is after promotion to
+  `master`.
 
 ## Environment files
 

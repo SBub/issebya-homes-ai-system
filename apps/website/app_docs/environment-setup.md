@@ -43,6 +43,15 @@ See `app_docs/database/production-migrations.md` for deploying database changes.
 | `SUPABASE_ANON_KEY`         | Public anon key for client-side/guest access         |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key for admin operations (bypasses RLS) |
 
+## Email and Scheduled Jobs
+
+| Variable                   | Description                                                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`           | Resend API key for every outgoing email                                                                                                                                      |
+| `RESEND_FROM_EMAIL`        | Sender address for every outgoing email; a send throws if it is unset                                                                                                        |
+| `ADMIN_NOTIFICATION_EMAIL` | The owner's address. Receives booking and shop notifications, and is the `bcc` and `replyTo` of the guest pre-arrival email (that email fails, and is retried, if it is unset) |
+| `CRON_SECRET`              | Bearer secret Vercel sends to cron routes (`/api/cron/pre-arrival`). Production only; the route returns 500 if it is unset and 401 on any other `Authorization` header       |
+
 ## AI Agent Rules
 
 AI agents must **NEVER** read the following files:

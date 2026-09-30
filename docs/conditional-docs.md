@@ -98,6 +98,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding a table, column, or query
     - IMPORTANT: read before writing any migration
 
+- `apps/website/app_docs/feature-6d199710-pre-arrival-email-cron.md`
+  - Conditions:
+    - When adding a scheduled job (Vercel Cron) or a guest email
+    - When changing the pre-arrival email, its copy, `pre_arrival_email_sent_at`, or `/api/cron/pre-arrival`
+    - When a guest did not get, or got twice, their pre-arrival email
+
 - `apps/website/app_docs/database/production-migrations.md`
   - Conditions:
     - When a schema change has to reach production
@@ -265,6 +271,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing the `ProductCard` name link's `after:*` classes, the photo wrapper's `z-10`, or the stacking/positioning of anything inside a `/shop` card
     - When the description/price area of a `/shop` card stops navigating, or swipe or an arrow on a card photo navigates instead of flipping
     - When tempted to make card text selectable with `pointer-events`, or a Playwright click on card text fails with "intercepts pointer events"
+- `apps/website/app_docs/feature-0a3bfba6-guest-contact-split-row-upsert.md`
+  - Conditions:
+    - When changing `upsertGuestContact`, its lookup order, or which fields it writes to `guest_contacts`
+    - When checkout, the Stripe webhook or `api/bookings/direct` fails with `23505` on `guest_contacts_email_key` or `guest_contacts_phone_key`
+    - When the `[guest-contacts] phone and email belong to different rows` warning appears and you need to know which row a booking links to
 
 ---
 
