@@ -273,7 +273,7 @@ events.addEventListener("done", () => {
 
 - **Every event arrives at once, when the stream ends.** A proxy is buffering the response. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
 - **The page reports success on a run that failed.** The 200 went out before the work started. A later failure cannot change it. Send the error as an event and let the page act on it.
-- **The page stalls once a few tabs are open.** Browsers allow six HTTP/1.1 connections per origin. Each open stream holds one. HTTP/2 lifts the limit.
+- **The seventh stream never connects.** Over HTTP/1.1 a browser allows six open connections per domain, shared across every tab. Each `EventSource` holds one, so a visitor with six tabs of your site open gets a seventh that waits forever. Chrome and Firefox will not change this. HTTP/2 lifts the limit to about 100 streams per connection, negotiated with the server. Vercel serves production over HTTP/2, but `next dev` is HTTP/1.1, and a proxy that speaks HTTP/1.1 to the browser brings the six back. Close the stream when the tab is hidden, or share one stream across tabs with a `SharedWorker` or `BroadcastChannel`.
 - **The function times out, or the bill grows with the number of visitors.** Every open stream is one function instance, billed for as long as it is open. Bound the run's lifetime.
 - **Timers keep running after the tab is closed.** Nothing listened to `request.signal`. Stop the job on abort and in `cancel`.
 - **`EventSource` reconnects forever after the stream ends.** There was no `done` event, so the close looked like a drop. See Wrong and right above.
@@ -283,6 +283,7 @@ events.addEventListener("done", () => {
 - Upload progress. The browser already knows it. Use `XMLHttpRequest.upload.onprogress`.
 - Data that changes rarely. Poll or revalidate instead of holding a connection open.
 - Anonymous, high-traffic pages. Every open tab keeps a serverless function running until the visitor leaves. You pay for each of those seconds, and the platform caps how many functions can run at once, so a busy page hits the cap. Poll instead, or hand the connections to a pub/sub service such as Supabase Realtime.
+- One feed for everyone, such as a live price chart. Every browser opens its own connection, so a million viewers means a million open responses, even though the data is identical. A Route Handler cannot fan one stream out to many clients. Poll a cached response instead, or publish once to a pub/sub service that holds the connections for you.
 
 ## Code
 
