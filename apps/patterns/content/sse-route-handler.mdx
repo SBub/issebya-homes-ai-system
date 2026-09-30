@@ -10,6 +10,9 @@ code:
   - path: apps/patterns/src/app/api/demo/progress/route.ts
     ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
     note: Resume id from the query param or the Last-Event-ID header, the SSE headers, the stream bound to request.signal.
+  - path: apps/patterns/src/lib/sse/frame.ts
+    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    note: The frame format, id, event and data lines ended by a blank line, and the ping comment.
   - path: apps/patterns/src/lib/sse/progress-stream.ts
     ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
     note: The ReadableStream with ids, pings, a closing done event, and a timer cleared on abort or cancel.
@@ -18,7 +21,7 @@ code:
     note: EventSource with named events, Disconnect, and resume by query param.
 verifiedIn:
   - 196
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 import { SseProgressDemo } from "@/app/demos/SseProgressDemo";
@@ -31,7 +34,7 @@ A page waits on server work that takes seconds and moves in steps. Polling is ei
 
 A stream is one long HTTP response. The Route Handler returns a `Response` whose body is a `ReadableStream`, and keeps writing to it while the connection is open.
 
-Each event is a frame: an `id:` line, an `event:` line, a `data:` line, then a blank line. The browser dispatches nothing until it sees that blank line. `EventSource` fires a listener per `event:` name.
+Each event is a frame of `field: value` lines ended by a blank line. The browser dispatches nothing until it sees that blank line, and `EventSource` fires a listener per `event:` name.
 
 The browser remembers the last `id:` it received. When the connection drops, `EventSource` reconnects on its own and sends that id as the `Last-Event-ID` header, so the server can resume after it.
 
@@ -59,98 +62,121 @@ Press Run demo, then Disconnect mid-run, then Run demo again. The second run sta
 
 ## Pattern
 
-Excerpt from apps/patterns/src/app/api/demo/progress/route.ts, trimmed.
+One event on the wire is three `field: value` lines and a blank line.
 
-```ts
-export function GET(request: Request) {
-  const fromId = parseResumeId(
-    new URL(request.url).searchParams.get("lastEventId") ?? request.headers.get("last-event-id"),
-  );
+```text
+id: 1
+event: progress
+data: {"percent":10}
 
-  return new Response(createProgressStream({ fromId, delayMs: 500, signal: request.signal }), {
-    headers: SSE_HEADERS,
+```
+
+The blank line is part of the frame. The browser holds the three lines above it until that blank line arrives, then fires one `progress` listener with `event.data` set to the JSON text and `event.lastEventId` set to `1`.
+
+The body of the response is a `ReadableStream` that writes those frames as the work moves on.
+
+```js
+function progressStream(job, signal) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      const send = (text) => controller.enqueue(encoder.encode(text));
+      signal.addEventListener("abort", () => job.return(), { once: true });
+      for await (const step of job) {
+        send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
+      }
+      if (signal.aborted) return;
+      // The client closes on this; a bare close looks like a drop
+      send("event: done\ndata: {}\n\n");
+      controller.close();
+    },
+    cancel: () => job.return(),
   });
 }
 ```
 
-Excerpt from apps/patterns/src/lib/sse/progress-stream.ts, trimmed.
+`job` is whatever yields the steps as they happen, an async iterable here. When `signal` aborts, the client has left: the job is told to stop, the loop ends, and no `done` goes out to a client that is gone. `cancel` is the other way a client leaves, when the reader is dropped first, and it stops the job the same way.
 
-```ts
-return new ReadableStream<Uint8Array>({
-  start(controller) {
-    const close = () => {
-      stop();
-      if (closed) return;
-      closed = true;
-      controller.close();
-    };
+The Route Handler reads the id the browser last saw, starts the job after it, and returns the stream with the three headers that keep it flowing.
 
-    if (signal.aborted) {
-      close();
-      return;
-    }
-    // The client left: stop the timer so nothing runs for nobody.
-    signal.addEventListener("abort", close, { once: true });
+```js
+export function GET(request) {
+  const lastEventId = Number(request.headers.get("Last-Event-ID") ?? 0);
+  const job = runJob({ after: lastEventId });
 
-    const emit = (index: number) => {
-      if (index === steps.length) {
-        send(formatEvent({ event: "done", data: { lastId: PROGRESS_STEPS.length } }));
-        signal.removeEventListener("abort", close);
-        close();
-        return;
-      }
-      if (index > 0) send(formatComment("ping"));
-      timer = setTimeout(() => {
-        const { id, percent, step } = steps[index];
-        send(formatEvent({ id, event: "progress", data: { percent, step } }));
-        emit(index + 1);
-      }, delayMs);
-    };
+  return new Response(progressStream(job, request.signal), {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+```
 
-    emit(0);
-  },
-  // A reader cancelling is the other way a client leaves.
-  cancel() {
-    closed = true;
-    stop();
-  },
+`runJob` stands for the server work; it yields the steps after `lastEventId`, so a reconnect resumes instead of restarting. `no-transform` stops a compressing proxy from buffering the stream, and `X-Accel-Buffering: no` turns off nginx-style buffering in front of the function. While the job is quiet, write `: ping\n\n` to the same stream every 15 s; `EventSource` ignores a comment line, and a proxy sees traffic.
+
+On the page, `EventSource` opens the connection and reconnects on its own.
+
+```js
+const events = new EventSource("/api/progress");
+
+events.addEventListener("progress", (event) => {
+  const step = JSON.parse(event.data);
+  console.log(step.percent);
+});
+events.addEventListener("done", () => {
+  events.close();
+});
+events.addEventListener("error", () => {
+  // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
+  if (events.readyState === EventSource.CLOSED) console.error("gave up");
 });
 ```
 
-Excerpt from apps/patterns/src/app/demos/SseProgressDemo.tsx, trimmed.
+Every `progress` frame becomes one event with its `id` already remembered by the browser. `done` is where the page closes the source; without that call the browser would reconnect. An `error` fires on every drop, including the ones the browser recovers from by itself, so only `CLOSED` is a failure.
 
-```tsx
-const source = new EventSource(
-  resumeAfter
-    ? `/api/demo/progress?lastEventId=${encodeURIComponent(resumeAfter)}`
-    : "/api/demo/progress",
-);
+### Wrong and right
 
-source.addEventListener("progress", (event) => {
-  const { percent, step } = JSON.parse(event.data) as { percent: number; step: string };
-  setPercent(percent);
-  setLastId(event.lastEventId);
-});
-source.addEventListener("done", () => {
-  source.close();
-  setStatus("done");
-  setLastId(null);
-});
-source.addEventListener("error", () => {
-  // While the browser is reconnecting on its own (sending Last-Event-ID)
-  // the state is CONNECTING; only CLOSED means it gave up.
-  if (source.readyState === EventSource.CLOSED) setStatus("error");
-});
+The run finishes, and the browser keeps reconnecting.
+
+🔴 The server closed the connection without saying it was done. `EventSource` reads that as a drop, reconnects with `Last-Event-ID`, gets an empty run and a close, and repeats.
+
+```js
+for await (const step of job) {
+  send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
+}
+controller.close();
 ```
+
+✅ Send a `done` event first, and close the source on the page when it arrives.
+
+```js
+for await (const step of job) {
+  send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
+}
+send("event: done\ndata: {}\n\n");
+controller.close();
+
+// On the page
+events.addEventListener("done", () => events.close());
+```
+
+### In this repo
+
+- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/app/api/demo/progress/route.ts) is the Route Handler: it reads the resume id from the query param or the `Last-Event-ID` header and returns the `Response` with the SSE headers.
+- [`frame.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/lib/sse/frame.ts) holds the frame format: `formatEvent` writes the `id`, `event` and `data` lines and the blank line, `formatComment` writes a ping.
+- [`progress-stream.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/lib/sse/progress-stream.ts) is the stream body, with demo timers in place of real work and a `closed` guard so abort and `cancel` cannot close the controller twice.
+- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/app/demos/SseProgressDemo.tsx) is the `EventSource` with the three listeners, plus the demo's own state: the bar, the event list and the id it resumes from.
 
 ## Pitfalls
 
-- A buffering proxy holds every event until the response ends. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
-- An error after the 200 must be an event. The client cannot see a status code that was never sent.
-- Browsers allow six HTTP/1.1 connections per origin. Several tabs with open streams can starve the page of connections. HTTP/2 lifts the limit.
-- Every open stream is one function instance, billed for its duration. An unbounded stream runs into the function's time limit.
-- Forgetting `request.signal` keeps timers or subscriptions running after the client has left.
-- Without a `done` event the client cannot tell the end from a drop, and `EventSource` reconnects forever.
+- **Every event arrives at once, when the stream ends.** A proxy is buffering the response. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
+- **The page reports success on a run that failed.** The 200 went out before the work started, and a later failure cannot change it. Send the error as an event and let the page act on it.
+- **The page stalls once a few tabs are open.** Browsers allow six HTTP/1.1 connections per origin, and each open stream holds one. HTTP/2 lifts the limit.
+- **The function times out, or the bill grows with the number of visitors.** Every open stream is one function instance, billed for its duration. Bound the stream's lifetime.
+- **Timers or subscriptions keep running after the tab is closed.** Nothing listened to `request.signal`. Stop the job on abort and in `cancel`.
+- **`EventSource` reconnects forever after the stream ends.** There was no `done` event, so the close looked like a drop. See Wrong and right above.
 
 ## When not to use
 

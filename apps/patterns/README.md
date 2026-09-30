@@ -1,8 +1,9 @@
 # apps/patterns
 
 A pattern library for this repo: one short MDX doc per React/Next pattern the
-codebase already runs, each with its mechanism, a minimal excerpt of the real
-code, its pitfalls and links to the files that prove it, pinned to a commit.
+codebase already runs, each with its mechanism, short teaching snippets
+written for the page, its pitfalls and links to the files that prove it,
+pinned to a commit.
 
 An **atom** is a single technique. A **composite** combines atoms and names
 them in `uses`.
@@ -64,6 +65,11 @@ Every doc has exactly these H2 sections, in this order:
 
 `## Combines` contains only `<Combines />` and `## Code` only `<CodeLinks />`;
 the page renders both from frontmatter. H3s inside a section are fine.
+
+`## Pattern` holds snippets written for the page, one idea each, in the
+react.dev teaching style, followed by an `### In this repo` list that maps
+each piece to the pinned file. The `code:` links are the proof that the
+simple version survives production. `AGENTS.md` has the full rules.
 
 ## How it works
 
