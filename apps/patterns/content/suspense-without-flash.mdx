@@ -10,6 +10,9 @@ code:
   - path: apps/website/src/app/(main)/shop/page.tsx
     ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
     note: Static shell with two Suspense boundaries, fallbacks sized like the content, the error boundary between them.
+  - path: apps/website/src/app/(main)/shop/ui/ShopProducts.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Awaits searchParams, so it and only it is the dynamic hole inside the inner boundary.
   - path: apps/website/src/app/(main)/shop/ui/ShopControls.tsx
     ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
     note: Every URL change in a transition; isPending dims the grid and sets aria-busy.
@@ -22,7 +25,7 @@ verifiedIn:
   - 168
   - 174
   - 182
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 ## Problem
@@ -31,80 +34,277 @@ A skeleton flashes on every sort or search, even though the old results were fin
 
 ## Mechanism
 
-A component that is not ready suspends: during render it throws a promise (a thenable), and React shows the nearest `<Suspense>` fallback until that promise settles. `use()` is React's sanctioned way to read a promise in render and suspend on it.
+A component that is not ready suspends. During render it throws a promise, or any object with a `then` method. React shows the nearest `<Suspense>` fallback until that promise settles. That `<Suspense>` is a suspense boundary: the place React swaps content for a fallback and back. `use()` is React's sanctioned way to read a promise in render and suspend on it. Here is what happens, in order.
 
-Under Cache Components, everything that does not read the request renders into the static shell. Only the component that awaits `searchParams` (or cookies, or headers) becomes a dynamic hole, and its `<Suspense>` fallback is what the prerendered HTML holds in its place.
+1. At build time, under Cache Components, Next prerenders everything that does not read the request. That is the static shell. Only the component that awaits `searchParams`, or cookies, or headers, is left out. It is the dynamic hole, and its `<Suspense>` fallback is what the prerendered HTML holds in its place.
+2. On a request, the server sends the shell at once and renders the hole. When it is ready, it streams the content in, and React swaps the fallback out.
+3. The visitor changes the sort. Your component wraps the URL change in a transition, a render React may keep in the background.
+4. React renders the new URL. The hole suspends again. Because the boundary has revealed its content once, and this update is a transition, React keeps the old content on screen. It does not show the fallback again.
+5. While that render is pending, `useTransition` reports `isPending` as true. Your component dims the old content and marks it busy.
+6. When the new render is ready, React commits it, and `isPending` turns false.
 
-After a boundary has revealed its content once, an update wrapped in a transition does not replace it with the fallback again. React keeps the old content on screen until the new render is ready. `useTransition` gives you `isPending` for that window, so the old content can be dimmed and marked `aria-busy`. When the UI needs no pending state, a bare `startTransition` is enough.
+When the UI needs no pending state, a bare `startTransition` is enough.
 
-An error boundary around the Suspense hole catches a failed render there, and nothing outside it is lost.
+An error boundary around the suspense hole catches a failed render there. Nothing outside it is lost.
 
 ## Pattern
 
-Excerpt from apps/website/src/app/(main)/shop/page.tsx, trimmed.
+The four files below are a working app. Paste them into a fresh Next project, open `/`, and change the sort. The old list stays, dimmed, until the new one is ready.
 
-```tsx
-<Suspense
-  fallback={
-    <ShopControlsFallback>
-      <ProductGridSkeleton count={SHOP_PAGE_SIZE} />
-    </ShopControlsFallback>
-  }
->
-  <ShopControls>
-    <ShopGridBoundary>
-      <Suspense fallback={<ProductGridSkeleton count={SHOP_PAGE_SIZE} />}>
-        <ShopProducts searchParams={searchParams} />
+The page is a Server Component. It never reads the request itself, so it is the static shell.
+
+```tsx title="app/page.tsx"
+import { Suspense } from "react";
+import { Controls, ControlsFallback } from "./Controls";
+import { Items, ItemsFallback } from "./Items";
+import { ItemsBoundary } from "./ItemsBoundary";
+
+export default function Page({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
+  return (
+    <main>
+      <h1>Items</h1>
+      <Suspense
+        fallback={
+          <ControlsFallback>
+            <ItemsFallback />
+          </ControlsFallback>
+        }
+      >
+        <Controls>
+          <ItemsBoundary>
+            <Suspense fallback={<ItemsFallback />}>
+              <Items searchParams={searchParams} />
+            </Suspense>
+          </ItemsBoundary>
+        </Controls>
       </Suspense>
-    </ShopGridBoundary>
-  </ShopControls>
+    </main>
+  );
+}
+```
+
+The page passes `searchParams` down as a promise and never awaits it. There are two boundaries. The outer one is for `Controls`, which reads the URL in the browser. The inner one is the hole: `Items` awaits `searchParams`, so it and only it is dynamic. The error boundary sits between them.
+
+`Items` is the slow part. It runs on the server.
+
+```tsx title="app/Items.tsx"
+const items = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+
+export async function Items({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
+  // Awaiting the request here, and nowhere above, is what makes this the hole
+  const { sort } = await searchParams;
+  // Stands in for the slow query the request decides
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const sorted = sort === "desc" ? [...items].reverse() : items;
+
+  return (
+    <ul>
+      {sorted.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
+export function ItemsFallback() {
+  // The same list shape, so nothing moves when the real one arrives
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={item}>Loading</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+`ItemsFallback` renders as many rows as the list will. The prerendered HTML holds it, and the real list replaces it at the same height.
+
+`Controls` runs in the browser. It reads the sort from the URL and writes the next one inside a transition.
+
+```tsx title="app/Controls.tsx"
+"use client";
+
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { type ReactNode, useOptimistic, useTransition } from "react";
+
+export function Controls({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sort = useSearchParams().get("sort") ?? "asc";
+  const [isPending, startTransition] = useTransition();
+  // Shows the chosen sort at once; the URL catches up when the transition commits
+  const [shownSort, setShownSort] = useOptimistic(sort);
+
+  const onSortChange = (next: string) => {
+    startTransition(() => {
+      setShownSort(next);
+      router.replace(`${pathname}?sort=${next}`, { scroll: false });
+    });
+  };
+
+  return (
+    <>
+      <select value={shownSort} onChange={(event) => onSortChange(event.target.value)}>
+        <option value="asc">A to Z</option>
+        <option value="desc">Z to A</option>
+      </select>
+      <div style={{ opacity: isPending ? 0.5 : 1 }}>{children}</div>
+    </>
+  );
+}
+
+export function ControlsFallback({ children }: { children: ReactNode }) {
+  // The same select, disabled: the URL is not known yet
+  return (
+    <>
+      <select disabled defaultValue="asc">
+        <option value="asc">A to Z</option>
+        <option value="desc">Z to A</option>
+      </select>
+      <div>{children}</div>
+    </>
+  );
+}
+```
+
+`useSearchParams` reads the URL in the browser, which is why `Controls` needs the outer boundary. `router.replace` inside `startTransition` makes the navigation a transition, and `isPending` is true until the new list is ready. The old list stays on screen, dimmed. `ControlsFallback` is the same row, disabled, so the row does not move when `Controls` hydrates.
+
+The error boundary catches a failed render of the hole and offers a retry.
+
+```tsx title="app/ItemsBoundary.tsx"
+"use client";
+
+import { useRouter } from "next/navigation";
+import { Component, type ReactNode, startTransition, useState } from "react";
+
+class Catch extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+export function ItemsBoundary({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const [attempt, setAttempt] = useState(0);
+
+  const retry = () =>
+    // One transition for both: refresh re-requests the failed render, the new key resets the boundary
+    startTransition(() => {
+      router.refresh();
+      setAttempt(attempt + 1);
+    });
+
+  return (
+    <Catch
+      key={attempt}
+      fallback={
+        <p>
+          Could not load the items.{" "}
+          <button type="button" onClick={retry}>
+            Try again
+          </button>
+        </p>
+      }
+    >
+      {children}
+    </Catch>
+  );
+}
+```
+
+`Catch` is a class because only a class can catch a render error. A new `key` remounts it, which clears the error. `router.refresh()` asks the server for the page again. Without it, the remount would render the same failed result.
+
+### Wrong and right
+
+Every visit renders the whole page on the server, and the fallback is never in the prerendered HTML.
+
+🔴 The page awaits `searchParams` itself. Reading the request above the boundary makes the whole page dynamic. There is no static shell. This is the top of `Page`.
+
+```tsx title="app/page.tsx"
+export default async function Page({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
+  const { sort } = await searchParams;
+  return (
+    <main>
+      <h1>Items</h1>
+      <Suspense fallback={<ItemsFallback />}>
+        <Items sort={sort} />
+      </Suspense>
+    </main>
+  );
+}
+```
+
+✅ Pass the promise down unawaited. Only `Items` reads it, so only `Items` is dynamic.
+
+```tsx title="app/page.tsx"
+export default function Page({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
+  return (
+    <main>
+      <h1>Items</h1>
+      <Suspense fallback={<ItemsFallback />}>
+        <Items searchParams={searchParams} />
+      </Suspense>
+    </main>
+  );
+}
+```
+
+The page jumps when the list arrives.
+
+🔴 The fallback is one line. The list is five. Everything below it moves down when the swap happens. This is the inner boundary in `Page`.
+
+```tsx title="app/page.tsx"
+<Suspense fallback={<p>Loading</p>}>
+  <Items searchParams={searchParams} />
 </Suspense>
 ```
 
-Excerpt from apps/website/src/app/(main)/shop/ui/ShopControls.tsx, trimmed.
+✅ The fallback has the shape of the content. The swap changes nothing around it.
 
-```tsx
-const [isPending, startTransition] = useTransition();
-
-startTransition(() => {
-  router.replace(shopHref(pathname, { sort: shownSort, q: term }), { scroll: false });
-});
-
-<div
-  data-testid="shop-grid"
-  aria-busy={isPending || undefined}
-  className={`${SHOP_GRID_WRAPPER_CLASS} ${isPending ? "opacity-50" : ""}`}
->
-  {children}
-</div>;
+```tsx title="app/page.tsx"
+<Suspense fallback={<ItemsFallback />}>
+  <Items searchParams={searchParams} />
+</Suspense>
 ```
 
-Excerpt from apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx, trimmed.
+Try again shows the same error.
 
-```tsx
-<ErrorBoundary
-  onReset={reset}
-  fallback={({ resetError }) => (
-    <ShopGridError
-      onRetry={() =>
-        startTransition(() => {
-          router.refresh();
-          resetError();
-        })
-      }
-    />
-  )}
->
-  {children}
-</ErrorBoundary>
+🔴 The retry only resets the boundary. React remounts it and renders the same failed result the server already sent. This is `retry` in `ItemsBoundary`.
+
+```tsx title="app/ItemsBoundary.tsx"
+const retry = () => setAttempt(attempt + 1);
 ```
+
+✅ Refresh and reset in one transition. The server renders again, and the boundary shows the new result.
+
+```tsx title="app/ItemsBoundary.tsx"
+const retry = () =>
+  startTransition(() => {
+    router.refresh();
+    setAttempt(attempt + 1);
+  });
+```
+
+### In this repo
+
+- [`page.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/page.tsx>) is the shell. The outer boundary wraps `ShopControls` with `ShopControlsFallback` around a grid skeleton. The inner one wraps `ShopProducts` with `ProductGridSkeleton`, `SHOP_PAGE_SIZE` card-sized placeholders. `ShopGridBoundary` sits between them.
+- [`ShopProducts.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopProducts.tsx>) is the hole. It awaits `searchParams`, parses `sort` and `q`, and renders the hydrated page one.
+- [`ShopControls.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopControls.tsx>) is the controls. Every URL change runs inside `startTransition`, `useOptimistic` shows the chosen sort at once, and `isPending` dims the grid and sets `aria-busy`.
+- [`ShopGridBoundary.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx>) is the error boundary. Retry runs `router.refresh()` and `resetError()` in one transition, and `onReset` clears React Query's error reset boundary.
 
 ## Pitfalls
 
-- A fallback that is not sized like the content causes the jump it was meant to prevent. The shop's controls fallback is the same row, disabled, and the grid skeleton renders `SHOP_PAGE_SIZE` card-sized placeholders.
-- Reading `searchParams`, cookies or headers above the boundary makes the whole page dynamic. The shop's page component passes the `searchParams` promise down unawaited; only `ShopProducts` awaits it.
-- Retrying a server-side failure needs `router.refresh()` as well as `resetError()`. Resetting alone re-renders the same errored RSC payload. A client query that rejected also needs `useQueryErrorResetBoundary`'s `reset`, or React Query re-throws the cached error on remount.
-- Next-page errors never reach the boundary. In suspense mode a query with data does not throw, so the list needs its own retry line for them.
+- **The page jumps when the content arrives.** The fallback is not sized like the content. Give it the same shape. The shop's controls fallback is the same row, disabled, and the grid skeleton renders `SHOP_PAGE_SIZE` card-sized placeholders. See Wrong and right above.
+- **Every request renders the whole page on the server.** Something above the boundary reads `searchParams`, cookies or headers. Pass the `searchParams` promise down unawaited. Only the hole awaits it. See Wrong and right above.
+- **Try again shows the same error.** The retry only reset the boundary. Resetting alone re-renders the same errored RSC payload. Run `router.refresh()` as well as the reset. A client query that rejected also needs `useQueryErrorResetBoundary`'s `reset`, or React Query re-throws the cached error on remount. See Wrong and right above.
+- **A failed next page never reaches the boundary.** In suspense mode a query with data does not throw. The list needs its own retry line for next-page errors.
 
 ## When not to use
 
