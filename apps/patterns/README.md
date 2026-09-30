@@ -14,14 +14,15 @@ It has two readers:
 - coding agents, from disk: the raw `content/*.mdx` files and the generated
   `content/INDEX.md`, which `docs/conditional-docs.md` points at.
 
-Every page is prerendered at build time. There are no client components.
+Every page is prerendered at build time. The only client components are live
+demos under `src/app/demos/`, rendered as islands inside a prerendered doc.
 
 ## Run
 
 ```sh
 yarn workspace patterns dev     # http://localhost:3004, honours PORT
 yarn workspace patterns build   # runs `index` first (prebuild)
-yarn workspace patterns test    # unit tests, node pool only
+yarn workspace patterns test    # unit (node) and browser (chromium) tests
 ```
 
 ## Add a doc
@@ -79,6 +80,9 @@ the page renders both from frontmatter. H3s inside a section are fine.
   time, so highlighted code is static HTML with no client JavaScript.
 - Plugins are passed to `createMDX` by string name, the only form Turbopack
   accepts.
+- **Demo route**: `src/app/api/demo/progress` is the one dynamic route. It
+  streams Server-Sent Events for the `sse-route-handler` demo and uses no env
+  vars and no database.
 
 ## Deployment
 

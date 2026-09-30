@@ -1,0 +1,163 @@
+---
+title: Server-Sent Events from a Route Handler
+kind: atom
+summary: The server must push a short run of progress or status updates to one open page, in order, without the page polling.
+tags:
+  - sse
+  - route-handler
+  - streaming
+code:
+  - path: apps/patterns/src/app/api/demo/progress/route.ts
+    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    note: Resume id from the query param or the Last-Event-ID header, the SSE headers, the stream bound to request.signal.
+  - path: apps/patterns/src/lib/sse/progress-stream.ts
+    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    note: The ReadableStream with ids, pings, a closing done event, and a timer cleared on abort or cancel.
+  - path: apps/patterns/src/app/demos/SseProgressDemo.tsx
+    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    note: EventSource with named events, Disconnect, and resume by query param.
+verifiedIn:
+  - 196
+updated: 2026-09-29
+---
+
+import { SseProgressDemo } from "@/app/demos/SseProgressDemo";
+
+## Problem
+
+A page waits on server work that takes seconds and moves in steps. Polling is either slow (a long interval) or wasteful (a short one). A websocket is more than one-way updates need.
+
+## Mechanism
+
+A stream is one long HTTP response. The Route Handler returns a `Response` whose body is a `ReadableStream`, and keeps writing to it while the connection is open.
+
+Each event is a frame: an `id:` line, an `event:` line, a `data:` line, then a blank line. The browser dispatches nothing until it sees that blank line. `EventSource` fires a listener per `event:` name.
+
+The browser remembers the last `id:` it received. When the connection drops, `EventSource` reconnects on its own and sends that id as the `Last-Event-ID` header, so the server can resume after it.
+
+The stream ends with an explicit `done` event. A closed connection alone looks like a drop, and `EventSource` would reconnect. The client closes the source when it sees `done`.
+
+While the server waits, it sends a `: ping` comment every 15 s. `EventSource` ignores comments; proxies and load balancers see traffic and do not close an idle connection.
+
+The status line goes out as 200 before the first byte of work. A failure after that cannot change it, so errors travel as events.
+
+Each open stream holds one function instance for as long as it is open. Keep the lifetime bounded, well under Vercel Fluid's 300 s limit.
+
+`EventSource` covers a plain GET. When the request needs POST or custom headers, use `fetch` and read `response.body.getReader()` instead.
+
+The producer polls or subscribes on the server. The browser never talks to the database.
+
+### Resuming by hand
+
+The demo passes `?lastEventId=` itself. `EventSource` sets `Last-Event-ID` only on its own automatic reconnects. A new `EventSource` created after `close()` starts with none, so the route reads the query param first and the header second.
+
+### Try it
+
+Press Run demo, then Disconnect mid-run, then Run demo again. The second run starts after the last id you saw.
+
+<SseProgressDemo />
+
+## Pattern
+
+Excerpt from apps/patterns/src/app/api/demo/progress/route.ts, trimmed.
+
+```ts
+export function GET(request: Request) {
+  const fromId = parseResumeId(
+    new URL(request.url).searchParams.get("lastEventId") ?? request.headers.get("last-event-id"),
+  );
+
+  return new Response(createProgressStream({ fromId, delayMs: 500, signal: request.signal }), {
+    headers: SSE_HEADERS,
+  });
+}
+```
+
+Excerpt from apps/patterns/src/lib/sse/progress-stream.ts, trimmed.
+
+```ts
+return new ReadableStream<Uint8Array>({
+  start(controller) {
+    const close = () => {
+      stop();
+      if (closed) return;
+      closed = true;
+      controller.close();
+    };
+
+    if (signal.aborted) {
+      close();
+      return;
+    }
+    // The client left: stop the timer so nothing runs for nobody.
+    signal.addEventListener("abort", close, { once: true });
+
+    const emit = (index: number) => {
+      if (index === steps.length) {
+        send(formatEvent({ event: "done", data: { lastId: PROGRESS_STEPS.length } }));
+        signal.removeEventListener("abort", close);
+        close();
+        return;
+      }
+      if (index > 0) send(formatComment("ping"));
+      timer = setTimeout(() => {
+        const { id, percent, step } = steps[index];
+        send(formatEvent({ id, event: "progress", data: { percent, step } }));
+        emit(index + 1);
+      }, delayMs);
+    };
+
+    emit(0);
+  },
+  // A reader cancelling is the other way a client leaves.
+  cancel() {
+    closed = true;
+    stop();
+  },
+});
+```
+
+Excerpt from apps/patterns/src/app/demos/SseProgressDemo.tsx, trimmed.
+
+```tsx
+const source = new EventSource(
+  resumeAfter
+    ? `/api/demo/progress?lastEventId=${encodeURIComponent(resumeAfter)}`
+    : "/api/demo/progress",
+);
+
+source.addEventListener("progress", (event) => {
+  const { percent, step } = JSON.parse(event.data) as { percent: number; step: string };
+  setPercent(percent);
+  setLastId(event.lastEventId);
+});
+source.addEventListener("done", () => {
+  source.close();
+  setStatus("done");
+  setLastId(null);
+});
+source.addEventListener("error", () => {
+  // While the browser is reconnecting on its own (sending Last-Event-ID)
+  // the state is CONNECTING; only CLOSED means it gave up.
+  if (source.readyState === EventSource.CLOSED) setStatus("error");
+});
+```
+
+## Pitfalls
+
+- A buffering proxy holds every event until the response ends. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
+- An error after the 200 must be an event. The client cannot see a status code that was never sent.
+- Browsers allow six HTTP/1.1 connections per origin. Several tabs with open streams can starve the page of connections. HTTP/2 lifts the limit.
+- Every open stream is one function instance, billed for its duration. An unbounded stream runs into the function's time limit.
+- Forgetting `request.signal` keeps timers or subscriptions running after the client has left.
+- Without a `done` event the client cannot tell the end from a drop, and `EventSource` reconnects forever.
+
+## When not to use
+
+- Upload progress. The browser already knows it: use `XMLHttpRequest.upload.onprogress`.
+- Data that changes rarely. Poll or revalidate instead of holding a connection open.
+- Anonymous, high-traffic pages. Each visitor holds a function instance.
+
+## Code
+
+<CodeLinks />

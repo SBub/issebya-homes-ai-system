@@ -18,4 +18,11 @@
   emojis. The em dash in `INDEX.md` lines is index syntax, generated.
 - MDX plugins in `next.config.ts` stay by string name with JSON options.
   Importing a plugin function breaks the Turbopack build.
-- No `"use client"` in this app. Every page must stay prerendered.
+- Client components only for live demos: one file per demo under
+  `src/app/demos/`, imported from the doc's MDX. Every page must still
+  prerender, so a demo never reads the request on the server and fetches only
+  from `src/app/api/demo/*`.
+- Demo routes under `src/app/api/demo/` take no env vars and touch no
+  database.
+- Never add `export const dynamic` to a route. It is rejected under
+  `cacheComponents`; reading the request already makes a handler dynamic.

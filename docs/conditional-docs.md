@@ -352,6 +352,11 @@ procedures, not code documentation) and anything gitignored.
     - When changing how `apps/patterns` loads, validates or routes docs (registry, generated manifest, MDX plugins in `next.config.ts`)
     - When a pattern doc fails the build or tests, or `INDEX.md`/the manifest reports as stale
     - When a `/p/<slug>` page overflows horizontally on mobile
+- `apps/patterns/app_docs/feature-7c786f67-sse-route-handler-demo.md`
+  - Conditions:
+    - When adding a live demo (client component under `src/app/demos/` or a route under `src/app/api/demo/`) to `apps/patterns`
+    - When building a Server-Sent Events stream from a Next Route Handler, e.g. the website's booking confirmation timeline
+    - When the patterns browser test pool fails, or an SSE stream buffers, never ends or does not resume
 
 ---
 
