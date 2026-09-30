@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkSections, extractH2Headings } from "../sections";
+import { checkSections, extractH2Headings, unlabelledPatternFences } from "../sections";
 
 const doc = (headings: string[], bodies: Record<string, string> = {}) =>
   [
@@ -85,5 +85,41 @@ describe("extractH2Headings", () => {
 
   it("ignores the frontmatter block", () => {
     expect(extractH2Headings("---\ntitle: x\n---\n## Problem\n")).toEqual(["Problem"]);
+  });
+});
+
+describe("unlabelledPatternFences", () => {
+  const pattern = (...blocks: string[]) => doc(ATOM, { Pattern: blocks.join("\n\n") });
+  const fence = (info: string) => `\`\`\`${info}\ncode\n\`\`\``;
+
+  it("is empty when every code fence under Pattern names its file", () => {
+    const body = pattern(
+      fence("text"),
+      fence('ts title="app/api/progress/route.ts"'),
+      fence('tsx title="app/ProgressView.tsx"'),
+    );
+    expect(unlabelledPatternFences(body)).toEqual([]);
+  });
+
+  it("names a code fence without a title once the doc uses titles", () => {
+    const body = pattern(fence('ts title="app/api/progress/route.ts"'), fence("js"));
+    expect(unlabelledPatternFences(body)).toEqual(["```js"]);
+  });
+
+  it("lets a text fence go without a title", () => {
+    const body = pattern(fence('ts title="app/x.ts"'), fence("text"));
+    expect(unlabelledPatternFences(body)).toEqual([]);
+  });
+
+  it("is empty for a doc that has not adopted titles at all", () => {
+    expect(unlabelledPatternFences(pattern(fence("js"), fence("tsx")))).toEqual([]);
+  });
+
+  it("ignores fences outside Pattern", () => {
+    const body = doc(ATOM, {
+      Pattern: fence('ts title="app/x.ts"'),
+      Mechanism: fence("js"),
+    });
+    expect(unlabelledPatternFences(body)).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONTENT_DIR, readContent } from "../read-content";
-import { checkSections } from "../sections";
+import { checkSections, unlabelledPatternFences } from "../sections";
 
 const REPO_ROOT = path.resolve(CONTENT_DIR, "../../..");
 
@@ -19,6 +19,13 @@ describe("pattern content", () => {
     "%s has the fixed sections",
     (_slug, doc) => {
       expect(checkSections(doc.body, doc.meta.kind)).toEqual([]);
+    },
+  );
+
+  it.each(docs.map((doc) => [doc.slug, doc] as const))(
+    "%s labels every code snippet under Pattern with its file",
+    (_slug, doc) => {
+      expect(unlabelledPatternFences(doc.body)).toEqual([]);
     },
   );
 

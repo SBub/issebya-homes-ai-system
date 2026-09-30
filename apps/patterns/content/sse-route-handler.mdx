@@ -62,49 +62,66 @@ Press Run demo, then Disconnect mid-run, then Run demo again. The second run sta
 
 ## Pattern
 
+The three files below are a working app. Paste them into a fresh Next project, open `/`, and watch the bar fill.
+
 One event on the wire is three `field: value` lines and a blank line.
 
 ```text
 id: 1
 event: progress
-data: {"percent":10}
+data: {"percent":25,"step":"Checking dates"}
 
 ```
 
 The blank line is part of the frame. The browser holds the three lines above it until that blank line arrives, then fires one `progress` listener with `event.data` set to the JSON text and `event.lastEventId` set to `1`.
 
-The body of the response is a `ReadableStream` that writes those frames as the work moves on.
+The Route Handler writes those frames into a `ReadableStream` as the work moves on, and returns it with the three headers that keep the stream flowing.
 
-```js
-function progressStream(job, signal) {
-  const encoder = new TextEncoder();
-  return new ReadableStream({
-    async start(controller) {
-      const send = (text) => controller.enqueue(encoder.encode(text));
-      signal.addEventListener("abort", () => job.return(), { once: true });
-      for await (const step of job) {
-        send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
-      }
-      if (signal.aborted) return;
-      // The client closes on this; a bare close looks like a drop
-      send("event: done\ndata: {}\n\n");
-      controller.close();
-    },
-    cancel: () => job.return(),
-  });
+```ts title="app/api/progress/route.ts"
+const steps = [
+  { id: 1, percent: 25, step: "Checking dates" },
+  { id: 2, percent: 50, step: "Holding the room" },
+  { id: 3, percent: 75, step: "Taking payment" },
+  { id: 4, percent: 100, step: "Confirmed" },
+];
+
+function frame(event: string, data: unknown, id?: number) {
+  const idLine = id === undefined ? "" : `id: ${id}\n`;
+  return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
-```
 
-`job` is whatever yields the steps as they happen, an async iterable here. When `signal` aborts, the client has left: the job is told to stop, the loop ends, and no `done` goes out to a client that is gone. `cancel` is the other way a client leaves, when the reader is dropped first, and it stops the job the same way.
-
-The Route Handler reads the id the browser last saw, starts the job after it, and returns the stream with the three headers that keep it flowing.
-
-```js
-export function GET(request) {
+export function GET(request: Request) {
   const lastEventId = Number(request.headers.get("Last-Event-ID") ?? 0);
-  const job = runJob({ after: lastEventId });
+  const pending = steps.filter((step) => step.id > lastEventId);
+  const encoder = new TextEncoder();
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  return new Response(progressStream(job, request.signal), {
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (text: string) => controller.enqueue(encoder.encode(text));
+      // The client left: stop the timer so nothing runs for nobody
+      request.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+
+      const emit = (index: number) => {
+        if (index === pending.length) {
+          // The client closes on this; a bare close looks like a drop
+          send(frame("done", {}));
+          controller.close();
+          return;
+        }
+        send(": ping\n\n");
+        timer = setTimeout(() => {
+          const { id, ...data } = pending[index];
+          send(frame("progress", data, id));
+          emit(index + 1);
+        }, 1000);
+      };
+      emit(0);
+    },
+    cancel: () => clearTimeout(timer),
+  });
+
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -114,52 +131,89 @@ export function GET(request) {
 }
 ```
 
-`runJob` stands for the server work; it yields the steps after `lastEventId`, so a reconnect resumes instead of restarting. `no-transform` stops a compressing proxy from buffering the stream, and `X-Accel-Buffering: no` turns off nginx-style buffering in front of the function. While the job is quiet, write `: ping\n\n` to the same stream every 15 s; `EventSource` ignores a comment line, and a proxy sees traffic.
+`steps` on a timer stands in for the server work. `Last-Event-ID` is the id the browser last saw, so a reconnect resumes after it instead of restarting. When `request.signal` aborts, the client has left: the timer stops, the loop ends, and no `done` goes out to nobody. `cancel` is the other way a client leaves, when the reader is dropped first. The `: ping` comment goes out before each wait; `EventSource` ignores a comment, and a proxy sees traffic on an idle connection. In real work, send one every 15 s while nothing happens. `no-transform` stops a compressing proxy from buffering the stream, and `X-Accel-Buffering: no` turns off nginx-style buffering in front of the function.
 
 On the page, `EventSource` opens the connection and reconnects on its own.
 
-```js
-const events = new EventSource("/api/progress");
+```tsx title="app/ProgressView.tsx"
+"use client";
 
-events.addEventListener("progress", (event) => {
-  const step = JSON.parse(event.data);
-  console.log(step.percent);
-});
-events.addEventListener("done", () => {
-  events.close();
-});
-events.addEventListener("error", () => {
-  // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
-  if (events.readyState === EventSource.CLOSED) console.error("gave up");
-});
+import { useEffect, useState } from "react";
+
+export function ProgressView() {
+  const [percent, setPercent] = useState(0);
+  const [status, setStatus] = useState("connecting");
+
+  useEffect(() => {
+    const events = new EventSource("/api/progress");
+
+    events.addEventListener("progress", (event) => {
+      setPercent(JSON.parse(event.data).percent);
+      setStatus("running");
+    });
+    events.addEventListener("done", () => {
+      // Without this the browser would reconnect and run again
+      events.close();
+      setStatus("done");
+    });
+    events.addEventListener("error", () => {
+      // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
+      if (events.readyState === EventSource.CLOSED) setStatus("failed");
+    });
+
+    return () => events.close();
+  }, []);
+
+  return (
+    <p>
+      <progress value={percent} max={100} /> {percent}% {status}
+    </p>
+  );
+}
 ```
 
-Every `progress` frame becomes one event with its `id` already remembered by the browser. `done` is where the page closes the source; without that call the browser would reconnect. An `error` fires on every drop, including the ones the browser recovers from by itself, so only `CLOSED` is a failure.
+Every `progress` frame becomes one event with its `id` already remembered by the browser. `done` is where the page closes the source; without that call the browser would reconnect. An `error` fires on every drop, including the ones the browser recovers from by itself, so only `CLOSED` is a failure. The cleanup closes the source when the component unmounts, so a page the user left holds no connection.
+
+A page mounts the view.
+
+```tsx title="app/page.tsx"
+import { ProgressView } from "./ProgressView";
+
+export default function Page() {
+  return <ProgressView />;
+}
+```
+
+The page is a Server Component and prerenders; only `ProgressView` runs in the browser, because of its `"use client"` line.
 
 ### Wrong and right
 
 The run finishes, and the browser keeps reconnecting.
 
-🔴 The server closed the connection without saying it was done. `EventSource` reads that as a drop, reconnects with `Last-Event-ID`, gets an empty run and a close, and repeats.
+🔴 The server closed the connection without saying it was done. `EventSource` reads that as a drop, reconnects with `Last-Event-ID`, gets an empty run and a close, and repeats. This is the end of `emit` in the route above.
 
-```js
-for await (const step of job) {
-  send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
+```ts title="app/api/progress/route.ts"
+if (index === pending.length) {
+  controller.close();
+  return;
 }
-controller.close();
 ```
 
-✅ Send a `done` event first, and close the source on the page when it arrives.
+✅ Send a `done` event first, and close the source on the page when it arrives. The same lines in the route, and the `done` listener in the view.
 
-```js
-for await (const step of job) {
-  send(`id: ${step.id}\nevent: progress\ndata: ${JSON.stringify(step)}\n\n`);
+```ts title="app/api/progress/route.ts"
+if (index === pending.length) {
+  send(frame("done", {}));
+  controller.close();
+  return;
 }
-send("event: done\ndata: {}\n\n");
-controller.close();
+```
 
-// On the page
-events.addEventListener("done", () => events.close());
+```tsx title="app/ProgressView.tsx"
+events.addEventListener("done", () => {
+  events.close();
+  setStatus("done");
+});
 ```
 
 ### In this repo

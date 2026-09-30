@@ -66,8 +66,10 @@ Every doc has exactly these H2 sections, in this order:
 `## Combines` contains only `<Combines />` and `## Code` only `<CodeLinks />`;
 the page renders both from frontmatter. H3s inside a section are fine.
 
-`## Pattern` holds snippets written for the page, one idea each, in the
-react.dev teaching style, followed by an `### In this repo` list that maps
+`## Pattern` holds snippets written for the page in the react.dev teaching
+style: a working mini app of two or three complete files, each fence labelled
+with its filename (` ```ts title="app/api/progress/route.ts" `, shown
+as a tab above the block), followed by an `### In this repo` list that maps
 each piece to the pinned file. The `code:` links are the proof that the
 simple version survives production. `AGENTS.md` has the full rules.
 
@@ -83,7 +85,9 @@ simple version survives production. `AGENTS.md` has the full rules.
   reverse "used by" edges. `read-content.ts` reads the disk and is only for
   the scripts and tests.
 - **Highlighting**: `rehype-pretty-code` with its `shiki` peer, at build
-  time, so highlighted code is static HTML with no client JavaScript.
+  time, so highlighted code is static HTML with no client JavaScript. A
+  fence's `title="..."` meta becomes a `<figcaption>` that `globals.css`
+  styles as a file tab.
 - Plugins are passed to `createMDX` by string name, the only form Turbopack
   accepts.
 - **Demo route**: `src/app/api/demo/progress` is the one dynamic route. It
