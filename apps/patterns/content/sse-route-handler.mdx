@@ -8,19 +8,23 @@ tags:
   - streaming
 code:
   - path: apps/patterns/src/app/api/demo/progress/route.ts
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
     note: Resume id from the query param or the Last-Event-ID header, the SSE headers, the stream bound to request.signal.
   - path: apps/patterns/src/lib/sse/frame.ts
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
     note: The frame format, id, event and data lines ended by a blank line, and the ping comment.
   - path: apps/patterns/src/lib/sse/progress-stream.ts
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
     note: The ReadableStream with ids, pings, a closing done event, and a timer cleared on abort or cancel.
+  - path: apps/patterns/src/lib/sse/progress-store.ts
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
+    note: The EventSource with named events and resume by query param, held outside React with a cached snapshot and a last-subscriber close.
   - path: apps/patterns/src/app/demos/SseProgressDemo.tsx
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
-    note: EventSource with named events, Disconnect, and resume by query param.
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
+    note: Reads the store with useSyncExternalStore, no effect and no state; the bar and the event list come from one snapshot.
 verifiedIn:
   - 196
+  - 201
 updated: 2026-09-30
 ---
 
@@ -62,7 +66,7 @@ Press Run demo, then Disconnect mid-run, then Run demo again. The second run sta
 
 ## Pattern
 
-The three files below are a working app. Paste them into a fresh Next project, open `/`, and watch the bar fill.
+The four files below are a working app. Paste them into a fresh Next project, open `/`, and watch the bar fill.
 
 One event on the wire is three `field: value` lines and a blank line.
 
@@ -133,46 +137,84 @@ export function GET(request: Request) {
 
 `steps` on a timer stands in for the server work. `Last-Event-ID` is the id the browser last saw, so a reconnect resumes after it instead of restarting. When `request.signal` aborts, the client has left: the timer stops, the loop ends, and no `done` goes out to nobody. `cancel` is the other way a client leaves, when the reader is dropped first. The `: ping` comment goes out before each wait; `EventSource` ignores a comment, and a proxy sees traffic on an idle connection. In real work, send one every 15 s while nothing happens. `no-transform` stops a compressing proxy from buffering the stream, and `X-Accel-Buffering: no` turns off nginx-style buffering in front of the function.
 
-On the page, `EventSource` opens the connection and reconnects on its own.
+On the page, the `EventSource` lives in a small store module outside React. It opens on the first subscriber, closes when the last one leaves, and holds one snapshot object that it replaces on every event.
+
+```ts title="app/progress-store.ts"
+const initial = { percent: 0, step: "", status: "connecting" };
+
+let snapshot = initial;
+let source: EventSource | null = null;
+const listeners = new Set<() => void>();
+
+function update(patch: Partial<typeof initial>) {
+  // A new object only when something changed; React compares snapshots with Object.is
+  snapshot = { ...snapshot, ...patch };
+  for (const listener of listeners) listener();
+}
+
+function open() {
+  const events = new EventSource("/api/progress");
+
+  events.addEventListener("progress", (event) => {
+    const { percent, step } = JSON.parse(event.data);
+    update({ percent, step, status: "running" });
+  });
+  events.addEventListener("done", () => {
+    // Without this the browser would reconnect and run again
+    events.close();
+    update({ status: "done" });
+  });
+  events.addEventListener("error", () => {
+    // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
+    if (events.readyState === EventSource.CLOSED) update({ status: "failed" });
+  });
+
+  return events;
+}
+
+export function subscribe(listener: () => void) {
+  listeners.add(listener);
+  if (source === null) source = open();
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      source?.close();
+      source = null;
+    }
+  };
+}
+
+export function getSnapshot() {
+  return snapshot;
+}
+
+export function getServerSnapshot() {
+  return initial;
+}
+```
+
+Every `progress` frame becomes one event with its `id` already remembered by the browser, and one new snapshot. `done` is where the store closes the source; without that call the browser would reconnect. An `error` fires on every drop, including the ones the browser recovers from by itself, so only `CLOSED` is a failure. The unsubscribe closes the source when the last component leaves, so a page the user left holds no connection. Between events `getSnapshot` returns the same object, which is what lets React skip renders.
+
+The component reads that store with `useSyncExternalStore`.
 
 ```tsx title="app/ProgressView.tsx"
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+import { getServerSnapshot, getSnapshot, subscribe } from "./progress-store";
 
 export function ProgressView() {
-  const [percent, setPercent] = useState(0);
-  const [status, setStatus] = useState("connecting");
-
-  useEffect(() => {
-    const events = new EventSource("/api/progress");
-
-    events.addEventListener("progress", (event) => {
-      setPercent(JSON.parse(event.data).percent);
-      setStatus("running");
-    });
-    events.addEventListener("done", () => {
-      // Without this the browser would reconnect and run again
-      events.close();
-      setStatus("done");
-    });
-    events.addEventListener("error", () => {
-      // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
-      if (events.readyState === EventSource.CLOSED) setStatus("failed");
-    });
-
-    return () => events.close();
-  }, []);
+  const { percent, step, status } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   return (
     <p>
-      <progress value={percent} max={100} /> {percent}% {status}
+      <progress value={percent} max={100} /> {percent}% {step} {status}
     </p>
   );
 }
 ```
 
-Every `progress` frame becomes one event with its `id` already remembered by the browser. `done` is where the page closes the source; without that call the browser would reconnect. An `error` fires on every drop, including the ones the browser recovers from by itself, so only `CLOSED` is a failure. The cleanup closes the source when the component unmounts, so a page the user left holds no connection.
+React calls `subscribe` when the component mounts and the returned function when it unmounts, so the component has no effect and no state of its own. That is the reason for the store: React owns the subscription lifecycle, every render reads one whole snapshot so `percent` and `status` can never come from different events, and there is no effect ordering to get right. The three functions and their rules are in [Reading an external store with useSyncExternalStore](/p/use-sync-external-store).
 
 A page mounts the view.
 
@@ -199,7 +241,7 @@ if (index === pending.length) {
 }
 ```
 
-✅ Send a `done` event first, and close the source on the page when it arrives. The same lines in the route, and the `done` listener in the view.
+✅ Send a `done` event first, and close the source on the page when it arrives. The same lines in the route, and the `done` listener in the store.
 
 ```ts title="app/api/progress/route.ts"
 if (index === pending.length) {
@@ -209,19 +251,20 @@ if (index === pending.length) {
 }
 ```
 
-```tsx title="app/ProgressView.tsx"
+```ts title="app/progress-store.ts"
 events.addEventListener("done", () => {
   events.close();
-  setStatus("done");
+  update({ status: "done" });
 });
 ```
 
 ### In this repo
 
-- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/app/api/demo/progress/route.ts) is the Route Handler: it reads the resume id from the query param or the `Last-Event-ID` header and returns the `Response` with the SSE headers.
-- [`frame.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/lib/sse/frame.ts) holds the frame format: `formatEvent` writes the `id`, `event` and `data` lines and the blank line, `formatComment` writes a ping.
-- [`progress-stream.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/lib/sse/progress-stream.ts) is the stream body, with demo timers in place of real work and a `closed` guard so abort and `cancel` cannot close the controller twice.
-- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/71869c9a57a37b1bedb99b7aec289bdf0d5f70b7/apps/patterns/src/app/demos/SseProgressDemo.tsx) is the `EventSource` with the three listeners, plus the demo's own state: the bar, the event list and the id it resumes from.
+- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/api/demo/progress/route.ts) is the Route Handler: it reads the resume id from the query param or the `Last-Event-ID` header and returns the `Response` with the SSE headers.
+- [`frame.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/frame.ts) holds the frame format: `formatEvent` writes the `id`, `event` and `data` lines and the blank line, `formatComment` writes a ping.
+- [`progress-stream.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-stream.ts) is the stream body, with demo timers in place of real work and a `closed` guard so abort and `cancel` cannot close the controller twice.
+- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-store.ts) is the `EventSource` with the three listeners, held outside React: `run` opens it, with the id it resumes from, `disconnect` closes it, and the last unsubscribe closes it too and forgets the run.
+- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/demos/SseProgressDemo.tsx) reads that store with `useSyncExternalStore` and renders the bar, the buttons and the event list from one snapshot.
 
 ## Pitfalls
 
