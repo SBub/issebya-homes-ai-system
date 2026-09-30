@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-
-type Status = "idle" | "running" | "disconnected" | "done" | "error";
-
-type Entry =
-  | { kind: "event"; id: string; percent: number; step: string }
-  | { kind: "resume"; afterId: string };
+import { useSyncExternalStore } from "react";
+import {
+  disconnect,
+  getServerSnapshot,
+  getSnapshot,
+  run,
+  type Status,
+  subscribe,
+} from "@/lib/sse/progress-store";
 
 const STATUS_TEXT: Record<Status, string> = {
   idle: "Not started.",
@@ -17,61 +19,19 @@ const STATUS_TEXT: Record<Status, string> = {
 };
 
 /**
- * Live demo for the `sse-route-handler` doc: opens an `EventSource` on
- * /api/demo/progress, fills a bar on each `progress` event and lists them.
- * After Disconnect, the next run resumes by passing the last id it saw.
+ * Live demo for the `sse-route-handler` doc: the `EventSource` on
+ * /api/demo/progress lives in `progress-store.ts`, and this component reads
+ * its snapshot with `useSyncExternalStore`. Run demo fills a bar on each
+ * `progress` event and lists them; after Disconnect, the next run resumes by
+ * passing the last id it saw. Unmounting unsubscribes, which closes the
+ * connection.
  */
 export function SseProgressDemo() {
-  const sourceRef = useRef<EventSource | null>(null);
-  const [status, setStatus] = useState<Status>("idle");
-  const [percent, setPercent] = useState(0);
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [lastId, setLastId] = useState<string | null>(null);
-
-  // The one effect: close the connection when the doc unmounts.
-  useEffect(() => () => sourceRef.current?.close(), []);
-
-  function run() {
-    const resumeAfter = status === "disconnected" || status === "error" ? lastId : null;
-    if (resumeAfter) {
-      setEntries((prev) => [...prev, { kind: "resume", afterId: resumeAfter }]);
-    } else {
-      setEntries([]);
-      setPercent(0);
-      setLastId(null);
-    }
-
-    const source = new EventSource(
-      resumeAfter
-        ? `/api/demo/progress?lastEventId=${encodeURIComponent(resumeAfter)}`
-        : "/api/demo/progress",
-    );
-    sourceRef.current = source;
-    setStatus("running");
-
-    source.addEventListener("progress", (event) => {
-      const { percent, step } = JSON.parse(event.data) as { percent: number; step: string };
-      setPercent(percent);
-      setEntries((prev) => [...prev, { kind: "event", id: event.lastEventId, percent, step }]);
-      setLastId(event.lastEventId);
-    });
-    source.addEventListener("done", () => {
-      source.close();
-      setStatus("done");
-      setLastId(null);
-    });
-    source.addEventListener("error", () => {
-      // While the browser is reconnecting on its own (sending Last-Event-ID)
-      // the state is CONNECTING; only CLOSED means it gave up.
-      if (source.readyState === EventSource.CLOSED) setStatus("error");
-    });
-  }
-
-  function disconnect() {
-    sourceRef.current?.close();
-    setStatus("disconnected");
-  }
-
+  const { status, percent, entries } = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getServerSnapshot,
+  );
   const running = status === "running";
 
   return (

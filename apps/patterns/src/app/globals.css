@@ -41,3 +41,13 @@ figure[data-rehype-pretty-code-figure] pre {
 figure[data-rehype-pretty-code-figure] pre [data-line] {
   @apply px-4;
 }
+
+/* A fence with `title="app/x.ts"` gets a <figcaption> from rehype-pretty-code.
+   Shown as a file tab above the block, like react.dev's sandbox tabs. */
+figure[data-rehype-pretty-code-figure] figcaption[data-rehype-pretty-code-title] {
+  @apply -mb-px inline-block rounded-t-sm border border-b-0 border-gray-300 bg-white/70 px-3 py-1 font-mono text-xs;
+}
+
+figure[data-rehype-pretty-code-figure] figcaption[data-rehype-pretty-code-title] + pre {
+  @apply rounded-tl-none;
+}

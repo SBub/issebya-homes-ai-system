@@ -99,3 +99,43 @@ export function checkSections(body: string, kind: PatternMeta["kind"]): string[]
   }
   return problems;
 }
+
+type Fence = { section: string; lang: string; meta: string };
+
+/** Every fenced code block, with the H2 it sits under and its info string split into language and meta. */
+function fences(body: string): Fence[] {
+  const found: Fence[] = [];
+  let open: { section: string; marker: string } | null = null;
+
+  for (const section of splitSections(body)) {
+    for (const line of section.lines) {
+      const match = /^\s*(`{3,}|~{3,})\s*(\S*)\s*(.*)$/.exec(line);
+      if (!match) continue;
+      const [, marker, lang, meta] = match;
+      if (open === null) {
+        open = { section: section.heading, marker };
+        found.push({ section: section.heading, lang, meta: meta.trim() });
+      } else if (marker[0] === open.marker[0] && marker.length >= open.marker.length) {
+        open = null;
+      }
+    }
+  }
+  return found;
+}
+
+const TITLE_PATTERN = /\btitle="[^"]+"/;
+
+/**
+ * Fences under `## Pattern` that show code (any language but `text`, which is
+ * wire output) and carry no `title="<file>"` label. Empty when every snippet
+ * names its file, or when the doc is still on the old unlabelled format, so
+ * that a doc adopting labels must label all of its snippets while the docs
+ * not yet rewritten stay untouched.
+ */
+export function unlabelledPatternFences(body: string): string[] {
+  const inPattern = fences(body).filter((fence) => fence.section === "Pattern");
+  if (!inPattern.some((fence) => TITLE_PATTERN.test(fence.meta))) return [];
+  return inPattern
+    .filter((fence) => fence.lang !== "text" && !TITLE_PATTERN.test(fence.meta))
+    .map((fence) => `\`\`\`${fence.lang} ${fence.meta}`.trim());
+}

@@ -8,48 +8,56 @@ tags:
   - streaming
 code:
   - path: apps/patterns/src/app/api/demo/progress/route.ts
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
     note: Resume id from the query param or the Last-Event-ID header, the SSE headers, the stream bound to request.signal.
+  - path: apps/patterns/src/lib/sse/frame.ts
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
+    note: The frame format, id, event and data lines ended by a blank line, and the ping comment.
   - path: apps/patterns/src/lib/sse/progress-stream.ts
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
     note: The ReadableStream with ids, pings, a closing done event, and a timer cleared on abort or cancel.
+  - path: apps/patterns/src/lib/sse/progress-store.ts
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
+    note: The EventSource with named events and resume by query param, held outside React with a cached snapshot and a last-subscriber close.
   - path: apps/patterns/src/app/demos/SseProgressDemo.tsx
-    ref: 71869c9a57a37b1bedb99b7aec289bdf0d5f70b7
-    note: EventSource with named events, Disconnect, and resume by query param.
+    ref: 5599fb8cc0cbddaa5c46bfe822db40a65ab2831e
+    note: Reads the store with useSyncExternalStore, no effect and no state; the bar and the event list come from one snapshot.
 verifiedIn:
   - 196
-updated: 2026-09-29
+  - 201
+updated: 2026-09-30
 ---
 
 import { SseProgressDemo } from "@/app/demos/SseProgressDemo";
 
 ## Problem
 
-A page waits on server work that takes seconds and moves in steps. Polling is either slow (a long interval) or wasteful (a short one). A websocket is more than one-way updates need.
+A page waits on server work that takes seconds and moves in steps. The page wants to show each step as it happens. Polling asks the server again and again. A long interval shows steps late. A short one wastes requests. A websocket lets both sides talk, and here only the server has something to say.
 
 ## Mechanism
 
-A stream is one long HTTP response. The Route Handler returns a `Response` whose body is a `ReadableStream`, and keeps writing to it while the connection is open.
+Server-Sent Events keep one HTTP response open and write to it over time. Here is what happens, in order.
 
-Each event is a frame: an `id:` line, an `event:` line, a `data:` line, then a blank line. The browser dispatches nothing until it sees that blank line. `EventSource` fires a listener per `event:` name.
+1. The browser opens `new EventSource(url)`. It sends a normal GET request.
+2. Your Route Handler returns a `Response` whose body is a `ReadableStream`. The status is 200 and the content type is `text/event-stream`. The response stays open.
+3. Your handler writes one frame per event into the stream. A frame is a few `field: value` lines ended by a blank line. The browser holds each frame until it sees that blank line. Then it fires the listener named by the `event:` line.
+4. The browser remembers the last `id:` line it saw. If the connection drops, `EventSource` reconnects on its own and sends that id as the `Last-Event-ID` header. Your handler reads it and resumes after that id.
+5. While the server waits on work, your handler sends a `: ping` comment every 15 seconds. `EventSource` ignores comments. Proxies and load balancers see traffic, so they do not close an idle connection.
+6. When the work is finished, your handler sends a `done` event and closes the stream. The page closes its `EventSource` when it sees `done`. Without that event, the close looks like a drop and the browser reconnects.
 
-The browser remembers the last `id:` it received. When the connection drops, `EventSource` reconnects on its own and sends that id as the `Last-Event-ID` header, so the server can resume after it.
+Three things follow from step 2.
 
-The stream ends with an explicit `done` event. A closed connection alone looks like a drop, and `EventSource` would reconnect. The client closes the source when it sees `done`.
+The 200 goes out before any work starts. A failure later cannot change the status. Send errors as events instead.
 
-While the server waits, it sends a `: ping` comment every 15 s. `EventSource` ignores comments; proxies and load balancers see traffic and do not close an idle connection.
+Each open stream holds one function instance for as long as it is open. Keep the run short, well under Vercel Fluid's 300 second limit.
 
-The status line goes out as 200 before the first byte of work. A failure after that cannot change it, so errors travel as events.
+`EventSource` can only send a GET with no custom headers. When you need POST or a header, call `fetch` and read `response.body.getReader()` instead.
 
-Each open stream holds one function instance for as long as it is open. Keep the lifetime bounded, well under Vercel Fluid's 300 s limit.
-
-`EventSource` covers a plain GET. When the request needs POST or custom headers, use `fetch` and read `response.body.getReader()` instead.
-
-The producer polls or subscribes on the server. The browser never talks to the database.
+The producer runs on the server. It polls or subscribes to whatever does the work. The browser never talks to the database.
 
 ### Resuming by hand
 
-The demo passes `?lastEventId=` itself. `EventSource` sets `Last-Event-ID` only on its own automatic reconnects. A new `EventSource` created after `close()` starts with none, so the route reads the query param first and the header second.
+`EventSource` sends `Last-Event-ID` only on its own automatic reconnects. A new `EventSource` you create after `close()` starts with no id. So the demo passes the id it last saw as `?lastEventId=`. The route reads the query param first and the header second.
 
 ### Try it
 
@@ -59,104 +67,223 @@ Press Run demo, then Disconnect mid-run, then Run demo again. The second run sta
 
 ## Pattern
 
-Excerpt from apps/patterns/src/app/api/demo/progress/route.ts, trimmed.
+The four files below are a working app. Paste them into a fresh Next project, open `/`, and watch the bar fill.
 
-```ts
+This is one event on the wire.
+
+```text
+id: 1
+event: progress
+data: {"percent":25,"step":"Checking dates"}
+
+```
+
+The blank line is part of the frame. The browser holds the three lines above it until the blank line arrives. Then it fires one `progress` listener with `event.data` set to the JSON text and `event.lastEventId` set to `1`.
+
+The Route Handler runs on the server. It writes frames into a `ReadableStream` as the work moves on. It returns that stream with headers that keep it flowing.
+
+```ts title="app/api/progress/route.ts"
+const steps = [
+  { id: 1, percent: 25, step: "Checking dates" },
+  { id: 2, percent: 50, step: "Holding the room" },
+  { id: 3, percent: 75, step: "Taking payment" },
+  { id: 4, percent: 100, step: "Confirmed" },
+];
+
+function frame(event: string, data: unknown, id?: number) {
+  const idLine = id === undefined ? "" : `id: ${id}\n`;
+  return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
 export function GET(request: Request) {
-  const fromId = parseResumeId(
-    new URL(request.url).searchParams.get("lastEventId") ?? request.headers.get("last-event-id"),
-  );
+  const lastEventId = Number(request.headers.get("Last-Event-ID") ?? 0);
+  const pending = steps.filter((step) => step.id > lastEventId);
+  const encoder = new TextEncoder();
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  return new Response(createProgressStream({ fromId, delayMs: 500, signal: request.signal }), {
-    headers: SSE_HEADERS,
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (text: string) => controller.enqueue(encoder.encode(text));
+      // The client left: stop the timer so nothing runs for nobody
+      request.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+
+      const emit = (index: number) => {
+        if (index === pending.length) {
+          // The client closes on this; a bare close looks like a drop
+          send(frame("done", {}));
+          controller.close();
+          return;
+        }
+        send(": ping\n\n");
+        timer = setTimeout(() => {
+          const { id, ...data } = pending[index];
+          send(frame("progress", data, id));
+          emit(index + 1);
+        }, 1000);
+      };
+      emit(0);
+    },
+    cancel: () => clearTimeout(timer),
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
   });
 }
 ```
 
-Excerpt from apps/patterns/src/lib/sse/progress-stream.ts, trimmed.
+`steps` on a timer stands in for real work. A reconnect sends `Last-Event-ID`, so the route skips the steps the browser already saw. When the client leaves, `request.signal` aborts and the timer stops. `cancel` covers a dropped reader, the other way a client leaves.
 
-```ts
-return new ReadableStream<Uint8Array>({
-  start(controller) {
-    const close = () => {
-      stop();
-      if (closed) return;
-      closed = true;
-      controller.close();
-    };
+The headers keep the stream flowing. `no-transform` stops a compressing proxy from holding the stream to compress it. `X-Accel-Buffering: no` turns off nginx-style buffering in front of the function. The `: ping` here goes out before each wait. In real work, send one every 15 seconds while nothing happens.
 
-    if (signal.aborted) {
-      close();
-      return;
+In the browser, a small store module owns the `EventSource`. It opens the source for the first subscriber and closes it when the last one leaves.
+
+```ts title="app/progress-store.ts"
+const initial = { percent: 0, step: "", status: "connecting" };
+
+let snapshot = initial;
+let source: EventSource | null = null;
+const listeners = new Set<() => void>();
+
+function update(patch: Partial<typeof initial>) {
+  // A new object only when something changed; React compares snapshots with Object.is
+  snapshot = { ...snapshot, ...patch };
+  for (const listener of listeners) listener();
+}
+
+function open() {
+  const events = new EventSource("/api/progress");
+
+  events.addEventListener("progress", (event) => {
+    const { percent, step } = JSON.parse(event.data);
+    update({ percent, step, status: "running" });
+  });
+  events.addEventListener("done", () => {
+    // Without this the browser would reconnect and run again
+    events.close();
+    update({ status: "done" });
+  });
+  events.addEventListener("error", () => {
+    // CONNECTING means the browser is retrying with Last-Event-ID; only CLOSED means it gave up
+    if (events.readyState === EventSource.CLOSED) update({ status: "failed" });
+  });
+
+  return events;
+}
+
+export function subscribe(listener: () => void) {
+  listeners.add(listener);
+  if (source === null) source = open();
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      source?.close();
+      source = null;
     }
-    // The client left: stop the timer so nothing runs for nobody.
-    signal.addEventListener("abort", close, { once: true });
+  };
+}
 
-    const emit = (index: number) => {
-      if (index === steps.length) {
-        send(formatEvent({ event: "done", data: { lastId: PROGRESS_STEPS.length } }));
-        signal.removeEventListener("abort", close);
-        close();
-        return;
-      }
-      if (index > 0) send(formatComment("ping"));
-      timer = setTimeout(() => {
-        const { id, percent, step } = steps[index];
-        send(formatEvent({ id, event: "progress", data: { percent, step } }));
-        emit(index + 1);
-      }, delayMs);
-    };
+export function getSnapshot() {
+  return snapshot;
+}
 
-    emit(0);
-  },
-  // A reader cancelling is the other way a client leaves.
-  cancel() {
-    closed = true;
-    stop();
-  },
+export function getServerSnapshot() {
+  return initial;
+}
+```
+
+Every `progress` frame becomes one new snapshot object. Between events, `getSnapshot` returns the same object, so React can skip renders. On `done`, the store closes the source itself. `error` fires on every drop, including the ones the browser recovers from, so only `CLOSED` counts as a failure.
+
+The component reads that store with `useSyncExternalStore`.
+
+```tsx title="app/ProgressView.tsx"
+"use client";
+
+import { useSyncExternalStore } from "react";
+import { getServerSnapshot, getSnapshot, subscribe } from "./progress-store";
+
+export function ProgressView() {
+  const { percent, step, status } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  return (
+    <p>
+      <progress value={percent} max={100} /> {percent}% {step} {status}
+    </p>
+  );
+}
+```
+
+React calls `subscribe` when the component mounts and the returned function when it unmounts. The component has no effect and no state. Every render reads one whole snapshot, so `percent` and `status` always come from the same event. The three functions and their rules are in [Reading an external store with useSyncExternalStore](/p/use-sync-external-store).
+
+A page mounts the view.
+
+```tsx title="app/page.tsx"
+import { ProgressView } from "./ProgressView";
+
+export default function Page() {
+  return <ProgressView />;
+}
+```
+
+The page is a Server Component and prerenders. Only `ProgressView` runs in the browser, because of its `"use client"` line.
+
+### Wrong and right
+
+The run finishes, and the browser keeps reconnecting.
+
+🔴 The server closed the connection without saying it was done. `EventSource` treats that close as a drop. It reconnects with `Last-Event-ID`, gets an empty run and another close, and repeats. This is the end of `emit` in the route above.
+
+```ts title="app/api/progress/route.ts"
+if (index === pending.length) {
+  controller.close();
+  return;
+}
+```
+
+✅ Send a `done` event before closing. On the page, close the source when it arrives. The same lines in the route, then the `done` listener in the store.
+
+```ts title="app/api/progress/route.ts"
+if (index === pending.length) {
+  send(frame("done", {}));
+  controller.close();
+  return;
+}
+```
+
+```ts title="app/progress-store.ts"
+events.addEventListener("done", () => {
+  events.close();
+  update({ status: "done" });
 });
 ```
 
-Excerpt from apps/patterns/src/app/demos/SseProgressDemo.tsx, trimmed.
+### In this repo
 
-```tsx
-const source = new EventSource(
-  resumeAfter
-    ? `/api/demo/progress?lastEventId=${encodeURIComponent(resumeAfter)}`
-    : "/api/demo/progress",
-);
-
-source.addEventListener("progress", (event) => {
-  const { percent, step } = JSON.parse(event.data) as { percent: number; step: string };
-  setPercent(percent);
-  setLastId(event.lastEventId);
-});
-source.addEventListener("done", () => {
-  source.close();
-  setStatus("done");
-  setLastId(null);
-});
-source.addEventListener("error", () => {
-  // While the browser is reconnecting on its own (sending Last-Event-ID)
-  // the state is CONNECTING; only CLOSED means it gave up.
-  if (source.readyState === EventSource.CLOSED) setStatus("error");
-});
-```
+- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/api/demo/progress/route.ts) is the Route Handler. It reads the resume id from the query param or the `Last-Event-ID` header. It returns the `Response` with the SSE headers.
+- [`frame.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/frame.ts) holds the frame format. `formatEvent` writes the `id`, `event` and `data` lines and the blank line. `formatComment` writes a ping.
+- [`progress-stream.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-stream.ts) is the stream body. Demo timers stand in for real work, and a `closed` guard stops abort and `cancel` from closing the controller twice.
+- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/lib/sse/progress-store.ts) is the `EventSource` with the three listeners, held outside React. `run` opens it with the id to resume from. `disconnect` closes it. The last unsubscribe closes it too and forgets the run.
+- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/5599fb8cc0cbddaa5c46bfe822db40a65ab2831e/apps/patterns/src/app/demos/SseProgressDemo.tsx) reads that store with `useSyncExternalStore`. It renders the bar, the buttons and the event list from one snapshot.
 
 ## Pitfalls
 
-- A buffering proxy holds every event until the response ends. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
-- An error after the 200 must be an event. The client cannot see a status code that was never sent.
-- Browsers allow six HTTP/1.1 connections per origin. Several tabs with open streams can starve the page of connections. HTTP/2 lifts the limit.
-- Every open stream is one function instance, billed for its duration. An unbounded stream runs into the function's time limit.
-- Forgetting `request.signal` keeps timers or subscriptions running after the client has left.
-- Without a `done` event the client cannot tell the end from a drop, and `EventSource` reconnects forever.
+- **Every event arrives at once, when the stream ends.** A proxy is buffering the response. Send `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, and do not compress the stream.
+- **The page reports success on a run that failed.** The 200 went out before the work started. A later failure cannot change it. Send the error as an event and let the page act on it.
+- **The seventh stream never connects.** Over HTTP/1.1 a browser allows six open connections per domain, shared across every tab. Each `EventSource` holds one, so a visitor with six tabs of your site open gets a seventh that waits forever. Chrome and Firefox will not change this. HTTP/2 lifts the limit to about 100 streams per connection, negotiated with the server. Vercel serves production over HTTP/2, but `next dev` is HTTP/1.1, and a proxy that speaks HTTP/1.1 to the browser brings the six back. Close the stream when the tab is hidden, or share one stream across tabs with a `SharedWorker` or `BroadcastChannel`.
+- **The function times out, or the bill grows with the number of visitors.** Every open stream is one function instance, billed for as long as it is open. Bound the run's lifetime.
+- **Timers keep running after the tab is closed.** Nothing listened to `request.signal`. Stop the job on abort and in `cancel`.
+- **`EventSource` reconnects forever after the stream ends.** There was no `done` event, so the close looked like a drop. See Wrong and right above.
 
 ## When not to use
 
-- Upload progress. The browser already knows it: use `XMLHttpRequest.upload.onprogress`.
+- Upload progress. The browser already knows it. Use `XMLHttpRequest.upload.onprogress`.
 - Data that changes rarely. Poll or revalidate instead of holding a connection open.
-- Anonymous, high-traffic pages. Each visitor holds a function instance.
+- Anonymous, high-traffic pages. Every open tab keeps a serverless function running until the visitor leaves. You pay for each of those seconds, and the platform caps how many functions can run at once, so a busy page hits the cap. Poll instead, or hand the connections to a pub/sub service such as Supabase Realtime.
+- One feed for everyone, such as a live price chart. Every browser opens its own connection, so a million viewers means a million open responses, even though the data is identical. A Route Handler cannot fan one stream out to many clients. Poll a cached response instead, or publish once to a pub/sub service that holds the connections for you.
 
 ## Code
 
