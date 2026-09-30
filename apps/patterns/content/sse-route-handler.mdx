@@ -282,7 +282,7 @@ events.addEventListener("done", () => {
 
 - Upload progress. The browser already knows it. Use `XMLHttpRequest.upload.onprogress`.
 - Data that changes rarely. Poll or revalidate instead of holding a connection open.
-- Anonymous, high-traffic pages. Each visitor holds a function instance.
+- Anonymous, high-traffic pages. Every open tab keeps a serverless function running until the visitor leaves. You pay for each of those seconds, and the platform caps how many functions can run at once, so a busy page hits the cap. Poll instead, or hand the connections to a pub/sub service such as Supabase Realtime.
 
 ## Code
 
