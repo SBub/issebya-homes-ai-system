@@ -1,0 +1,400 @@
+---
+title: An approval gate on waitForEvent
+kind: atom
+summary: A tool with a side effect must pause for a human yes or no, so one half nudges and waits for an event matched on a correlation id with a bounded timeout, and the other half runs only after a yes.
+tags:
+  - agent-harness
+  - human-in-the-loop
+  - durable-execution
+  - inngest
+code:
+  - path: apps/patterns/src/lib/approval/gate.ts
+    ref: 1070a3109836371b4ba7a00a60d7601c6cafe29e
+    note: The two halves on the harness runner; requestApproval nudges in its own step and waits on data.requestId, runSend runs only after a yes, a timeout is a soft no.
+  - path: apps/patterns/src/lib/harness/step-runner.ts
+    ref: c2f96931704f2c73e85dec0a1b31f8a790c71bb4
+    note: The in-memory durable runner the demo runs on; memoized steps, a wait that ends the invocation, replay from the top, a step inside a step refused.
+  - path: apps/patterns/src/app/demos/ApprovalGateDemo.tsx
+    ref: 1070a3109836371b4ba7a00a60d7601c6cafe29e
+    note: The live demo; Start, Approve, Reject, Replay, the runner log, the memo, and the wrong variant that nudges outside a step.
+  - path: apps/guest-communication-agent/src/agent/tools/approval-gate.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: requestApprovalGate in production; the nudge in its own step, step.waitForEvent on data.correlationId with a bounded timeout, false on timeout.
+  - path: apps/guest-communication-agent/src/agent/tools/booking.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The gated tool's two halves; requestSendBookingLinkApproval returns the not-approved output on a no, runSendBookingLink runs only after a yes.
+  - path: apps/guest-communication-agent/src/app/api/owner-nudges/[correlationId]/approve/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The resume route; a POST with { approved } sends the decision event for that correlation id, and a duplicate or late POST is a safe no-op.
+verifiedIn:
+  - 208
+updated: 2026-10-01
+---
+
+import { ApprovalGateDemo } from "@/app/demos/ApprovalGateDemo";
+
+## Problem
+
+The model wants to run a tool that acts in the world: send a link, charge a card, change a booking. A person has to say yes first, and that person may answer in ten seconds or in two days. The reply channel is a phone, so the answer arrives as a new HTTP request, in a different process, with nothing in common with the run that asked except an id.
+
+A process cannot wait two days. A serverless function is frozen after seconds. Polling a table from the model's turn burns a function for as long as the wait lasts and still dies at the platform's limit. Dropping the turn and starting a new one when the answer comes loses the model's context: the conversation, the tool calls so far, what it was about to do.
+
+A durable runner solves the wait. Your function asks for the approval, then calls `waitForEvent`. The function returns; nothing holds a process open. When a matching event arrives, the runner replays your function from the top, every finished step answers from its memo without running again, and the wait returns the event. Your function continues from the line after the wait as if no time had passed. The gate is the shape that makes this safe: a request half that nudges and waits, a run half that executes only after a yes, and a route that turns the human's answer into the event.
+
+### In this app
+
+- The WhatsApp agent cannot send a booking link until the owner approves it. The turn suspends on the wait, for up to a year, and resumes when the owner taps Approve or Reject.
+- The same shape, with an answer instead of a yes or no, lets the agent ask the owner a question it cannot answer from its notes and continue the turn with the reply.
+- The tap lands on a separate service, which posts to a resume route on the agent with the correlation id from the button. That route only sends the event.
+
+## Mechanism
+
+Here is what happens, in order, from the model's tool call to the result the model sees.
+
+1. Your loop sees a call for a gated tool. It calls the request half, from plain function code, never from inside another step.
+2. The request half nudges the approver inside its own step, `notify-approver`. The step runner runs the step once and memoizes its result. Whatever the nudge is, a message to a phone, an email, a row in an inbox, it has now happened exactly once.
+3. The request half calls `waitForEvent` with three things: the event name to wait for, a `match` path, and a timeout. The match path, `data.requestId`, names a field that must hold the same value on the triggering event and on the awaited one. That value is the correlation id. The timeout is bounded; a runner refuses to wait forever.
+4. The step runner registers the wait and ends the invocation. Your function returns here, part way through. Nothing is running. Nothing is being billed.
+5. The approver answers. Their answer arrives at the resume route as a request carrying the correlation id and a yes or no. The route sends the decision event with both in its data. It does nothing else. If no run is waiting on that id, the event is delivered to nobody and that is fine.
+6. The step runner matches the event: same name, same value at the match path. It memoizes the event under the wait's id and replays your function from the top.
+7. On the replay, `notify-approver` answers from its memo and does not nudge again. The wait answers at once with the event. The request half returns true for a yes and false for a no.
+8. On a yes, your loop calls the run half. It executes the tool's real work in its own step, `send-link`, and returns the result the model will see. On a no, the request half returns a soft result, an object that says the action was not approved, and the run half never runs. The model reads either one as a tool result.
+9. If the timeout elapses first, the runner memoizes `null` for the wait and replays. The request half treats `null` as a no. Same soft result, no error.
+
+Two things follow from step 4.
+
+The function body runs again on every replay. Code outside a step, including a nudge written as a plain call, runs again too. Only steps are skipped.
+
+A step's callback cannot call another step. The runner refuses it, because a nested step has no place in the memo. So the nudge and the wait are two steps, one after the other, in function code.
+
+### Try it
+
+Press Start. The approver is nudged once, and the function suspends. Press Replay: the function runs from the top, the log shows `notify-approver` answering from its memo, no second notification goes out, and the function suspends again on the same wait. Press Approve: the event matches, the function replays, the wait returns the event, and `send-link` runs. Press Reset, Start, then Reject: the same path ends in the not-approved result and `send-link` never runs. Leave it waiting for twenty seconds and the timeout gives the same result. Tick the checkbox to send the nudge outside a step, and watch Replay send it twice.
+
+<ApprovalGateDemo />
+
+## Pattern
+
+The four files below are a working app. Paste them into a fresh Next project and drive it with `curl`. A small runner stands in for a durable runner such as Inngest. It keeps the three rules the gate depends on: a step result is memoized by id, a wait ends the invocation and the function replays from the top when the event or the timeout arrives, and a step cannot run inside a step.
+
+```ts title="lib/steps.ts"
+export type Event = { name: string; data: Record<string, unknown> };
+
+export type Step = {
+  run<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  waitForEvent(
+    id: string,
+    options: { event: string; match: string; timeout: number },
+  ): Promise<Event | null>;
+};
+
+type Run = {
+  fn: (input: { step: Step }) => Promise<unknown>;
+  trigger: Event;
+  memo: Map<string, string>;
+  wait: { id: string; event: string; match: string; timer: ReturnType<typeof setTimeout> } | null;
+  status: "running" | "suspended" | "done";
+  result: unknown;
+  log: string[];
+};
+
+const runs = new Map<string, Run>();
+
+class Suspended extends Error {}
+
+// The match path names a field of the event, "data.id" here
+function matchValue(event: Event, match: string) {
+  return event.data[match.replace("data.", "")];
+}
+
+async function invoke(id: string, reason: string) {
+  const run = runs.get(id);
+  if (run === undefined) return;
+  run.status = "running";
+  run.log.push(`invocation (${reason})`);
+  let inside: string | null = null;
+
+  const step: Step = {
+    async run(stepId, fn) {
+      if (inside !== null) throw new Error(`step "${stepId}" called inside step "${inside}"`);
+      if (run.memo.has(stepId)) {
+        run.log.push(`${stepId}: memoized`);
+        // A memoized result comes back from the store as JSON, not as the live object
+        return JSON.parse(run.memo.get(stepId) ?? "null");
+      }
+      inside = stepId;
+      const value = await fn();
+      inside = null;
+      run.memo.set(stepId, JSON.stringify(value));
+      run.log.push(`${stepId}: ran`);
+      return value;
+    },
+    async waitForEvent(stepId, { event, match, timeout }) {
+      if (inside !== null) throw new Error(`step "${stepId}" called inside step "${inside}"`);
+      if (run.memo.has(stepId)) {
+        run.log.push(`${stepId}: memoized`);
+        return JSON.parse(run.memo.get(stepId) ?? "null");
+      }
+      if (run.wait === null) {
+        const timer = setTimeout(() => {
+          run.memo.set(stepId, "null");
+          run.wait = null;
+          void invoke(id, "timeout");
+        }, timeout);
+        run.wait = { id: stepId, event, match, timer };
+      }
+      run.log.push(`${stepId}: suspended`);
+      // Ends this invocation. The function returns here and nothing holds a process open
+      throw new Suspended();
+    },
+  };
+
+  try {
+    run.result = await run.fn({ step });
+    run.status = "done";
+  } catch (error) {
+    if (!(error instanceof Suspended)) throw error;
+    run.status = "suspended";
+  }
+}
+
+export async function start(id: string, trigger: Event, fn: Run["fn"]) {
+  runs.set(id, {
+    fn,
+    trigger,
+    memo: new Map(),
+    wait: null,
+    status: "running",
+    result: undefined,
+    log: [],
+  });
+  await invoke(id, "start");
+}
+
+export async function send(event: Event) {
+  for (const [id, run] of runs) {
+    const wait = run.wait;
+    if (wait === null || wait.event !== event.name) continue;
+    if (matchValue(event, wait.match) !== matchValue(run.trigger, wait.match)) continue;
+    clearTimeout(wait.timer);
+    run.wait = null;
+    run.memo.set(wait.id, JSON.stringify(event));
+    await invoke(id, "event");
+  }
+}
+
+export function status() {
+  return [...runs].map(([id, run]) => ({
+    id,
+    status: run.status,
+    result: run.result,
+    log: run.log,
+  }));
+}
+```
+
+`start` runs a function for a trigger event. `send` delivers an event to the run whose wait matches it, by name and by the value at the match path, and replays that run. `status` is for reading. A real runner keeps the memo in a database and replays from a queue; the rules are the same.
+
+The gate has two halves, and the function calls them one after the other.
+
+```ts title="lib/approval.ts"
+import { send, start, type Step } from "./steps";
+
+const DECISION_EVENT = "request.decided";
+// Bounded, always. A runner refuses a wait with no end
+const DECISION_TIMEOUT = 20_000;
+
+export const notifications: string[] = [];
+
+// The request half: nudge the approver in its own step, then wait for their decision
+async function requestApproval(step: Step, id: string, reason: string) {
+  await step.run("notify-approver", async () => {
+    notifications.push(`Approve "${reason}"? (${id})`);
+    return true;
+  });
+  const decision = await step.waitForEvent("wait-for-decision", {
+    event: DECISION_EVENT,
+    match: "data.id",
+    timeout: DECISION_TIMEOUT,
+  });
+  // A timeout is a no, not an error
+  return decision !== null && decision.data.approved === true;
+}
+
+// The run half: the real work, reached only after a yes
+function runSend(step: Step, id: string) {
+  return step.run("send-link", async () => ({ approved: true, url: `/requests/${id}/link` }));
+}
+
+export function startRequest(id: string, reason: string) {
+  return start(id, { name: "request.received", data: { id, reason } }, async ({ step }) => {
+    const approved = await requestApproval(step, id, reason);
+    if (!approved) {
+      return { approved: false, message: "This action was not approved. Do not retry it." };
+    }
+    return runSend(step, id);
+  });
+}
+
+export function decide(id: string, approved: boolean) {
+  return send({ name: DECISION_EVENT, data: { id, approved } });
+}
+```
+
+`requestApproval` returns a boolean, and both of its no paths look the same to the caller: a rejection and a timeout. `runSend` is an ordinary step. The function returns either the link or the not-approved object, and either one is a tool result the model can read.
+
+A route starts a run and reads every run's status.
+
+```ts title="app/api/requests/route.ts"
+import { notifications, startRequest } from "../../../lib/approval";
+import { status } from "../../../lib/steps";
+
+export async function POST(request: Request) {
+  const { id, reason } = await request.json();
+  await startRequest(id, reason);
+  return Response.json({ runs: status(), notifications });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), notifications });
+}
+```
+
+After the POST the run is suspended. The response shows one notification and a log that ends in `wait-for-decision: suspended`.
+
+The resume route turns the approver's answer into the event.
+
+```ts title="app/api/requests/[id]/decide/route.ts"
+import { decide } from "../../../../../lib/approval";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const { approved } = await request.json();
+  // Resumes the run waiting on this id. With no such run, the event goes nowhere, and that is fine
+  await decide(id, approved === true);
+  return Response.json({ ok: true });
+}
+```
+
+Start a run with `curl -X POST localhost:3000/api/requests -H 'content-type: application/json' -d '{"id":"req_1","reason":"send the link"}'`. Approve it with `curl -X POST localhost:3000/api/requests/req_1/decide -H 'content-type: application/json' -d '{"approved":true}'`. Then `curl localhost:3000/api/requests` shows the run done, with the link as its result and a log in which `notify-approver` was memoized on the second invocation. Start a second run and leave it: twenty seconds later it is done with the not-approved result.
+
+### Wrong and right
+
+The run fails as soon as it asks for approval.
+
+🔴 The nudge and the wait share one step. The wait is a step tool called inside another step's callback, and the runner refuses it. This is `requestApproval` in `lib/approval.ts`.
+
+```ts title="lib/approval.ts"
+async function requestApproval(step: Step, id: string, reason: string) {
+  const decision = await step.run("ask-and-wait", async () => {
+    notifications.push(`Approve "${reason}"? (${id})`);
+    // A step inside a step: refused
+    return step.waitForEvent("wait-for-decision", {
+      event: DECISION_EVENT,
+      match: "data.id",
+      timeout: DECISION_TIMEOUT,
+    });
+  });
+  return decision !== null && decision.data.approved === true;
+}
+```
+
+✅ Two steps, one after the other, from function code. The nudge is memoized on its own, and the wait is the runner's.
+
+```ts title="lib/approval.ts"
+async function requestApproval(step: Step, id: string, reason: string) {
+  await step.run("notify-approver", async () => {
+    notifications.push(`Approve "${reason}"? (${id})`);
+    return true;
+  });
+  const decision = await step.waitForEvent("wait-for-decision", {
+    event: DECISION_EVENT,
+    match: "data.id",
+    timeout: DECISION_TIMEOUT,
+  });
+  return decision !== null && decision.data.approved === true;
+}
+```
+
+The approver gets the same message twice, once when asked and once when they answer.
+
+🔴 The nudge is a plain call. The replay that the decision event causes runs the function body from the top, and the plain call runs again. This is the start of `requestApproval` in `lib/approval.ts`.
+
+```ts title="lib/approval.ts"
+async function requestApproval(step: Step, id: string, reason: string) {
+  // Plain code. Every replay runs this line again
+  notifications.push(`Approve "${reason}"? (${id})`);
+  const decision = await step.waitForEvent("wait-for-decision", {
+    event: DECISION_EVENT,
+    match: "data.id",
+    timeout: DECISION_TIMEOUT,
+  });
+  return decision !== null && decision.data.approved === true;
+}
+```
+
+✅ The nudge in its own step. On the replay it answers from the memo.
+
+```ts title="lib/approval.ts"
+async function requestApproval(step: Step, id: string, reason: string) {
+  await step.run("notify-approver", async () => {
+    notifications.push(`Approve "${reason}"? (${id})`);
+    return true;
+  });
+  const decision = await step.waitForEvent("wait-for-decision", {
+    event: DECISION_EVENT,
+    match: "data.id",
+    timeout: DECISION_TIMEOUT,
+  });
+  return decision !== null && decision.data.approved === true;
+}
+```
+
+Nobody answered, and the run is marked failed with a stack trace instead of a reply.
+
+🔴 A timeout throws. The runner records a failed run, may retry it, and the model never gets a result to answer with. This is the end of `requestApproval` in `lib/approval.ts`.
+
+```ts title="lib/approval.ts"
+  if (decision === null) throw new Error(`approval for ${id} timed out`);
+  return decision.data.approved === true;
+}
+```
+
+✅ A timeout is a no. The caller returns the same soft result as for a rejection, and the model tells the person it could not do it.
+
+```ts title="lib/approval.ts"
+  // A timeout is a no, not an error
+  return decision !== null && decision.data.approved === true;
+}
+```
+
+### In this repo
+
+- [`gate.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/1070a3109836371b4ba7a00a60d7601c6cafe29e/apps/patterns/src/lib/approval/gate.ts) is `lib/approval.ts` on the harness runner. `requestApproval` and `runSend` are the two halves, `createGatedFunction` calls them in order, and its `nudge: "unstepped"` option is the second wrong example above, kept so the demo can show the double send.
+- [`step-runner.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2f96931704f2c73e85dec0a1b31f8a790c71bb4/apps/patterns/src/lib/harness/step-runner.ts) is `lib/steps.ts` with a log a page can subscribe to, a `replay()` on demand, and `reset()`.
+- [`ApprovalGateDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/1070a3109836371b4ba7a00a60d7601c6cafe29e/apps/patterns/src/app/demos/ApprovalGateDemo.tsx) is the two routes as buttons: Start is the POST that starts a run, Approve and Reject are the decide route, and Replay is what the runner does on its own after an event.
+- [`approval-gate.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/approval-gate.ts) is `requestApproval` in production, on Inngest. `requestApprovalGate` records a trace anchor in one step, sends the Telegram nudge to the owner in its own step, returns false if the nudge did not go out, records a pending-decision row in another step, and then calls `step.waitForEvent` with the tool's event name, `match: "data.correlationId"` and the tool's timeout. `null` is logged as a timeout and returned as false; otherwise the result is `Boolean(result.data.approved)`. A rejection and a timeout are not told apart. `resolveToolApproval` is `decide`: one `inngest.send` with the correlation id and the boolean.
+- [`booking.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/booking.ts) is the gated tool. `requestSendBookingLinkApproval` opens the gate's span, re-checks the dates in a step so the owner is never asked about a link that could not be built, calls `requestApprovalGate` with the event `gca/booking-link.approval` and a timeout of `52w`, the longest bounded wait that stands in for forever, and on a no returns `{ approved: false, message: "This action was not approved. Do not retry it automatically." }` as the tool result. `runSendBookingLink` is the run half, reached from the loop only after a yes.
+- [`approve/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/owner-nudges/%5BcorrelationId%5D/approve/route.ts) is the decide route. The correlation id is the path segment, the body is `{ approved: boolean }`, a non-boolean is a 400, and the handler sends the event through `handleBookingLinkApprovalReceived`. It continues the original turn's trace through an anchor row when one exists, and a duplicate or late POST is a safe no-op because an event nobody waits on is not an error.
+
+## Pitfalls
+
+- **The run fails the moment it asks.** The wait was called inside a step's callback. Two steps, in function code. See Wrong and right above.
+- **The approver is nudged twice.** The nudge was plain code and the replay ran it again. Put it in its own step. See Wrong and right above.
+- **A timeout ends in a failed run.** The code threw on `null`. Return a no. See Wrong and right above.
+- **Approving one request resumed a different one.** The wait had no `match`, or two tools share one event name, so any decision resumed any waiting run. Match on the correlation id, and give each gated tool its own event name.
+- **The runner refuses the wait with an error about the timeout.** It has no unbounded wait. Pick the longest bound you can live with and treat it as a no.
+- **The decision arrived and nothing happened.** The route sent the event with a different id than the one the run matched on, often because the id was parsed out of free text. Carry the id in structured data, a button payload or a path segment, and send it back as it came.
+- **The tool ran even though the answer was no.** The run half was called regardless, or the result of the request half was not checked. The run half is reached only through a true.
+- **The approver answered after the timeout and the link went out anyway.** The resume route did more than send the event. It must only send; the suspended run, if any, is what decides.
+
+## When not to use
+
+- The tool only reads. Nothing to approve.
+- The person who approves is the person who asked, in the same session. Ask in the UI and call the tool after the click; no suspend is needed.
+- The answer is needed in seconds and the function may stay up. A single process can await a promise. The gate is for waits that outlive the process.
+- The decision is a value, not a yes or no, such as an answer to a question. The wait is the same, but the result is the payload, not a boolean, and the run half embeds it rather than gating on it.
+
+## Code
+
+<CodeLinks />

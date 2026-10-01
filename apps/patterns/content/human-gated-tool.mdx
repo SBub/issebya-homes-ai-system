@@ -1,0 +1,412 @@
+---
+title: Human-gated tool
+kind: composite
+summary: One tool call must wait for a person's yes through a chat app and come back as a tool result the model can read, without repeating the ask, losing its trace, or running on a no.
+tags:
+  - agent-harness
+  - human-in-the-loop
+  - durable-execution
+  - opentelemetry
+uses:
+  - approval-gate-wait-for-event
+  - in-band-correlation
+  - tool-file-convention
+  - trace-anchor-across-steps
+code:
+  - path: apps/patterns/src/lib/gated-tool/gated-tool.ts
+    ref: 7413055ff3db8a03f0071d405801d1ea3c5f941e
+    note: The composite on the harness runtime; the tool file's two halves, the gate with the anchor row and the nudge, the ingress, and the relay that parses the tap.
+  - path: apps/patterns/src/app/demos/GatedToolDemo.tsx
+    ref: 7413055ff3db8a03f0071d405801d1ea3c5f941e
+    note: The live demo; the call, the chat with its buttons, the tool result, the span tree, Replay, and the refusal before anyone is asked.
+  - path: apps/guest-communication-agent/src/agent/tools/booking.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The production tool file; the gate span first, the re-check in a step, the gate, the not-approved object, and the run half reached only after a yes.
+  - path: apps/guest-communication-agent/src/agent/tools/approval-gate.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The reusable gate; the anchor row in a step, the nudge in its own stepped span, the wait on the correlation id, and the decision recorded either way.
+  - path: apps/guest-communication-agent/src/agent/tools/owner-nudge.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The nudge as one call to the relay with the correlation id; a failed send marks the span and returns false, so the gate never waits for a message nobody got.
+  - path: apps/guest-communication-agent/src/agent/run-agent-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The loop's gated branch; the request half decided before dispatch, the not-approved output returned as the tool result, runTool only after a yes.
+  - path: apps/guest-communication-agent/src/app/api/owner-nudges/[correlationId]/approve/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The resume route; the anchor row consumed, the decision under the gate span or its own tagged root, then the one event.
+  - path: apps/telegram-router/app/routers/owner_nudges.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The relay composing the nudge with the correlation id in each button's data.
+  - path: apps/telegram-router/app/routers/telegram_webhook.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The relay's webhook; the id out of the tapped button's data, posted to the resume route, the message edited with the outcome, no double-tap guard.
+verifiedIn:
+  - 210
+updated: 2026-10-01
+---
+
+import { GatedToolDemo } from "@/app/demos/GatedToolDemo";
+
+## Problem
+
+The model has decided to do the one thing that needs a person's yes: send the link, in this app. Between that decision and the tool result the model will read, four things have to go right at once. The tool must not run until the yes arrives, which may be a day later, in another process. The ask must reach the person exactly once, however many times the function replays. The person's tap must find its way back to this run and no other, through a chat app that knows nothing about runs. And everything from the ask to the tap to the link must land in one trace, so that a question about this turn has one answer.
+
+Each of those is one atom. Together they have to agree on where the gate span is opened, what the correlation id is and where it travels, what is a step, and what the model sees on a no. This composite is that agreement, in one tool file and one gate function.
+
+## Mechanism
+
+Here is what happens, in order, across the four atoms.
+
+1. The loop reaches a call for the gated tool. It does not dispatch it. It calls the tool file's request half, from plain function code, with the step tools, the trace anchor and the correlation id. That is the gated branch of [The manual tool loop](/p/manual-tool-loop), with the tool shaped by [The tool file convention](/p/tool-file-convention): a schema the model sees, a pure compute, and two traced halves instead of one.
+2. The request half opens the gate span in its own step, under the turn's anchor, and keeps that span's anchor. Everything about the ask nests under this span, and its anchor is what a later request will rejoin. That is [Trace anchor across steps](/p/trace-anchor-across-steps).
+3. The request half re-checks the model's arguments in a step, with the same compute the plain tool uses. A range that cannot be booked is refused here as a value, and the person is never asked about a link that could not be built.
+4. The gate records the gate span's anchor in a row keyed by the correlation id, in a step. Then it nudges the person in its own step: a message with Approve and Reject buttons whose data is the action and the correlation id. That is [In-band correlation](/p/in-band-correlation) on the way out.
+5. The gate waits for the decision event matched on `data.correlationId`, with a bounded timeout. The invocation ends. That is [An approval gate on waitForEvent](/p/approval-gate-wait-for-event).
+6. The person taps. The chat app posts the button's data to the relay. The relay parses the action and the id, consumes the anchor row, opens the decision span under the gate span, and sends the event with the id as it came. A second tap finds no row and no waiting run.
+7. The runner replays the function. The gate span, the re-check, the anchor row and the nudge all answer from their memos. The wait returns the decision. The gate records it in a stepped span under the gate span and returns yes or no; a timeout is a no.
+8. On a yes, the loop calls the run half: the tool's real work in its own stepped span, through the same execution helper every plain tool uses. On a no, the request half's not-approved object is the tool result, and the run half is never called. Either way the model gets a result it can read and answer with.
+
+The gate span, the anchor row and the buttons all carry the same correlation id, and none of them carries the trace id. The trace is rejoined through the row; the run is resumed through the event.
+
+### Try it
+
+Press the first button. The gate span opens, the dates pass the re-check, the chat shows the nudge with Approve and Reject, and the run pauses with one anchor row. Press Approve: the decision nests under the gate span, the run half runs, and the model's tool result is the URL. Press Approve again: no row, no waiting run, a decision root of its own. Reset and press Reject: the tool result is the not-approved object and `tool-send_link` never appears. Reset and press the second button: past dates are refused before anyone is nudged, with one span and an empty chat. Replay at any point repeats nothing.
+
+<GatedToolDemo />
+
+## Combines
+
+<Combines />
+
+## Pattern
+
+The five files below, with `lib/steps.ts` from [An approval gate on waitForEvent](/p/approval-gate-wait-for-event), `lib/correlation.ts` from [In-band correlation](/p/in-band-correlation) and `lib/tool-execution.ts` from [The tool file convention](/p/tool-file-convention) unchanged, are a working app. Paste them into a fresh Next project with `zod` installed and drive it with `curl`. The tracer below is the one from [Trace anchor across steps](/p/trace-anchor-across-steps) with the status from the tool file atom added, so one file serves both.
+
+```ts title="lib/tracing.ts"
+export type Anchor = { traceId: string; spanId: string };
+
+export type Span = {
+  traceId: string;
+  spanId: string;
+  parentSpanId: string | null;
+  name: string;
+  attributes: Record<string, string>;
+  status: "unset" | "error";
+  error: string | null;
+};
+
+// Ended spans wait here until flush() sends them, as a batch exporter does
+export const pending: Span[] = [];
+export const exported: Span[] = [];
+
+function hex(bytes: number) {
+  const buffer = crypto.getRandomValues(new Uint8Array(bytes));
+  return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function anchorOf(span: Span): Anchor {
+  return { traceId: span.traceId, spanId: span.spanId };
+}
+
+// A child of the anchor, or a root when the anchor is null. Failed on a throw, or by markSpanFailed for a value
+export async function withSpan<T>(
+  name: string,
+  parent: Anchor | null,
+  fn: (span: Span) => Promise<T> | T,
+): Promise<T> {
+  const span: Span = {
+    traceId: parent?.traceId ?? hex(16),
+    spanId: hex(8),
+    parentSpanId: parent?.spanId ?? null,
+    name,
+    attributes: {},
+    status: "unset",
+    error: null,
+  };
+  try {
+    return await fn(span);
+  } catch (error) {
+    markSpanFailed(span, error instanceof Error ? error.message : String(error));
+    throw error;
+  } finally {
+    pending.push(span);
+  }
+}
+
+export function markSpanFailed(span: Span, message: string) {
+  span.status = "error";
+  span.error = message;
+}
+
+export async function flush() {
+  exported.push(...pending.splice(0));
+}
+
+// The gate span's anchor, keyed by the id a later request will carry. Single use: read and deleted together
+const anchors = new Map<string, Anchor>();
+
+export function recordAnchor(id: string, anchor: Anchor) {
+  anchors.set(id, anchor);
+}
+
+export function consumeAnchor(id: string): Anchor | null {
+  const anchor = anchors.get(id) ?? null;
+  anchors.delete(id);
+  return anchor;
+}
+```
+
+The gate is generic. It knows the mechanism, the anchor row, the nudge and the wait, and nothing about any tool.
+
+```ts title="lib/approval.ts"
+import { composeDecision, type Nudge } from "./correlation";
+import type { Step } from "./steps";
+import { type Anchor, recordAnchor, type Span, withSpan } from "./tracing";
+
+export const DECISION_EVENT = "link.decided";
+
+// What went out to the person, as the chat app would hold it
+export const chat: Array<Nudge & { id: number }> = [];
+
+// A span inside the step, under the anchor: created once, parented right, even on a replay
+export function steppedSpan<T>(
+  step: Step,
+  id: string,
+  anchor: Anchor,
+  fn: (span: Span) => Promise<T> | T,
+) {
+  return step.run(id, () => withSpan(id, anchor, fn));
+}
+
+// The gate: the anchor row, the nudge in its own step, the wait. A timeout is a no
+export async function requestApprovalGate(
+  step: Step,
+  correlationId: string,
+  gate: Anchor,
+  reason: string,
+) {
+  // The resume route gets only the id, hours later: the gate's anchor waits for it in a row
+  await step.run("record-gate-anchor", async () => {
+    recordAnchor(correlationId, gate);
+    return true;
+  });
+
+  // Its own step, apart from the wait: a replay must not nudge twice
+  await steppedSpan(step, "nudge-approver", gate, async () => {
+    chat.push({ id: chat.length + 1, ...composeDecision(correlationId, reason) });
+    return true;
+  });
+
+  const decision = await step.waitForEvent("wait-for-decision", {
+    event: DECISION_EVENT,
+    match: "data.correlationId",
+    timeout: 60_000,
+  });
+  const outcome =
+    decision === null ? "timeout" : decision.data.approved === true ? "approved" : "rejected";
+  await steppedSpan(step, "gate-decision", gate, async (span) => {
+    span.attributes["approval.decision"] = outcome;
+    return outcome;
+  });
+  return outcome === "approved";
+}
+```
+
+`requestApprovalGate` takes the gate span's anchor as an argument and nests the nudge and the decision under it. The event name and the match path are the contract with the relay below.
+
+The tool file has the three parts of the convention, with the run split in two: a request half that never does the work, and a run half that is reached only after a yes.
+
+```ts title="lib/tools/send-link.ts"
+import { z } from "zod";
+import { requestApprovalGate, steppedSpan } from "../approval";
+import { dispatchToolExecution, type ToolContext } from "../tool-execution";
+import { type Anchor, anchorOf } from "../tracing";
+
+const sendLinkSchema = z.object({
+  from: z.string().describe("Check-in date, YYYY-MM-DD"),
+  to: z.string().describe("Check-out date, YYYY-MM-DD"),
+  email: z.string().describe("Where the link goes"),
+});
+
+// Schema only: the loop decides whether and when the run half runs
+export const sendLink = {
+  description: "Send the booking link. Call it once the person has confirmed the dates.",
+  inputSchema: sendLinkSchema,
+};
+
+export type GateContext = ToolContext & { anchor: Anchor; correlationId: string };
+
+const NOT_APPROVED = {
+  approved: false,
+  message: "This action was not approved. Do not retry it automatically.",
+};
+
+// Pure: the URL from the arguments
+export function computeSendLink(args: z.infer<typeof sendLinkSchema>) {
+  return { url: `/book?from=${args.from}&to=${args.to}&email=${encodeURIComponent(args.email)}` };
+}
+
+// The same guard the plain date tool runs, so the two can never disagree. Null means the link may be built
+function verifySendLink(args: z.infer<typeof sendLinkSchema>, today: string) {
+  if (!(args.from < args.to))
+    return {
+      approved: false,
+      error: `Cannot build a link: ${args.from} to ${args.to} is not a valid range.`,
+    };
+  if (args.from < today)
+    return {
+      approved: false,
+      error: `Cannot build a link: ${args.from} is in the past (today is ${today}).`,
+    };
+  return null;
+}
+
+// The request half: the gate span, the re-check, the gate. Never the real work
+export async function requestSendLinkApproval(
+  input: Record<string, unknown>,
+  context: GateContext,
+) {
+  const { step, anchor, correlationId, today } = context;
+  // Created first: the nudge and the decision nest under it, and its anchor is what the row holds
+  const gate = await steppedSpan(step, "gate-send_link", anchor, (span) => {
+    span.attributes["tool.input"] = JSON.stringify(input);
+    return anchorOf(span);
+  });
+
+  const parsed = sendLinkSchema.safeParse(input);
+  if (!parsed.success)
+    return {
+      approved: false,
+      output: { error: `Invalid input for send_link: ${parsed.error.message}` },
+    };
+
+  // Before anyone is asked: the person is never nudged about a link that could not be built
+  const refusal = await step.run("verify-send_link", async () =>
+    verifySendLink(parsed.data, today),
+  );
+  if (refusal !== null) return { approved: false, output: refusal };
+
+  const { from, to, email } = parsed.data;
+  const approved = await requestApprovalGate(
+    step,
+    correlationId,
+    gate,
+    `Send the link for ${from} to ${to} to ${email}?`,
+  );
+  return approved ? { approved: true, output: null } : { approved: false, output: NOT_APPROVED };
+}
+
+// The run half: reached only after a yes. The same one-shot shape as any plain tool
+export function runSendLink(input: Record<string, unknown>, context: GateContext) {
+  return steppedSpan(context.step, "tool-send_link", context.anchor, (span) =>
+    dispatchToolExecution(span, input, () => {
+      const parsed = sendLinkSchema.safeParse(input);
+      if (!parsed.success) return { error: `Invalid input for send_link: ${parsed.error.message}` };
+      return computeSendLink(parsed.data);
+    }),
+  );
+}
+```
+
+Every exit of the request half is an object the model can read: invalid input, a refused range, a no. Only `approved: true` lets the loop go on to the run half.
+
+The ingress route is the loop at the moment it reaches the gated call: the root span, the function, the request half, then the run half on a yes.
+
+```ts title="app/api/requests/route.ts"
+import { after } from "next/server";
+import { chat } from "../../../lib/approval";
+import { start, status } from "../../../lib/steps";
+import { requestSendLinkApproval, runSendLink } from "../../../lib/tools/send-link";
+import { anchorOf, exported, flush, withSpan } from "../../../lib/tracing";
+
+const TODAY = "2026-10-01";
+
+export async function POST(request: Request) {
+  const { input } = await request.json();
+  const correlationId = crypto.randomUUID();
+  // The root belongs to this handler, which runs once. Its anchor is data from here on
+  const anchor = await withSpan("message.received", null, (span) => anchorOf(span));
+  await start(
+    correlationId,
+    { name: "message.received", data: { correlationId } },
+    async ({ step }) => {
+      const context = { step, today: TODAY, anchor, correlationId };
+      // The request half decides. The run half runs only after a yes
+      const decision = await requestSendLinkApproval(input, context);
+      if (!decision.approved) return decision.output;
+      return runSendLink(input, context);
+    },
+  );
+  after(() => flush());
+  return Response.json({ correlationId, runs: status(), chat });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), chat, spans: exported });
+}
+```
+
+The relay route is the chat app's webhook and the resume route in one: parse the tap, rejoin the trace, send the event.
+
+```ts title="app/api/chat/route.ts"
+import { after } from "next/server";
+import { DECISION_EVENT } from "../../../lib/approval";
+import { parseButtonData } from "../../../lib/correlation";
+import { send, status } from "../../../lib/steps";
+import { consumeAnchor, flush, withSpan } from "../../../lib/tracing";
+
+// A button tap arrives with the button's data and nothing else
+export async function POST(request: Request) {
+  const { data } = await request.json();
+  const parsed = parseButtonData(data);
+  if (parsed === null) return Response.json({ id: null });
+  const approved = parsed.action === "approve";
+
+  // Hours later, another process: the single-use row keyed by the id says where this belongs in the trace
+  const gate = consumeAnchor(parsed.id);
+  await withSpan("decision", gate, (span) => {
+    span.attributes["correlation.id"] = parsed.id;
+    span.attributes["approved"] = String(approved);
+  });
+
+  // Only the event. The suspended run, if any, decides; a duplicate finds nobody waiting
+  await send({ name: DECISION_EVENT, data: { correlationId: parsed.id, approved } });
+  after(() => flush());
+  return Response.json({ id: parsed.id, nested: gate !== null, runs: status() });
+}
+```
+
+Start with `curl -X POST localhost:3000/api/requests -H 'content-type: application/json' -d '{"input":{"from":"2026-10-06","to":"2026-10-08","email":"ana@example.com"}}'`. The response carries the correlation id, a run whose log ends in `wait-for-decision: suspended`, and one chat message whose buttons carry `approve:<id>` and `reject:<id>`. Tap with `curl -X POST localhost:3000/api/chat -H 'content-type: application/json' -d '{"data":"approve:<id>"}'`: `nested: true`, and the run is done with `{ url: "/book?from=2026-10-06&to=2026-10-08&email=ana%40example.com" }`. Then `curl localhost:3000/api/requests` shows one trace: `gate-send_link` under the root with `nudge-approver`, `decision` and `gate-decision` under it, and `tool-send_link` under the root. The same tap again answers `nested: false` and changes nothing. Start again with `"from":"2026-09-20","to":"2026-09-22"`: the run is done at once with the refusal, the chat is unchanged, and the trace has the root and the gate span only.
+
+### In this repo
+
+- [`gated-tool.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/7413055ff3db8a03f0071d405801d1ea3c5f941e/apps/patterns/src/lib/gated-tool/gated-tool.ts) is `lib/approval.ts`, `lib/tools/send-link.ts` and both routes on the harness runtime: `receiveToolCall` is the ingress, `relayTap` the relay, and `verifySendLink` reuses `computeCheckDates` from the tool file atom so the refusal is the plain tool's.
+- [`GatedToolDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/7413055ff3db8a03f0071d405801d1ea3c5f941e/apps/patterns/src/app/demos/GatedToolDemo.tsx) is the routes as buttons, with the chat's buttons wired to the relay and a flush after every action standing in for `after()`.
+- [`booking.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/booking.ts) is `lib/tools/send-link.ts` in production. `requestSendBookingLinkApproval` opens the gate span `hitl.send_booking_link` in the step `hitl-send_booking_link` and keeps its anchor, flushes so a later patch of that span's output cannot be overwritten, re-checks the dates in `verify-send_booking_link-availability` with `computeCheckAvailability`, and on a refusal patches the gate span's output and returns `{ approved: false, error, reason }` without nudging. Otherwise it calls `requestApprovalGate` with the event `gca/booking-link.approval`, the timeout `52w`, the gate's anchor as the parent, and the call's input captured on the pending row, and on a no returns the not-approved object. `runSendBookingLink` is the run half: one `steppedSpan` named `tool-send_booking_link` around `dispatchToolExecution` and `computeSendBookingLink`, which runs the same guard once more so no path can turn a bad range into a URL. `handleBookingLinkApprovalReceived` is the one send.
+- [`approval-gate.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/approval-gate.ts) is `requestApprovalGate` in production, on Inngest. It records the anchor row in `record-approval-gate-trace-anchor-<tool>`, sends the nudge in the stepped span `hitl-<tool>-nudge` and returns false when the send failed, records a pending-decision row only once the nudge is confirmed sent, waits on `wait-for-<tool>-approval` matched on `data.correlationId`, and records the outcome in a stepped span either way: `hitl.<tool>.no_reply` on a timeout, `hitl.<tool>.decision` with `gca.approval.decision` otherwise. Its comment is the canonical statement that it must be called from the loop body, never inside a step.
+- [`owner-nudge.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/owner-nudge.ts) is the nudge: one span, one POST to the Telegram router with the correlation id in the body, and a `{ ok: false }` from the router marks the span failed and returns false.
+- [`run-agent-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-agent-turn.ts) is the ingress route's function body. `NEEDS_APPROVAL` names the gated tools, the inline switch calls each one's request half before dispatch, a decision that is not approved returns its `notApprovedOutput` as the tool result without reaching `runTool`, and an approved one goes through the same `runTool` as every plain tool.
+- [`approve/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/owner-nudges/%5BcorrelationId%5D/approve/route.ts) is `app/api/chat/route.ts` on the agent's side. The correlation id is the path segment, the body is `{ approved }`, `consumeApprovalGateTraceAnchor` reads and deletes the row, the handling runs under the gate span with `withTurnSpan` or under its own root tagged `gca.correlation_id`, and a duplicate POST is a safe no-op because nobody waits on the event.
+- [`owner_nudges.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/routers/owner_nudges.py) and [`telegram_webhook.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/routers/telegram_webhook.py) are the chat app's side of the relay. The first composes the Telegram message with `booking_approve:<id>` and `booking_reject:<id>` as the two buttons' callback data. The second takes the id out of a tapped button's data, posts it with the decision to the approve route, answers the tap, and edits the message in place with the outcome, with no double-tap guard because the agent's side needs none.
+
+## Pitfalls
+
+- **The person was nudged twice for one call.** The nudge was plain code and the replay sent it again. Its own step; see [An approval gate on waitForEvent](/p/approval-gate-wait-for-event).
+- **The tap resumed the wrong run, or none.** The button data had no id, or the relay looked up a pending request instead of parsing. The id in every button, parsed back out; see [In-band correlation](/p/in-band-correlation).
+- **The decision is a trace of its own.** The relay did not consume the anchor row, or the row was written after the wait instead of before. Record it in the gate, before the nudge; see [Trace anchor across steps](/p/trace-anchor-across-steps).
+- **The tool ran on a no.** The loop called the run half regardless. Only `approved: true` reaches it; see [The tool file convention](/p/tool-file-convention) for the two halves.
+- **The person was asked to approve a link for last week.** The re-check came after the nudge, or not at all. Re-check the model's arguments in a step before the gate, with the same compute the plain tool uses.
+- **The run half built a link the re-check would have refused.** The run half trusted the request half. Run the guard in the compute too; it is pure and cheap.
+- **The gate's spans nest under the turn instead of under the gate.** The gate was given the turn's anchor rather than the gate span's. Open the gate span first, keep its anchor, and pass that to the gate.
+- **The not-approved result is missing from the trace.** The gate span was created before its output was known and never patched. Record the decision in its own stepped span, as above, or patch the gate span after the fact.
+
+## When not to use
+
+- Nothing needs a person. The plain tool file is enough.
+- The person who approves is the one talking, in the same session. Ask in the reply and run the tool on the next turn; no gate, no relay.
+- The decision is a value rather than a yes or no, such as an answer to a question. The wait and the correlation are the same, but the result is the payload and the run half embeds it instead of gating on it.
+- The runner is not durable. A gate on a promise in one process is a different, simpler thing, and it dies with the process.
+
+## Code
+
+<CodeLinks />
