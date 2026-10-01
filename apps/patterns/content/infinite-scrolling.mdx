@@ -18,26 +18,36 @@ code:
   - path: apps/website/src/app/api/shop/products/route.ts
     ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
     note: Pages 2 and on; decodes the cursor outside the cache so a bad cursor is a 400.
+  - path: apps/website/src/app/(main)/shop/ui/ShopProducts.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: Page one, prefetched on the server with prefetchInfiniteQuery from the data function, not over HTTP.
 verifiedIn:
   - 164
   - 166
   - 168
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 ## Problem
 
-A catalogue that grows past one screen needs paging. Numbered pages break the browsing flow. Offset pagination duplicates or skips items when the list changes between two requests.
+A catalogue that grows past one screen needs paging. Numbered pages break the browsing flow. Offset pagination asks for "items 20 to 40". When an item is inserted or removed between two requests, the next page repeats one item or skips one.
 
 ## Mechanism
 
-Page one comes from the server, prefetched and hydrated into the client query cache. Pages 2 and on come from an API route that the client calls with a cursor.
+Page one comes from the server, prefetched and hydrated into the browser's query cache. Pages 2 and on come from an API route that the browser calls with a cursor. Here is what happens, in order.
 
-The cursor is a keyset bookmark: the `(createdAt, slug)` of the last item shown, in the current sort order. A page is the items that compare strictly after it, so an insert or a removal elsewhere in the list never shifts what comes next. The slug is the tie-breaker that makes the order total. The cursor is opaque to the client: base64url JSON that also carries the sort and the search term, so a cursor from one list is rejected by another.
+1. The server prefetches page one and hands it to the browser's cache. That is the [Server prefetch with hydration](/p/server-prefetch-hydration) atom.
+2. The list renders page one from the cache. Below the last item sits an empty element, the sentinel.
+3. An `IntersectionObserver` watches the sentinel. The browser calls its callback when the sentinel comes within `400px` of the viewport, so the next page starts loading before the visitor reaches the end.
+4. The callback calls `fetchNextPage`. React Query sends the last page's cursor to the route.
+5. The route reads the cursor, selects the items after it, and returns them with the next cursor, or `null` on the last page.
+6. React Query appends the page. The list re-renders with the new items, and the sentinel moves down. The observer is re-armed and waits again.
 
-The sort and the search term are in the query key. Changing either starts a new query at its own page one, and the transition keeps the old cards on screen until it arrives.
+The cursor is a keyset bookmark. In the app it is the `(createdAt, slug)` of the last item shown, in the current sort order. A page is the items that compare strictly after it. So an insert or a removal elsewhere in the list never shifts what comes next. The slug is the tie-breaker that makes the order total. The cursor is opaque to the browser: base64url JSON that also carries the sort and the search term, so a cursor from one list is rejected by another.
 
-An invisible sentinel after the last card is watched by an `IntersectionObserver` with a `400px` root margin, so the next page starts loading before the visitor reaches the end. A "Load more" button is always there while a next page exists, for when the observer never fires. A failed next page shows a retry line in place of the button.
+The sort and the search term are in the query key. Changing either starts a new query at its own page one, and the transition keeps the old cards on screen until it arrives. That is the [Suspense without the flash](/p/suspense-without-flash) atom.
+
+A "Load more" button is always there while a next page exists, for when the observer never fires. A failed next page shows a retry line in place of the button.
 
 ## Combines
 
@@ -45,103 +55,244 @@ An invisible sentinel after the last card is watched by an `IntersectionObserver
 
 ## Pattern
 
-Excerpt from apps/website/src/lib/shop/pagination.ts, trimmed.
+The five files below, with `app/providers.tsx` from [Server prefetch with hydration](/p/server-prefetch-hydration) unchanged, are a working app. Paste them into a fresh Next project with `@tanstack/react-query` installed, open `/items`, and scroll.
 
-```ts
-export function encodeCursor(bookmark: CursorBookmark): string {
-  return toBase64Url(JSON.stringify(bookmark));
-}
+A data module holds the items and the one function that pages them. It runs on the server only.
 
-export function decodeCursor(cursor: string, sort: ShopSort, q: string): CursorBookmark {
-  // Throws UnknownCursorError, CursorSortMismatchError or CursorSearchMismatchError.
-}
+```ts title="app/items/data.ts"
+export type Item = { id: number; name: string };
 
-export function selectPage(
-  products: readonly Product[],
-  cursor: string | null,
-  limit: number,
-  sort: ShopSort,
-  q: string,
-): ProductsPage {
-  const sorted = sortProducts(filterByName(products, q), sort);
+export type ItemsPage = { items: Item[]; nextCursor: number | null };
 
-  let start = 0;
-  if (cursor !== null) {
-    const bookmark = decodeCursor(cursor, sort, q);
-    const index = sorted.findIndex((product) => compareProducts(product, bookmark, sort) > 0);
-    start = index === -1 ? sorted.length : index;
-  }
+const PAGE_SIZE = 10;
 
-  const items = sorted.slice(start, start + limit);
-  const last = items.at(-1);
-  const nextCursor =
-    last && start + limit < sorted.length
-      ? encodeCursor({ sort, q, createdAt: last.createdAt, slug: last.slug })
-      : null;
+const items: Item[] = Array.from({ length: 100 }, (_, index) => ({
+  id: index + 1,
+  name: `Item ${index + 1}`,
+}));
 
-  return { items, nextCursor, total: sorted.length };
+export async function pageAfter(cursor: number) {
+  // Stands in for a database query
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  // Keyset: the items strictly after the bookmark, never an offset
+  const rest = items.filter((item) => item.id > cursor);
+  const page = rest.slice(0, PAGE_SIZE);
+  // null on the last page, so an exact multiple of PAGE_SIZE never hands out a cursor to an empty page
+  const nextCursor = rest.length > PAGE_SIZE ? page[PAGE_SIZE - 1].id : null;
+
+  return { items: page, nextCursor };
 }
 ```
 
-Excerpt from apps/website/src/app/api/shop/products/route.ts, trimmed.
+The cursor is the `id` of the last item shown, and `0` means the start. A page is what comes strictly after it. `id` is unique, so it needs no tie-breaker.
 
-```ts
-// Checked here, outside the cache: see `decodeCursor`. A bad cursor never
-// reaches `getProductsPage`, so it never becomes a cache entry either.
-if (cursor !== undefined) {
-  try {
-    decodeCursor(cursor, sort, q);
-  } catch (error) {
-    if (error instanceof UnknownCursorError) {
-      return NextResponse.json({ error: "Unknown cursor" }, { status: 400 });
-    }
-    throw error;
+The Route Handler serves pages 2 and on to the browser. It checks the cursor before it touches the data.
+
+```ts title="app/api/items/route.ts"
+import { pageAfter } from "../../items/data";
+
+export async function GET(request: Request) {
+  const cursor = Number(new URL(request.url).searchParams.get("cursor") ?? 0);
+
+  // Decided here, before the data function: a bad cursor is the caller's mistake
+  if (!Number.isInteger(cursor) || cursor < 0) {
+    return Response.json({ error: "Unknown cursor" }, { status: 400 });
   }
+
+  return Response.json(await pageAfter(cursor));
 }
 ```
 
-Excerpt from apps/website/src/app/(main)/shop/ui/ProductList.tsx, trimmed.
+A request without a cursor gets page one. A cursor that is not a whole number gets a 400 and never reaches `pageAfter`.
 
-```tsx
-const canLoadMore = hasNextPage && !isFetchingNextPage;
-const sentinelRef = useCallback(
-  (sentinel: HTMLDivElement | null) => {
-    if (!sentinel || !canLoadMore) return;
+A shared module holds the key, the browser's fetcher and the client factory.
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) {
-          observer.disconnect();
-          void loadMore();
-        }
+```ts title="app/items/query.ts"
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
+import type { ItemsPage } from "./data";
+
+export const itemsKey = ["items"];
+
+export async function fetchItemsPage(cursor: number, signal: AbortSignal): Promise<ItemsPage> {
+  const response = await fetch(`/api/items?cursor=${cursor}`, { signal });
+  if (!response.ok) throw new Error(`Items request failed: ${response.status}`);
+  return response.json();
+}
+
+export function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      dehydrate: {
+        shouldDehydrateQuery: (query) =>
+          defaultShouldDehydrateQuery(query) || query.state.status === "pending",
       },
-      { rootMargin: "400px 0px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  },
-  [canLoadMore, loadMore],
-);
+    },
+  });
+}
+```
 
-{
-  hasNextPage && !isFetchNextPageError && (
-    <div className="mt-8 flex justify-center">
-      <button type="button" onClick={loadMore} disabled={isFetchingNextPage}>
-        Load more
-      </button>
-    </div>
+`fetchItemsPage` runs in the browser only, so its relative URL is fine. `signal` lets React Query cancel a page the list no longer needs.
+
+The page runs on the server. It prefetches page one from the data module and hydrates it into the list.
+
+```tsx title="app/items/page.tsx"
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import { Suspense } from "react";
+import { Providers } from "../providers";
+import { pageAfter } from "./data";
+import { ItemList } from "./ItemList";
+import { itemsKey, makeQueryClient } from "./query";
+
+export default async function Page() {
+  const queryClient = makeQueryClient();
+  // Page one straight from the data, not over HTTP; the browser fetches the rest from the route
+  await queryClient.prefetchInfiniteQuery({
+    queryKey: itemsKey,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => pageAfter(pageParam),
+  });
+
+  return (
+    <Providers>
+      <HydrationBoundary state={dehydrate(queryClient)}>
+        <Suspense fallback={<p>Loading</p>}>
+          <ItemList />
+        </Suspense>
+      </HydrationBoundary>
+    </Providers>
   );
 }
 ```
 
+`prefetchInfiniteQuery` stores page one together with its page param, `0`. The list below reads the same key and the same `initialPageParam`, so it starts from that page.
+
+The list is a client component. It reads the pages, watches the sentinel, and loads the next page.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { useSuspenseInfiniteQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
+import type { ItemsPage } from "./data";
+import { fetchItemsPage, itemsKey } from "./query";
+
+export function ItemList() {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } =
+    useSuspenseInfiniteQuery({
+      queryKey: itemsKey,
+      initialPageParam: 0,
+      getNextPageParam: (last: ItemsPage) => last.nextCursor,
+      queryFn: ({ pageParam, signal }) => fetchItemsPage(pageParam, signal),
+      refetchOnMount: false,
+    });
+
+  const loadMore = useCallback(() => {
+    void fetchNextPage();
+  }, [fetchNextPage]);
+
+  // Armed only while there is a page to load and none in flight, so it is rebuilt twice per page
+  const canLoadMore = hasNextPage && !isFetchingNextPage;
+  const sentinelRef = useCallback(
+    (sentinel: HTMLDivElement | null) => {
+      if (!sentinel || !canLoadMore) return;
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer.disconnect();
+            loadMore();
+          }
+        },
+        { rootMargin: "400px 0px" },
+      );
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+    },
+    [canLoadMore, loadMore],
+  );
+
+  const items = data.pages.flatMap((page) => page.items);
+
+  return (
+    <>
+      <ul>
+        {items.map((item) => (
+          <li key={item.id}>{item.name}</li>
+        ))}
+      </ul>
+
+      <div ref={sentinelRef} />
+
+      {isFetchNextPageError && (
+        <p>
+          Could not load more.{" "}
+          <button type="button" onClick={loadMore}>
+            Try again
+          </button>
+        </p>
+      )}
+
+      {hasNextPage && !isFetchNextPageError && (
+        <button type="button" onClick={loadMore} disabled={isFetchingNextPage}>
+          Load more
+        </button>
+      )}
+    </>
+  );
+}
+```
+
+`getNextPageParam` returns the last page's `nextCursor`, so `null` ends the list and `hasNextPage` turns false. `sentinelRef` is a callback ref: React calls it with the element on mount and runs the returned cleanup on unmount, or when the callback changes. A fresh observer reports the current state on `observe`, so a sentinel still in view after a page lands loads the next one. The button stays while a next page exists, and the retry line replaces it after a failure.
+
+### Wrong and right
+
+The list repeats an item, or skips one, after something was added or removed while the visitor scrolled.
+
+🔴 The page is an offset. Every earlier item shifted the window by one. This is the selection in `pageAfter`.
+
+```ts title="app/items/data.ts"
+const page = items.slice(cursor, cursor + PAGE_SIZE);
+const nextCursor = cursor + PAGE_SIZE < items.length ? cursor + PAGE_SIZE : null;
+```
+
+✅ The page is what comes after the bookmark. An item inserted before it changes nothing after it.
+
+```ts title="app/items/data.ts"
+const rest = items.filter((item) => item.id > cursor);
+const page = rest.slice(0, PAGE_SIZE);
+const nextCursor = rest.length > PAGE_SIZE ? page[PAGE_SIZE - 1].id : null;
+```
+
+A list whose length is an exact multiple of the page size makes one more request, for an empty page.
+
+🔴 `nextCursor` is the last item's `id` whenever the page has items. The last full page still hands out a cursor. This is the last line of the selection in `pageAfter`.
+
+```ts title="app/items/data.ts"
+const nextCursor = page.length > 0 ? page[page.length - 1].id : null;
+```
+
+✅ Hand out a cursor only when something follows this page.
+
+```ts title="app/items/data.ts"
+const nextCursor = rest.length > PAGE_SIZE ? page[PAGE_SIZE - 1].id : null;
+```
+
+### In this repo
+
+- [`pagination.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/lib/shop/pagination.ts) is the data module's paging. `selectPage` filters, sorts and slices by the `(createdAt, slug)` keyset. `encodeCursor` and `decodeCursor` make the cursor an opaque base64url string that carries the sort and the search term. `shopProductsQueryKey` is the key, with the sort and the term in it.
+- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/api/shop/products/route.ts) is the Route Handler. It decodes the cursor before the cached `getProductsPage`, so a bad cursor is a 400 and never becomes a cache entry.
+- [`ShopProducts.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopProducts.tsx>) is the page side. `getFirstPageState` prefetches page one with `prefetchInfiniteQuery` from `getProductsPage` directly, with `null` as the first cursor, and dehydrates it.
+- [`ProductList.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ProductList.tsx>) is the list. `fetchProductsPage` is the browser's fetcher. `sentinelRef` is the callback ref with the `400px` root margin, `loadMore` reports each loaded page, and the button and the retry line sit under the grid.
+
 ## Pitfalls
 
-- Offset pagination duplicates or skips items when one is inserted or removed between two requests. Page by a keyset bookmark instead.
-- A keyset needs a tie-breaker. Without the unique slug, items sharing a `createdAt` could swap between requests and be duplicated or skipped across pages.
-- Decode the cursor in the route, before the cached page function. An error thrown inside a `"use cache"` scope loses its class on the way out, so the route could not tell a bad cursor (400) from a real failure (500).
-- Return `nextCursor: null` when a page reaches the end. Otherwise a list whose length is an exact multiple of the page size hands out a cursor to an empty trailing page.
-- Re-arm the observer only when "can load more" changes, not on every render. The callback ref depends on `canLoadMore` and `loadMore` alone, so the observer is recreated twice per page.
-- Put the sort and the search term in the query key. A change then starts a fresh page one with no effect and no manual cache reset.
+- **An item repeats, or one goes missing, between two pages.** The pages are offsets, and an insert or a removal shifted the window. Page by a keyset bookmark instead. See Wrong and right above.
+- **Two items swap between requests and one is duplicated or skipped.** The keyset has no tie-breaker. Items sharing a `createdAt` have no fixed order between them. Add a unique column, the slug, to the bookmark.
+- **A bad cursor comes back as a 500 instead of a 400.** The cursor was decoded inside the `"use cache"` scope. An error thrown there loses its class on the way out, so the route could not tell a bad cursor from a real failure. Decode the cursor in the route, before the cached page function.
+- **The list makes one more request for an empty page.** `nextCursor` was set whenever the page had items. Return `null` when a page reaches the end. See Wrong and right above.
+- **The observer is rebuilt on every render.** The callback ref closes over values that change each render. Depend on `canLoadMore` and `loadMore` alone, so it is recreated twice per page and no more.
+- **A sort or search change keeps the old pages.** The sort and the term are not in the query key. Put them in it. A change then starts a fresh page one with no effect and no manual cache reset.
 
 ## When not to use
 

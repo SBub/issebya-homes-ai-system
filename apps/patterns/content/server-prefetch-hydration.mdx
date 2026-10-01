@@ -16,61 +16,65 @@ code:
   - path: apps/website/src/lib/shop/query-client.ts
     ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
     note: The one QueryClient factory for server and client, which also dehydrates pending queries.
+  - path: apps/website/src/lib/shop/pagination.ts
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: shopProductsQueryKey, the one key builder the prefetch and the list both call.
+  - path: apps/website/src/app/(main)/shop/ui/ShopProviders.tsx
+    ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0
+    note: The client QueryClientProvider, one client per browser session from the same factory.
 verifiedIn:
   - 164
   - 182
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 ## Problem
 
-A client list that fetches on mount shows a spinner, then the data. The server could have fetched that data during the render it was already doing. The browser repeats the work and the visitor waits for it.
+A client component that fetches on mount shows a spinner first. Then the data arrives. The server was already rendering that page. It could have fetched the data during that render. Instead the browser repeats the work, and the visitor waits for it.
 
 ## Mechanism
 
-The server builds a `QueryClient` from the same factory the client uses. It prefetches the first page under the same query key, calls `dehydrate`, and renders the client list inside a `HydrationBoundary` with that state.
+React Query keeps fetched data in a cache. Each entry sits under a query key, an array such as `["items"]`. Hydration here means filling the browser's cache from state the server produced. Here is what happens, in order.
 
-On the client, the list's `useSuspenseInfiniteQuery` finds the key already in its cache, so it renders the data straight away. Pending queries are dehydrated too, so if the server has not finished, the client picks up the in-flight promise and suspends on it instead of starting a second fetch.
+1. The server builds a `QueryClient` from the same factory the browser uses. It prefetches the data under the query key and waits for it.
+2. The server calls `dehydrate(queryClient)`. Dehydrating turns the cache into a plain object: the key, the data, and the time it was fetched.
+3. The server renders the client list inside a `HydrationBoundary` with that object as its `state`. The object travels to the browser with the page.
+4. In the browser, `HydrationBoundary` writes the object into the browser's `QueryClient`, the one `QueryClientProvider` holds.
+5. The list calls `useSuspenseQuery` with the same key. React Query finds the entry and returns it. The list renders the data on its first render, so the server HTML already holds it.
+6. From then on the browser's cache owns that entry. The list does not refetch it on mount. Any later page or refetch is the browser's job.
 
-The server fetches page one and hands it to the client's query cache. From then on that cache owns it: the client does not refetch it on mount, and the client fetches every later page itself.
+If the server hands over a query that is still pending, the browser picks up the in-flight promise and suspends on it. It does not start a second fetch. That needs the factory's dehydrate rule below and the suspense variant of the hook.
 
 ## Pattern
 
-Excerpt from apps/website/src/app/(main)/shop/ui/ShopProducts.tsx, trimmed.
+The four files below are a working app. Paste them into a fresh Next project with `@tanstack/react-query` installed, open `/items`, and view the page source. The list is in the HTML.
 
-```tsx
-async function getFirstPageState(sort: ShopSort, q: string): Promise<DehydratedState> {
-  "use cache";
-  cacheTag("shop-products");
-  cacheLife("days");
+One module holds what both sides share: the key, the fetcher, and the client factory.
 
-  const queryClient = makeShopQueryClient();
-  await queryClient.prefetchInfiniteQuery({
-    queryKey: shopProductsQueryKey(sort, q),
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => getProductsPage(pageParam, SHOP_PAGE_SIZE, sort, q),
-  });
+```ts title="app/items/query.ts"
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
 
-  return dehydrate(queryClient);
+export type Item = { id: number; name: string };
+
+export const itemsKey = ["items"];
+
+const items: Item[] = [
+  { id: 1, name: "Alpha" },
+  { id: 2, name: "Bravo" },
+  { id: 3, name: "Charlie" },
+];
+
+export async function fetchItems() {
+  // Stands in for a database call on the server or an API call in the browser
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return items;
 }
 
-// ...inside ShopProducts:
-<HydrationBoundary state={await getFirstPageState(sort, q)}>
-  <ProductList sort={sort} q={q} />
-</HydrationBoundary>;
-```
-
-Excerpt from apps/website/src/lib/shop/query-client.ts, trimmed.
-
-```ts
-export function makeShopQueryClient(): QueryClient {
+export function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
-      queries: {
-        staleTime: SHOP_QUERY_TTL_MS,
-        gcTime: SHOP_QUERY_TTL_MS,
-      },
       dehydrate: {
+        // Hand over a prefetch that is still pending, not only settled ones
         shouldDehydrateQuery: (query) =>
           defaultShouldDehydrateQuery(query) || query.state.status === "pending",
       },
@@ -79,26 +83,142 @@ export function makeShopQueryClient(): QueryClient {
 }
 ```
 
-Excerpt from apps/website/src/app/(main)/shop/ui/ProductList.tsx, trimmed.
+`itemsKey` is the one key both sides use. `fetchItems` runs on the server during the prefetch. In the browser it runs only when the cache has nothing under `itemsKey`. By default `dehydrate` includes settled queries only. The rule adds pending ones.
 
-```tsx
-const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } =
-  useSuspenseInfiniteQuery({
-    queryKey: shopProductsQueryKey(sort, q),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last: ProductsPage) => last.nextCursor,
-    queryFn: ({ pageParam, signal }) => fetchProductsPage(pageParam, sort, q, signal),
+The page runs on the server. It prefetches the items, dehydrates the cache, and mounts the list inside the boundary.
+
+```tsx title="app/items/page.tsx"
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import { Suspense } from "react";
+import { Providers } from "../providers";
+import { ItemList } from "./ItemList";
+import { fetchItems, itemsKey, makeQueryClient } from "./query";
+
+export default async function Page() {
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey, queryFn: fetchItems });
+
+  return (
+    <Providers>
+      <HydrationBoundary state={dehydrate(queryClient)}>
+        <Suspense fallback={<p>Loading</p>}>
+          <ItemList />
+        </Suspense>
+      </HydrationBoundary>
+    </Providers>
+  );
+}
+```
+
+The `await` means the query is settled when `dehydrate` runs, so the HTML holds the items. `Providers` sits above `HydrationBoundary`, because the boundary writes into the client the provider holds. The fallback shows only when the server hands over a query that is still pending.
+
+The provider is a client component with one `QueryClient` for the whole session.
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { QueryClientProvider } from "@tanstack/react-query";
+import { type ReactNode, useState } from "react";
+import { makeQueryClient } from "./items/query";
+
+export function Providers({ children }: { children: ReactNode }) {
+  // The lazy initialiser keeps a re-render from building a second client
+  const [queryClient] = useState(makeQueryClient);
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+```
+
+The browser's client comes from the same factory as the server's. Both agree on the dehydrate rule.
+
+The list is a client component. It reads the same key.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { fetchItems, itemsKey } from "./query";
+
+export function ItemList() {
+  const { data } = useSuspenseQuery({
+    queryKey: itemsKey,
+    queryFn: fetchItems,
+    // The hydrated data is stale on arrival; refetching it is the fetch we avoided
     refetchOnMount: false,
   });
+
+  return (
+    <ul>
+      {data.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
 ```
+
+On the first render React Query finds `itemsKey` in the cache and returns the items. Nothing suspends and nothing fetches. `queryFn` runs only for a cache miss.
+
+### Wrong and right
+
+The list suspends on mount and fetches in the browser, even though the server prefetched.
+
+🔴 The list builds its own key. It differs from the server's by one element. React Query sees a cache miss, suspends, and fetches. This is the hook call in `ItemList`.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: ["items", "all"],
+  queryFn: fetchItems,
+  refetchOnMount: false,
+});
+```
+
+✅ Both sides import the one key. The prefetch and the read cannot drift apart.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+  refetchOnMount: false,
+});
+```
+
+The HTML holds the list, and the browser fetches it again right after hydration.
+
+🔴 The hook uses the default mount behaviour. The dehydrated state carries the time the server fetched. Past `staleTime`, which is zero by default, the entry counts as stale, and a stale query refetches when its component mounts. This is the same hook call.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+});
+```
+
+✅ Turn the mount refetch off. The hydrated entry is served as it is until something else invalidates it.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+  refetchOnMount: false,
+});
+```
+
+### In this repo
+
+- [`ShopProducts.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopProducts.tsx>) is the page side. `getFirstPageState` prefetches page one with `prefetchInfiniteQuery` and dehydrates it inside a `"use cache"` scope, so the `Date.now()` stamp is the cache fill time. The prefetch calls `getProductsPage` directly, not over HTTP. `ShopProducts` renders `ProductList` inside `HydrationBoundary`.
+- [`ProductList.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ProductList.tsx>) is the list. It reads the hydrated page one with `useSuspenseInfiniteQuery` under the same key, with `refetchOnMount: false`, and fetches every later page from the browser.
+- [`query-client.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/lib/shop/query-client.ts) is the factory. `makeShopQueryClient` sets `staleTime` and `gcTime` to one hour and carries the pending dehydrate rule.
+- [`pagination.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/lib/shop/pagination.ts) holds `shopProductsQueryKey`. The prefetch and the list both call it, with the sort and the search term as its arguments.
+- [`ShopProviders.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0/apps/website/src/app/(main)/shop/ui/ShopProviders.tsx>) is the provider. The shop layout mounts it, so loaded pages survive a visit to a product and back.
 
 ## Pitfalls
 
-- The key must be identical on both sides. The shop builds it in one place, `shopProductsQueryKey`, and both the prefetch and the list call it. A key that differs by one element is a cache miss and a client fetch.
-- `dehydrate` stamps the state with `Date.now()`. Under Cache Components, reading the current time outside a cache scope fails the prerender (`next-prerender-current-time`). The prefetch runs inside `"use cache"`, so the timestamp is the cache fill time.
-- Without `refetchOnMount: false`, the hydrated page is refetched as soon as it is older than `staleTime`. A page from a cache filled hours ago arrives already stale, so the browser would fetch page one anyway.
-- Use the suspense variant. The server can hand over a still-pending query, and only `useSuspenseInfiniteQuery` suspends on it. The plain `useInfiniteQuery` renders an empty pending state instead.
-- Share the client options through one factory. Two hand-built clients drift, and the dehydrate rule for pending queries only works if both sides agree on it.
+- **The list fetches in the browser on mount, even though the server prefetched.** The keys differ. A key that differs by one element is a cache miss. Build the key in one place and call it from both sides. See Wrong and right above.
+- **The prerender fails with `next-prerender-current-time`.** `dehydrate` stamps the state with `Date.now()`. Under Cache Components, reading the current time outside a cache scope fails the prerender. Run the prefetch inside `"use cache"`. The timestamp is then the cache fill time.
+- **The browser refetches the hydrated data right after hydration.** The entry is older than `staleTime` on arrival. A page from a cache filled hours ago arrives already stale, so the browser fetches page one anyway. Set `refetchOnMount: false`. See Wrong and right above.
+- **The list renders empty instead of waiting for a pending prefetch.** The server can hand over a still-pending query, and only the suspense variants suspend on it. The plain `useInfiniteQuery` renders an empty pending state instead. Use `useSuspenseQuery` or `useSuspenseInfiniteQuery`.
+- **Pending queries reach the browser from one page and not another.** Two hand-built clients drift. The dehydrate rule for pending queries only works when both sides agree on it. Share the options through one factory.
 
 ## When not to use
 
