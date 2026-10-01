@@ -101,6 +101,30 @@ simple version survives production. `AGENTS.md` has the full rules.
   and drops its queue on `freeze()`, and a span tree). No demo calls a real
   model, database or network.
 
+## Agent harness
+
+The `agent-harness` tag covers the plumbing around a model call that makes the
+Guest Communication Agent and the Telegram router reliable, as twelve atoms and
+four composites, every demo on the shared fake runtime above. Atoms:
+[manual-tool-loop](content/manual-tool-loop.mdx),
+[step-memoized-side-effects](content/step-memoized-side-effects.mdx),
+[idempotent-write-by-trace-key](content/idempotent-write-by-trace-key.mdx),
+[approval-gate-wait-for-event](content/approval-gate-wait-for-event.mdx),
+[in-band-correlation](content/in-band-correlation.mdx),
+[tool-file-convention](content/tool-file-convention.mdx),
+[turn-replay-history](content/turn-replay-history.mdx),
+[fold-and-distill-memory](content/fold-and-distill-memory.mdx),
+[trace-anchor-across-steps](content/trace-anchor-across-steps.mdx),
+[flush-before-freeze](content/flush-before-freeze.mdx),
+[eval-gate-independent-thresholds](content/eval-gate-independent-thresholds.mdx)
+and [sandboxed-tool-shims](content/sandboxed-tool-shims.mdx). Composites:
+[durable-agent-turn](content/durable-agent-turn.mdx),
+[human-gated-tool](content/human-gated-tool.mdx),
+[agent-memory-window](content/agent-memory-window.mdx) and
+[agent-release-gate](content/agent-release-gate.mdx). The sandbox demo is the
+one agent demo with a route, `src/app/api/demo/sandbox`, which runs the
+program in `node:vm` in this process as a stand-in for the microVM.
+
 ## Deployment
 
 Not deployed yet. The intended setup is a Vercel project `ihas-patterns` with
