@@ -1,0 +1,364 @@
+---
+title: The manual tool loop
+kind: atom
+summary: A model's tools have side effects the SDK must not run on its own, so you run the loop yourself with schema-only tools, one batched tool message per round, a round cap and a fallback reply.
+tags:
+  - agent-harness
+  - tool-calling
+  - ai-sdk
+code:
+  - path: apps/patterns/src/lib/tool-loop/run-turn.ts
+    ref: 789e8d7e083372754ee4454237d07782d808a138
+    note: The loop over a scripted model; schema tools, one batched tool message per round, a round cap, the fallback for an empty reply, an unknown-tool error.
+  - path: apps/patterns/src/lib/harness/fake-model.ts
+    ref: c2f96931704f2c73e85dec0a1b31f8a790c71bb4
+    note: The scripted model the demo runs against; it answers each call with the next fixture round and records what it saw.
+  - path: apps/patterns/src/app/demos/ToolLoopDemo.tsx
+    ref: 789e8d7e083372754ee4454237d07782d808a138
+    note: The live demo; three scripts, a round cap, and the rounds rendered as the loop builds them.
+  - path: apps/guest-communication-agent/src/agent/run-agent-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The production loop; MAX_AGENT_STEPS rounds, one batched tool message per round, FALLBACK_REPLY_TEXT for an empty reply, gated tools decided before runTool.
+  - path: apps/guest-communication-agent/src/agent/run-model.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: One generateText call per round over tools with no execute, so the SDK returns tool calls and never runs them; retries an empty output up to three times.
+  - path: apps/guest-communication-agent/src/agent/run-tool.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The tool registry and the one dispatcher every call goes through; an unknown name returns an error object instead of throwing.
+verifiedIn:
+  - 208
+updated: 2026-10-01
+---
+
+import { ToolLoopDemo } from "@/app/demos/ToolLoopDemo";
+
+## Problem
+
+A model answers a question by calling tools. Some of those tools only read: a rate, a calendar. Some of them act: they send a message, build a link, write a row. The SDK offers to run the whole thing for you. Give each tool an `execute` function, call `generateText` once, and it calls the model, runs every tool the model asks for, feeds the results back, and calls the model again until it answers with text.
+
+That is the wrong deal when a tool acts. Inside that one call there is no place to ask a human first, no place to refuse a call the model should not have made, and no place to stop a model that keeps asking for tools. The side effect fires the moment the model names the tool.
+
+So you take the loop back. The tools you hand the SDK carry a name, a description and an input schema, and nothing that runs. The SDK's one job is to return the calls the model wants. Your loop decides which of them run, runs them, packs the results into one tool message, and calls the model again. The loop has a cap on rounds and a fallback reply for when the model gives you nothing usable.
+
+### In this app
+
+- The WhatsApp agent that answers guests runs this loop. Its tools include one that sends a booking link and one that asks the owner a question, and neither may fire until a human has said yes. The SDK never gets an `execute` for any tool.
+- One round of that loop often carries two or three calls at once, a rate lookup and an availability check, and the results go back as one message.
+- The model it runs on is a reasoning model that can spend its whole budget thinking and return nothing. The fallback reply is what reaches the guest when that happens, because an empty message body is rejected by the messaging provider.
+
+## Mechanism
+
+Here is what happens, in order, for one incoming message.
+
+1. Your loop builds the message list: the history, ending with the new message. It sets the round counter to zero.
+2. Your loop calls the model with the messages and the tool schemas. Nothing in those schemas can run.
+3. The model answers with text, or with one or more tool calls. Each call has an id, a tool name and an input the model wrote. The SDK returns them to your loop and stops. With no `execute` anywhere, it has nothing else to do.
+4. If the model answered with text, your loop is done. Empty text is not an answer: your loop substitutes the fallback reply, so the channel never receives an empty body.
+5. If the model asked for tools, your loop dispatches each call. A call for a gated tool gets a decision first, and runs only on a yes. A call for a name no tool has gets an error object as its result, not a throw, so the model can read it and try again. Every call gets a result, even a refused one.
+6. Your loop appends the model's own message, the one with the tool calls, and then one `tool` message with one result part per call, in call order. The call ids on the results are what lets the model match each result to its call.
+7. Your loop increments the round counter and goes back to step 2, unless the counter has reached the cap. At the cap it stops on a tool message and uses the fallback reply.
+
+Two things follow from step 3.
+
+The SDK returns the calls as data. The decision to run them is yours, which means the gate for a tool with a side effect is ordinary code in your loop, before dispatch, not a hook inside the SDK.
+
+Every round is one model call. The cap counts rounds, not calls, so a round with three calls costs the same as a round with one. Eight rounds is enough for a question that needs a lookup, a check and a correction.
+
+### Try it
+
+Run the first script. The model asks for two tools in round one, gets both results in one message, asks for a tool that does not exist in round two, reads the error, and answers in round three. Then run the second script with a cap of four: it never stops asking, and the loop stops it. The third script returns an empty reply, and the fallback goes out instead.
+
+<ToolLoopDemo />
+
+## Pattern
+
+The four files below are a working app. Paste them into a fresh Next project, open `/`, and read the turn. A scripted model stands in for the real one, as a timer stands in for real work in the streaming pattern. It asks for tools the way a real model does and never runs them.
+
+The tools are schema only. The model sees a name and a description; the loop owns the code that runs.
+
+```ts title="lib/tools.ts"
+// Schema only: a name and a description for the model, no execute. Nothing runs until the loop decides to
+export const tools = {
+  check_dates: { description: "Whether a date range is free" },
+  lookup_rate: { description: "The nightly rate for a date range" },
+};
+
+export async function runTool(name: string, input: Record<string, unknown>) {
+  switch (name) {
+    case "check_dates":
+      return { free: true, from: input.from, to: input.to };
+    case "lookup_rate":
+      return { nightly: 120, currency: "EUR" };
+    default:
+      // A model can invent a name. An error the model can read beats a throw that ends the turn
+      return { error: `Unknown tool "${name}". Valid tools: ${Object.keys(tools).join(", ")}.` };
+  }
+}
+```
+
+`runTool` is the dispatch half of every tool. The `default` branch is the one case no tool file can own.
+
+The model module stands in for `generateText` with the tool schemas. It returns the calls it wants and, later, its text.
+
+```ts title="lib/model.ts"
+export type ToolCall = { id: string; name: string; input: Record<string, unknown> };
+
+export type Message =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | ToolCall[] }
+  | { role: "tool"; content: Array<{ id: string; name: string; output: unknown }> };
+
+export type ModelReply = { text: string; toolCalls: ToolCall[] };
+
+const dates = { from: "2026-10-06", to: "2026-10-08" };
+
+// Stands in for a model call with schema-only tools: it asks for tool calls and never runs them
+export async function generate(messages: Message[]): Promise<ModelReply> {
+  const round = messages.filter((message) => message.role === "tool").length + 1;
+  if (round === 1) {
+    return {
+      text: "",
+      toolCalls: [
+        { id: "call_1", name: "check_dates", input: dates },
+        { id: "call_2", name: "lookup_rate", input: dates },
+      ],
+    };
+  }
+  if (round === 2) {
+    return { text: "", toolCalls: [{ id: "call_3", name: "book_dates", input: dates }] };
+  }
+  return {
+    text: "The 6th to the 8th is free at 120 EUR a night. I cannot book it for you here.",
+    toolCalls: [],
+  };
+}
+```
+
+The script counts the tool messages it has been shown to know which round it is in. A real model does the same thing in its own way: it reads the results and decides what to ask next.
+
+The loop is the pattern. It calls the model, dispatches, batches, and stops.
+
+```ts title="lib/turn.ts"
+import { generate, type Message, type ToolCall } from "./model";
+import { runTool } from "./tools";
+
+// Rounds, not calls: one round can dispatch several tools
+const MAX_ROUNDS = 4;
+const FALLBACK_TEXT = "Sorry, I could not process that. Please try again shortly.";
+
+function toolResultMessage(calls: ToolCall[], outputs: unknown[]): Message {
+  return {
+    role: "tool",
+    content: calls.map((call, index) => ({ id: call.id, name: call.name, output: outputs[index] })),
+  };
+}
+
+export async function runTurn(history: Message[]) {
+  let messages = history;
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const reply = await generate(messages);
+
+    if (reply.toolCalls.length === 0) {
+      // An empty reply reaches the channel as the fallback, never as ""
+      const text = reply.text.trim() === "" ? FALLBACK_TEXT : reply.text;
+      const final: Message[] = [...messages, { role: "assistant", content: text }];
+      return { messages: final, text, rounds: round };
+    }
+
+    const outputs = await Promise.all(
+      reply.toolCalls.map((call) => runTool(call.name, call.input)),
+    );
+    // One tool message per round, one result per call, in call order
+    messages = [
+      ...messages,
+      { role: "assistant", content: reply.toolCalls },
+      toolResultMessage(reply.toolCalls, outputs),
+    ];
+  }
+  // The cap fired on a tool message. The fallback is the reply
+  return { messages, text: FALLBACK_TEXT, rounds: MAX_ROUNDS };
+}
+```
+
+`runTurn` returns the whole conversation, the text that goes to the channel, and the number of rounds. On the cap path the conversation ends on a tool message. The text is the fallback.
+
+A page runs one turn and shows the messages.
+
+```tsx title="app/page.tsx"
+import { runTurn } from "../lib/turn";
+
+export default async function Page() {
+  const turn = await runTurn([
+    { role: "user", content: "Is the 6th to the 8th free, and how much?" },
+  ]);
+
+  return (
+    <main>
+      <p>
+        {turn.rounds} rounds. Reply: {turn.text}
+      </p>
+      <ol>
+        {turn.messages.map((message, index) => (
+          <li key={index}>
+            {message.role}:{" "}
+            {typeof message.content === "string"
+              ? message.content
+              : JSON.stringify(message.content)}
+          </li>
+        ))}
+      </ol>
+    </main>
+  );
+}
+```
+
+The page is a Server Component. It shows three rounds: the two results in one tool message, the error for `book_dates`, and the text.
+
+### Wrong and right
+
+A link went out before anyone looked at it.
+
+🔴 The tool carries an `execute`. With the AI SDK, `generateText` runs it inside the model call, before your loop sees that the model asked for it. This is the tool object in `lib/tools.ts`.
+
+```ts title="lib/tools.ts"
+export const tools = {
+  send_link: {
+    description: "Send the booking link",
+    // The SDK calls this itself, as soon as the model names the tool
+    execute: async (input: Record<string, unknown>) => ({ sent: true, to: input.email }),
+  },
+};
+```
+
+✅ Schema only. The SDK returns the call, and `runTool` runs it after your loop has decided it may run.
+
+```ts title="lib/tools.ts"
+export const tools = {
+  send_link: { description: "Send the booking link" },
+};
+
+export async function runTool(name: string, input: Record<string, unknown>) {
+  switch (name) {
+    case "send_link":
+      return { sent: true, to: input.email };
+    default:
+      return { error: `Unknown tool "${name}". Valid tools: ${Object.keys(tools).join(", ")}.` };
+  }
+}
+```
+
+The turn never ends, and the bill climbs.
+
+🔴 The loop runs until the model answers with text. A model that keeps asking for tools, or asks for the same one again and again, keeps the loop going. This is the loop in `lib/turn.ts`.
+
+```ts title="lib/turn.ts"
+export async function runTurn(history: Message[]) {
+  let messages = history;
+  while (true) {
+    const reply = await generate(messages);
+    if (reply.toolCalls.length === 0) {
+      const final: Message[] = [...messages, { role: "assistant", content: reply.text }];
+      return { messages: final, text: reply.text };
+    }
+    const outputs = await Promise.all(
+      reply.toolCalls.map((call) => runTool(call.name, call.input)),
+    );
+    messages = [
+      ...messages,
+      { role: "assistant", content: reply.toolCalls },
+      toolResultMessage(reply.toolCalls, outputs),
+    ];
+  }
+}
+```
+
+✅ Count rounds and stop at a cap. The turn ends on a tool message, so the reply is the fallback, not the model's.
+
+```ts title="lib/turn.ts"
+export async function runTurn(history: Message[]) {
+  let messages = history;
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const reply = await generate(messages);
+    if (reply.toolCalls.length === 0) {
+      const text = reply.text.trim() === "" ? FALLBACK_TEXT : reply.text;
+      const final: Message[] = [...messages, { role: "assistant", content: text }];
+      return { messages: final, text, rounds: round };
+    }
+    const outputs = await Promise.all(
+      reply.toolCalls.map((call) => runTool(call.name, call.input)),
+    );
+    messages = [
+      ...messages,
+      { role: "assistant", content: reply.toolCalls },
+      toolResultMessage(reply.toolCalls, outputs),
+    ];
+  }
+  return { messages, text: FALLBACK_TEXT, rounds: MAX_ROUNDS };
+}
+```
+
+The model asked for a tool that does not exist, and the whole turn crashed.
+
+🔴 Dispatch throws on an unknown name. The throw ends the turn with no reply, and a durable step around it fails and retries the same call. This is the `default` branch of `runTool` in `lib/tools.ts`.
+
+```ts title="lib/tools.ts"
+    default:
+      throw new Error(`Unknown tool "${name}"`);
+```
+
+✅ Return an error object as the tool's result. It goes into the tool message like any other result. The model reads it in the next round and picks a real tool.
+
+```ts title="lib/tools.ts"
+    default:
+      return { error: `Unknown tool "${name}". Valid tools: ${Object.keys(tools).join(", ")}.` };
+```
+
+The channel rejected the reply with a 400, and the person got nothing.
+
+🔴 The loop returns the model's text as it is. A reasoning model can return an empty string with a normal finish reason, and a messaging provider rejects an empty body. This is the text branch of `runTurn` in `lib/turn.ts`.
+
+```ts title="lib/turn.ts"
+if (reply.toolCalls.length === 0) {
+  const final: Message[] = [...messages, { role: "assistant", content: reply.text }];
+  return { messages: final, text: reply.text, rounds: round };
+}
+```
+
+✅ Treat empty text as no answer and send the fallback.
+
+```ts title="lib/turn.ts"
+if (reply.toolCalls.length === 0) {
+  const text = reply.text.trim() === "" ? FALLBACK_TEXT : reply.text;
+  const final: Message[] = [...messages, { role: "assistant", content: text }];
+  return { messages: final, text, rounds: round };
+}
+```
+
+### In this repo
+
+- [`run-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/789e8d7e083372754ee4454237d07782d808a138/apps/patterns/src/lib/tool-loop/run-turn.ts) is `lib/turn.ts` and `lib/tools.ts` together, over the harness model. `runTurn` takes the cap as an option, reports each round through `onRound` so the demo can draw it, and returns how the turn ended: text, an empty reply, or the round cap.
+- [`fake-model.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2f96931704f2c73e85dec0a1b31f8a790c71bb4/apps/patterns/src/lib/harness/fake-model.ts) is `lib/model.ts` driven by a fixture instead of a round counter. Once the fixture is used up it returns the empty reply on purpose.
+- [`ToolLoopDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/789e8d7e083372754ee4454237d07782d808a138/apps/patterns/src/app/demos/ToolLoopDemo.tsx) is `app/page.tsx` as a client component with three scripts and a cap input.
+- [`run-agent-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-agent-turn.ts) is `runTurn` in production. `MAX_AGENT_STEPS` is 8 rounds. Each model call sits in its own durable step, `model-1`, `model-2` and so on. `toolResultMessage` builds the one `tool` message per round in the shape the AI SDK would produce itself. An empty reply becomes `FALLBACK_REPLY_TEXT`; other replies go through `sanitizeReplyText`, which strips the markdown the prompt forbids. Two tools, `missing_info` and `send_booking_link`, are gated: the loop gets their decision before `runTool`, and a no returns the gate's own output as the tool result. On the cap the loop returns with the conversation ending on a tool message, and the delivery function in `run-guest-turn.ts` substitutes the fallback.
+- [`run-model.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-model.ts) is `lib/model.ts` in production: one `generateText` call with `tools` that have no `execute`, so the SDK only ever returns the model's requested calls. It retries an output with neither text nor calls up to three attempts, gives up at once on a content filter, and marks the trace span failed when the reply is still empty.
+- [`run-tool.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-tool.ts) is `lib/tools.ts` in production. `tools` is the registry handed to the model, each entry a schema with no `execute`. `runTool` is the one switch every call goes through, and its `default` returns `{ error: "Unknown tool name: ..." }` listing the valid names, inside its own traced step.
+
+## Pitfalls
+
+- **A side effect fired before any check ran.** A tool had an `execute`, so the SDK ran it inside the model call. Remove it; dispatch from your loop. See Wrong and right above.
+- **The turn never ends.** No round cap. Count rounds and stop, with the fallback as the reply. See Wrong and right above.
+- **The whole turn crashed on a tool name that does not exist.** Dispatch threw. Return an error object as the result so the model can correct itself. See Wrong and right above.
+- **The reply was rejected as empty.** The model returned `""` and the loop passed it on. Substitute the fallback. See Wrong and right above.
+- **The provider rejects the next model call with a 400 about a missing tool result.** A call went into the conversation without a result part for its id. Every call in a round gets a result, including a refused or failed one, and they go out in one tool message in call order.
+- **The cap fires on a question that needs one more lookup.** The cap counts rounds. If the model makes one call per round, a question that needs six facts takes six rounds. Let the model batch calls in a round, or give it a tool that does several lookups at once.
+- **A retry re-ran the tool.** The model call and the dispatch ran inside one durable step, so a failure after the dispatch replayed both. Give the model call and each tool's side effect their own step.
+
+## When not to use
+
+- Every tool only reads. A rate lookup, a search, a calendar check. There is nothing to gate and nothing to lose on a retry. Let the SDK run the loop with `execute` on each tool and a `stopWhen` step limit.
+- One call, no tools. Call the model and return its text.
+- The tool must run inside the model's own context, such as a code interpreter the provider hosts. The provider runs that loop; you only see the result.
+
+## Code
+
+<CodeLinks />

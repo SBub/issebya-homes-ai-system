@@ -1,0 +1,249 @@
+---
+title: Idempotent write by trace key
+kind: atom
+summary: A retried write must return the row the first attempt wrote, so the reply row carries the turn's trace id under a unique key, a conflict selects that row, and the all-zero id is never a key.
+tags:
+  - agent-harness
+  - durable-execution
+  - postgres
+  - idempotency
+code:
+  - path: apps/patterns/src/lib/idempotent-write/record-reply.ts
+    ref: 73f19a3226725e5bdae3273c846d02b3d068a0ca
+    note: recordReply on the harness table; a unique key on the trace id, select after the conflict, the zero id stored as null and reported, and the two wrong variants.
+  - path: apps/patterns/src/lib/harness/store.ts
+    ref: c2f96931704f2c73e85dec0a1b31f8a790c71bb4
+    note: The in-memory table the demo writes to; insert raises the 23505 unique violation on a duplicate key, and null never conflicts.
+  - path: apps/patterns/src/app/demos/IdempotentWriteDemo.tsx
+    ref: 73f19a3226725e5bdae3273c846d02b3d068a0ca
+    note: The live demo; Record, Retry and another conversation, the table, and toggles for the zero id, accepting it as a key, and inserting with no conflict handling.
+  - path: apps/guest-communication-agent/src/lib/conversations.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: recordMessage in production; an invalid trace id is stored as null and logged, a 23505 on an assistant row selects the existing row by trace id.
+  - path: supabase/migrations/20260922120000_add_turn_messages_to_whatsapp_messages.sql
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The partial unique index on (trace_id) where role is assistant and trace_id is not null, and the incident that made it necessary.
+  - path: apps/guest-communication-agent/src/lib/tracing.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: isValidTraceAnchor and reportUntracedAnchor; the all-zero ids mean no tracer is registered, not an identifier, and must never be a key.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The record-reply step; passes the trace id only when it is valid and reports the untraced case before writing.
+verifiedIn:
+  - 209
+updated: 2026-10-01
+---
+
+import { IdempotentWriteDemo } from "@/app/demos/IdempotentWriteDemo";
+
+## Problem
+
+A durable step that writes a row can run twice. The write lands, then the process dies before the runner records the step's result, and the retry runs the callback again. A plain insert now produces two rows for one reply. The second row is the one the rest of the turn uses, the first one is an orphan, and the history the model reads next turn has the same reply twice.
+
+A unique key on the row stops the second insert, but a bare unique key turns the retry into a failed step, and the runner retries that too. What the step needs is to come out of the retry with the same row id the first attempt produced.
+
+The key is the trace id of the turn. Every turn has exactly one, it is known before the write, and it is the same on every replay of the same turn because it travels in the trigger event. One assistant row per trace id, a select when the key conflicts, and the step is idempotent.
+
+One id is not a key. A process with no tracer registered hands out the all-zero trace id, the same one to every turn. Stored as a key it makes every untraced turn's reply collide with the last one's row. The write must refuse it as a key, store null in its place, and report that the turn was untraced.
+
+### In this app
+
+- The assistant reply row carries the turn's trace id. The runner's retry of the record step gets the existing row's id back, and the delivery status update that follows targets that row.
+- The trace id on the row is also the pointer from a conversation to its trace in the observability backend.
+- Production once had eleven distinct replies sharing the all-zero id, written by instances where no tracer had registered. The first attempt to add the unique index failed on them.
+
+## Mechanism
+
+Here is what happens, in order, for a write and for its retry.
+
+1. The turn starts with a trace id, created by the request that received the message and passed to the durable function as data. Every replay of this turn sees the same id.
+2. The record step calls `recordReply` with the conversation, the text and the trace id.
+3. `recordReply` checks the id: 32 hex characters and not all zero. A valid id is the key. An invalid one is replaced by null and an error is logged, so the row is still written but takes part in no uniqueness check.
+4. The insert runs. The table has a partial unique index on the trace id column for assistant rows with a non-null id. User rows and untraced rows are outside it. The insert succeeds and returns the new row.
+5. The process dies before the runner memoizes the step. Or the step threw after the insert. Either way the runner retries the step: the callback runs again with the same arguments.
+6. The insert hits the unique index and the database raises `23505 unique_violation`. The function catches that code, and only that code, and selects the assistant row with this trace id.
+7. The step returns the selected row's id. It is the same id the first attempt produced. The rest of the turn cannot tell there was a retry.
+8. For an untraced turn, the key was null, so the retry inserts a second row. That is the known cost of the null path, and it is why the untraced case is reported loudly: it means tracing is broken on that instance, which is the bug to fix.
+
+The select is a select, not an upsert. An upsert needs the conflict target named, and a partial index is not a conflict target every client can name.
+
+### Try it
+
+Press Record reply: one row, inserted, with the turn's trace id. Press Retry the write: the status says the key conflicted and the existing row was selected, and the table still has one row. Press Reply in another conversation: a new trace id, a second row. Tick the zero-id checkbox and Reset, then Record: the guard reports the invalid id and stores null. Another conversation gets its own row too, because null never conflicts. Tick the accept checkbox instead: the zero id is stored as a key, and the other conversation's reply comes back as row 1, which is the first conversation's reply. Tick the no-conflict-handling checkbox: the retry fails with the unique violation.
+
+<IdempotentWriteDemo />
+
+## Pattern
+
+The three files below are a working app. Paste them into a fresh Next project and drive it with `curl`. A small in-memory table stands in for Postgres. It keeps the two rules this pattern depends on: a partial unique index on assistant rows with a trace id, and a `23505` on a duplicate.
+
+```ts title="lib/db.ts"
+export type MessageRow = {
+  id: number;
+  conversation: string;
+  role: "user" | "assistant";
+  content: string;
+  traceId: string | null;
+};
+
+const rows: MessageRow[] = [];
+
+export class UniqueViolation extends Error {
+  code = "23505";
+}
+
+// One assistant row per trace: a partial unique index on (trace_id) where role = 'assistant' and trace_id is not null
+export function insertMessage(values: Omit<MessageRow, "id">): MessageRow {
+  const clash =
+    values.role === "assistant" &&
+    values.traceId !== null &&
+    rows.some((row) => row.role === "assistant" && row.traceId === values.traceId);
+  if (clash) {
+    throw new UniqueViolation(
+      'duplicate key value violates unique constraint "messages_assistant_trace_id_key"',
+    );
+  }
+  const row = { ...values, id: rows.length + 1 };
+  rows.push(row);
+  return row;
+}
+
+export function selectAssistantByTrace(traceId: string): MessageRow | null {
+  return rows.find((row) => row.role === "assistant" && row.traceId === traceId) ?? null;
+}
+
+export function allMessages() {
+  return rows;
+}
+```
+
+`insertMessage` is the insert with the index. `selectAssistantByTrace` is the select the write runs after a conflict. Null is outside the index, as in Postgres.
+
+The write is the pattern: validate the key, insert, select on conflict.
+
+```ts title="lib/messages.ts"
+import { insertMessage, selectAssistantByTrace, UniqueViolation } from "./db";
+
+const ZERO_TRACE_ID = "0".repeat(32);
+
+// A real id is 32 hex characters and not the all-zero sentinel an untraced process hands out
+export function isValidTraceId(id: string) {
+  return /^[0-9a-f]{32}$/.test(id) && id !== ZERO_TRACE_ID;
+}
+
+type RecordResult = { id: number; outcome: "inserted" | "existing" };
+
+export function recordReply(conversation: string, content: string, traceId: string): RecordResult {
+  // The sentinel is not a key. Stored as null, which never conflicts, and reported
+  const key = isValidTraceId(traceId) ? traceId : null;
+  if (key === null) console.error(`recordReply: invalid trace id "${traceId}", storing null`);
+
+  try {
+    const row = insertMessage({ conversation, role: "assistant", content, traceId: key });
+    return { id: row.id, outcome: "inserted" };
+  } catch (error) {
+    if (!(error instanceof UniqueViolation) || key === null) throw error;
+    // The earlier write landed. Select it instead of inserting again
+    const existing = selectAssistantByTrace(key);
+    if (existing === null) throw error;
+    return { id: existing.id, outcome: "existing" };
+  }
+}
+```
+
+`recordReply` returns the row id either way, and says which way. Only a `UniqueViolation` with a real key leads to the select; any other error is still an error.
+
+A route records a reply and lists the rows.
+
+```ts title="app/api/messages/route.ts"
+import { allMessages } from "../../../lib/db";
+import { recordReply } from "../../../lib/messages";
+
+export async function POST(request: Request) {
+  const { conversation, content, traceId } = await request.json();
+  const result = recordReply(conversation, content, traceId);
+  return Response.json({ result, rows: allMessages() });
+}
+
+export function GET() {
+  return Response.json({ rows: allMessages() });
+}
+```
+
+Record a reply with `curl -X POST localhost:3000/api/messages -H 'content-type: application/json' -d '{"conversation":"c1","content":"Yes, it is free.","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}'`. The result is `{ "id": 1, "outcome": "inserted" }`. Send the same request again: `{ "id": 1, "outcome": "existing" }`, and `GET /api/messages` shows one row. Send it with `"traceId":"00000000000000000000000000000000"` twice: two rows with `traceId: null`, and the server log has the error.
+
+### Wrong and right
+
+The retry fails with a unique violation, and the runner retries the step until it gives up.
+
+🔴 The insert has no conflict handling. The first attempt wrote the row; the retry hits the index and throws. This is the body of `recordReply` in `lib/messages.ts`.
+
+```ts title="lib/messages.ts"
+  // The second attempt throws 23505 and the step fails
+  const row = insertMessage({ conversation, role: "assistant", content, traceId: key });
+  return { id: row.id, outcome: "inserted" };
+}
+```
+
+✅ A `23505` on a real key means the first attempt landed. Select that row and return it.
+
+```ts title="lib/messages.ts"
+  try {
+    const row = insertMessage({ conversation, role: "assistant", content, traceId: key });
+    return { id: row.id, outcome: "inserted" };
+  } catch (error) {
+    if (!(error instanceof UniqueViolation) || key === null) throw error;
+    const existing = selectAssistantByTrace(key);
+    if (existing === null) throw error;
+    return { id: existing.id, outcome: "existing" };
+  }
+}
+```
+
+A reply in one conversation comes back with the row id of a reply in another, and the delivery status lands on the wrong row.
+
+🔴 The all-zero id is stored as a key. Every untraced turn carries it, so the second untraced turn's write conflicts with the first's row and the select returns that row. This is the start of `recordReply` in `lib/messages.ts`.
+
+```ts title="lib/messages.ts"
+export function recordReply(conversation: string, content: string, traceId: string): RecordResult {
+  // Whatever arrived is the key, including the sentinel every untraced turn shares
+  const key = traceId;
+```
+
+✅ The sentinel is rejected as a key, stored as null, and reported.
+
+```ts title="lib/messages.ts"
+export function recordReply(conversation: string, content: string, traceId: string): RecordResult {
+  const key = isValidTraceId(traceId) ? traceId : null;
+  if (key === null) console.error(`recordReply: invalid trace id "${traceId}", storing null`);
+```
+
+### In this repo
+
+- [`record-reply.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/73f19a3226725e5bdae3273c846d02b3d068a0ca/apps/patterns/src/lib/idempotent-write/record-reply.ts) is `lib/messages.ts` on the harness table. Its `conflict` and `guard` options hold the two wrong examples above, so the demo can show the failing retry and the collision.
+- [`store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2f96931704f2c73e85dec0a1b31f8a790c71bb4/apps/patterns/src/lib/harness/store.ts) is `lib/db.ts` with the unique columns named at creation. Its index is not partial on the role, so the demo only writes assistant rows to it.
+- [`IdempotentWriteDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/73f19a3226725e5bdae3273c846d02b3d068a0ca/apps/patterns/src/app/demos/IdempotentWriteDemo.tsx) is the route as buttons. Record is the first POST, Retry is the same POST again, and the zero-id checkbox is what an instance with no tracer sends.
+- [`conversations.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/conversations.ts) is `recordMessage` in production. The trace id is checked with `isValidTraceId` from the OpenTelemetry API, an invalid one is logged and omitted from the insert, and a `23505` on an assistant row with a real id goes to `findAssistantMessageIdByTrace`. Its comment says why it is a select and not an upsert: PostgREST's `onConflict` cannot target a partial index.
+- [`20260922120000_add_turn_messages_to_whatsapp_messages.sql`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/supabase/migrations/20260922120000_add_turn_messages_to_whatsapp_messages.sql) creates `whatsapp_messages_assistant_trace_id_key` on `(trace_id) where role = 'assistant' and trace_id is not null`. Its header records the first production apply failing on eleven assistant rows that shared the all-zero id, written by untraced webhook instances, and the delete that cleared them before the index could be created.
+- [`tracing.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/tracing.ts) has `isValidTraceAnchor` and `reportUntracedAnchor`. The comment on them is the canonical explanation: with no tracer provider registered, OpenTelemetry hands out a non-recording span whose ids are the all-zero sentinel, which means no trace, not an identifier.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) has the `record-reply` step. `recordReply` passes the trace id only when the anchor is valid and calls `reportUntracedAnchor` otherwise, before the write, so an untraced turn is visible in Sentry and in the logs, not just as a null in a column.
+
+## Pitfalls
+
+- **The retry fails with 23505.** The insert had no conflict handling. Catch that code, select the existing row. See Wrong and right above.
+- **A reply shows up under another conversation's row id.** The all-zero trace id was stored as a key. Reject it, store null, report it. See Wrong and right above.
+- **The retry inserted a second row.** There was no unique key, or the key was null. For a traced turn, add the index. For an untraced turn, the fix is upstream: the instance has no tracer registered, which the report should have said.
+- **The upsert errors with no unique or exclusion constraint matching the ON CONFLICT specification.** The index is partial and the client cannot name it as a conflict target. Insert, catch, select.
+- **The index creation fails on existing rows.** Rows already share a key, most likely the sentinel. Find them, decide which to keep, and delete the rest before creating the index. The migration in this repo does exactly that, and is written to be re-runnable.
+- **Two different turns got the same trace id.** The id was generated from something that repeats, or copied from a previous event. The id must come from the tracer in the request that received the message, once per turn.
+- **The select after the conflict found nothing.** The conflict was on a different unique key than the one being selected by. Select by the key that conflicted, and treat a miss as the original error.
+
+## When not to use
+
+- The write is not inside a step that can retry, and the process cannot die between the write and its acknowledgement. A plain insert is enough.
+- The row has a natural key of its own, such as an external message id, that the retry carries as well. Use that; the trace id is for rows that have no other stable identity per turn.
+- Several rows per turn are legitimate, such as one per tool call. Then the trace id alone is not unique; add the call id to the key.
+
+## Code
+
+<CodeLinks />
