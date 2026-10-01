@@ -1,0 +1,377 @@
+---
+title: In-band correlation
+kind: atom
+summary: The reply channel has no session, so the correlation id travels inside the message, in a button's data or in a tag at the end of the text, and comes back out by parsing.
+tags:
+  - agent-harness
+  - human-in-the-loop
+  - messaging
+code:
+  - path: apps/patterns/src/lib/in-band/correlation.ts
+    ref: 1653f199ffda89c30c112d7bcefe2f41cc2f3fc6
+    note: The two carriers, composed and parsed in one file; the ref tag at the end of the text and the action plus id in a button's data.
+  - path: apps/patterns/src/lib/in-band/request.ts
+    ref: 1653f199ffda89c30c112d7bcefe2f41cc2f3fc6
+    note: The function with a question gate and a decision gate on the harness runner, and relayUpdate, the chat webhook that parses the id and sends the event unchanged.
+  - path: apps/patterns/src/app/demos/InBandDemo.tsx
+    ref: 1653f199ffda89c30c112d7bcefe2f41cc2f3fc6
+    note: The live demo; a chat transcript with buttons, a reply box, the relay log, and the wrong lookup behind a checkbox.
+  - path: apps/patterns/src/lib/harness/step-runner.ts
+    ref: c2f96931704f2c73e85dec0a1b31f8a790c71bb4
+    note: The runner whose send matches an event by name and by the value at the match path, and ignores one that nothing waits on.
+  - path: apps/telegram-router/app/routers/owner_nudges.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: Where the nudge is composed; the ref tag appended to a question, the id in each button's data for a decision, and the id required for that category.
+  - path: apps/telegram-router/app/routers/telegram_webhook.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The webhook; the regex over the replied-to text, the button prefixes, no lookup, no double-tap guard, and a 200 for everything.
+  - path: apps/guest-communication-agent/src/agent/tools/owner-nudge.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The nudge request that carries the correlation id to the relay, with the comment explaining the two carriers and why neither needs a row.
+  - path: apps/guest-communication-agent/src/agent/tools/missing-info.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The question gate; the wait matched on data.correlationId, and the handler that sends the answer event when the parsed id arrives.
+  - path: apps/guest-communication-agent/src/lib/telegram-router.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The call to the relay's nudge endpoint; the correlation id goes in the body and comes back as a tag or as button data.
+verifiedIn:
+  - 210
+updated: 2026-10-01
+---
+
+import { InBandDemo } from "@/app/demos/InBandDemo";
+
+## Problem
+
+A run pauses to ask a person something through a chat app, and the person answers hours later. The answer arrives as a webhook from the chat app, in a fresh process, with no cookie, no session and no header that says which run it belongs to. All the chat app knows is what it sent and what the person did: tapped a button, or replied to a message.
+
+The usual fix is a lookup. Store a row per pending question, and when a reply arrives, find the pending row for this chat and resume it. That breaks the first time two questions are pending at once, and the second time the row is written after the person has already answered. It also puts a database between the chat app and the run for a question that has only one honest answer: which message did the person respond to?
+
+The chat app already answers that question. A button tap delivers the button's own data, a few bytes the sender chose. A reply delivers the id and the full text of the message it replies to. So the correlation id travels inside the message: in each button's data for a yes or no, and in a short tag at the end of the text for a free-text answer. The webhook parses it back out and sends the event with that id, nothing else. No row, no guess. A second reply to the same message parses to the same id, and the run that waited on it is no longer waiting, so nothing happens.
+
+### In this app
+
+- When the agent cannot answer a question, it sends the owner a message ending in `[ref:<correlation id>]` and waits. The owner replies to that message; the chat app echoes the message's text with the reply, and the relay service parses the id out of it and posts the answer to the agent's resume route.
+- When the agent wants to send a booking link, the message has Approve and Reject buttons whose data is `booking_approve:<id>` and `booking_reject:<id>`. A tap is more reliable than parsing a reply, so the decision never goes through the tag.
+- The button data has a small size limit, so the guest's identity rides in the message text as a labelled line that the webhook reads back on a tap. There is no row to look up in either case.
+
+## Mechanism
+
+Here is what happens, in order, for one question and then one decision.
+
+1. The run reaches a question for a person. In its own step, it composes the message: the question, an instruction to reply, and the tag `[ref:<id>]` at the very end, where `<id>` is the run's correlation id. It sends the message and waits for the answer event, matched on `data.id`.
+2. The person replies in the chat app. The chat app posts an update to your webhook with the reply's text and the message replied to, including that message's text, because that is what a reply is.
+3. The webhook runs one regular expression over the replied-to text and gets the id. If there is no tag, the reply was to something else, and the webhook does nothing with it.
+4. The webhook sends the answer event with the id as it came and the reply text as the answer. It does not look anything up and does not check whether anyone is waiting.
+5. The runner matches the event by name and by the id, and replays the run. The wait returns the answer.
+6. The run needs a decision next. In its own step, it composes a message with two buttons. Each button's data is the action and the id, `approve:<id>` or `reject:<id>`. It sends the message and waits for the decision event, matched on `data.id`.
+7. The person taps a button. The chat app posts an update to the webhook with the button's data.
+8. The webhook splits the data at the first colon, gets the action and the id, and sends the decision event with both. The run resumes with a yes or a no.
+9. The person replies to the first message again, or taps again. The webhook parses the same id and sends the same event. Nothing is waiting on that id, so the runner ignores it. No row had to be marked, because the wait itself was single use.
+
+Two things follow from step 4.
+
+The webhook is stateless. It can run anywhere, restart at any time, and handle a reply to a message sent by a process that no longer exists, because the message carries everything it needs.
+
+The two ends must agree on the format. The compose function and the parse function live in one file, so a change to the tag or to the button data changes both.
+
+### Try it
+
+Press New request. The agent posts a question ending in `[ref:req_1]` and the run waits for the answer. Send the reply: the relay parses `req_1` out of the message replied to, sends the event, and the run posts a decision with two buttons, each carrying `req_1`. Tap Approve: the run is done. Reply to the first message again: the relay parses the same id and nothing is waiting, so it is ignored. Then press New request twice, tick the checkbox, and reply to the first question: the relay takes the latest question instead of the id in the message and resumes the wrong run.
+
+<InBandDemo />
+
+## Pattern
+
+The four files below, with `lib/steps.ts` from [An approval gate on waitForEvent](/p/approval-gate-wait-for-event) unchanged, are a working app. Paste them into a fresh Next project and drive it with `curl`. A chat transcript stands in for the chat app, and the webhook route is what that app would call.
+
+The two carriers are composed and parsed in one file, so the two ends cannot drift apart.
+
+```ts title="lib/correlation.ts"
+export type Button = { label: string; data: string };
+
+export type Nudge = { text: string; buttons: Button[] };
+
+// At the very end of the text. The id is an opaque token, not assumed to be a UUID
+const REF_PATTERN = /\[ref:([^\]\s]+)\]\s*$/;
+
+export function tagWithRef(text: string, id: string) {
+  return `${text}\n\n[ref:${id}]`;
+}
+
+// The id out of the text of the message that was replied to, or null when there is no tag
+export function parseRef(text: string | null) {
+  const match = text === null ? null : REF_PATTERN.exec(text);
+  return match === null ? null : match[1];
+}
+
+// Button data is a few bytes: the action and the id, nothing else
+export function parseButtonData(data: string) {
+  const separator = data.indexOf(":");
+  const action = data.slice(0, separator);
+  const id = data.slice(separator + 1);
+  if (separator === -1 || (action !== "approve" && action !== "reject") || id === "") return null;
+  return { action, id };
+}
+
+// A question the person answers in free text: the id rides in the tag
+export function composeQuestion(id: string, question: string): Nudge {
+  return {
+    text: tagWithRef(
+      `Question from the conversation: "${question}"\nReply to this message with the answer.`,
+      id,
+    ),
+    buttons: [],
+  };
+}
+
+// A yes or no the person gives with one tap: the id rides in each button's data
+export function composeDecision(id: string, reason: string): Nudge {
+  return {
+    text: `${reason}\nApprove?`,
+    buttons: [
+      { label: "Approve", data: `approve:${id}` },
+      { label: "Reject", data: `reject:${id}` },
+    ],
+  };
+}
+```
+
+`parseRef` anchors the tag to the end of the text, so a tag quoted in the middle of a longer message does not count. `parseButtonData` splits at the first colon, so an id may contain colons of its own.
+
+The function asks twice: a question with the tag, then a decision with the buttons. The relay is the webhook's work: parse the id, send the event.
+
+```ts title="lib/request.ts"
+import {
+  composeDecision,
+  composeQuestion,
+  type Nudge,
+  parseButtonData,
+  parseRef,
+} from "./correlation";
+import { send, start } from "./steps";
+
+export const ANSWER_EVENT = "request.answered";
+export const DECISION_EVENT = "request.decided";
+
+export type ChatMessage = {
+  id: number;
+  from: "agent" | "approver";
+  text: string;
+  buttons: Nudge["buttons"];
+  replyTo: number | null;
+};
+
+// The chat as the chat app holds it: every message has an id, and a reply names the id it replies to
+export const chat: ChatMessage[] = [];
+
+function post(from: ChatMessage["from"], nudge: Nudge, replyTo: number | null) {
+  chat.push({ id: chat.length + 1, from, text: nudge.text, buttons: nudge.buttons, replyTo });
+}
+
+export function startRequest(id: string, question: string) {
+  return start(id, { name: "request.received", data: { id } }, async ({ step }) => {
+    // The question carries the id in its text; the reply brings that text back
+    await step.run("send-question", async () => {
+      post("agent", composeQuestion(id, question), null);
+      return true;
+    });
+    const answered = await step.waitForEvent("wait-for-answer", {
+      event: ANSWER_EVENT,
+      match: "data.id",
+      timeout: 60_000,
+    });
+    if (answered === null) return { answer: null, approved: false };
+    const answer = String(answered.data.answer);
+
+    // The decision carries the id in each button's data
+    await step.run("send-decision", async () => {
+      post("agent", composeDecision(id, `The answer is "${answer}". Send it on?`), null);
+      return true;
+    });
+    const decided = await step.waitForEvent("wait-for-decision", {
+      event: DECISION_EVENT,
+      match: "data.id",
+      timeout: 60_000,
+    });
+    return { answer, approved: decided !== null && decided.data.approved === true };
+  });
+}
+
+export type ChatUpdate =
+  { kind: "tap"; data: string } | { kind: "reply"; to: number; text: string };
+
+// The chat webhook's work: one update in, at most one event out, with the id exactly as it came
+export async function relay(update: ChatUpdate) {
+  if (update.kind === "tap") {
+    const parsed = parseButtonData(update.data);
+    if (parsed === null) return { id: null };
+    await send({
+      name: DECISION_EVENT,
+      data: { id: parsed.id, approved: parsed.action === "approve" },
+    });
+    return { id: parsed.id };
+  }
+  post("approver", { text: update.text, buttons: [] }, update.to);
+  // The chat app echoes the replied-to message's text with the reply. The tag is in it
+  const id = parseRef(chat.find((message) => message.id === update.to)?.text ?? null);
+  if (id === null) return { id: null };
+  await send({ name: ANSWER_EVENT, data: { id, answer: update.text } });
+  return { id };
+}
+```
+
+`relay` never reads the runs. It parses and sends, and `send` from the steps library delivers the event to whichever run is waiting on that id, or to nobody.
+
+A route starts a request and reads the state.
+
+```ts title="app/api/requests/route.ts"
+import { chat, startRequest } from "../../../lib/request";
+import { status } from "../../../lib/steps";
+
+export async function POST(request: Request) {
+  const { id, question } = await request.json();
+  await startRequest(id, question);
+  return Response.json({ runs: status(), chat });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), chat });
+}
+```
+
+The webhook route is what the chat app calls. It is the one place the id is parsed.
+
+```ts title="app/api/chat/route.ts"
+import { relay } from "../../../lib/request";
+import { status } from "../../../lib/steps";
+
+// What the chat app posts: a button tap with the button's data, or a reply with the id of the message replied to
+export async function POST(request: Request) {
+  const update = await request.json();
+  const { id } = await relay(update);
+  return Response.json({ id, runs: status() });
+}
+```
+
+Start a request with `curl -X POST localhost:3000/api/requests -H 'content-type: application/json' -d '{"id":"req_1","question":"Is late check-in possible?"}'`: the chat holds one message ending in `[ref:req_1]` and the run's log ends in `wait-for-answer: suspended`. Reply to it with `curl -X POST localhost:3000/api/chat -H 'content-type: application/json' -d '{"kind":"reply","to":1,"text":"Yes, until 23:00."}'`: the response says `id: "req_1"`, and `curl localhost:3000/api/requests` shows a third message with buttons whose data is `approve:req_1` and `reject:req_1`, and the run suspended on `wait-for-decision`. Tap with `-d '{"kind":"tap","data":"approve:req_1"}'`: the run is done with the answer and `approved: true`. Send the reply again: `id: "req_1"` again, and the run is unchanged, because nothing waits on it.
+
+### Wrong and right
+
+The person answered the first question and the second run resumed with it.
+
+🔴 The relay resolves "the pending question" instead of the one replied to. With two questions out, the newest wins. This is the reply branch of `relay` in `lib/request.ts`.
+
+```ts title="lib/request.ts"
+post("approver", { text: update.text, buttons: [] }, update.to);
+// Whatever was asked last. Right only while one question is pending
+const latest = chat.filter((message) => parseRef(message.text) !== null).at(-1);
+const id = latest === undefined ? null : parseRef(latest.text);
+if (id === null) return { id: null };
+await send({ name: ANSWER_EVENT, data: { id, answer: update.text } });
+return { id };
+```
+
+✅ The id comes out of the message the person replied to. The chat app says which one; the tag says which run.
+
+```ts title="lib/request.ts"
+post("approver", { text: update.text, buttons: [] }, update.to);
+// The chat app echoes the replied-to message's text with the reply. The tag is in it
+const id = parseRef(chat.find((message) => message.id === update.to)?.text ?? null);
+if (id === null) return { id: null };
+await send({ name: ANSWER_EVENT, data: { id, answer: update.text } });
+return { id };
+```
+
+A tap on an old message approved the newest request.
+
+🔴 The button data is only the action. The relay has to guess which request it was for. This is `composeDecision` in `lib/correlation.ts`.
+
+```ts title="lib/correlation.ts"
+export function composeDecision(id: string, reason: string): Nudge {
+  return {
+    text: `${reason}\nApprove?`,
+    // No id: every Approve button in the chat is the same button
+    buttons: [
+      { label: "Approve", data: "approve" },
+      { label: "Reject", data: "reject" },
+    ],
+  };
+}
+```
+
+✅ The id is in every button's data. A tap on any message, however old, names its own request.
+
+```ts title="lib/correlation.ts"
+export function composeDecision(id: string, reason: string): Nudge {
+  return {
+    text: `${reason}\nApprove?`,
+    buttons: [
+      { label: "Approve", data: `approve:${id}` },
+      { label: "Reject", data: `reject:${id}` },
+    ],
+  };
+}
+```
+
+The person tapped Approve twice and the link went out twice.
+
+🔴 The relay does the work itself on every tap. The second tap parses the same id and acts again. This is the tap branch of `relay` in `lib/request.ts`.
+
+```ts title="lib/request.ts"
+if (update.kind === "tap") {
+  const parsed = parseButtonData(update.data);
+  if (parsed === null) return { id: null };
+  // The relay acts. A second tap, a retry from the chat app, a slow finger: it acts again
+  if (parsed.action === "approve")
+    post("agent", { text: `Link sent for ${parsed.id}.`, buttons: [] }, null);
+  return { id: parsed.id };
+}
+```
+
+✅ The relay only sends the event. The run that waited on the id does the work once; a second tap finds nobody waiting.
+
+```ts title="lib/request.ts"
+if (update.kind === "tap") {
+  const parsed = parseButtonData(update.data);
+  if (parsed === null) return { id: null };
+  await send({
+    name: DECISION_EVENT,
+    data: { id: parsed.id, approved: parsed.action === "approve" },
+  });
+  return { id: parsed.id };
+}
+```
+
+### In this repo
+
+- [`correlation.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/1653f199ffda89c30c112d7bcefe2f41cc2f3fc6/apps/patterns/src/lib/in-band/correlation.ts) is `lib/correlation.ts` as it is, with a `buttonData` helper the decision composer uses.
+- [`request.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/1653f199ffda89c30c112d7bcefe2f41cc2f3fc6/apps/patterns/src/lib/in-band/request.ts) is `lib/request.ts` on the harness runner, with the chat as a store a page can subscribe to. `relayUpdate` takes the runs to deliver to, and its `lookup: "latest"` option is the first wrong example above, kept so the demo can show the wrong run resuming.
+- [`InBandDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/1653f199ffda89c30c112d7bcefe2f41cc2f3fc6/apps/patterns/src/app/demos/InBandDemo.tsx) is the two routes as a page: New request is the start route, the buttons and the reply box are the chat app, and the relay log is what the webhook returned.
+- [`step-runner.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2f96931704f2c73e85dec0a1b31f8a790c71bb4/apps/patterns/src/lib/harness/step-runner.ts) is `lib/steps.ts` with a log. Its `send` returns false and logs the event as ignored when no wait matches, which is what a second reply hits.
+- [`owner_nudges.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/routers/owner_nudges.py) is `composeQuestion` and `composeDecision` in production, in the Telegram router. For `missing_info` the text ends in `[ref:{correlation_id}]` and has no buttons; for `send_booking_link` the message carries inline Approve and Reject buttons with `booking_approve:{correlation_id}` and `booking_reject:{correlation_id}` as their callback data and no tag, and the request model requires a correlation id for that category. The guest's phone goes in a `Guest: <phone>` line in the text because Telegram caps callback data at 64 bytes.
+- [`telegram_webhook.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/routers/telegram_webhook.py) is `relay` in production. `MISSING_INFO_REF_REGEX` is `\[ref:(\S+)\]\s*$` over `reply_to_message.text`, which Telegram echoes with every reply; `_handle_owner_nudge_reply` returns False when there is no tag, and the route answers 200 either way so Telegram does not retry. A tap is a `callback_query` whose data starts with `booking_approve:` or `booking_reject:`; the id is the rest of the string, and the handler posts it to the agent's approve route. The comment above it says why there is no double-tap guard: a duplicate just resends an event nobody waits on.
+- [`owner-nudge.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/owner-nudge.ts) is where the agent hands the correlation id to the router. Its module comment is the canonical explanation of both carriers: the tag for a question, because the owner's reply comes back with the text; the button data for a decision, because a tap is more reliable than parsed text; and no row for either.
+- [`missing-info.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/missing-info.ts) is the question gate. `requestMissingInfoApproval` sends the nudge with the correlation id and waits on `OWNER_NUDGE_ANSWERED_EVENT` with `match: "data.correlationId"` for up to 24 hours. `handleMissingInfoReplyReceived`, called by the resume route with the parsed id, embeds the answer into the knowledge base first and then sends that event.
+- [`telegram-router.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/telegram-router.ts) is the call from the agent to the router's nudge endpoint. The correlation id is one field of the JSON body, and the comment says it comes back as the tag.
+
+## Pitfalls
+
+- **The wrong run resumed.** The relay resolved the latest pending request instead of the id in the message. Parse the message. See Wrong and right above.
+- **An old button approved a new request.** The button data had no id. Put the id in every button. See Wrong and right above.
+- **A double tap acted twice.** The relay did the work. The relay only sends; the single-use wait does the work once. See Wrong and right above.
+- **A reply is never matched.** The tag was not at the end of the text, or something was appended after it, such as a signature line or an outcome note. Keep the tag last, and edit the message only above it.
+- **The id came back changed.** The text was reformatted on the way, or the id was parsed with a pattern that stops at a character the id can contain. Treat the id as an opaque token; match it to a delimiter, not to a shape.
+- **The button tap arrives with no data.** The chat app has a size limit on button data and the id with its prefix went over it. Keep the prefix short and the id a compact token.
+- **The relay needs the database to tell which run to resume.** Something other than the id is being looked up. Everything the relay needs is in the message, by design; add the missing thing to the message.
+- **A reply to the wrong message is treated as an answer.** The relay matched on the chat rather than on the replied-to message. Only a reply whose target carries the tag is an answer; everything else is noise and gets a 200.
+
+## When not to use
+
+- The reply comes back over a channel that carries headers or a session, such as a web form the same service rendered. Put the id in the URL or a hidden field; no parsing needed.
+- The person answers in the same process that asked, in seconds. Await the promise.
+- The chat app offers a thread or conversation id per question. Use it as the correlation id directly, if it is stable and unique per question; the tag is for channels that offer nothing of the kind.
+
+## Code
+
+<CodeLinks />
