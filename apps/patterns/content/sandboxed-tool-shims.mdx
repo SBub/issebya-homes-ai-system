@@ -1,0 +1,353 @@
+---
+title: Sandboxed tool shims
+kind: atom
+summary: Model-written code runs in an isolated VM with a timeout and a guaranteed stop, returns its result on one sentinel line apart from its logs, and reaches read-only tools only through allowlisted shims.
+tags:
+  - agent-harness
+  - sandbox
+  - tool-calling
+code:
+  - path: apps/patterns/src/lib/sandbox/sandbox.ts
+    ref: 74840cb72f89a02f2ce897e8160938d9e639d887
+    note: The engine on node:vm; the allowlist check, buildScript with one shim per requested key, the timeout race, the stop in finally, and the sentinel parser.
+  - path: apps/patterns/src/lib/sandbox/run-code.ts
+    ref: 74840cb72f89a02f2ce897e8160938d9e639d887
+    note: The run_code tool file; the schema, the api object of read-only computes that is the allowlist by construction, and the traced run.
+  - path: apps/patterns/src/app/api/demo/sandbox/route.ts
+    ref: 74840cb72f89a02f2ce897e8160938d9e639d887
+    note: The route handler behind the demo; node:vm in this process standing in for the microVM, with a send exposed on request to show the refusal.
+  - path: apps/patterns/src/app/demos/SandboxDemo.tsx
+    ref: 74840cb72f89a02f2ce897e8160938d9e639d887
+    note: The live demo; the program, the raw stdout, the parsed result, the logs and the shim call log, with presets that throw, hang and loop.
+  - path: apps/guest-communication-agent/src/agent/tools/run-code.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The production tool file; the api object of three read-only computes with the comment that forbids adding a send, and the traced run.
+  - path: apps/guest-communication-agent/src/agent/tools/sandbox.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The microVM engine; SUPPORTED_TOOLS checked first, buildScript with three mirrored shims, the timeout, stop in finally, and the sentinel parser.
+  - path: apps/guest-communication-agent/src/agent/tool-execution.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: dispatchToolExecution; a program that failed comes back as ok false, which marks the tool span failed without throwing.
+  - path: apps/guest-communication-agent/ENGINEERING.md
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: Section 6; why the sandbox exists, why the tools are re-implemented for it, and the boundary that keeps the booking link out.
+verifiedIn:
+  - 211
+updated: 2026-10-01
+---
+
+import { SandboxDemo } from "@/app/demos/SandboxDemo";
+
+## Problem
+
+Some questions need a loop over tool calls: "the next free weekend" is a date check per candidate until one is free, then a rate lookup. A model answers that with one tool call per round, and a loop with a step cap of eight runs out before the answer. The way out is a tool that takes a short program the model wrote, runs it, and returns what it computed, so the whole loop is one round.
+
+Running code a model wrote is running untrusted code. Three things have to be true. It runs somewhere it cannot reach your process, with a wall-clock timeout and a stop that happens on every path, or one program that loops forever holds a slot until the platform kills it. Its result comes back as data you can trust is the result, not a log line that happened to look like JSON. And the tools it may call are the read-only ones, and only those, in a way that cannot be widened by accident: a program must not be able to send a link because someone added a function to an object.
+
+The pattern is an engine that builds one script around the program: a `tools` object with one shim per allowlisted tool, generated into the script because the sandbox cannot call back into your process; a `console` that keeps logs; and a final line that starts with a sentinel and carries the result as JSON. The engine refuses any key it has no shim for before the VM starts, runs the script with a timeout, stops the sandbox in `finally`, and parses the last sentinel line.
+
+### In this app
+
+- The WhatsApp agent's `run_code` tool runs the model's program on a Vercel Sandbox, a Firecracker microVM, with a thirty second timeout and a stop in `finally` that has its own span.
+- Three read-only tools are mirrored into the script: the availability check re-issues the public calendar fetch with the date guard copied, the pricing lookup is a table computed from the real function before the sandbox starts, and the current date is evaluated inside the VM.
+- The booking link is excluded by construction. The api object that names what a program may call holds only computes, the engine throws for any name without a shim, and the comment on that object says never to add a send.
+- The demo on this page stands in for the microVM with `node:vm` in a route handler, which keeps the contract and not the isolation.
+
+## Mechanism
+
+Here is what happens, in order, when the model calls `run_code` with a program.
+
+1. The tool's run function parses the input and hands the program and the api object to the engine. The api object is a map of tool names to the real compute functions; nothing in it is ever passed into the sandbox.
+2. The engine checks every key of the api object against its allowlist of names it knows how to shim. A key it does not know throws here, before any sandbox exists. This is the only place a new tool can enter, and it has to be written as a shim.
+3. The engine builds the script. For a pure lookup it calls the real function in this process, once per possible input, and embeds the answers as a table the shim reads. For a read with a guard it mirrors the guard into the shim over a literal. For a clock it generates code that reads the clock inside the VM. Then it appends a `console` that collects logs, the `tools` object of shims, and the program as the body of an async function.
+4. The script ends by writing one line: the sentinel followed by the JSON of `{ ok, result, logs }` or `{ ok: false, error, logs }`. A throw inside the program is caught inside the script and becomes the second shape.
+5. The engine runs the script with a timeout. A synchronous loop is stopped by the VM's own timeout; a program that awaits forever is stopped by a timer racing it. Either way the run returns an error after the timeout, not never.
+6. `finally` stops the sandbox. On the microVM that is a stop call, so the slot is released; here it is a flag, so a program that wakes up later writes into nothing. The stop runs on the success path, the error path and the timeout path.
+7. The engine splits stdout into lines and takes the last one that starts with the sentinel. Everything before it was logs or noise. The line is parsed, and the result goes back to the tool's run function, which records it on the span and marks the span failed when `ok` is false, without throwing. The model reads the result or the error and continues.
+
+Two things follow from step 3.
+
+The shim and the real tool can drift. The guard mirrored into the shim must be kept in step with the compute it mirrors, or the program sees the past as free while the tool refuses it. The table built from the real function cannot drift, because it is the real function's answer.
+
+A tool that needs your process's private state at call time, a database read or a secret, cannot be a shim. It needs a callback route the sandbox can reach, and that route is a new public surface. Until it exists, that tool stays out.
+
+### Try it
+
+Run the first program: stdout shows two log lines and then the sentinel line, the result is the free range with its rate, and the shim call log lists two date checks and one rate lookup. Pick Throws: the program's error comes back as `ok: false` with the logs it wrote before it threw. Pick Hangs and run: after one second, timed out and stopped. Pick Busy loop: the VM's own timeout stops it. Pick Tries to send with the box unticked: the program fails on `tools.sendLink` because no such shim exists. Tick the box and run again: the engine refuses before the VM starts, naming the key it has no shim for.
+
+<SandboxDemo />
+
+## Pattern
+
+The three files below, with `lib/steps.ts`, `lib/tracing.ts`, `lib/tool-execution.ts`, `lib/tools/lookup-rate.ts` and `lib/tools/check-dates.ts` from [The tool file convention](/p/tool-file-convention) unchanged except that `check-dates.ts` exports its `BOOKED` list, are a working app. Paste them into a fresh Next project with `zod` installed and drive it with `curl`. `node:vm` stands in for the microVM: it keeps the contract of the engine, not the isolation, and a program can reach the host through prototype chains, which is why production runs on a separate machine.
+
+The engine owns the allowlist, the script, the timeout, the stop and the parser.
+
+```ts title="lib/sandbox.ts"
+import vm from "node:vm";
+import { BOOKED } from "./tools/check-dates";
+
+export type SandboxResult =
+  { ok: true; result: unknown; logs: string[] } | { ok: false; error: string; logs: string[] };
+
+export type SandboxApi = {
+  lookupRate?: (args: { room: "small" | "large" }) => unknown;
+  checkDates?: (args: { from: string; to: string }, today: string) => unknown;
+} & Record<string, unknown>;
+
+// The allowlist: the names buildScript knows how to shim. A key outside it throws before anything runs
+const SUPPORTED_TOOLS = ["lookupRate", "checkDates"];
+const SENTINEL = "__RUNCODE_RESULT__";
+
+export function buildScript(code: string, api: SandboxApi, today: string) {
+  const preamble = [`const TODAY = ${JSON.stringify(today)};`];
+  const shims: string[] = [];
+  if (api.lookupRate !== undefined) {
+    // The real compute, called here once per room, embedded as a table the shim reads
+    const table = {
+      small: api.lookupRate({ room: "small" }),
+      large: api.lookupRate({ room: "large" }),
+    };
+    preamble.push(`const RATES = ${JSON.stringify(table)};`);
+    shims.push(`async lookupRate({ room }) { return RATES[room]; },`);
+  }
+  if (api.checkDates !== undefined) {
+    // The guard mirrored over the booked ranges as a literal; no call back into this process
+    preamble.push(`const BOOKED = ${JSON.stringify(BOOKED)};`);
+    shims.push(`async checkDates({ from, to }) {
+    if (!(from < to)) return { ok: false, reason: "invalid_range", today: TODAY };
+    if (from < TODAY) return { ok: false, reason: "past_date", today: TODAY };
+    return { ok: true, free: !BOOKED.some((b) => from < b.to && to > b.from), from, to };
+  },`);
+  }
+  return `"use strict";
+${preamble.join("\n")}
+const logs = [];
+const console = { log: (...args) => { const line = args.map(String).join(" "); logs.push(line); stdout.write(line + "\\n"); } };
+const tools = { ${shims.join("\n")} };
+(async () => {
+  let output;
+  try {
+    const result = await (async () => {
+${code}
+    })();
+    output = { ok: true, result, logs };
+  } catch (err) {
+    output = { ok: false, error: err instanceof Error ? err.message : String(err), logs };
+  }
+  // One marked line: the result, apart from everything else on stdout
+  stdout.write(${JSON.stringify(SENTINEL)} + JSON.stringify(output) + "\\n");
+})();`;
+}
+
+export async function runInSandbox(
+  code: string,
+  api: SandboxApi,
+  options: { today: string; timeoutMs: number },
+): Promise<SandboxResult> {
+  const unsupported = Object.keys(api).filter((name) => !SUPPORTED_TOOLS.includes(name));
+  if (unsupported.length > 0) throw new Error(`No shim for tool(s): ${unsupported.join(", ")}`);
+
+  let stdout = "";
+  let stopped = false;
+  const context = vm.createContext({
+    stdout: {
+      write: (text: string) => {
+        if (!stopped) stdout += text;
+      },
+    },
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${options.timeoutMs} ms`)),
+      options.timeoutMs,
+    );
+  });
+  try {
+    const script = new vm.Script(buildScript(code, api, options.today));
+    // The VM's timeout stops a synchronous loop; the race stops a program that awaits forever
+    const running = script.runInContext(context, { timeout: options.timeoutMs });
+    await Promise.race([Promise.resolve(running), expired]);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error), logs: [] };
+  } finally {
+    clearTimeout(timer);
+    // The stop, on every path: a program that wakes up later writes into nothing
+    stopped = true;
+  }
+  const line = stdout
+    .split("\n")
+    .reverse()
+    .find((candidate) => candidate.startsWith(SENTINEL));
+  if (line === undefined)
+    return { ok: false, error: `no result line in: ${stdout.slice(0, 200)}`, logs: [] };
+  return JSON.parse(line.slice(SENTINEL.length));
+}
+```
+
+`buildScript` generates a shim only for the keys it was given, and only for keys it knows. The script's `console` writes to stdout and keeps the line, so the model gets its logs back with the result. `runInSandbox` returns on every path and never throws for anything the program did.
+
+The tool file is the plain shape: a schema, the api object, a traced run. The api object is the allowlist as the tool sees it.
+
+```ts title="lib/tools/run-code.ts"
+import { z } from "zod";
+import { runInSandbox, type SandboxApi } from "../sandbox";
+import { dispatchToolExecution, type ToolContext } from "../tool-execution";
+import { withSpan } from "../tracing";
+import { computeCheckDates } from "./check-dates";
+import { computeLookupRate } from "./lookup-rate";
+
+const runCodeSchema = z.object({ code: z.string().describe("An async function body") });
+
+export const runCode = {
+  description:
+    "Run a short program instead of many tool calls. Inside it: await tools.checkDates({ from, to }), await tools.lookupRate({ room }), console.log. Return the result. It cannot send anything.",
+  inputSchema: runCodeSchema,
+};
+
+// Read-only computes only. A send is a gated tool call, never reachable from a program
+export const sandboxApi: SandboxApi = {
+  lookupRate: computeLookupRate,
+  checkDates: computeCheckDates,
+};
+
+export function runRunCode(input: Record<string, unknown>, context: ToolContext) {
+  return context.step.run("tool-run_code", () =>
+    withSpan("tool.run_code", (span) =>
+      dispatchToolExecution(span, input, async () => {
+        const parsed = runCodeSchema.safeParse(input);
+        if (!parsed.success)
+          return { error: `Invalid input for run_code: ${parsed.error.message}` };
+        return await runInSandbox(parsed.data.code, sandboxApi, {
+          today: context.today,
+          timeoutMs: 1000,
+        });
+      }),
+    ),
+  );
+}
+```
+
+`sandboxApi` lists the two computes and nothing else. The engine would throw for a third key it had no shim for, so adding a send here means writing a shim for it on purpose, and the description tells the model it cannot.
+
+The route is one call of the tool inside a durable run, as the loop would dispatch it.
+
+```ts title="app/api/code/route.ts"
+import { start, status } from "../../../lib/steps";
+import { runRunCode } from "../../../lib/tools/run-code";
+
+const TODAY = "2026-10-01";
+
+export async function POST(request: Request) {
+  const { code } = await request.json();
+  const id = `call_${status().length + 1}`;
+  await start(id, { name: "tool.call", data: { id } }, ({ step }) =>
+    runRunCode({ code }, { step, today: TODAY }),
+  );
+  const run = status().find((entry) => entry.id === id);
+  return Response.json(run?.result);
+}
+```
+
+Post a program with `curl -X POST localhost:3000/api/code -H 'content-type: application/json' -d '{"code":"const c = await tools.checkDates({ from: \"2026-10-13\", to: \"2026-10-15\" }); console.log(\"free:\", c.free); return c;"}'`: the answer is `{ ok: true, result: { ok: true, free: true, ... }, logs: ["free: true"] }`. Post `{"code":"await new Promise(() => {});"}`: after one second, `{ ok: false, error: "timed out after 1000 ms", logs: [] }`. Post `{"code":"return await tools.sendLink({});"}`: `ok: false` with `tools.sendLink is not a function`, because no shim was generated for it.
+
+### Wrong and right
+
+A program sent a link, and the approval gate never saw it.
+
+🔴 The real tool functions are put in the sandbox's scope. Anything in scope is callable, a send included, and on a separate machine there is no scope to pass at all. This replaces the `tools` object in `buildScript` in `lib/sandbox.ts`.
+
+```ts title="lib/sandbox.ts"
+// Everything handed in is callable from the program, the send included
+const context = vm.createContext({
+  stdout: { write: (text: string) => (stdout += text) },
+  tools: { lookupRate: api.lookupRate, checkDates: api.checkDates, sendLink: runSendLink },
+});
+```
+
+✅ The sandbox gets source text only: one shim per allowlisted key, generated into the script, and a key with no shim throws before the VM starts.
+
+```ts title="lib/sandbox.ts"
+const unsupported = Object.keys(api).filter((name) => !SUPPORTED_TOOLS.includes(name));
+if (unsupported.length > 0) throw new Error(`No shim for tool(s): ${unsupported.join(", ")}`);
+// Only source text enters the VM: the shims for the keys that were given, and nothing else
+const script = new vm.Script(buildScript(code, api, options.today));
+```
+
+The result came back as a parse error the day a program logged something.
+
+🔴 All of stdout is parsed as the result. The first `console.log`, or anything the runtime prints, breaks it. This is the end of `runInSandbox` in `lib/sandbox.ts`.
+
+```ts title="lib/sandbox.ts"
+// Breaks on the first log line, and on anything the runtime prints
+return JSON.parse(stdout);
+```
+
+✅ The result is the last line that starts with the sentinel. Logs stay logs.
+
+```ts title="lib/sandbox.ts"
+const line = stdout
+  .split("\n")
+  .reverse()
+  .find((candidate) => candidate.startsWith(SENTINEL));
+if (line === undefined)
+  return { ok: false, error: `no result line in: ${stdout.slice(0, 200)}`, logs: [] };
+return JSON.parse(line.slice(SENTINEL.length));
+```
+
+One program that never returned held the slot until the platform killed it, and the turn never answered.
+
+🔴 The script is awaited with no timeout and nothing stops the sandbox when it fails. This is the run in `runInSandbox` in `lib/sandbox.ts`.
+
+```ts title="lib/sandbox.ts"
+// Waits as long as the program wants, and a throw skips any teardown below it
+const script = new vm.Script(buildScript(code, api, options.today));
+await script.runInContext(context);
+```
+
+✅ A timeout on the VM and a timer racing it, and the stop in `finally` so it runs on every path.
+
+```ts title="lib/sandbox.ts"
+try {
+  const script = new vm.Script(buildScript(code, api, options.today));
+  const running = script.runInContext(context, { timeout: options.timeoutMs });
+  await Promise.race([Promise.resolve(running), expired]);
+} catch (error) {
+  return { ok: false, error: error instanceof Error ? error.message : String(error), logs: [] };
+} finally {
+  clearTimeout(timer);
+  stopped = true;
+}
+```
+
+### In this repo
+
+- [`sandbox.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/74840cb72f89a02f2ce897e8160938d9e639d887/apps/patterns/src/lib/sandbox/sandbox.ts) is `lib/sandbox.ts` with the run split out as `runScript`, which returns the raw stdout and the stop flag so the demo can show them, and a shim call log the shims append to. [`run-code.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/74840cb72f89a02f2ce897e8160938d9e639d887/apps/patterns/src/lib/sandbox/run-code.ts) is `lib/tools/run-code.ts` on the harness tracer. [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/74840cb72f89a02f2ce897e8160938d9e639d887/apps/patterns/src/app/api/demo/sandbox/route.ts) is `app/api/code/route.ts` with a flag that adds a send to the api object so the refusal can be shown, and [`SandboxDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/74840cb72f89a02f2ce897e8160938d9e639d887/apps/patterns/src/app/demos/SandboxDemo.tsx) posts to it.
+- [`run-code.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/run-code.ts) is the production tool file. `runCode` is `tool({ description, inputSchema, outputSchema })` with no `execute`, and the description tells the model what `tools` holds and that it has no access to the booking link. `sandboxApi` holds `checkAvailability`, `getPricing` and `getCurrentDate` as the real compute functions, under a comment marked as a landmine: never add `sendBookingLink` or anything that moves state or money. `runRunCode` is one `steppedSpan` around `dispatchToolExecution` and `runInSandbox`.
+- [`sandbox.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/sandbox.ts) is `lib/sandbox.ts` in production, on Vercel Sandbox. `SUPPORTED_TOOLS` is the allowlist of three names and `runInSandbox` throws for any other key before `Sandbox.create`. The default timeout is thirty seconds, with a thirty second buffer on the sandbox's own lifetime so the VM's timeout cannot kill it before the command's timeout reports cleanly. The script is written to the VM as a file and run with `node`; a non-zero exit returns stderr as the error. `parseSandboxOutput` finds the last line starting with `__RUNCODE_RESULT__`. `finally` calls `sandbox.stop()` inside its own span, and a failure to stop is marked on the span and captured, not thrown, because the person already has their answer. `buildScript` holds the three shims: the availability check mirrors the date guard and re-issues the public calendar fetch, with a comment on the backslash that an untagged template eats; the pricing table is built by calling the real function once per room in this process; the current date is read inside the VM. Its `console` shim only collects, so stdout normally holds the sentinel line alone, and the sentinel still protects against anything the runtime prints.
+- [`tool-execution.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tool-execution.ts) is why a failed program is a soft failure: `detectToolSoftFailure` sees `ok: false` and `markSpanFailed` marks the tool span without throwing, so the model reads the error and the turn goes on.
+- [`ENGINEERING.md`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/ENGINEERING.md), section 6, is the reasoning: the eight-step cap, the microVM rather than an in-process sandbox, the re-implemented tools, and the boundary that sandboxing solves running untrusted code safely and not letting it take real-world actions.
+
+## Pitfalls
+
+- **A program did something only a gated tool should.** The real functions were in the sandbox's scope. Shims from an allowlist, generated as source. See Wrong and right above.
+- **The result is a parse error whenever the program logs.** All of stdout was parsed. One sentinel line, read from the end. See Wrong and right above.
+- **A program that never returned held its slot until the platform killed it.** No timeout, or no stop on the failure path. Timeout plus a race, stop in `finally`. See Wrong and right above.
+- **The sandbox's own timeout killed the VM while it was still provisioning.** The sandbox lifetime equalled the command timeout. Give the lifetime a buffer beyond the command's budget, so the command times out first and reports cleanly.
+- **The program sees the past as free while the tool refuses it.** The mirrored guard drifted from the compute. Change both together, and let a test call the shim and the compute with the same input.
+- **A regex in a shim matched nothing.** The shim is written inside an untagged template literal, where `\d` becomes `d`. Spell character classes without backslashes, or double the backslash.
+- **A new tool was added to the api object and every call started throwing.** The engine has no shim for it, which is the design. Write the shim, add the name to the allowlist, and only then expose it.
+- **A tool that needs a secret or a database row cannot be shimmed.** The sandbox cannot call back into the process. It needs a callback route the sandbox can reach, which is new public surface; until then it stays out.
+- **The turn ended when a program threw.** The run function let the error escape. The script catches inside the sandbox and returns `ok: false`; the run function returns it as a value.
+- **A program's `await` outlived the timeout and wrote into the result.** The stop did not run, or ran before the flag was checked. The stop in `finally` makes every later write a no-op.
+
+## When not to use
+
+- A question one tool call answers. The program is overhead, and the model's own loop is enough.
+- A tool with a side effect. It is never a shim; it stays a gated tool call outside the sandbox.
+- Code you wrote yourself. A sandbox is for code the model wrote; your own code runs in your process with a test.
+
+## Code
+
+<CodeLinks />
