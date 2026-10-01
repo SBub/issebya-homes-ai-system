@@ -1,0 +1,413 @@
+---
+title: The tool file convention
+kind: atom
+summary: One file per tool holds a schema the model sees, a pure compute a test can call, and a traced run that owns the side effects, so a soft failure is a value and an unknown name an error object.
+tags:
+  - agent-harness
+  - tool-calling
+  - conventions
+code:
+  - path: apps/patterns/src/lib/tool-files/check-dates.ts
+    ref: 447c944469028894757637fc76b878e4c1a05ef1
+    note: One tool file on the harness; the schema with no execute, computeCheckDates taking today as an argument, runCheckDates in its own stepped span.
+  - path: apps/patterns/src/lib/tool-files/run-tool.ts
+    ref: 447c944469028894757637fc76b878e4c1a05ef1
+    note: The registry and the one dispatcher; the default returns the unknown-tool error object in a span of its own, and the two wrong variants throw.
+  - path: apps/patterns/src/lib/tool-files/tool-execution.ts
+    ref: 447c944469028894757637fc76b878e4c1a05ef1
+    note: detectSoftFailure, narrow on purpose, and dispatchToolExecution recording input and output and marking the span failed without throwing.
+  - path: apps/patterns/src/app/demos/ToolFilesDemo.tsx
+    ref: 447c944469028894757637fc76b878e4c1a05ef1
+    note: The live demo; five calls through the dispatcher, the result next to the span status, and the two wrong shapes behind checkboxes.
+  - path: apps/guest-communication-agent/src/agent/tools/pricing.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The simplest production tool file; a schema-only tool(), computeGetPricingResult with no tracing, runGetPricing in one steppedSpan.
+  - path: apps/guest-communication-agent/src/agent/tools/availability.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: A tool whose compute owns a guard; a past or inverted range comes back as a value with today's date, never fetched, and a fetch outage still throws.
+  - path: apps/guest-communication-agent/src/agent/tool-execution.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: dispatchToolExecution and detectToolSoftFailure; ok false or the single-key error object marks the span failed, any other shape is data.
+  - path: apps/guest-communication-agent/src/agent/run-tool.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The registry handed to the model and the one switch; toolName stays a string, and the default returns the unknown-tool error in its own span.
+  - path: apps/guest-communication-agent/AGENTS.md
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The rule as written for agents; every tool owns its span and steps inside its own run function, and business logic stays a separate pure compute.
+verifiedIn:
+  - 210
+updated: 2026-10-01
+---
+
+import { ToolFilesDemo } from "@/app/demos/ToolFilesDemo";
+
+## Problem
+
+An agent with a handful of tools grows one of two ways. The tools end up as one big switch in the loop, where the span, the step, the validation and the business logic of every tool sit side by side, and adding a tool means editing the one file everything depends on. Or each tool is an `execute` function the SDK calls, where nothing of yours runs between the model naming the tool and the side effect happening.
+
+Both shapes hide the same three faults. A tool's logic cannot be tested without a tracer, a step runner or a clock, because they are mixed into it. A tool that cannot do what was asked throws, the step fails, the turn ends with no reply, and a retry repeats the same call. And a model that invents a tool name, which models do, crashes the whole turn instead of being told.
+
+The convention is one file per tool with three parts. The schema is what the model sees: a name, a description, an input schema, and no `execute`. The compute is a pure function of its arguments, including anything that would otherwise be read from the environment such as today's date. The run function is the traced half: it opens the tool's step and span, parses the input, calls the compute, and owns every side effect and every wait a human may be needed for. Failures the model can act on are values, `{ ok: false, reason }` or a single-key `{ error }`, and the span is marked failed without throwing. One dispatcher switches on the name and returns an error object for a name it does not know.
+
+### In this app
+
+- The WhatsApp agent has eight tools, each in its own file. Pricing and availability are the plain shape: schema, compute, run. The booking link and the owner question add a request half before their run half, because a human must say yes first.
+- The sandboxed code tool calls the compute functions of pricing and availability directly, as helpers, without their spans. That only works because the compute is pure.
+- Each tool's span is opened inside its own run function, so the loop calls one dispatcher for every tool and wraps nothing itself. The rule is written down for agents in the app's `AGENTS.md`.
+
+## Mechanism
+
+Here is what happens, in order, for one tool call the model asked for.
+
+1. Your loop takes the call off the model's reply: a name and an input the model wrote. It calls the dispatcher with both and a context: the step tools, the trace anchor, and whatever the tools need that would otherwise come from the environment.
+2. The dispatcher switches on the name. Each case calls that tool's run function. The `default` case returns an error object naming the valid tools, inside a span of its own, because no tool file can own the span for a name that has no file.
+3. The run function opens the tool's step and, inside it, the tool's span. On a replay the step answers from its memo and the span is not created again.
+4. Inside the span, the run function parses the input against the schema. Input the schema rejects becomes a single-key error object. A model that passed a room that does not exist reads that and corrects itself.
+5. The run function calls the compute with the parsed input and anything else the compute needs as arguments. The compute returns a result. When the request cannot be met, the result says so as a value: `{ ok: false, reason: "past_date", today }`.
+6. The execution helper records the input and the output on the span and looks at the output's shape. `ok: false`, or an object whose only key is `error`, marks the span failed. Nothing is thrown. The output is returned.
+7. Your loop puts the output in the tool message, whatever its shape. The model reads a refusal the same way it reads a success, and the next round it asks for something that can be done.
+
+Two things follow from step 6.
+
+The detection is deliberately narrow. A successful result that happens to have an `error` field among other keys is data, and marking it failed would make the trace lie. Only the two shapes above count.
+
+A refusal and a success take the same path through the span. The difference is one attribute on the span and the shape of the value. That is what lets a trace search find every refused call without any call having ended a turn.
+
+### Try it
+
+Call `check_dates` with free dates: the result is `ok: true` and the span is ok. Call it with past dates: the result says `past_date` with today's date, and the span is marked failed. Call `lookup_rate` with a room the schema does not know: the single-key error object, span failed. Call `book_dates`, which does not exist: the dispatcher's error object, naming the two real tools. Tick the checkboxes and call the last two again: the run fails and nothing reaches the model.
+
+<ToolFilesDemo />
+
+## Pattern
+
+The six files below, with `lib/steps.ts` from [An approval gate on waitForEvent](/p/approval-gate-wait-for-event) unchanged, are a working app. Paste them into a fresh Next project with `zod` installed and drive it with `curl`. A small tracer stands in for OpenTelemetry: a span has a status that can be set to failed without anything being thrown.
+
+```ts title="lib/tracing.ts"
+export type Span = {
+  name: string;
+  attributes: Record<string, string>;
+  status: "unset" | "error";
+  error: string | null;
+};
+
+// Ended spans, in order, as an exporter would receive them
+export const spans: Span[] = [];
+
+export async function withSpan<T>(name: string, fn: (span: Span) => Promise<T> | T): Promise<T> {
+  const span: Span = { name, attributes: {}, status: "unset", error: null };
+  try {
+    return await fn(span);
+  } catch (error) {
+    markSpanFailed(span, error instanceof Error ? error.message : String(error));
+    throw error;
+  } finally {
+    spans.push(span);
+  }
+}
+
+// Marks the span failed without throwing, for a failure the caller returns as a value
+export function markSpanFailed(span: Span, message: string) {
+  span.status = "error";
+  span.error = message;
+}
+```
+
+`withSpan` marks the span on a throw, as a tracer does. `markSpanFailed` is for the other case: the call returned normally with a result that means failure.
+
+The execution helper is shared by every tool's run function and lives in its own file so that the tool files and the dispatcher can both import it.
+
+```ts title="lib/tool-execution.ts"
+import type { Step } from "./steps";
+import { markSpanFailed, type Span } from "./tracing";
+
+// What every run function gets besides its arguments
+export type ToolContext = { step: Step; today: string };
+
+// Only ok: false, or an object whose single key is error. A result that merely has an error field is data
+export function detectSoftFailure(output: unknown): string | null {
+  if (typeof output !== "object" || output === null) return null;
+  const record: Record<string, unknown> = { ...output };
+  if (record.ok === false) {
+    return typeof record.reason === "string" ? record.reason : "tool call failed";
+  }
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === "error" && typeof record.error === "string") {
+    return record.error;
+  }
+  return null;
+}
+
+export async function dispatchToolExecution<T>(
+  span: Span,
+  input: Record<string, unknown>,
+  execute: () => Promise<T> | T,
+): Promise<T> {
+  const output = await execute();
+  span.attributes["tool.input"] = JSON.stringify(input);
+  span.attributes["tool.output"] = JSON.stringify(output);
+  const failure = detectSoftFailure(output);
+  // Marked, not thrown: the trace shows the failure and the model still gets the result
+  if (failure !== null) markSpanFailed(span, failure);
+  return output;
+}
+```
+
+`dispatchToolExecution` returns whatever the compute returned. Its only job is the span.
+
+A tool file has the three parts in order: the schema, the compute, the run function.
+
+```ts title="lib/tools/check-dates.ts"
+import { z } from "zod";
+import { dispatchToolExecution, type ToolContext } from "../tool-execution";
+import { withSpan } from "../tracing";
+
+const checkDatesSchema = z.object({
+  from: z.string().describe("Check-in date, YYYY-MM-DD"),
+  to: z.string().describe("Check-out date, YYYY-MM-DD"),
+});
+
+// Schema only, no execute: the dispatcher calls runCheckDates by name when the loop decides to
+export const checkDates = {
+  description: "Whether a date range is free",
+  inputSchema: checkDatesSchema,
+};
+
+const BOOKED = [{ from: "2026-10-10", to: "2026-10-12" }];
+
+// Pure: no span, no step, no clock. A unit test calls it with two arguments
+export function computeCheckDates(args: z.infer<typeof checkDatesSchema>, today: string) {
+  const { from, to } = args;
+  if (!(from < to)) return { ok: false, reason: "invalid_range", today };
+  // A soft failure: the model reads the reason and today's date and corrects itself
+  if (from < today) return { ok: false, reason: "past_date", today };
+  const free = !BOOKED.some((booked) => from < booked.to && to > booked.from);
+  return { ok: true, free, from, to };
+}
+
+// The traced half: the step, the span, the parse. Side effects would live here too
+export function runCheckDates(input: Record<string, unknown>, context: ToolContext) {
+  return context.step.run("tool-check_dates", () =>
+    withSpan("tool.check_dates", (span) =>
+      dispatchToolExecution(span, input, () => {
+        const parsed = checkDatesSchema.safeParse(input);
+        if (!parsed.success)
+          return { error: `Invalid input for check_dates: ${parsed.error.message}` };
+        return computeCheckDates(parsed.data, context.today);
+      }),
+    ),
+  );
+}
+```
+
+`computeCheckDates` takes `today` as an argument instead of reading the clock, so a test gets the same answer every day and a replayed step gets the same answer as the first run. The run function is the only part that knows about steps and spans.
+
+The second tool has the same three parts and nothing in common with the first beyond the helper.
+
+```ts title="lib/tools/lookup-rate.ts"
+import { z } from "zod";
+import { dispatchToolExecution, type ToolContext } from "../tool-execution";
+import { withSpan } from "../tracing";
+
+const lookupRateSchema = z.object({
+  room: z.enum(["small", "large"]).describe("Which room"),
+});
+
+export const lookupRate = {
+  description: "The nightly rate for a room",
+  inputSchema: lookupRateSchema,
+};
+
+export function computeLookupRate(args: z.infer<typeof lookupRateSchema>) {
+  return { room: args.room, nightly: args.room === "small" ? 95 : 140, currency: "EUR" };
+}
+
+export function runLookupRate(input: Record<string, unknown>, context: ToolContext) {
+  return context.step.run("tool-lookup_rate", () =>
+    withSpan("tool.lookup_rate", (span) =>
+      dispatchToolExecution(span, input, () => {
+        const parsed = lookupRateSchema.safeParse(input);
+        if (!parsed.success)
+          return { error: `Invalid input for lookup_rate: ${parsed.error.message}` };
+        return computeLookupRate(parsed.data);
+      }),
+    ),
+  );
+}
+```
+
+The registry and the dispatcher share a file, because the dispatcher's `default` needs the registry's keys.
+
+```ts title="lib/tools.ts"
+import { dispatchToolExecution, type ToolContext } from "./tool-execution";
+import { checkDates, runCheckDates } from "./tools/check-dates";
+import { lookupRate, runLookupRate } from "./tools/lookup-rate";
+import { withSpan } from "./tracing";
+
+// What the model sees: names, descriptions, schemas. Nothing in it runs
+export const tools = { check_dates: checkDates, lookup_rate: lookupRate };
+
+// The one dispatcher. Each tool owns its span; this file wraps only the case no tool file can own
+export function runTool(name: string, input: Record<string, unknown>, context: ToolContext) {
+  switch (name) {
+    case "check_dates":
+      return runCheckDates(input, context);
+    case "lookup_rate":
+      return runLookupRate(input, context);
+    default:
+      return context.step.run(`tool-${name}`, () =>
+        withSpan(`tool.${name}`, (span) =>
+          dispatchToolExecution(span, input, () => ({
+            error: `Unknown tool name: "${name}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
+          })),
+        ),
+      );
+  }
+}
+```
+
+`name` is a plain string, not a union of the registry's keys, because the model can send any string. The `default` branch is the runtime handling for that, and it goes through the same helper, so the span is marked failed like any other soft failure.
+
+The route is one tool call as the loop would dispatch it: inside a durable run, through the dispatcher.
+
+```ts title="app/api/tools/route.ts"
+import { start, status } from "../../../lib/steps";
+import { runTool } from "../../../lib/tools";
+import { spans } from "../../../lib/tracing";
+
+const TODAY = "2026-10-01";
+
+export async function POST(request: Request) {
+  const { name, input } = await request.json();
+  const id = `call_${status().length + 1}`;
+  await start(id, { name: "tool.call", data: { id } }, ({ step }) =>
+    runTool(name, input, { step, today: TODAY }),
+  );
+  const run = status().find((entry) => entry.id === id);
+  return Response.json({ result: run?.result, span: spans.at(-1) });
+}
+```
+
+Call it with `curl -X POST localhost:3000/api/tools -H 'content-type: application/json' -d '{"name":"check_dates","input":{"from":"2026-10-06","to":"2026-10-08"}}'`: the result is `ok: true` and the span's status is `unset`. Send `{"from":"2026-09-20","to":"2026-09-22"}` instead: the result is `{ ok: false, reason: "past_date", today: "2026-10-01" }` and the span's status is `error`. Send `{"name":"book_dates","input":{}}`: the result is the error object naming `check_dates, lookup_rate`, in a span called `tool.book_dates`, and the run still finished.
+
+### Wrong and right
+
+The tool ran before your loop saw the call, with no step, no span and no check.
+
+🔴 The tool object carries an `execute`. With the AI SDK, `generateText` runs it inside the model call, and whatever it reads or does happens there. This is the tool object in `lib/tools/check-dates.ts`.
+
+```ts title="lib/tools/check-dates.ts"
+export const checkDates = {
+  description: "Whether a date range is free",
+  inputSchema: checkDatesSchema,
+  // The SDK runs this itself, the moment the model names the tool, outside any step or span
+  execute: async (input: z.infer<typeof checkDatesSchema>) =>
+    computeCheckDates(input, new Date().toISOString().slice(0, 10)),
+};
+```
+
+✅ Schema only. The run function owns the step, the span and the arguments the compute needs, and the loop decides when it runs.
+
+```ts title="lib/tools/check-dates.ts"
+export const checkDates = {
+  description: "Whether a date range is free",
+  inputSchema: checkDatesSchema,
+};
+
+export function runCheckDates(input: Record<string, unknown>, context: ToolContext) {
+  return context.step.run("tool-check_dates", () =>
+    withSpan("tool.check_dates", (span) =>
+      dispatchToolExecution(span, input, () => {
+        const parsed = checkDatesSchema.safeParse(input);
+        if (!parsed.success)
+          return { error: `Invalid input for check_dates: ${parsed.error.message}` };
+        return computeCheckDates(parsed.data, context.today);
+      }),
+    ),
+  );
+}
+```
+
+The person asked about last week, the turn ended with the fallback reply, and the retry asked about last week again.
+
+🔴 The compute throws on a request it cannot meet. The step fails, the runner retries the same call with the same input, and the model never learns what was wrong. This is the guard in `computeCheckDates` in `lib/tools/check-dates.ts`.
+
+```ts title="lib/tools/check-dates.ts"
+export function computeCheckDates(args: z.infer<typeof checkDatesSchema>, today: string) {
+  const { from, to } = args;
+  if (!(from < to)) throw new Error("check-out must be after check-in");
+  // Ends the step, the turn and the reply. The model never sees why
+  if (from < today) throw new Error(`${from} is in the past`);
+  const free = !BOOKED.some((booked) => from < booked.to && to > booked.from);
+  return { ok: true, free, from, to };
+}
+```
+
+✅ The refusal is a value with what the model needs to correct itself. The helper marks the span failed; the model reads the reason and asks again with real dates.
+
+```ts title="lib/tools/check-dates.ts"
+export function computeCheckDates(args: z.infer<typeof checkDatesSchema>, today: string) {
+  const { from, to } = args;
+  if (!(from < to)) return { ok: false, reason: "invalid_range", today };
+  // A soft failure: the model reads the reason and today's date and corrects itself
+  if (from < today) return { ok: false, reason: "past_date", today };
+  const free = !BOOKED.some((booked) => from < booked.to && to > booked.from);
+  return { ok: true, free, from, to };
+}
+```
+
+The model asked for `book_dates`, which does not exist, and the whole turn crashed.
+
+🔴 The dispatcher throws on a name it does not know. This is the `default` branch of `runTool` in `lib/tools.ts`.
+
+```ts title="lib/tools.ts"
+    default:
+      throw new Error(`Unknown tool "${name}"`);
+```
+
+✅ An error object in a span of its own, through the same helper. The model reads the list of valid tools and picks one.
+
+```ts title="lib/tools.ts"
+    default:
+      return context.step.run(`tool-${name}`, () =>
+        withSpan(`tool.${name}`, (span) =>
+          dispatchToolExecution(span, input, () => ({
+            error: `Unknown tool name: "${name}". Valid tools are: ${Object.keys(tools).join(", ")}.`,
+          })),
+        ),
+      );
+```
+
+### In this repo
+
+- [`check-dates.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/lib/tool-files/check-dates.ts) is `lib/tools/check-dates.ts` on the harness runner and tracer, with `steppedSpan` from [Trace anchor across steps](/p/trace-anchor-across-steps) in place of the step around the span. [`lookup-rate.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/lib/tool-files/lookup-rate.ts) is the second tool file, and [`context.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/lib/tool-files/context.ts) is `ToolContext` with a `variant` field the demo uses for the wrong shapes.
+- [`run-tool.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/lib/tool-files/run-tool.ts) is `lib/tools.ts`. Its `unknownTool: "throw"` and `softFailure: "throw"` variants are the second and third wrong examples above, kept so the demo can show the run failing.
+- [`tool-execution.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/lib/tool-files/tool-execution.ts) is `lib/tool-execution.ts` on the harness span's `fail`, which sets the status without throwing.
+- [`ToolFilesDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/447c944469028894757637fc76b878e4c1a05ef1/apps/patterns/src/app/demos/ToolFilesDemo.tsx) is the route as buttons: each one starts a durable run that calls the dispatcher once, then reads the result and the tool span from the exporter.
+- [`pricing.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/pricing.ts) is the production tool file in its simplest form. `getPricing` is `tool({ description, inputSchema })` with no `execute`. `computeGetPricingResult` is the pure lookup, which the sandboxed code tool also calls directly as a helper. `runGetPricing` is one `steppedSpan` with the step id `tool-get_pricing` and the span name `gen_ai.tool.get_pricing`, calling `dispatchToolExecution` with the compute.
+- [`availability.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tools/availability.ts) is the tool whose compute owns a guard. `computeCheckAvailability` validates the range against today's date first and returns `{ available: false, reason, today }` as a value for a past or inverted range, so the model can re-read the dates without another round trip. It then fetches the live calendar, and a failed fetch throws: an outage is an error, not a refusal. Its refusal shape has no `ok` key, so the span stays unmarked for it; the gated booking tool re-uses the same compute to re-check the model's arguments before anyone is asked.
+- [`tool-execution.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/tool-execution.ts) is `lib/tool-execution.ts` in production. `detectToolSoftFailure` is narrow on purpose, and its comment names the case that must not be marked: the booking tool's `{ error, reason }` for a refused range is a successful object with two keys. `dispatchToolExecution` records the input and output under two attribute namespaces and calls `markSpanFailed`. The gated tools do not use it, because they do not know their output when their span is created.
+- [`run-tool.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-tool.ts) is `lib/tools.ts` in production. `tools` is the registry, `satisfies ToolSet`. `runTool` takes `toolName: string` on purpose, with a comment saying a model can hallucinate a name outside the registry's keys, and its `default` returns `{ error: "Unknown tool name: ..." }` inside its own `steppedSpan` through `dispatchToolExecution`. Each case casts the input to the tool's type instead of parsing it, because the SDK has already validated the input against the schema before returning the call.
+- [`AGENTS.md`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/AGENTS.md) is the rule as the agents read it: every tool owns its span and its steps inside its own run function, the loop wraps nothing, business logic stays a separate pure compute, and a new tool is placed in a tier before its dispatch is written.
+
+## Pitfalls
+
+- **The tool ran before your loop saw the call.** It had an `execute`. Schema only; the run function owns the work. See Wrong and right above.
+- **The turn ended on a request the model could have fixed.** The compute threw. Return the refusal as a value. See Wrong and right above.
+- **The whole turn crashed on a tool name that does not exist.** The dispatcher threw. Return an error object in its own span. See Wrong and right above.
+- **A refused call is green in the trace.** The result had a shape the detection does not recognise, such as `available: false`. Either return `ok: false`, or mark the span yourself in the run function. Do not widen the detection.
+- **A successful call is red in the trace.** The detection matched any object with an `error` key. Keep it to `ok: false` and the single-key object.
+- **A tool's unit test needs a tracer, a step runner or a database.** The compute is not pure. Move the step, the span and the I/O into the run function and leave the compute a function of its arguments.
+- **A replayed step gives a different answer than the first run.** The compute read the clock. Pass today's date in from the context, which is the same on every invocation.
+- **Two tools disagree about the same dates.** Each has its own guard. Let the second tool call the first one's compute.
+- **The model keeps calling a tool with the same bad input.** The error object says only that the input was invalid. Include what was wrong and what would be right, such as today's date.
+
+## When not to use
+
+- A tool with no side effect and nothing to refuse, in a loop that needs no steps. The SDK's `execute` is fine, and the file shape is overhead.
+- A tool whose whole job is a side effect with no logic, such as a send. Keep the file, but the compute is nearly empty and the run function is the point.
+- Tools the provider hosts and runs itself. There is no file to write; you only see the result.
+
+## Code
+
+<CodeLinks />
