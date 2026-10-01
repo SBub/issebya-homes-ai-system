@@ -86,6 +86,10 @@ class Suspend {
   constructor(id: string) {
     this.id = id;
   }
+  /** What an ambient span sees when the invocation ends through it. */
+  toString() {
+    return `invocation ended on wait "${this.id}"`;
+  }
 }
 
 function valueAt(event: StepEvent, path: string): unknown {
