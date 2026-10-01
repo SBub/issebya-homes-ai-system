@@ -722,9 +722,10 @@ test.describe("Seller submission", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Offer a piece" })).toBeVisible();
   });
 
-  test("a seller submits a piece with two photos", async ({ page }) => {
+  test("a seller walks the three steps and submits a piece with two photos", async ({ page }) => {
     await page.goto("/shop/sell");
 
+    // Step one: details. Next saves a draft before any photo exists.
     await page.getByLabel("Your name").fill("E2E Seller");
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Title").fill("Oak side table");
@@ -734,16 +735,34 @@ test.describe("Seller submission", () => {
     await page
       .getByLabel("Description")
       .fill("Bought in Porto in the seventies, one small mark on the top.");
-    await page.getByLabel("Photos").setInputFiles([
+    await page.getByRole("checkbox", { name: SELLER_CONTACT_CONSENT_COPY }).check();
+    await page.getByRole("button", { name: "Next" }).click();
+
+    const photosInput = page.getByLabel("Photos", { exact: true });
+    await expect(photosInput).toBeVisible({ timeout: 15000 });
+
+    const supabase = createAdminClient();
+    const { data: drafts } = await supabase
+      .from("shop_seller_submissions")
+      .select("id, status, photo_paths")
+      .eq("seller_email", email);
+    expect(drafts).toHaveLength(1);
+    expect(drafts?.[0].status).toBe("draft");
+    expect(drafts?.[0].photo_paths).toEqual([]);
+
+    // Step two: the photos go under the draft's id.
+    await photosInput.setInputFiles([
       { name: "front.png", mimeType: "image/png", buffer: TINY_PNG },
       { name: "back.png", mimeType: "image/png", buffer: TINY_PNG },
     ]);
-    await page.getByRole("checkbox", { name: SELLER_CONTACT_CONSENT_COPY }).check();
+    await page.getByRole("button", { name: "Next" }).click();
+
+    // Step three: the summary, then Send.
+    await expect(page.getByText("€120.50")).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: "Send to the owner" }).click();
 
     await expect(page.getByText(sellerSuccessCopy(email))).toBeVisible({ timeout: 15000 });
 
-    const supabase = createAdminClient();
     const { data: rows } = await supabase
       .from("shop_seller_submissions")
       .select("id, status, asking_price_cents, photo_paths")
@@ -751,7 +770,8 @@ test.describe("Seller submission", () => {
     expect(rows).toHaveLength(1);
 
     const [row] = rows ?? [];
-    expect(row.status).toBe("new");
+    expect(row.id).toBe(drafts?.[0].id);
+    expect(row.status).toBe("submitted");
     expect(row.asking_price_cents).toBe(12050);
     expect(row.photo_paths).toHaveLength(2);
     for (const path of row.photo_paths as string[]) {

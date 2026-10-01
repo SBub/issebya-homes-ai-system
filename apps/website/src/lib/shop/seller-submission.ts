@@ -149,14 +149,14 @@ const photoMetaSchema = z.object({
   size: z.number().int().positive(PHOTO_EMPTY_COPY).max(MAX_PHOTO_BYTES, PHOTO_TOO_LARGE_COPY),
 });
 
-const photosMetaSchema = z
+export const sellerPhotosMetaSchema = z
   .array(photoMetaSchema)
   .min(MIN_PHOTOS, PHOTOS_NONE_COPY)
   .max(MAX_PHOTOS, PHOTOS_TOO_MANY_COPY);
 
 export const sellerSubmissionSchema = z.object({
   fields: sellerFieldsSchema,
-  photos: photosMetaSchema,
+  photos: sellerPhotosMetaSchema,
 });
 
 /**
@@ -216,32 +216,50 @@ export type SellerFieldErrors = Partial<Record<keyof SellerFields | "photos", st
 
 type PhotoUpload = { path: string; signedUrl: string; token: string };
 
-export type PrepareResult =
-  | { kind: "invalid"; errors: SellerFieldErrors; generalError: string }
-  | { kind: "upload"; submissionId: string; uploads: PhotoUpload[] }
-  // A tripped honeypot: the bot sees success, nothing was minted.
-  | { kind: "done" };
+type SellerInvalid = { kind: "invalid"; errors: SellerFieldErrors; generalError: string };
 
+// Step one. `draft` carries the row id every later step needs. `done` is a
+// tripped honeypot: the bot sees the thank-you, nothing was written.
+export type CreateDraftResult =
+  SellerInvalid | { kind: "draft"; submissionId: string } | { kind: "done" };
+
+// Step two. One signed upload URL per photo, under the draft's own prefix.
+export type PrepareResult = SellerInvalid | { kind: "upload"; uploads: PhotoUpload[] };
+
+// Step three.
 export type SubmitResult =
   { ok: true } | { ok: false; errors: SellerFieldErrors; generalError: string };
 
-// React resets an uncontrolled <form> as soon as an `action` submission starts.
-// `values` echoes back only the seller's own input so the inputs can be
-// re-keyed and re-seeded, the same reason as `BookingFormState.values`.
-export type SellerFormState = {
-  attempt: number;
-  ok: boolean;
+// --- Wizard state ---
+
+export type SellerWizardStep = "details" | "photos" | "review" | "done";
+
+/**
+ * The one state object behind the wizard's `useActionState`. Every step is a
+ * dispatch that reads what the previous one left here: `submissionId` from
+ * the details step, `photoPaths` from the photos step. It crosses the wire
+ * both ways (it is bound into the step one form for the no-JavaScript POST),
+ * so everything in it is plain data.
+ *
+ * React resets an uncontrolled <form> when its `action` submission ends.
+ * `fields` echoes the seller's own input so the details inputs can be
+ * re-keyed by `attempt` and re-seeded after a validation error, the same
+ * reason as `BookingFormState.values`.
+ */
+export type SellerWizardState = {
+  step: SellerWizardStep;
+  submissionId: string | null;
+  fields: SellerFields;
+  photoPaths: string[];
   errors: SellerFieldErrors;
   generalError: string;
-  values: SellerFields;
+  attempt: number;
 };
 
-export const initialSellerFormState: SellerFormState = {
-  attempt: 0,
-  ok: false,
-  errors: {},
-  generalError: "",
-  values: {
+export const initialSellerWizardState: SellerWizardState = {
+  step: "details",
+  submissionId: null,
+  fields: {
     name: "",
     email: "",
     phone: "",
@@ -255,6 +273,10 @@ export const initialSellerFormState: SellerFormState = {
     contactConsent: false,
     honeypot: "",
   },
+  photoPaths: [],
+  errors: {},
+  generalError: "",
+  attempt: 0,
 };
 
 // One mapping from the form's fields to `SellerFields`, shared by the form and
