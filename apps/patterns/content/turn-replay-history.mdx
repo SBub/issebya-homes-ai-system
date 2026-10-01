@@ -1,0 +1,298 @@
+---
+title: Turn replay history
+kind: atom
+summary: The model needs what its tools found in earlier turns, so each turn stores its tool messages, the last few replay verbatim, older turns replay as text, and trimming drops whole turns to a budget.
+tags:
+  - agent-harness
+  - memory
+  - context-window
+code:
+  - path: apps/patterns/src/lib/history/history.ts
+    ref: 4ebf59dc65750038ecaafcf6443a1a5adb6fe917
+    note: finalizeTurn, groupByTurn, buildHistory with the verbatim window, estimateTokens and trimToBudget by whole groups.
+  - path: apps/patterns/src/lib/harness/store.ts
+    ref: c2f96931704f2c73e85dec0a1b31f8a790c71bb4
+    note: The in-memory table the demo stores its rows in.
+  - path: apps/patterns/src/app/demos/HistoryDemo.tsx
+    ref: 4ebf59dc65750038ecaafcf6443a1a5adb6fe917
+    note: The live demo; rows in a table, a verbatim-turns input, a budget slider, and what the model sees after tiering and trimming.
+  - path: apps/guest-communication-agent/src/agent/turn-messages.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The stored shape with a schema version, the 2000-character cap on each tool result, and finalizeTurnMessages making every stored array end in assistant text.
+  - path: apps/guest-communication-agent/src/agent/memory.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: groupRowsByTurn and buildHistoryMessages; the last VERBATIM_TURNS groups replay stored messages, older groups and rows without them replay as text.
+  - path: apps/guest-communication-agent/src/agent/context.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: trimToTokenBudget over turn groups; over MAX_CONTEXT_TOKENS it drops whole groups from the oldest down to KEEP_CONTEXT_TOKENS and never the last one.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: Where a turn is stored; finalizeTurnMessages over the turn's messages, written on the assistant row in the record-reply step.
+verifiedIn:
+  - 208
+updated: 2026-10-01
+---
+
+import { HistoryDemo } from "@/app/demos/HistoryDemo";
+
+## Problem
+
+A conversation runs over many turns. On each one the model calls tools, reads what they return, and answers. The usual history keeps the text: what the person wrote, what the model replied. The next turn the model sees "The 6th to the 8th is free" and nothing else. It does not see that a tool returned `from: "2026-10-06"`, so when the person says "yes, those", the model guesses the year, and a tool refuses the guess as a date in the past.
+
+Storing the whole transcript of every turn, tool messages included, fixes the facts and breaks the budget. Tool results are large. Ten turns of them do not fit, and a model with a window full of old JSON answers worse, not better.
+
+Trimming by messages to make them fit breaks something else. Cut between a tool call and its result and the provider rejects the whole request: a call with no result is malformed input.
+
+So the history is built from rows every turn, in tiers. Each assistant row stores its own turn's messages. The last few turns replay those messages word for word. Older turns replay as text. If the total is still over budget, whole turns are dropped from the oldest, never a message from inside one, and never the turn being answered.
+
+### In this app
+
+- The WhatsApp agent stores every reply's tool calls and results on its row, so a date or a price a tool found two turns ago is still a fact the model can act on, not prose it has to parse.
+- Three turns replay in full and the rest as text. A budget of eight thousand tokens, trimmed to six, covers about ten turns with a tool round or two each.
+- Whatever trimming drops is summarised off the reply path and prepended as memory on later turns, which is its own pattern.
+
+## Mechanism
+
+Here is what happens, in order, from one incoming message to the next.
+
+1. A message arrives. Your code stores it as a user row. That row is the start of a new turn.
+2. Your code loads this conversation's rows, oldest first, and groups them by turn: a user row starts a group, and the assistant rows after it belong to it. The last group is the turn being answered. It holds the new message and nothing else yet.
+3. Your code maps each group to messages. For the last N groups, an assistant row's stored turn messages replace it as they are: the tool calls, the tool results, the reply. For older groups, and for any assistant row with nothing stored, the row's text stands in. The user rows are text in both cases.
+4. Your code counts tokens over the flattened list. Under the maximum, the history is ready. Over it, your code drops the oldest group, counts again, and repeats until the total is under the keep level, which sits below the maximum so that one more turn does not trip the trim again. It never drops the last group.
+5. Your loop calls the model with that history. The model sees the exact outputs its tools returned on the last turns.
+6. The model finishes the turn: a few tool calls, their results, a reply. Your code takes this turn's messages and makes them self-contained. Only assistant text, tool calls and tool messages are kept. If the last message is not assistant text, which happens when the loop stopped at its cap, the reply is appended. Long tool outputs are cut to a limit, as text, so the stored array stays small and valid.
+7. Your code stores the assistant row with the reply as its text and that array as its turn messages.
+
+Two things follow from step 3.
+
+The verbatim window is small on purpose. Facts from the last few turns are worth their tokens. Facts from ten turns ago are better compressed into text, and the trimmed-off part into a summary.
+
+Replay only works because each stored array is complete. The arrays are interleaved with other rows and with each other. One that ends on a tool call without its result, or starts with a result and no call, breaks the request for the whole conversation.
+
+### Try it
+
+Four turns are stored. The last three show their tool calls and results; the first shows text. Slide the budget down and whole turns disappear from the top, the newest never. Lower the verbatim turns to one and the middle turns become text. Add a turn and the window moves.
+
+<HistoryDemo />
+
+## Pattern
+
+The two files below are a working app. Paste them into a fresh Next project and drive it with `curl`. Rows live in an array; a database row with a JSON column holds the same thing.
+
+The library owns the rows and the three operations: finalize a turn for storage, build the tiered history, trim it by whole turns.
+
+```ts title="lib/history.ts"
+export type ToolCall = { id: string; name: string; input: Record<string, unknown> };
+
+export type Message =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | ToolCall[] }
+  | { role: "tool"; content: Array<{ id: string; name: string; output: unknown }> };
+
+export type Row = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  // This turn's own messages, on the assistant row only. Null replays as text
+  turnMessages: Message[] | null;
+};
+
+const rows: Row[] = [];
+
+export function storeRow(role: Row["role"], content: string, turnMessages: Message[] | null) {
+  rows.push({ id: rows.length + 1, role, content, turnMessages });
+}
+
+export function allRows() {
+  return rows;
+}
+
+// Every stored array ends in assistant text, so no tool call is ever replayed without its result
+export function finalizeTurn(tail: Message[], replyText: string): Message[] {
+  const kept = tail.filter((message) => message.role !== "user");
+  const last = kept.at(-1);
+  if (last?.role === "assistant" && typeof last.content === "string") return kept;
+  return [...kept, { role: "assistant", content: replyText }];
+}
+
+// A user row starts a turn. The assistant rows after it belong to it
+function groupByTurn(rows: Row[]): Row[][] {
+  const groups: Row[][] = [];
+  for (const row of rows) {
+    const current = groups.at(-1);
+    if (row.role === "user" || current === undefined) groups.push([row]);
+    else current.push(row);
+  }
+  return groups;
+}
+
+const VERBATIM_TURNS = 3;
+
+export function buildHistory(rows: Row[]): Message[][] {
+  const groups = groupByTurn(rows);
+  return groups.map((group, index) => {
+    const verbatim = groups.length - index <= VERBATIM_TURNS;
+    return group.flatMap((row): Message[] => {
+      // Stored messages word for word inside the window; the row's text everywhere else
+      if (verbatim && row.role === "assistant" && row.turnMessages !== null)
+        return row.turnMessages;
+      return [{ role: row.role, content: row.content }];
+    });
+  });
+}
+
+// Stands in for a tokenizer: about four characters per token
+export function estimateTokens(messages: Message[]) {
+  return messages.reduce((total, message) => {
+    const text =
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    return total + Math.ceil(text.length / 4);
+  }, 0);
+}
+
+export function trimToBudget(groups: Message[][], max: number, keep: number) {
+  if (estimateTokens(groups.flat()) <= max) return groups;
+  const kept = [...groups];
+  // Whole turns from the oldest, never the last: it holds the message being answered
+  while (kept.length > 1 && estimateTokens(kept.flat()) > keep) kept.shift();
+  return kept;
+}
+```
+
+`buildHistory` returns one list per turn, not one flat list, so that `trimToBudget` can drop a turn as a unit. The two budgets are a pair: `max` decides whether to trim at all, `keep` is how far down to go once trimming starts.
+
+The route is one turn. It stores the message, builds the history, calls the model, and stores the turn.
+
+```ts title="app/api/chat/route.ts"
+import {
+  allRows,
+  buildHistory,
+  finalizeTurn,
+  type Message,
+  storeRow,
+  trimToBudget,
+} from "../../../lib/history";
+
+const MAX_TOKENS = 8000;
+const KEEP_TOKENS = 6000;
+
+export async function POST(request: Request) {
+  const { message } = await request.json();
+  storeRow("user", message, null);
+
+  const history = trimToBudget(buildHistory(allRows()), MAX_TOKENS, KEEP_TOKENS).flat();
+
+  // Stands in for the model and its tool: every turn checks the dates and answers
+  const call = {
+    id: `call_${allRows().length}`,
+    name: "check_dates",
+    input: { from: "2026-10-06", to: "2026-10-08" },
+  };
+  const reply = `Still free. I saw ${history.length} messages.`;
+  const tail: Message[] = [
+    { role: "assistant", content: [call] },
+    { role: "tool", content: [{ id: call.id, name: call.name, output: { free: true } }] },
+    { role: "assistant", content: reply },
+  ];
+
+  // The reply as text for the next turns' text tier, the array for the verbatim tier
+  storeRow("assistant", reply, finalizeTurn(tail, reply));
+  return Response.json({ reply, modelSaw: history });
+}
+
+export function GET(request: Request) {
+  const max = Number(new URL(request.url).searchParams.get("max") ?? MAX_TOKENS);
+  const groups = buildHistory(allRows());
+  const kept = trimToBudget(groups, max, Math.round(max * 0.75));
+  return Response.json({ turns: groups.length, kept: kept.length, modelWouldSee: kept.flat() });
+}
+```
+
+Post four messages with `curl -X POST localhost:3000/api/chat -H 'content-type: application/json' -d '{"message":"Is it free?"}'`. The fourth response's `modelSaw` holds the first turn as two text messages and the next two as four messages each, tool call and result included. Then `curl 'localhost:3000/api/chat?max=60'` shows the oldest turns gone whole and the newest still there.
+
+### Wrong and right
+
+The provider rejects the request: a tool call has no result.
+
+🔴 Trimming works on messages. It drops from the front until the budget fits, and the cut lands between a tool call and its result. This is `trimToBudget` in `lib/history.ts`, written over a flat list.
+
+```ts title="lib/history.ts"
+export function trimToBudget(messages: Message[], max: number, keep: number) {
+  if (estimateTokens(messages) <= max) return messages;
+  const kept = [...messages];
+  // Can stop right after a tool call, leaving its result as the first message
+  while (kept.length > 1 && estimateTokens(kept) > keep) kept.shift();
+  return kept;
+}
+```
+
+✅ Trimming works on turns. A turn is dropped whole or kept whole.
+
+```ts title="lib/history.ts"
+export function trimToBudget(groups: Message[][], max: number, keep: number) {
+  if (estimateTokens(groups.flat()) <= max) return groups;
+  const kept = [...groups];
+  while (kept.length > 1 && estimateTokens(kept.flat()) > keep) kept.shift();
+  return kept;
+}
+```
+
+The model forgets what its tool found one turn ago and guesses.
+
+🔴 Only the reply text is stored. The next turn replays "the 6th to the 8th" as prose, and the dates the tool returned are gone. This is the store call in `app/api/chat/route.ts`.
+
+```ts title="app/api/chat/route.ts"
+storeRow("assistant", reply, null);
+```
+
+✅ The turn's messages are stored with the row. The next turns replay the tool call and its result as they were.
+
+```ts title="app/api/chat/route.ts"
+storeRow("assistant", reply, finalizeTurn(tail, reply));
+```
+
+The provider rejects the request on the turn after the loop hit its cap.
+
+🔴 The tail is stored as it is. On the cap path it ends on a tool message, and the stored array is replayed into the middle of the conversation without an assistant message to close it. This is the store call in `app/api/chat/route.ts`.
+
+```ts title="app/api/chat/route.ts"
+storeRow("assistant", reply, tail);
+```
+
+✅ `finalizeTurn` appends the reply text when the tail does not end in it, so every stored array closes.
+
+```ts title="app/api/chat/route.ts"
+storeRow("assistant", reply, finalizeTurn(tail, reply));
+```
+
+### In this repo
+
+- [`history.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/4ebf59dc65750038ecaafcf6443a1a5adb6fe917/apps/patterns/src/lib/history/history.ts) is `lib/history.ts` with the verbatim count and the budget as arguments, so the demo can move them. `finalizeTurn` also drops assistant parts that are neither text nor a tool call.
+- [`store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2f96931704f2c73e85dec0a1b31f8a790c71bb4/apps/patterns/src/lib/harness/store.ts) is the `rows` array as a table with ids.
+- [`HistoryDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/4ebf59dc65750038ecaafcf6443a1a5adb6fe917/apps/patterns/src/app/demos/HistoryDemo.tsx) is the route as a page: Add a turn is the POST, and the right-hand panel is the GET with the slider as `max`.
+- [`turn-messages.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/turn-messages.ts) is `finalizeTurn` in production. The stored shape is `{ schema_version: 1, messages }`, and a version the code no longer understands reads as null, so the row replays as text. `truncateToolOutputs` cuts a tool result over 2000 characters to a text part that says how much was cut; tool-call inputs are never cut. `finalizeTurnMessages` keeps assistant text and tool-call parts and tool messages, and appends the reply when the tail ends on a tool message.
+- [`memory.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/memory.ts) is `buildHistory` in production. `groupRowsByTurn` is `groupByTurn`, `VERBATIM_TURNS` is 3, and `buildHistoryMessages` returns the groups with their source rows so that trimmed rows can be found again. Groups older than the last 8 rows also have their URLs replaced by a placeholder, in text and in replayed tool results, never in tool-call inputs. The watermark of what has already been summarised is applied before trimming, and the rows the trim drops are what `foldMemory` summarises, off the reply path.
+- [`context.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/context.ts) is `estimateTokens` and `trimToBudget` in production. The count uses a real tokenizer, `gpt-tokenizer`'s o200k_base encoding, the closest maintained one to the model in use. `MAX_CONTEXT_TOKENS` is 8000 and `KEEP_CONTEXT_TOKENS` is 6000, and `trimToTokenBudget` drops whole groups from the front and never the last one.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) is the store call. It takes the turn's own messages from the loop, runs `finalizeTurnMessages` with the reply text, and writes the assistant row with them in the `record-reply` step. The write is unique per trace id, so a retry of that step returns the existing row.
+
+## Pitfalls
+
+- **A 400 about a tool call without a result.** Trimming cut inside a turn. Trim by whole turns. See Wrong and right above.
+- **The model forgets a fact a tool returned.** Only the text was stored. Store the turn's messages. See Wrong and right above.
+- **A 400 on the turn after a cap.** The stored array ended on a tool message. Finalize it with the reply. See Wrong and right above.
+- **The history grows with every turn and the trim never fires.** The count ignores tool parts, because it only measures string content. Serialise the parts and count those too.
+- **The trim fires on every turn.** `keep` equals `max`, so one more message tips it over again. Keep a gap between the two.
+- **A stored array breaks replay after a library upgrade.** The SDK renamed a field, and the old rows no longer parse. Version the stored shape and let an unknown version replay as text.
+- **One tool result eats the whole budget.** A search returned a page of JSON and it was stored whole. Cap each stored tool result and say in the cut text that the tool can be called again.
+- **A model says "I already sent [link]" and copies the placeholder.** Redaction of old messages touched a recent one. Never rewrite the turns the model is working from, only the ones old enough that exact recall no longer matters.
+
+## When not to use
+
+- Single-turn tasks. There is no earlier turn to replay.
+- Tools whose results are small and stable, such as the current date. Text history carries them well enough.
+- A provider that manages the conversation for you and accepts a conversation id instead of a message list. It holds the history; you cannot tier it.
+- Long-term facts across conversations, such as a person's preferences. Those belong in a summary or a profile, not in replayed turns.
+
+## Code
+
+<CodeLinks />
