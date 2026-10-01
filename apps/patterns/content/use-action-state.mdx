@@ -55,7 +55,7 @@ The question to ask is whether the next request needs the answer from the previo
 
 **Where it does not**
 
-- Hearts on several products in the grid. Product A and product B are unrelated, so one queue would make B wait for A's round trip for nothing. One hook per card already keeps them apart, because the queue belongs to the hook, not the page.
+- Hearts on several products in the grid. Product A and product B are unrelated, so one queue would make B wait for A's round trip for nothing. One hook per card keeps the order separate, but React still commits ongoing Actions together, so the slow card holds back the fast one on screen. Give each card `useState` with `useTransition` instead.
 - Photo uploads in the seller form. Five photos upload at once, each with its own progress. None of them needs the answer from another.
 - Shop sort and filters. A sort change should not wait for a filter request in flight. The shop controls already use `useOptimistic` with a transition for this.
 - Saving a note while an email sends. Two unrelated side effects share one screen. Neither needs the other's result.
