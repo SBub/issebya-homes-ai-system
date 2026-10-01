@@ -63,3 +63,10 @@
   database.
 - Never add `export const dynamic` to a route. It is rejected under
   `cacheComponents`; reading the request already makes a handler dynamic.
+- Agent harness demos (the `agent-harness` tag) run on the shared fake runtime
+  under `src/lib/harness/`: a scripted model, an in-memory durable step runner
+  and a Map-backed table. The step runner must keep modelling memoization,
+  replay from the top and the no-step-inside-a-step rule honestly, or the
+  approval and trace demos teach the wrong thing. Never import from
+  `apps/guest-communication-agent`; snippets are copied and simplified, and the
+  pinned `code[]` links are the proof.
