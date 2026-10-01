@@ -42,6 +42,28 @@ By hand that is a `useState` for the value, another for the pending flag, and an
 
 `useActionState` fixes the order. You give it a reducer: a function that takes the last state and an action and returns the next state. React runs that reducer one call at a time, and tells you while any call is still running.
 
+### In this app
+
+The question to ask is whether the next request needs the answer from the previous one. If yes, the queue is doing real work. If no, the queue only adds waiting.
+
+**Where the queue fits**
+
+- The seller form as a wizard. Step one creates a draft listing and the server returns its id, step two uploads photos to that id, and step three publishes it. The state carries the id from call to call, and no step can start before the last one returns.
+- The wishlist heart on one product. Toggle on, off, on within a second: each call flips whatever the server holds, so order matters, and two of them run in parallel race. Only the last click matters, so this is also where the cancelling version fits.
+- Extending a hold on dates in the booking calendar. Each added night is checked against availability given the hold you already have. The hold id comes from the first call.
+- A stock-limited shop item. Each add must use the server's confirmed count. Otherwise two fast clicks on the last unit both succeed.
+
+**Where it does not**
+
+- Hearts on several products in the grid. Product A and product B are unrelated, so one queue would make B wait for A's round trip for nothing. One hook per card already keeps them apart, because the queue belongs to the hook, not the page.
+- Photo uploads in the seller form. Five photos upload at once, each with its own progress. None of them needs the answer from another.
+- Shop sort and filters. A sort change should not wait for a filter request in flight. The shop controls already use `useOptimistic` with a transition for this.
+- Saving a note while an email sends. Two unrelated side effects share one screen. Neither needs the other's result.
+
+**The tell**
+
+Look at the payload. A relative payload ("add one", "toggle", "next step") depends on the server's current truth and belongs in the queue. An absolute payload ("set quantity to 4", "upload this file") carries everything it needs, so it can run on its own or be cancelled for a newer one.
+
 ## Mechanism
 
 Here is what happens, in order.
