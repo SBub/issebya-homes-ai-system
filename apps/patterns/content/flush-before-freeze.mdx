@@ -1,0 +1,235 @@
+---
+title: Flush before freeze
+kind: atom
+summary: A serverless process is frozen the moment the response is sent, so batched spans never export unless the route flushes them in after() on Next or in response middleware on FastAPI.
+tags:
+  - agent-harness
+  - opentelemetry
+  - serverless
+  - nextjs
+code:
+  - path: apps/patterns/src/lib/flush/handle-request.ts
+    ref: 89d26d7343de79c87ddae970028898a3ce3be148
+    note: One request on a model of the platform; handler, response, after callbacks, freeze, with no flush, a flush in after, and a flush before the response.
+  - path: apps/patterns/src/lib/harness/span-exporter.ts
+    ref: 429400f7aac389b9e9ab7e3ce4e788fae9ae5173
+    note: The batch exporter; ended spans queue, flush() sends them after a round trip, freeze() drops the queue as a frozen process does.
+  - path: apps/patterns/src/app/demos/FlushDemo.tsx
+    ref: 89d26d7343de79c87ddae970028898a3ce3be148
+    note: The live demo; a request button, a flush mode select, the spans that reached the backend, and the response time per request.
+  - path: apps/guest-communication-agent/src/instrumentation.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: flushTracing; forceFlush on the shared provider, swallowing failures, with the comment on why a batch timer loses the race on Vercel.
+  - path: apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The route that emits spans and schedules the flush with after() in its finally, so the ack is not delayed and the process is kept alive.
+  - path: apps/guest-communication-agent/src/app/api/inngest/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The serve endpoint where the steps run; POST is wrapped to schedule the flush with after() before handing off.
+  - path: apps/telegram-router/app/main.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The FastAPI counterpart; a response middleware that flushes after the handler returns, chosen over a per-span exporter for one round trip per request.
+  - path: apps/telegram-router/app/tracing.py
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: flush_tracing; force_flush in a thread with a 2 s budget, swallowing failures, a no-op when no provider is set.
+verifiedIn:
+  - 209
+updated: 2026-10-01
+---
+
+import { FlushDemo } from "@/app/demos/FlushDemo";
+
+## Problem
+
+A span exporter does not send spans one by one. It queues them as they end and sends a batch on a timer, every few seconds, or when the queue is full. That is the right design on a server that stays up: one round trip for many spans, no latency added to the request.
+
+A serverless function does not stay up. The platform freezes the process the instant the response is sent and thaws it for the next request, if there is one. The batch timer is a timer in a frozen process. It does not fire. If the next request comes an hour later, the queue is still there and may go out then, mixed into that request's batch, or the instance is gone and the queue with it. Under sporadic traffic most spans are lost, and the loss is silent: the route returned 200, the tracer recorded everything, nothing arrived.
+
+Locally the process never freezes, the timer fires, and every span arrives. The bug is invisible in development and only shows in production as traces with holes in them.
+
+The fix is to make export a property of the request, not of the process's lifetime: flush the exporter before the freeze. Not before the response, which would add the round trip to every response. In the window after the response, which the platform keeps open for work registered with `after()` on Next, and which a FastAPI app gets by flushing in response middleware, after the handler, with a bounded timeout.
+
+### In this app
+
+- The WhatsApp webhook emits a handful of spans per inbound message and acks within milliseconds. It schedules the flush in `after()` in its `finally`, so the ack is not delayed and the spans go out before the freeze.
+- The Inngest serve route is where the turn's steps actually run and emit their spans. Its POST is wrapped to schedule the same flush.
+- The router in front of the owner's chat app, a FastAPI service on the same platform, has no `after()`. A response middleware flushes once per request, with a 2 second budget, which costs one round trip per request instead of one per span.
+
+## Mechanism
+
+Here is what happens, in order, on one request, with and without the flush.
+
+1. The request arrives and the process thaws. The handler runs and opens spans: the request, loading an item, rendering. Each one ends and is pushed onto the exporter's queue. Nothing is sent yet.
+2. The handler returns the response. The platform sends it to the client.
+3. Without a flush: the process is frozen. The queue holds three spans and a timer that will never fire. On the next request the process may thaw with the queue intact, or it may be a new process with an empty one. The backend has nothing from this request.
+4. With `after(() => flush())`: before returning, the handler registered a callback. The platform sends the response, then runs the callback and keeps the process alive until it resolves. The flush takes the queue and sends it, one round trip. Then the process is frozen, with an empty queue.
+5. With `await flush()` before the return: the spans go out, and the response waits for the round trip. Every request is slower by the exporter's latency, which is the batch exporter's whole reason for existing thrown away.
+6. The flush is best effort. It swallows its own errors and logs them. A tracing backend that is down must not turn a successful request into a failed one.
+
+In a FastAPI app the shape differs because the platform offers no kept-alive window to Python: a response middleware runs after the handler has returned and before the response is sent, and flushes there with a bounded timeout. That is the before-the-response shape with the cost capped, chosen over a per-span exporter because one request can emit several spans and one round trip is cheaper than several.
+
+### Try it
+
+With no flush, press Send a request: the response is fast and nothing arrives at the backend; the request line says three spans were dropped by the freeze. Switch to the `after()` flush and send again: still fast, and three spans arrive in one flush. Switch to the flush before the response: three spans arrive, and the response took the round trip longer.
+
+<FlushDemo />
+
+## Pattern
+
+The three files below are a working app. Paste them into a fresh Next project and drive it with `curl`. A small batch exporter stands in for the OpenTelemetry one. It keeps the rule this pattern depends on: ended spans queue, and leave on a timer or on `flush()`.
+
+```ts title="lib/tracing.ts"
+type Span = { name: string; endedAt: number };
+
+// A batch exporter: ended spans queue here and leave as one batch, on a timer or on flush()
+const pending: Span[] = [];
+export const exported: Span[] = [];
+let timer: ReturnType<typeof setTimeout> | null = null;
+
+const BATCH_DELAY = 5000;
+const ROUND_TRIP = 300;
+
+export async function span<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
+  try {
+    return await fn();
+  } finally {
+    pending.push({ name, endedAt: Date.now() });
+    // The timer a frozen process never gets to fire
+    timer ??= setTimeout(() => void flush(), BATCH_DELAY);
+  }
+}
+
+export async function flush() {
+  if (timer !== null) clearTimeout(timer);
+  timer = null;
+  const batch = pending.splice(0);
+  if (batch.length === 0) return;
+  // Stands in for the HTTP round trip to the backend
+  await new Promise((resolve) => setTimeout(resolve, ROUND_TRIP));
+  exported.push(...batch);
+}
+```
+
+`span` records an ended span and arms the timer. `flush` is the thing the route must call: it takes whatever is queued and sends it.
+
+The route emits spans and schedules the flush for after the response.
+
+```ts title="app/api/items/route.ts"
+import { after } from "next/server";
+import { flush, span } from "../../../lib/tracing";
+
+export async function GET() {
+  const item = await span("handle-request", async () => {
+    const found = await span("load-item", () => ({ id: 1, name: "Item 1" }));
+    await span("render", () => undefined);
+    return found;
+  });
+  // Runs once the response is sent. The platform keeps the process alive until it resolves
+  after(() => flush());
+  return Response.json(item);
+}
+```
+
+The response goes out at once. The flush runs in the window after it.
+
+A second route shows what reached the backend.
+
+```ts title="app/api/spans/route.ts"
+import { exported } from "../../../lib/tracing";
+
+export function GET() {
+  return Response.json({ exported });
+}
+```
+
+Run `curl localhost:3000/api/items` and then `curl localhost:3000/api/spans` right after: three spans, `load-item`, `render`, `handle-request`, in the order they ended. Now remove the `after` line and try again on your laptop: the spans still arrive, five seconds later, because the dev server never freezes. That is why this bug is found in production. Deploy the version without `after` to a serverless platform and `/api/spans` stays empty.
+
+### Wrong and right
+
+Spans from the route never arrive in production, and the same route traced locally shows all of them.
+
+🔴 No flush. The batch timer is the only thing that sends, and the process is frozen before it fires. This is the end of `GET` in `app/api/items/route.ts`.
+
+```ts title="app/api/items/route.ts"
+  // The timer will send them. It will not: the process is frozen before it fires
+  return Response.json(item);
+}
+```
+
+✅ The flush scheduled with `after()`. The response goes out first, and the process stays alive until the flush resolves.
+
+```ts title="app/api/items/route.ts"
+  after(() => flush());
+  return Response.json(item);
+}
+```
+
+Every response from the route got a few hundred milliseconds slower when tracing was added.
+
+🔴 The flush is awaited before the response. The spans arrive, and every client waits for the exporter's round trip. This is the end of `GET` in `app/api/items/route.ts`.
+
+```ts title="app/api/items/route.ts"
+  // The round trip to the tracing backend is now part of every response
+  await flush();
+  return Response.json(item);
+}
+```
+
+✅ The flush after the response, in `after()`. Same spans, no added latency.
+
+```ts title="app/api/items/route.ts"
+  after(() => flush());
+  return Response.json(item);
+}
+```
+
+Spans arrive from some requests and not from others.
+
+🔴 The flush is started and not awaited, and not registered with the platform. The response goes out, and whether the flush finishes before the freeze is a race. This is the end of `GET` in `app/api/items/route.ts`.
+
+```ts title="app/api/items/route.ts"
+  // Fire and forget: nothing keeps the process alive for it
+  void flush();
+  return Response.json(item);
+}
+```
+
+✅ Registered with `after()`, so the platform waits for it.
+
+```ts title="app/api/items/route.ts"
+  after(() => flush());
+  return Response.json(item);
+}
+```
+
+### In this repo
+
+- [`handle-request.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/89d26d7343de79c87ddae970028898a3ce3be148/apps/patterns/src/lib/flush/handle-request.ts) is the route under a model of the platform: the handler, the response time, the `after` callbacks, then a `freeze()` that drops the queue. Its three modes are the right shape and the first two wrong examples above.
+- [`span-exporter.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/429400f7aac389b9e9ab7e3ce4e788fae9ae5173/apps/patterns/src/lib/harness/span-exporter.ts) is `lib/tracing.ts` with a configurable round trip, a `freeze()`, and a snapshot a page can subscribe to.
+- [`FlushDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/89d26d7343de79c87ddae970028898a3ce3be148/apps/patterns/src/app/demos/FlushDemo.tsx) is the request button, the mode select, and the backend view.
+- [`instrumentation.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/instrumentation.ts) is the production `flush`: `flushTracing` calls `forceFlush` on the one shared tracer provider, a no-op when none was registered, and logs instead of throwing. Both of its processors wrap a `BatchSpanProcessor`. The comment above it is the canonical explanation: the batch timer routinely loses the race against the freeze under this app's sporadic traffic, and any call other than through `after()` is not guaranteed to export.
+- [`whatsapp/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts) emits the `webhook.*` spans and has `after(() => flushTracing())` in its `finally`, so it runs on the ack and on every error path alike.
+- [`inngest/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/inngest/route.ts) is where the steps run and emit their spans. The exported `POST` calls `after(() => flushTracing())` and then hands the request to the serve handler.
+- [`main.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/main.py) is the FastAPI version. `flush_tracing_middleware` awaits `call_next`, then flushes inside its own `try`, so a flush can never change a response, and returns the response untouched. Its comment says why a middleware flush was chosen over a `SimpleSpanProcessor`: one Axiom round trip per request instead of one per span, with batching kept inside the request. The lifespan's shutdown flush, with a 400 ms budget under the platform's 500 ms SIGTERM window, is belt and braces only.
+- [`tracing.py`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/telegram-router/app/tracing.py) is `flush_tracing`: `force_flush` with a 2 second budget, run in a thread so the synchronous exporter does not stall the event loop, a no-op when the provider is the API's default, and swallowed on failure.
+
+## Pitfalls
+
+- **Spans never arrive in production, all of them arrive locally.** No flush. Schedule one in `after()`. See Wrong and right above.
+- **Every response got slower by the exporter's latency.** The flush is awaited before the response. Move it into `after()`. See Wrong and right above.
+- **Some requests' spans arrive, others' do not.** The flush is fire and forget. Register it with the platform. See Wrong and right above.
+- **A request fails when the tracing backend is down.** The flush throws into the handler. It must swallow and log; export is best effort.
+- **The flush runs, and the spans still do not arrive.** They were emitted by a different process than the one that flushed, for example a worker, or they end after the flush, such as a span closed in a `finally` that runs later than the `after` registration. Flush where the spans end, after they end.
+- **Spans from one request arrive with the next request's batch, minutes later.** The process thawed with the old queue intact and the next flush took both. Harmless for the backend, confusing for anyone reading timestamps; the fix is the same flush.
+- **The middleware flush holds a webhook response open until the sender gives up and retries.** The flush has no timeout and the exporter is stalled. Bound it, as the FastAPI version does with 2 seconds, and let the sender's retry be a flush failure, not a duplicate webhook.
+- **Two copies of the tracer provider, one flushed and one not.** The instrumentation module was loaded twice, by hot reload or a second bundle, and the route's `flush` reached a different copy. Keep the provider on a process-global key, as the production module does, so every copy flushes the same one.
+
+## When not to use
+
+- The process stays up between requests, such as a long-running server or a worker. The batch timer fires; let it.
+- The exporter is synchronous per span, a `SimpleSpanProcessor`. Nothing is queued, so there is nothing to flush, at the cost of a round trip per span.
+- The route emits no spans of its own and the framework's automatic spans are not wanted. Then there is nothing in the queue worth a round trip.
+
+## Code
+
+<CodeLinks />
