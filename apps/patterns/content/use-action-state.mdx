@@ -1,0 +1,468 @@
+---
+title: Queued actions with useActionState
+kind: atom
+summary: A component must run a user action with a side effect, show that it is pending, and keep its result as state, in order, even when clicks arrive faster than the server answers.
+tags:
+  - use-action-state
+  - actions
+  - transitions
+  - forms
+  - server-functions
+code:
+  - path: apps/patterns/src/lib/action-state/quantity.ts
+    ref: ab0035d4ff2bf5385184f4ada6f0900516f01fbb
+    note: The reducer, one call at a time from prevState, reporting each call to a log; an aborted call answers at once, a thrown error becomes an error state.
+  - path: apps/patterns/src/lib/action-state/fake-api.ts
+    ref: ab0035d4ff2bf5385184f4ada6f0900516f01fbb
+    note: The fake save with a 1 s delay; the wait rejects with an AbortError as soon as the signal aborts.
+  - path: apps/patterns/src/lib/action-state/actions.ts
+    ref: ab0035d4ff2bf5385184f4ada6f0900516f01fbb
+    note: The "use server" reducer with (prevState, formData), an in-memory count, serializable state in and out.
+  - path: apps/patterns/src/app/demos/ActionStateDemo.tsx
+    ref: ab0035d4ff2bf5385184f4ada6f0900516f01fbb
+    note: Three steppers over one reducer, every dispatch inside startTransition, useOptimistic, the AbortController, and the form bound to the Server Function.
+  - path: apps/website/src/app/(main)/shop/sell/ui/SellerForm.tsx
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: A <form action={formAction}> over useActionState; the reducer takes (prevState, formData), calls Server Functions, and returns the next form state.
+  - path: apps/website/src/app/(main)/shop/sell/actions.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The Server Functions that reducer calls; each returns a plain result object that becomes the next state.
+verifiedIn:
+  - 204
+updated: 2026-10-01
+---
+
+import { ActionStateDemo } from "@/app/demos/ActionStateDemo";
+
+## Problem
+
+A button sends a request. The page wants the result as state, a pending indicator while the request runs, and the right answer when the visitor clicks three times fast.
+
+By hand that is a `useState` for the value, another for the pending flag, and an async handler. Three clicks start three requests at once, each from the same stale value. The responses land in any order, and the last one to arrive wins. The pending flag turns off after the first response, while two requests are still running.
+
+`useActionState` fixes the order. You give it a reducer: a function that takes the last state and an action and returns the next state. React runs that reducer one call at a time, and tells you while any call is still running.
+
+## Mechanism
+
+Here is what happens, in order.
+
+1. Your component calls `useActionState(updateQuantity, 0)`. React returns three things: the current state, a `dispatchAction` function, and an `isPending` flag.
+2. A click handler calls `dispatchAction(payload)` inside `startTransition`. A Transition is an update that React may finish in the background while the old screen stays on. Dispatching inside one is what lets `isPending` move.
+3. React queues the dispatch. It runs the reducer calls one at a time, in the order they were dispatched. Each call receives the result of the previous call as `prevState`. The first receives the initial state. The reducer may be async and may have side effects. That is the difference from `useReducer`, whose reducer must be pure.
+4. `isPending` is true from the first dispatch until the last queued call has returned. Meanwhile the component keeps rendering the old state. When a call returns, React re-renders with its result, as a Transition. While several Actions are still running, React batches their results and commits them together, so a burst of clicks shows the old state until the last call returns.
+5. If a reducer call throws, React drops every call queued after it and shows the nearest error boundary. When the later calls should still run, catch inside the reducer and return an error state.
+6. Pass `dispatchAction` as a `<form action>`. React wraps the submission in a Transition for you. The reducer receives `(prevState, formData)`, and the form's fields reset when the submission ends.
+7. With a Server Function as the reducer, React renders the form so that it submits as a plain POST before the JavaScript has loaded. The server runs the reducer and sends the page back with the new state. The optional `permalink` argument only chooses which page URL that POST lands on, and Next handles it for you.
+
+Two things follow from step 3.
+
+Five fast clicks take five seconds. React has to wait for one call to return before it can hand the result to the next. The optimistic and cancelling versions below are the two ways out.
+
+The reducer is where the side effect lives. The component only describes what it wants to change, and the reducer decides how.
+
+### Try it
+
+Press Add five times fast on each stepper. The queued one shows 0 for five seconds and then 5. Its log fills one line per second, because the reducer reports each call as it ends, while React holds the batched state until the queue drains. The optimistic one moves at once and settles. The cancelling one moves at once and saves once. The form at the bottom posts to a Server Function. Turn JavaScript off and it still works.
+
+<ActionStateDemo />
+
+## Pattern
+
+The files below are a working app. Paste them into a fresh Next project, open `/`, and press Add five times fast. The example grows in three steps, and the names never change.
+
+### Client queue
+
+The fake API stands in for a server call. It answers a second later with the quantity it was given.
+
+```ts title="app/api.ts"
+export async function saveQuantity(quantity: number) {
+  // Stands in for a request that stores the quantity and echoes it back
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  return quantity;
+}
+```
+
+The delay is the point. It makes the queue visible.
+
+The component owns the reducer and dispatches to it from two buttons.
+
+```tsx title="app/Stepper.tsx"
+"use client";
+
+import { startTransition, useActionState } from "react";
+import { saveQuantity } from "./api";
+
+type Payload = { type: "ADD" | "REMOVE" };
+
+async function updateQuantity(prevState: number, payload: Payload) {
+  const next = payload.type === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+
+export function Stepper() {
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, 0);
+
+  const step = (type: Payload["type"]) => {
+    // Outside a Transition, isPending never moves
+    startTransition(() => dispatchAction({ type }));
+  };
+
+  return (
+    <p>
+      {quantity} {isPending ? "saving" : ""}
+      <button type="button" onClick={() => step("ADD")}>
+        Add
+      </button>
+      <button type="button" onClick={() => step("REMOVE")}>
+        Remove
+      </button>
+    </p>
+  );
+}
+```
+
+`updateQuantity` runs once per click, in click order, each time with the quantity the previous call saved. Five fast clicks show `0 saving` for five seconds and then `5`. React batches the ongoing Actions, so the screen commits once, when the last call has returned. Nothing races, because nothing runs at the same time.
+
+### Optimistic and cancel
+
+The queue is correct but slow to look at. `useOptimistic` shows the expected value at once. It takes the real state and gives back a copy you may change inside a Transition. When the Transition ends, the copy snaps back to the real state.
+
+```tsx title="app/Stepper.tsx"
+"use client";
+
+import { startTransition, useActionState, useOptimistic } from "react";
+import { saveQuantity } from "./api";
+
+type Payload = { type: "ADD" | "REMOVE" };
+
+async function updateQuantity(prevState: number, payload: Payload) {
+  const next = payload.type === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+
+export function Stepper() {
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, 0);
+  const [optimisticQuantity, setOptimisticQuantity] = useOptimistic(quantity);
+
+  const step = (type: Payload["type"]) => {
+    startTransition(() => {
+      // Shown at once; the real quantity catches up when the queue drains
+      setOptimisticQuantity((current) => (type === "ADD" ? current + 1 : Math.max(0, current - 1)));
+      dispatchAction({ type });
+    });
+  };
+
+  return (
+    <p>
+      {optimisticQuantity} {isPending ? "saving" : ""}
+      <button type="button" onClick={() => step("ADD")}>
+        Add
+      </button>
+      <button type="button" onClick={() => step("REMOVE")}>
+        Remove
+      </button>
+    </p>
+  );
+}
+```
+
+The number now moves on every click. The reducer still runs one call at a time, so `saving` stays on for five seconds after five clicks. The optimistic value takes the updater form, `current + 1`, because several clicks can land before the first render.
+
+To make the queue drain fast, cancel the calls that a later click made pointless. The API takes an `AbortSignal` and stops waiting when it aborts.
+
+```ts title="app/api.ts"
+export async function saveQuantity(quantity: number, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, 1000);
+    // A later click aborted this call: stop waiting so the queue can move on
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
+  return quantity;
+}
+```
+
+An aborted call rejects instead of resolving a second later. Nothing is saved for it.
+
+The component carries an `AbortController` in the payload. Each click aborts the call before it, and the reducer answers an aborted call at once.
+
+```tsx title="app/Stepper.tsx"
+"use client";
+
+import { startTransition, useActionState, useOptimistic, useRef } from "react";
+import { saveQuantity } from "./api";
+
+type Payload = { type: "ADD" | "REMOVE"; signal: AbortSignal };
+
+async function updateQuantity(prevState: number, payload: Payload) {
+  const next = payload.type === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  try {
+    return await saveQuantity(next, payload.signal);
+  } catch (error) {
+    // Aborted by a later click: answer at once, and the next call builds on this value
+    if (payload.signal.aborted) return next;
+    throw error;
+  }
+}
+
+export function Stepper() {
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, 0);
+  const [optimisticQuantity, setOptimisticQuantity] = useOptimistic(quantity);
+  const controller = useRef<AbortController | null>(null);
+
+  const step = (type: Payload["type"]) => {
+    startTransition(() => {
+      setOptimisticQuantity((current) => (type === "ADD" ? current + 1 : Math.max(0, current - 1)));
+      controller.current?.abort();
+      controller.current = new AbortController();
+      dispatchAction({ type, signal: controller.current.signal });
+    });
+  };
+
+  return (
+    <p>
+      {optimisticQuantity} {isPending ? "saving" : ""}
+      <button type="button" onClick={() => step("ADD")}>
+        Add
+      </button>
+      <button type="button" onClick={() => step("REMOVE")}>
+        Remove
+      </button>
+    </p>
+  );
+}
+```
+
+Five fast clicks now queue five calls, and four of them are already aborted when their turn comes. Each returns the quantity it meant to save, without waiting, and the fifth saves `5`. The whole burst takes one second and one request. This is only safe because the API stores the whole quantity. A call that adds one on the server cannot be cancelled this way: the server may have applied it before the abort arrived.
+
+### Form and Server Function
+
+The same reducer can run on the server. Move it to a file marked `"use server"`, which makes every exported function a Server Function: the browser gets a reference, and calling it sends a request. The reducer now receives the submitted `FormData` as its second argument.
+
+```ts title="app/actions.ts"
+"use server";
+
+import { saveQuantity } from "./api";
+
+export async function updateQuantity(prevState: number, formData: FormData) {
+  // The previous state comes first; the submitted fields are the second argument
+  const next = formData.get("type") === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+```
+
+`prevState` arrives from the browser with the form, so the server treats it as input, like any field.
+
+The form passes `dispatchAction` as its `action`. Two submit buttons share a name, and the one that was pressed puts its value in the form data.
+
+```tsx title="app/StepperForm.tsx"
+"use client";
+
+import { useActionState } from "react";
+import { updateQuantity } from "./actions";
+
+export function StepperForm() {
+  // 0 is serializable: plain data that can cross the wire to the Server Function and back
+  const [quantity, formAction, isPending] = useActionState(updateQuantity, 0);
+
+  return (
+    <form action={formAction}>
+      {quantity} {isPending ? "saving" : ""}
+      <button type="submit" name="type" value="ADD">
+        Add
+      </button>
+      <button type="submit" name="type" value="REMOVE">
+        Remove
+      </button>
+    </form>
+  );
+}
+```
+
+There is no `startTransition` here. The `action` prop wraps the submission in a Transition for you. Before hydration, which is when React attaches to the server-rendered HTML, the form submits as a plain POST. The server runs `updateQuantity` and renders the page again with the new quantity. The same happens with JavaScript turned off.
+
+A page mounts both components.
+
+```tsx title="app/page.tsx"
+import { Stepper } from "./Stepper";
+import { StepperForm } from "./StepperForm";
+
+export default function Page() {
+  return (
+    <>
+      <Stepper />
+      <StepperForm />
+    </>
+  );
+}
+```
+
+The page is a Server Component and prerenders. The two components run in the browser because of their `"use client"` line, and `updateQuantity` in `actions.ts` runs on the server.
+
+### Wrong and right
+
+`isPending` never moves.
+
+🔴 `dispatchAction` is called straight from the click handler. Outside a Transition, React cannot tell the component that an Action is running. This is `step` in `Stepper`.
+
+```tsx title="app/Stepper.tsx"
+const step = (type: Payload["type"]) => {
+  dispatchAction({ type });
+};
+```
+
+✅ Wrap the call in `startTransition`. Now the dispatch is an Action, and `isPending` is true until the queue drains.
+
+```tsx title="app/Stepper.tsx"
+const step = (type: Payload["type"]) => {
+  startTransition(() => dispatchAction({ type }));
+};
+```
+
+One click fails, and every click after it does nothing.
+
+🔴 The reducer lets the error through. React drops every call queued behind the one that threw and shows the nearest error boundary. This is `updateQuantity` in `Stepper`.
+
+```tsx title="app/Stepper.tsx"
+async function updateQuantity(prevState: number, payload: Payload) {
+  const next = payload.type === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+```
+
+✅ Catch inside the reducer and return an error state. The state becomes an object, so the initial state does too: `useActionState(updateQuantity, { quantity: 0, error: null })`.
+
+```tsx title="app/Stepper.tsx"
+async function updateQuantity(
+  prevState: { quantity: number; error: string | null },
+  payload: Payload,
+) {
+  const next =
+    payload.type === "ADD" ? prevState.quantity + 1 : Math.max(0, prevState.quantity - 1);
+  try {
+    return { quantity: await saveQuantity(next), error: null };
+  } catch {
+    return { quantity: prevState.quantity, error: "Could not save" };
+  }
+}
+```
+
+`formData.get is not a function`.
+
+🔴 The reducer reads the form data from its first argument. With `useActionState`, the first argument is the previous state. This is the signature in `actions.ts`.
+
+```ts title="app/actions.ts"
+export async function updateQuantity(formData: FormData) {
+  const next = formData.get("type") === "ADD" ? 1 : 0;
+  return saveQuantity(next);
+}
+```
+
+✅ The previous state comes first, the form data second.
+
+```ts title="app/actions.ts"
+export async function updateQuantity(prevState: number, formData: FormData) {
+  const next = formData.get("type") === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+```
+
+The quantity does not go back to zero.
+
+🔴 The component expects a new initial state to reset it. `useActionState` reads `initialState` on the first render only, and there is no reset function. This is the hook call in `Stepper`, now with a prop.
+
+```tsx title="app/Stepper.tsx"
+export function Stepper({ initialQuantity }: { initialQuantity: number }) {
+  // Read once, on the first render; a new prop value changes nothing
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, initialQuantity);
+```
+
+✅ Make `null` a reset signal the reducer understands, and dispatch it inside a Transition. Or give the component a `key` that changes, so React mounts a fresh one.
+
+```tsx title="app/Stepper.tsx"
+async function updateQuantity(prevState: number, payload: Payload | null) {
+  // null is the reset signal; it runs in order with the queued calls
+  if (payload === null) return 0;
+  const next = payload.type === "ADD" ? prevState + 1 : Math.max(0, prevState - 1);
+  return saveQuantity(next);
+}
+
+const reset = () => startTransition(() => dispatchAction(null));
+```
+
+`Cannot update action state while rendering`.
+
+🔴 `dispatchAction` is called in the component body. It schedules an update, which renders the component, which calls it again, without end. This is the top of `Stepper`.
+
+```tsx title="app/Stepper.tsx"
+export function Stepper() {
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, 0);
+  // Runs on every render, and every run causes another render
+  dispatchAction({ type: "ADD" });
+```
+
+✅ Dispatch only from an event, such as a click or a form submission.
+
+```tsx title="app/Stepper.tsx"
+export function Stepper() {
+  const [quantity, dispatchAction, isPending] = useActionState(updateQuantity, 0);
+
+  const step = (type: Payload["type"]) => {
+    startTransition(() => dispatchAction({ type }));
+  };
+```
+
+`An async function with useActionState was called outside of a transition`.
+
+🔴 The handler calls `dispatchAction` on its own, with an async reducer. React logs this error in development because the dispatch is not part of any Action. This is the button in `Stepper`.
+
+```tsx title="app/Stepper.tsx"
+<button type="button" onClick={() => dispatchAction({ type: "ADD" })}>
+  Add
+</button>
+```
+
+✅ Either wrap the call in `startTransition`, as above, or hand `dispatchAction` to something that calls it inside a Transition for you: a `<form action>`.
+
+```tsx title="app/StepperForm.tsx"
+<form action={formAction}>
+  <button type="submit" name="type" value="ADD">
+    Add
+  </button>
+</form>
+```
+
+### In this repo
+
+- [`quantity.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/ab0035d4ff2bf5385184f4ada6f0900516f01fbb/apps/patterns/src/lib/action-state/quantity.ts) is `updateQuantity` from the cancelling step. `createQuantityReducer` takes the save function and a log callback, called as each call ends, so the page can list the calls live while the batched state waits. An already aborted call answers at once, an abort mid-flight returns the intended quantity, and a thrown error becomes an error state instead of a throw.
+- [`fake-api.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/ab0035d4ff2bf5385184f4ada6f0900516f01fbb/apps/patterns/src/lib/action-state/fake-api.ts) is `saveQuantity` with the delay as an option. `sleep` rejects with an `AbortError` as soon as the signal aborts and clears its timer.
+- [`actions.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/ab0035d4ff2bf5385184f4ada6f0900516f01fbb/apps/patterns/src/lib/action-state/actions.ts) is the `"use server"` reducer, `updateQuantityForm(prevState, formData)`. It keeps the count in the server's memory, so a page without JavaScript still shows the new count after a POST.
+- [`ActionStateDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/ab0035d4ff2bf5385184f4ada6f0900516f01fbb/apps/patterns/src/app/demos/ActionStateDemo.tsx) is `Stepper` three times over one reducer, each dispatch inside `startTransition`, `useOptimistic` for the second and third, the `AbortController` in a ref for the third, and `StepperForm` bound to the Server Function.
+- [`SellerForm.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/website/src/app/(main)/shop/sell/ui/SellerForm.tsx>) is `StepperForm` in production. `runSubmit(prevState, formData)` is the reducer, `<form action={formAction}>` dispatches it, `isPending` disables the fieldsets, and the fields are re-keyed per attempt because the form resets when the submission ends.
+- [`actions.ts`](<https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/website/src/app/(main)/shop/sell/actions.ts>) holds the Server Functions that reducer calls. Each returns a plain result object, never throws to the caller, and the reducer turns it into the next form state.
+
+## Pitfalls
+
+- **`isPending` never moves.** `dispatchAction` was called outside a Transition. Wrap it in `startTransition`, or pass it to a `<form action>`. See Wrong and right above.
+- **One click fails, and every click after it does nothing.** The reducer threw. React drops every call queued behind it. Catch inside the reducer and return an error state. See Wrong and right above.
+- **`formData.get is not a function`.** The reducer took the form data as its first argument. The first argument is the previous state; the form data is the second. See Wrong and right above.
+- **The state does not reset.** There is no reset function, and `initialState` is read once. Dispatch `null` and handle it in the reducer, or change the component's `key`. A `<form action>` resets the form's fields, not this state. See Wrong and right above.
+- **`Cannot update action state while rendering`.** `dispatchAction` was called in the component body. Call it from an event. See Wrong and right above.
+- **`An async function with useActionState was called outside of a transition`.** The same cause as the first item, reported as an error in development. See Wrong and right above.
+- **Two steppers on one page wait for each other.** React batches ongoing Actions together, even across hooks. React calls this a limitation that may be lifted. Until then, do not expect two `useActionState` queues to run side by side.
+- **Five fast clicks take five seconds.** The queue is strict by design: each call needs the previous result. Show the expected value with `useOptimistic`, or cancel the calls a later click made pointless with an `AbortController` in the payload.
+- **A cancelled call still changed the server.** Aborting stops the wait, not the server. Only cancel when the call can be ignored or repeated, such as a save of the whole value. Never cancel a call that adds or charges.
+- **The server ignores the count the page shows.** `prevState` for a Server Function comes from the browser. Validate it like a form field, or keep the real value on the server and return that.
+
+## When not to use
+
+- Independent requests that may run at the same time, such as deleting three rows. The queue would run them one after another. Use `useState` and `useTransition`, one per request.
+- State React owns with no side effect, such as an open menu or a selected tab. Use `useState`, or `useReducer` when several values change together.
+- Data fetching. A query library such as React Query, or `use(promise)` in a Server Component, handles loading, errors and caching. A reducer queue has none of that.
+
+## Code
+
+<CodeLinks />
