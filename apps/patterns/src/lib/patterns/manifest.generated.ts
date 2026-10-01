@@ -4,7 +4,8 @@ import * as doc0 from "@content/infinite-scrolling.mdx";
 import * as doc1 from "@content/server-prefetch-hydration.mdx";
 import * as doc2 from "@content/sse-route-handler.mdx";
 import * as doc3 from "@content/suspense-without-flash.mdx";
-import * as doc4 from "@content/use-sync-external-store.mdx";
+import * as doc4 from "@content/use-action-state.mdx";
+import * as doc5 from "@content/use-sync-external-store.mdx";
 
 export const manifest = [
   {
@@ -28,8 +29,13 @@ export const manifest = [
     Content: doc3.default,
   },
   {
-    slug: "use-sync-external-store",
+    slug: "use-action-state",
     meta: doc4.frontmatter,
     Content: doc4.default,
+  },
+  {
+    slug: "use-sync-external-store",
+    meta: doc5.frontmatter,
+    Content: doc5.default,
   },
 ] as const;
