@@ -1,0 +1,298 @@
+---
+title: Durable agent turn
+kind: composite
+summary: One agent turn must survive crashes, retries and a pause of hours without repeating a side effect, losing its trace or writing its reply twice.
+tags:
+  - agent-harness
+  - durable-execution
+  - inngest
+  - opentelemetry
+uses:
+  - manual-tool-loop
+  - step-memoized-side-effects
+  - idempotent-write-by-trace-key
+  - trace-anchor-across-steps
+  - flush-before-freeze
+code:
+  - path: apps/patterns/src/lib/durable-turn/turn.ts
+    ref: 31afee13bd47f5a86fe18be3974eb19907afaf5b
+    note: The composite on the harness runtime; the ingress root span, every side effect in a stepped span, the gated tool, the keyed reply row and the resume.
+  - path: apps/patterns/src/app/demos/DurableTurnDemo.tsx
+    ref: 31afee13bd47f5a86fe18be3974eb19907afaf5b
+    note: The live demo; Receive, Approve, Reject, Replay, a retried reply write, the runner log, the span tree and the messages table.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The production orchestrator; the anchor and correlation id off the event, the loop, then record, send, delivery status and memory fold as stepped spans.
+  - path: apps/guest-communication-agent/src/agent/run-agent-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The reasoning loop inside the function; the turn's own child span, the hoisted prompt step, a step per model round, gated tools decided before dispatch.
+  - path: apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The ingress; the root span, the inbound row, the event with the anchor and the correlation id, the ack, and the flush in after().
+  - path: apps/guest-communication-agent/src/app/api/inngest/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: Where the steps run; the flush scheduled in after() around the serve handler.
+verifiedIn:
+  - 209
+updated: 2026-10-01
+---
+
+import { DurableTurnDemo } from "@/app/demos/DurableTurnDemo";
+
+## Problem
+
+A conversational agent's turn is one logical unit: a message arrives, the model reasons over it with tools, a reply goes out. In production that unit is spread over time and processes. The request that receives the message must ack in milliseconds. The reasoning runs on a durable runner that may replay it after a crash or a retry. A tool may need a human's yes, and the yes may take a day and arrive as a different request on a different instance. The reply row is written by a step that can run twice. The spans that explain all this are emitted from short-lived processes that freeze after every response.
+
+Each of those is one problem with one atom. Together they have to agree on three things: what travels in the trigger event, what is a step, and what is a span's parent. This composite is that agreement, in one orchestrating function.
+
+## Mechanism
+
+Here is what happens, in order, across the five atoms.
+
+1. The ingress request opens the root span of the turn and ends it at once; its anchor, two ids, is the turn's identity from here on. The request records the inbound message as a user row, then starts the durable function with the conversation id, a fresh correlation id and the anchor in the trigger event, and acks. Its spans flush in `after()`. That is [Trace anchor across steps](/p/trace-anchor-across-steps) and [Flush before freeze](/p/flush-before-freeze).
+2. The function's first step opens one child span under the root, `turn`, and memoizes its anchor. Every later span of the turn nests under this one, so the trace reads as ingress, then the turn, then the turn's parts.
+3. The function loads the history in a step. The history already ends with the inbound message; the ingress wrote it. Plain code builds the message list from it, which is safe because it is deterministic over memoized values. That is [Step memoized side effects](/p/step-memoized-side-effects).
+4. The loop calls the model in a stepped span per round and dispatches the tools it asks for itself, one stepped span per call, then appends one batched tool message. That is [The manual tool loop](/p/manual-tool-loop) with each of its side effects in a step.
+5. One tool is gated. The loop does not run it. It nudges the approver in a step whose span records its own anchor under the correlation id, then waits for the decision event matched on that id. The invocation ends. That is [An approval gate on waitForEvent](/p/approval-gate-wait-for-event), which this composite calls without listing, through the trace anchor atom's single-use row.
+6. The decision arrives on the resume route. It consumes the anchor row, records the decision as a child of the gate span, sends the event, and flushes in `after()`. The runner replays the function: every step so far answers from its memo and emits no span, the wait returns the decision, and the gated tool's run half executes in its own stepped span only on a yes. On a no the model gets the not-approved object as the tool result and answers with it.
+7. The model answers with text. The function records the reply row in a stepped span, keyed by the root's trace id. If that step is retried after the insert landed, the conflict selects the existing row and the step returns the same id. That is [Idempotent write by trace key](/p/idempotent-write-by-trace-key).
+8. The function sends the reply in its own step and returns. A replay now, for any reason, runs the body from the top, finds every step memoized, repeats no side effect, emits no span, and returns the same result.
+
+The two ids in the event have different jobs and never mix: the trace anchor is a span parent, the correlation id is the key the wait matches on and the row is stored under.
+
+### Try it
+
+Press Receive message. The ingress root and `record-inbound` appear, then `turn` with `load-history`, `model-1`, the tool call, `model-2` and `notify-approver` under it, and the function pauses. Press Approve: `decision` nests under `notify-approver`, `send-link`, `model-3`, `record-reply` and `send-reply` follow under `turn`, the table gains the assistant row with the turn's trace id, and the reply is sent once. Press Replay: another invocation, every step memoized, no new span, row or send. Press Retry the reply write: the same row comes back. Reset and try Reject: no `send-link`, and the model still replies.
+
+<DurableTurnDemo />
+
+## Combines
+
+<Combines />
+
+## Pattern
+
+The four files below, with `lib/steps.ts` from [An approval gate on waitForEvent](/p/approval-gate-wait-for-event), `lib/tracing.ts` from [Trace anchor across steps](/p/trace-anchor-across-steps), `lib/tools.ts` from [The manual tool loop](/p/manual-tool-loop) and `lib/db.ts` and `lib/messages.ts` from [Idempotent write by trace key](/p/idempotent-write-by-trace-key) unchanged, are a working app. Paste them into a fresh Next project and drive it with `curl`. The ingress route below replaces the write atom's route at the same path.
+
+The model script asks for a plain tool, then the gated one, then answers.
+
+```ts title="lib/model.ts"
+export type ToolCall = { id: string; name: string; input: Record<string, unknown> };
+
+export type Message =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | ToolCall[] }
+  | { role: "tool"; content: Array<{ id: string; name: string; output: unknown }> };
+
+export type ModelReply = { text: string; toolCalls: ToolCall[] };
+
+const dates = { from: "2026-10-06", to: "2026-10-08" };
+
+// Stands in for a model call with schema-only tools. It counts the tool messages it sees, so it is deterministic
+export async function generate(messages: Message[]): Promise<ModelReply> {
+  const round = messages.filter((message) => message.role === "tool").length + 1;
+  if (round === 1) {
+    return { text: "", toolCalls: [{ id: "call_1", name: "check_dates", input: dates }] };
+  }
+  if (round === 2) {
+    return { text: "", toolCalls: [{ id: "call_2", name: "send_link", input: dates }] };
+  }
+  return { text: "The 6th to the 8th is free. The link is on its way.", toolCalls: [] };
+}
+```
+
+The turn is the orchestrating file. Everything in it is a step, every step opens its span under the anchor, and the gated tool pauses it.
+
+```ts title="lib/turn.ts"
+import { allMessages } from "./db";
+import { recordReply } from "./messages";
+import { generate, type Message, type ToolCall } from "./model";
+import { send, start, type Step } from "./steps";
+import { runTool } from "./tools";
+import { type Anchor, anchorOf, recordAnchor, withSpan } from "./tracing";
+
+export const DECISION_EVENT = "request.decided";
+export const outbox: string[] = [];
+
+const MAX_ROUNDS = 4;
+const FALLBACK_TEXT = "Sorry, I could not process that. Please try again shortly.";
+const NOT_APPROVED = { approved: false, message: "This action was not approved. Do not retry it." };
+
+// A span inside the step, under the anchor: created once, parented right, even on a replay
+function steppedSpan<T>(step: Step, id: string, anchor: Anchor, fn: () => Promise<T> | T) {
+  return step.run(id, () => withSpan(id, anchor, fn));
+}
+
+function toolResultMessage(calls: ToolCall[], outputs: unknown[]): Message {
+  return {
+    role: "tool",
+    content: calls.map((call, index) => ({ id: call.id, name: call.name, output: outputs[index] })),
+  };
+}
+
+async function turn(step: Step, conversation: string, correlationId: string, root: Anchor) {
+  // One child of the root per turn; everything below nests under it
+  const anchor = await step.run("turn", () => withSpan("turn", root, (span) => anchorOf(span)));
+
+  const history = await steppedSpan(step, "load-history", anchor, () =>
+    allMessages()
+      .filter((row) => row.conversation === conversation)
+      .map((row): Message => ({ role: row.role, content: row.content })),
+  );
+  // The history already ends with this turn's inbound message; the ingress recorded it
+  let messages = history;
+  let text = FALLBACK_TEXT;
+
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const reply = await steppedSpan(step, `model-${round}`, anchor, () => generate(messages));
+    if (reply.toolCalls.length === 0) {
+      text = reply.text.trim() === "" ? FALLBACK_TEXT : reply.text;
+      break;
+    }
+
+    const outputs: unknown[] = [];
+    for (const call of reply.toolCalls) {
+      if (call.name !== "send_link") {
+        outputs.push(
+          await steppedSpan(step, `tool-${call.id}`, anchor, () => runTool(call.name, call.input)),
+        );
+        continue;
+      }
+      // The gated tool: nudge in one step, wait in another, run only after a yes
+      await step.run("notify-approver", () =>
+        withSpan("request-approval", anchor, (span) => {
+          recordAnchor(correlationId, anchorOf(span));
+          outbox.push(`Approve sending the link? (${correlationId})`);
+          return true;
+        }),
+      );
+      const decision = await step.waitForEvent("wait-for-decision", {
+        event: DECISION_EVENT,
+        match: "data.correlationId",
+        timeout: 20_000,
+      });
+      const approved = decision !== null && decision.data.approved === true;
+      outputs.push(
+        approved
+          ? await steppedSpan(step, "send-link", anchor, () => ({
+              approved: true,
+              url: `/conversations/${conversation}/link`,
+            }))
+          : NOT_APPROVED,
+      );
+    }
+    messages = [
+      ...messages,
+      { role: "assistant", content: reply.toolCalls },
+      toolResultMessage(reply.toolCalls, outputs),
+    ];
+  }
+
+  // Keyed by the trace id: a retry of this step returns the row the first attempt wrote
+  const row = await steppedSpan(step, "record-reply", anchor, () =>
+    recordReply(conversation, text, root.traceId),
+  );
+  await steppedSpan(step, "send-reply", anchor, () => {
+    outbox.push(`${conversation}: ${text}`);
+    return true;
+  });
+  return { text, rowId: row.id };
+}
+
+export function startTurn(conversation: string, correlationId: string, root: Anchor) {
+  return start(correlationId, { name: "message.received", data: { correlationId } }, ({ step }) =>
+    turn(step, conversation, correlationId, root),
+  );
+}
+
+export function decide(correlationId: string, approved: boolean) {
+  return send({ name: DECISION_EVENT, data: { correlationId, approved } });
+}
+```
+
+`turn` takes the anchor and the correlation id as arguments and never looks for either anywhere else. The step ids carry the round or the call id, so no two steps share one. `outbox` is the list of things that went out into the world, which a replay must not add to.
+
+The ingress opens the root, records the inbound message, starts the turn, and flushes after the ack.
+
+```ts title="app/api/messages/route.ts"
+import { after } from "next/server";
+import { insertMessage } from "../../../lib/db";
+import { status } from "../../../lib/steps";
+import { anchorOf, exported, flush, withSpan } from "../../../lib/tracing";
+import { outbox, startTurn } from "../../../lib/turn";
+
+export async function POST(request: Request) {
+  const { conversation, text } = await request.json();
+  const correlationId = crypto.randomUUID();
+  // The root span of the whole turn, in the handler that runs exactly once. Its anchor is data from here on
+  const anchor = await withSpan("message.received", null, async (span) => {
+    await withSpan("record-inbound", anchorOf(span), () =>
+      insertMessage({ conversation, role: "user", content: text, traceId: null }),
+    );
+    return anchorOf(span);
+  });
+  await startTurn(conversation, correlationId, anchor);
+  // The spans above and the steps' spans are queued; they go out once the response is sent
+  after(() => flush());
+  return Response.json({ correlationId, runs: status(), outbox });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), outbox, spans: exported });
+}
+```
+
+The POST returns with the run suspended on the gate. The GET shows the runs, what went out, and the spans that reached the backend.
+
+The resume route rejoins the trace, sends the decision, and flushes.
+
+```ts title="app/api/messages/[id]/decide/route.ts"
+import { after } from "next/server";
+import { consumeAnchor, flush, withSpan } from "../../../../../lib/tracing";
+import { decide } from "../../../../../lib/turn";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const { approved } = await request.json();
+  // Hours later, another process: the single-use row keyed by the correlation id says where this belongs
+  const gate = consumeAnchor(id);
+  await withSpan("decision", gate, (span) => {
+    span.attributes["correlation.id"] = id;
+  });
+  await decide(id, approved === true);
+  after(() => flush());
+  return Response.json({ ok: true, nested: gate !== null });
+}
+```
+
+Receive a message with `curl -X POST localhost:3000/api/messages -H 'content-type: application/json' -d '{"conversation":"c1","text":"Is the 6th to the 8th free? Send me the link."}'`. The response carries the correlation id and a run whose log ends in `wait-for-decision: suspended`, with one line in the outbox. Approve with `curl -X POST localhost:3000/api/messages/<correlationId>/decide -H 'content-type: application/json' -d '{"approved":true}'`. Then `curl localhost:3000/api/messages` shows the run done with the reply text, two lines in the outbox, and one trace in which `decision` has `request-approval` as its parent and `record-reply` and `send-reply` have `turn` as theirs.
+
+### In this repo
+
+- [`turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/31afee13bd47f5a86fe18be3974eb19907afaf5b/apps/patterns/src/lib/durable-turn/turn.ts) is `lib/turn.ts` and both routes on the harness runtime: `receiveMessage` is the ingress, `decideTurn` the resume route, and the scripted model from the harness stands in for `lib/model.ts`.
+- [`DurableTurnDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/31afee13bd47f5a86fe18be3974eb19907afaf5b/apps/patterns/src/app/demos/DurableTurnDemo.tsx) is the routes as buttons, with a flush after every action standing in for `after()`.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) is `turn` in production, on Inngest. `runGuestTurn` reads `conversationId`, `correlationId` and `traceAnchor` off the event, calls the loop, derives the reply text by plain code, and then runs `update-turn-trace-io`, `record-reply`, `send-whatsapp-reply`, `update-message-delivery-status` and `fold-memory-summary` as steps. The delivery steps parent to the root anchor on purpose, as siblings of the turn's span, which the comment explains. `recordReply` passes the trace id only when the anchor is valid.
+- [`run-agent-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-agent-turn.ts) is the loop inside it. `start-trace` is the `turn` child span whose id becomes `turnAnchor`; `load-memory` and `load-system-prompt` are the hoisted steps; each round is `model-${stepCount}`; a gated tool goes through its request half before `runTool`, and the not-approved output is returned as the tool result without running it.
+- [`whatsapp/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts) is the ingress: `webhook.turn` as the marker root, the inbound row under `webhook.record_inbound_message`, the event with `traceAnchor` and `correlationId` under `webhook.enqueue_inngest`, an empty TwiML ack, and `after(() => flushTracing())` in the `finally`.
+- [`inngest/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/inngest/route.ts) is where the function's invocations run. Its `POST` schedules the flush with `after()` before the serve handler runs the steps.
+
+## Pitfalls
+
+- **The reply went out twice, or the model was called twice for one round.** A side effect sits outside a step. Every side effect in its own step; see [Step memoized side effects](/p/step-memoized-side-effects).
+- **The turn's spans are in two or three traces.** A span took the ambient active span as its parent. Every span under the anchor from the event; see [Trace anchor across steps](/p/trace-anchor-across-steps).
+- **The spans before the pause arrive, the ones after it do not.** The resume route or the serve endpoint never flushed. Both emit spans; both need `after(() => flush())`; see [Flush before freeze](/p/flush-before-freeze).
+- **Two assistant rows for one turn.** The record step retried and the insert had no key or no conflict handling; see [Idempotent write by trace key](/p/idempotent-write-by-trace-key).
+- **The decision resumed the wrong run, or none.** The wait matched on the trace id, or the resume route sent the event with a different field than the wait matches on. The correlation id is the key; carry it unchanged from the event to the nudge to the decision.
+- **The gated tool ran on a no.** The loop called the run half regardless of the decision. The not-approved object is the tool result; the run half is reached only through a yes.
+- **Two tool calls in one round shared a result.** Their step ids were the same. Put the call id in the id.
+- **The turn resumed after a day with yesterday's date in its prompt.** The date line was inside the memoized prompt step. Derive anything time-dependent in plain code, outside the step, as the production loop does.
+
+## When not to use
+
+- The turn runs in one process, in one request, with no pause and no retries. The [manual tool loop](/p/manual-tool-loop) alone is enough.
+- No tool needs a human. Drop the gate and the anchor row; the rest stays.
+- The runner is not durable, such as a queue that delivers a job once and never replays it. Then steps are just function calls, and the idempotent write is the one atom still worth keeping for the queue's own retries.
+
+## Code
+
+<CodeLinks />

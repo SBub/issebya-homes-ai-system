@@ -1,0 +1,321 @@
+---
+title: Trace anchor across steps
+kind: atom
+summary: No live span survives a durable step or a pause, so the root span's ids travel as data, each step opens its child span from them, and a later request rejoins through a single-use anchor row.
+tags:
+  - agent-harness
+  - durable-execution
+  - opentelemetry
+  - inngest
+code:
+  - path: apps/patterns/src/lib/trace-anchor/anchored-request.ts
+    ref: 2ecfe098cb2f8fe0825d21d29f54d1af1dfe5a10
+    note: The request on the harness runner and tracer; steppedSpan, the gate step recording its anchor, the resume consuming it once, and the two wrong variants.
+  - path: apps/patterns/src/lib/harness/span-exporter.ts
+    ref: 429400f7aac389b9e9ab7e3ce4e788fae9ae5173
+    note: The in-memory tracer; a child under an explicit anchor or the ambient active span, random ids, and a span tree built from parent ids.
+  - path: apps/patterns/src/app/demos/TraceAnchorDemo.tsx
+    ref: 2ecfe098cb2f8fe0825d21d29f54d1af1dfe5a10
+    note: The live demo; Start, Approve, Replay, the span tree from the exporter, and checkboxes for ambient context and a reusable anchor row.
+  - path: apps/guest-communication-agent/src/lib/tracing.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: TraceAnchor, startTraceRoot, withTurnSpan parenting to an anchor via a remote span context, steppedSpan, and the record and consume helpers for anchor rows.
+  - path: apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The ingress; a marker root span whose anchor rides in the event data, and a separate correlation id for the wait.
+  - path: apps/guest-communication-agent/src/app/api/owner-nudges/[correlationId]/answer/route.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The request hours later; consumes the anchor row by correlation id and nests under the gate span, or starts its own root tagged with the id.
+  - path: supabase/migrations/20260814090000_create_missing_info_trace_anchors.sql
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The anchor table; correlation id as primary key, trace and span id, self-cleaning because the reader deletes on read.
+verifiedIn:
+  - 209
+updated: 2026-10-01
+---
+
+import { TraceAnchorDemo } from "@/app/demos/TraceAnchorDemo";
+
+## Problem
+
+Tracing nests spans through ambient context: a span opened inside another's callback becomes its child, because the tracer knows which span is active in this process right now. That works in one process, in one call stack, with no gap in between.
+
+A durable function has gaps everywhere. Each step may run in a fresh invocation, so there is no active span when it starts. A replay runs the function body again, so a span opened there is opened twice. A pause ends the invocation and resumes it hours later, so the span that was active before the pause ended long ago. A reply to the pause arrives as a new request in another process that has only an id in common with the run. Left to ambient context, one turn becomes several small disconnected traces, and the one question tracing exists to answer, what happened in this turn, has no single answer.
+
+The fix is to stop relying on the ambient span and carry the parent as data. A trace anchor is two strings, `{ traceId, spanId }`, the identity of a real span that was emitted once. The request that receives the message opens the root span and puts its anchor in the trigger event. Every step opens its own child span under that anchor, inside the step, so a replay neither re-emits it nor loses its parent. And for the request that arrives hours later with nothing but a correlation id, the step that paused writes its own span's anchor to a row keyed by that id, and the later request reads the row once, nests under it, and deletes it.
+
+### In this app
+
+- The WhatsApp webhook opens a marker root span and puts its anchor in the event that starts the turn. Every step of the turn, the model rounds, the tool calls, recording and sending the reply, parents to that anchor or to a child of it, across every replay.
+- When the agent asks the owner a question and pauses, the gate step writes its span's anchor to a table keyed by the correlation id. The owner's answer lands on a separate route, possibly a day later, which consumes the row and nests the answer's work under the gate span, in the same trace as the guest's message.
+- If the row is missing, the route starts a small disconnected trace tagged with the correlation id, so it can still be found by hand.
+
+## Mechanism
+
+Here is what happens, in order, from the request that receives a message to the decision that arrives later.
+
+1. The request handler runs exactly once per real request, so it may open a real root span. It ends it at once; its job is to exist and to have ids. The handler reads `{ traceId, spanId }` off it: the anchor.
+2. The handler starts the durable function with the anchor in the trigger event's data. The runner stores the event with the run, so every invocation, including every replay, reads the same anchor.
+3. The function's first step calls `step.run("prepare", () => withSpan("prepare", anchor, fn))`. The span is created inside the step, with the anchor as its explicit parent, not whatever is active. On a replay the step is memoized and the span is not created again. The anchor is data; it has no context to lose.
+4. The gate step does the same for its span, and one thing more: it writes its own span's anchor to a row keyed by the request id. Then the function waits for the decision and the invocation ends. No span is open. Nothing is active.
+5. The decision arrives as a new request on a resume route, in a process that has never seen this run. It has the request id, from a path segment or a button payload, and nothing else.
+6. The route consumes the row: a delete that returns the deleted row, so a read and a removal are one operation. With the anchor in hand it opens the decision's span as a child of the gate span. The decision is now inside the turn's trace, in the right place.
+7. The route sends the event. The runner replays the function from the top with the decision memoized under the wait. The steps after the wait open their spans under the anchor from the event, as the steps before it did. One trace, correct nesting, no live span carried anywhere.
+8. A duplicate or late decision finds no row, because the first one consumed it. The route starts its own root span, tagged with the request id, and sends an event nobody waits on. The duplicate is visible, searchable by the id, and outside the finished trace.
+
+The anchor row is best effort. If the write fails, the later request falls back to the tagged root. Tracing never blocks the real work.
+
+### Try it
+
+Press Start. The route opens `request.received`, the function runs two steps under it and pauses, and the tree shows one root with `prepare` and `request-approval` as children. Press Replay: the invocation runs again and the span count does not change. Press Approve: the decision nests under `request-approval`, the run resumes, and `send-link` appears under the root. Press Approve again: no row is left, so the second decision is its own root. Tick the ambient checkbox and Reset, then Start and Approve: the replay opens a second `request` root and `send-link` lands under that one, a trace split in two. Tick the reusable-row checkbox instead: the second Approve nests a second decision under the finished gate, and the row count stays at one forever.
+
+<TraceAnchorDemo />
+
+## Pattern
+
+The four files below, with `lib/steps.ts` from [An approval gate on waitForEvent](/p/approval-gate-wait-for-event) unchanged, are a working app. Paste them into a fresh Next project and drive it with `curl`. A small tracer stands in for OpenTelemetry. It keeps the two rules this pattern depends on: a span is a child of an anchor or a root, and ended spans wait in a queue until something sends them.
+
+```ts title="lib/tracing.ts"
+export type Anchor = { traceId: string; spanId: string };
+
+export type Span = {
+  traceId: string;
+  spanId: string;
+  parentSpanId: string | null;
+  name: string;
+  attributes: Record<string, string | number | boolean>;
+};
+
+// Ended spans wait here until flush() sends them, as a batch exporter does
+export const pending: Span[] = [];
+export const exported: Span[] = [];
+
+function hex(bytes: number) {
+  const buffer = crypto.getRandomValues(new Uint8Array(bytes));
+  return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function anchorOf(span: Span): Anchor {
+  return { traceId: span.traceId, spanId: span.spanId };
+}
+
+// A child of the anchor, or a root when the anchor is null. The anchor is data: two ids, nothing live
+export async function withSpan<T>(
+  name: string,
+  parent: Anchor | null,
+  fn: (span: Span) => Promise<T> | T,
+): Promise<T> {
+  const span: Span = {
+    traceId: parent?.traceId ?? hex(16),
+    spanId: hex(8),
+    parentSpanId: parent?.spanId ?? null,
+    name,
+    attributes: {},
+  };
+  try {
+    return await fn(span);
+  } finally {
+    pending.push(span);
+  }
+}
+
+export async function flush() {
+  exported.push(...pending.splice(0));
+}
+
+// The gate span's anchor, keyed by the id a later request will carry. Single use: read and deleted together
+const anchors = new Map<string, Anchor>();
+
+export function recordAnchor(id: string, anchor: Anchor) {
+  anchors.set(id, anchor);
+}
+
+export function consumeAnchor(id: string): Anchor | null {
+  const anchor = anchors.get(id) ?? null;
+  anchors.delete(id);
+  return anchor;
+}
+```
+
+`withSpan` takes the parent as an argument and never looks for an active span. `consumeAnchor` is one operation that reads and deletes, which is what makes the row single use. When to call `flush` is the [Flush before freeze](/p/flush-before-freeze) atom; this app never calls it and reads both lists.
+
+The function opens every span inside a step, under the anchor from the event.
+
+```ts title="lib/request.ts"
+import { send, start, type Step } from "./steps";
+import { type Anchor, anchorOf, recordAnchor, withSpan } from "./tracing";
+
+export const DECISION_EVENT = "request.decided";
+export const notifications: string[] = [];
+
+// A span inside the step, under the anchor: created once, parented right, even on a replay
+function steppedSpan<T>(step: Step, id: string, anchor: Anchor, fn: () => Promise<T> | T) {
+  return step.run(id, () => withSpan(id, anchor, fn));
+}
+
+export function startRequest(id: string, anchor: Anchor) {
+  return start(id, { name: "request.received", data: { id } }, async ({ step }) => {
+    await steppedSpan(step, "prepare", anchor, () => true);
+
+    await step.run("notify-approver", () =>
+      withSpan("request-approval", anchor, (span) => {
+        // The resume route gets only the id, hours later. The gate's anchor waits for it in a row
+        recordAnchor(id, anchorOf(span));
+        notifications.push(`Approve request ${id}?`);
+        return true;
+      }),
+    );
+
+    const decision = await step.waitForEvent("wait-for-decision", {
+      event: DECISION_EVENT,
+      match: "data.id",
+      timeout: 20_000,
+    });
+    const approved = decision !== null && decision.data.approved === true;
+
+    return steppedSpan(step, "send-link", anchor, () => ({
+      approved,
+      url: approved ? `/requests/${id}/link` : null,
+    }));
+  });
+}
+
+export function decide(id: string, approved: boolean) {
+  return send({ name: DECISION_EVENT, data: { id, approved } });
+}
+```
+
+`anchor` comes in as a plain argument and is used by every step, before and after the wait. The gate step records its own span's anchor before the function pauses, so the row exists by the time anyone can answer.
+
+The route that receives a request opens the root and hands the anchor on.
+
+```ts title="app/api/requests/route.ts"
+import { notifications, startRequest } from "../../../lib/request";
+import { status } from "../../../lib/steps";
+import { anchorOf, exported, pending, withSpan } from "../../../lib/tracing";
+
+export async function POST(request: Request) {
+  const { id } = await request.json();
+  // The root belongs to this handler, which runs exactly once per request. Its anchor is what the function gets
+  const anchor = await withSpan("request.received", null, (span) => anchorOf(span));
+  await startRequest(id, anchor);
+  return Response.json({ runs: status(), notifications });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), spans: [...exported, ...pending] });
+}
+```
+
+The root span ends before the function starts. That is fine: a parent need not be open for a child to point at it. Only its ids matter.
+
+The resume route rejoins the trace through the row.
+
+```ts title="app/api/requests/[id]/decide/route.ts"
+import { decide } from "../../../../../lib/request";
+import { consumeAnchor, withSpan } from "../../../../../lib/tracing";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const { approved } = await request.json();
+  // Hours later, another process: no span is open. The row keyed by the id says where this belongs
+  const gate = consumeAnchor(id);
+  await withSpan("decision", gate, (span) => {
+    span.attributes["request.id"] = id;
+  });
+  // A second POST finds no row: its own root, tagged with the id, and an event nobody waits on
+  await decide(id, approved === true);
+  return Response.json({ ok: true, nested: gate !== null });
+}
+```
+
+Start a run with `curl -X POST localhost:3000/api/requests -H 'content-type: application/json' -d '{"id":"req_1"}'`. Then `curl localhost:3000/api/requests` shows three spans sharing one `traceId`: the root with `parentSpanId: null`, and `prepare` and `request-approval` with the root's `spanId` as parent. Approve with `curl -X POST localhost:3000/api/requests/req_1/decide -H 'content-type: application/json' -d '{"approved":true}'`: the response says `nested: true`, and the spans now include `decision` under `request-approval` and `send-link` under the root. The same POST again says `nested: false` and adds a `decision` root with the id in its attributes.
+
+### Wrong and right
+
+The trace splits in two at the pause, and everything after it hangs under a new root.
+
+🔴 The function body opens the root span, and every step nests under whatever is active. The first invocation is fine. The replay that the decision causes runs the body again, opens a second root, and the steps after the wait nest under that one. This is `startRequest` in `lib/request.ts`, with a `withSpan` that reads the active span instead of taking a parent.
+
+```ts title="lib/request.ts"
+export function startRequest(id: string) {
+  return start(id, { name: "request.received", data: { id } }, async ({ step }) =>
+    // Plain code. Every replay opens another root
+    withSpan("request", null, async () => {
+      await step.run("prepare", () => withSpan("prepare", active(), () => true));
+```
+
+✅ The root is opened by the request handler, once, and its anchor is passed in as data. Each step's span takes that anchor as its parent.
+
+```ts title="lib/request.ts"
+export function startRequest(id: string, anchor: Anchor) {
+  return start(id, { name: "request.received", data: { id } }, async ({ step }) => {
+    await steppedSpan(step, "prepare", anchor, () => true);
+```
+
+Every span of the turn appears twice after a replay, and the trace shows two model calls where there was one.
+
+🔴 The span is opened outside the step, around it. The step is memoized on the replay, the span is not. This is the first step in `startRequest` in `lib/request.ts`.
+
+```ts title="lib/request.ts"
+// The span is plain code around the step: emitted again on every replay
+await withSpan("prepare", anchor, () => step.run("prepare", () => true));
+```
+
+✅ The step wraps the span. Memoized step, no span.
+
+```ts title="lib/request.ts"
+await steppedSpan(step, "prepare", anchor, () => true);
+```
+
+A late or duplicate decision shows up inside a trace that finished days ago, and the anchor table only ever grows.
+
+🔴 The resume route reads the row and leaves it. This is `consumeAnchor` in `lib/tracing.ts`.
+
+```ts title="lib/tracing.ts"
+export function consumeAnchor(id: string): Anchor | null {
+  // Read and kept: a duplicate nests under the finished gate, and nothing ever deletes the row
+  return anchors.get(id) ?? null;
+}
+```
+
+✅ Read and deleted in one operation. The first decision consumes the row; a duplicate starts its own tagged root.
+
+```ts title="lib/tracing.ts"
+export function consumeAnchor(id: string): Anchor | null {
+  const anchor = anchors.get(id) ?? null;
+  anchors.delete(id);
+  return anchor;
+}
+```
+
+### In this repo
+
+- [`anchored-request.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/2ecfe098cb2f8fe0825d21d29f54d1af1dfe5a10/apps/patterns/src/lib/trace-anchor/anchored-request.ts) is `lib/request.ts` and the decide route on the harness. `steppedSpan` is the helper above; `context: "ambient"` is the first wrong example and `rows: "reusable"` the third, so the demo can show the split trace and the stray decision.
+- [`span-exporter.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/429400f7aac389b9e9ab7e3ce4e788fae9ae5173/apps/patterns/src/lib/harness/span-exporter.ts) is `lib/tracing.ts` with an ambient active span as well as an explicit parent, so the wrong variant can be run, and `buildSpanTree`, which the demo renders.
+- [`TraceAnchorDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/2ecfe098cb2f8fe0825d21d29f54d1af1dfe5a10/apps/patterns/src/app/demos/TraceAnchorDemo.tsx) is the two routes as buttons, with the tree read from the exporter after every action.
+- [`tracing.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/tracing.ts) is the production `lib/tracing.ts`, on OpenTelemetry. `TraceAnchor` is the type, with the comment that no live span survives an Inngest step boundary. `startTraceRoot` is the root a request opens once. `withTurnSpan` parents to an anchor by setting a remote span context on the active context before starting the span, so the SDK sees a parent it never held. `steppedSpan` puts `withTurnSpan` inside `step.run`. `recordMissingInfoTraceAnchor` and `consumeMissingInfoTraceAnchor` are the row helpers; the consume is a delete with a returned row, `.maybeSingle()`, so a miss is null, and both are best effort and never throw into the turn. A second pair does the same for the approval gate's table.
+- [`whatsapp/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/webhook/whatsapp/route.ts) is the ingress. `webhook.turn` is a near-zero-duration marker root opened before validation, and its anchor goes into the event as `traceAnchor` next to a `correlationId` that is a different thing: the key the wait matches on, never a span parent. The comment explains why the marker is not one of the real stages: a stage's span as the anchor would nest the whole turn inside it.
+- [`answer/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/app/api/owner-nudges/%5BcorrelationId%5D/answer/route.ts) is the decide route, hours later, called by the Telegram router with the correlation id from the owner's reply. It consumes the anchor and runs the embedding under the gate span with `withTurnSpan`; with no row it runs the same work under `startTraceRoot`, tagged `gca.correlation_id`. Its comment says why a row and not the reply itself carries the anchor: the reply crosses an HTTP boundary to a separate service, with no shared payload.
+- [`20260814090000_create_missing_info_trace_anchors.sql`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/supabase/migrations/20260814090000_create_missing_info_trace_anchors.sql) is the row: `correlation_id` as primary key, `trace_id`, `span_id`. Its comment states the single-use rule and the accepted gap: a gate that times out unanswered leaves an orphan row that no sweep removes yet.
+
+## Pitfalls
+
+- **The trace splits at the pause.** The root was opened by function code and the steps used ambient context. Open the root in the request, pass the anchor as data. See Wrong and right above.
+- **Every span appears twice after a replay.** The span wrapped the step instead of the step wrapping the span. See Wrong and right above.
+- **A late decision shows up inside an old trace, and the anchor table grows forever.** The row was read, not consumed. Delete on read. See Wrong and right above.
+- **The later request's span is a root with no link to the turn.** The row was never written, because the gate step wrote it after the wait instead of before, or the write failed silently. Write it in the gate step, before the wait, and tag the fallback root with the id so the two can be joined by hand.
+- **Child spans have a parent id that no span in the backend has.** The parent was a synthetic id, not the id of a span that was emitted. The root must be a real span, ended and exported, even if it lasts a microsecond.
+- **Spans from the steps after the pause are in a different trace than the ones before it.** The anchor was read from something that changed between invocations, such as a module variable, instead of from the event. The event is the only thing the runner replays identically.
+- **The resume route resumed the run but its span is missing.** The route opened the span after sending the event, and the send started a replay that ran inside the span's callback, or the process froze before the span exported. Open and end the span first, then send, and flush after the response.
+- **The correlation id and the trace id got mixed up.** They are different things with different jobs: one is the key a wait matches on, the other is a span parent. Carry both, name both, never derive one from the other.
+
+## When not to use
+
+- Everything runs in one process with no steps, no replay and no pause. Ambient context nests correctly on its own; use the tracer's active span.
+- The later request can carry the anchor itself, for example in a signed token the same service issued. Then no row is needed. The row is for a boundary that cannot carry the payload, such as a reply through a third-party channel.
+- The pause is seconds and the function stays up. A single process can keep the span open and await the promise.
+
+## Code
+
+<CodeLinks />

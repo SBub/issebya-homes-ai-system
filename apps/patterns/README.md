@@ -93,6 +93,13 @@ simple version survives production. `AGENTS.md` has the full rules.
 - **Demo route**: `src/app/api/demo/progress` is the one dynamic route. It
   streams Server-Sent Events for the `sse-route-handler` demo and uses no env
   vars and no database.
+- **Harness runtime**: `src/lib/harness/` is the fake runtime the agent
+  harness demos share: `fake-model.ts` (a scripted model), `step-runner.ts` (an
+  in-memory durable runner with memoized steps, `waitForEvent`, replay),
+  `store.ts` (a table with unique-key conflicts) and `span-exporter.ts` (an
+  in-memory tracer with anchors, a batch exporter that sends only on `flush()`
+  and drops its queue on `freeze()`, and a span tree). No demo calls a real
+  model, database or network.
 
 ## Deployment
 

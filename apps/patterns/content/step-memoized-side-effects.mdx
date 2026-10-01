@@ -1,0 +1,326 @@
+---
+title: Step memoized side effects
+kind: atom
+summary: A durable function replays from the top after a crash, a retry or a pause, so every side effect goes in its own step, a step never calls a step, and the prompt fetch is hoisted out of the loop.
+tags:
+  - agent-harness
+  - durable-execution
+  - inngest
+code:
+  - path: apps/patterns/src/lib/stepped-effects/turn.ts
+    ref: 44f152245db53518c7574d30b601f56faaf82be1
+    note: The turn on the harness runner; a hoisted prompt step, a model step per round, a tool step per round, a send step, and the three wrong variants.
+  - path: apps/patterns/src/lib/harness/step-runner.ts
+    ref: 429400f7aac389b9e9ab7e3ce4e788fae9ae5173
+    note: The in-memory durable runner; memoized steps answer at once on a replay, plain code runs again, a step inside a step throws.
+  - path: apps/patterns/src/app/demos/SteppedEffectsDemo.tsx
+    ref: 44f152245db53518c7574d30b601f56faaf82be1
+    note: The live demo; Run, Replay, the runner log, the side effects as they happened, and a variant select for the three wrong shapes.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The delivery half of a turn in production; record, send, delivery status and the memory fold each in their own step, the reply text derived outside one.
+  - path: apps/guest-communication-agent/src/agent/run-agent-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The reasoning loop; the system prompt fetched once in its own step before the loop, a step per model round, and the rule that no tool runs inside another step.
+  - path: apps/guest-communication-agent/src/lib/tracing.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: steppedSpan; step.run wraps the span so a span, itself a side effect, is created once and never re-emitted on a replay.
+verifiedIn:
+  - 209
+updated: 2026-10-01
+---
+
+import { SteppedEffectsDemo } from "@/app/demos/SteppedEffectsDemo";
+
+## Problem
+
+A turn of an agent is a chain of side effects: fetch the prompt, call the model, run the tools it asked for, call the model again, send the reply. Each one costs money or changes the world. On a durable runner the function that does all this does not run once. It runs again after a crash, again on a retry, and again when a pause ends, every time from its first line.
+
+If a side effect sits in plain function code, every one of those runs does it again. The reply goes out twice. The model is called twice and the second answer may differ from the first. The prompt store is hit once per round, then once more per finished round on every replay. None of this shows in a test that runs the function once.
+
+A durable step is the unit the runner remembers. `step.run(id, fn)` runs `fn` once, stores the result under `id`, and on every later invocation returns the stored result without calling `fn`. So the rule is short: every side effect in its own step, nothing else in a step, and no step inside a step.
+
+### In this app
+
+- A guest's turn is one durable function. Fetching the system prompt, each model round, each tool call, recording the reply, sending it on WhatsApp, marking it delivered and folding memory are each a step. A replay after a pause of hours repeats none of them.
+- The prompt is fetched in one step before the loop, not inside it. A turn that replays at round 4 would otherwise fetch it four more times.
+- Deriving the reply text from the last message is plain code on purpose: it is deterministic over memoized step results, so running it again is free and safe.
+
+## Mechanism
+
+Here is what happens, in order, on the first run and on a replay.
+
+1. The runner invokes your function with a `step` object. Your function runs from its first line.
+2. It calls `step.run("load-prompt", fetchPrompt)`. The runner has no memo for that id, so it runs `fetchPrompt`, stores the result as JSON under `load-prompt`, and returns it.
+3. The loop calls `step.run("model-1", ...)`, then `step.run("tool-1", ...)`, then `step.run("model-2", ...)`. Each one runs once and is memoized under its id. The ids carry the round number: the same callback in two rounds is two different steps.
+4. The model answers with text. The function calls `step.run("send-reply", ...)`. The reply goes out once. The function returns.
+5. Something causes a replay: the process died between steps, a step threw and the runner retries, or a pause ended. The runner invokes your function again, from its first line, with the same `step` memo.
+6. `step.run("load-prompt", ...)` finds a memo. It returns the stored JSON at once and never calls `fetchPrompt`. The same for every other id in the memo, in the order the function reaches them. The log says `memoized` for each.
+7. Plain code between the steps runs again: the loop counter, building the message list, reading a result. That is why it must be cheap and deterministic over the memoized values. If it has a side effect, the side effect happens again.
+8. The first step with no memo runs for real. That is where the function was when it stopped.
+
+Two consequences follow.
+
+A step's callback must not call `step.run` or any other step tool. The runner refuses it, because a step found inside another step has no place in the memo. Flatten them: one step after another in function code.
+
+A memoized result comes back as data, not as the live object the callback returned. A step cannot return a function, a class instance or an open handle and expect it on the replay.
+
+### Try it
+
+Press Run. The log shows five steps running, and the side effects list shows one prompt fetch, two model calls, one tool run and one send. Press Replay: the function runs again from the top, every step says `memoized, callback skipped`, and the side effects list does not grow. Switch the variant to the unstepped send and press Run, then Replay: the reply is sent twice. The prompt-in-loop variant fetches the prompt twice on Run and twice more on every Replay. The nested variant fails on the second round with the runner naming both steps.
+
+<SteppedEffectsDemo />
+
+## Pattern
+
+The four files below are a working app. Paste them into a fresh Next project and drive it with `curl`. A small runner stands in for a durable runner such as Inngest. It keeps the three rules this pattern depends on: a step result is memoized by id and comes back as JSON, a replay runs the function from the top, and a step cannot run inside a step.
+
+```ts title="lib/steps.ts"
+export type Step = {
+  run<T>(id: string, fn: () => Promise<T> | T): Promise<T>;
+};
+
+type Run = {
+  fn: (input: { step: Step }) => Promise<unknown>;
+  memo: Map<string, string>;
+  log: string[];
+  result: unknown;
+};
+
+const runs = new Map<string, Run>();
+
+async function invoke(id: string, reason: string) {
+  const run = runs.get(id);
+  if (run === undefined) return;
+  run.log.push(`invocation (${reason})`);
+  let inside: string | null = null;
+
+  const step: Step = {
+    async run(stepId, fn) {
+      if (inside !== null) throw new Error(`step "${stepId}" called inside step "${inside}"`);
+      if (run.memo.has(stepId)) {
+        run.log.push(`${stepId}: memoized`);
+        // A memoized result comes back from the store as JSON, not as the live object
+        return JSON.parse(run.memo.get(stepId) ?? "null");
+      }
+      inside = stepId;
+      try {
+        const value = await fn();
+        run.memo.set(stepId, JSON.stringify(value));
+        run.log.push(`${stepId}: ran`);
+        return value;
+      } finally {
+        inside = null;
+      }
+    },
+  };
+
+  try {
+    run.result = await run.fn({ step });
+    run.log.push("done");
+  } catch (error) {
+    run.log.push(`failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export async function start(id: string, fn: Run["fn"]) {
+  runs.set(id, { fn, memo: new Map(), log: [], result: undefined });
+  await invoke(id, "start");
+}
+
+// What a real runner does on its own after a crash, a retry or a resume: the function again, from the top
+export async function replay(id: string) {
+  await invoke(id, "replay");
+}
+
+export function status() {
+  return [...runs].map(([id, run]) => ({ id, result: run.result, log: run.log }));
+}
+```
+
+`start` runs a function once. `replay` is the thing a real runner does without being asked; here it is a function so a route can trigger it. `status` is for reading.
+
+The turn puts each side effect in a step and hoists the prompt fetch above the loop.
+
+```ts title="lib/turn.ts"
+import { start, type Step } from "./steps";
+
+export const effects: string[] = [];
+
+const PROMPT = "You are a short, polite assistant.";
+const MAX_ROUNDS = 4;
+
+type Reply = { text: string; tool: string | null };
+
+// Stands in for a model call: it asks for one tool, then answers
+async function callModel(prompt: string, round: number): Promise<Reply> {
+  effects.push(`call model, round ${round}, ${prompt.length} chars of prompt`);
+  if (round === 1) return { text: "", tool: "check_dates" };
+  return { text: "The 6th to the 8th is free.", tool: null };
+}
+
+async function fetchPrompt() {
+  effects.push("fetch prompt");
+  return PROMPT;
+}
+
+async function send(conversation: string, text: string) {
+  effects.push(`send "${text}" to ${conversation}`);
+  return true;
+}
+
+async function turn(step: Step, conversation: string) {
+  // Hoisted out of the loop, in its own step: once per turn, never once per round or per replay
+  const prompt = await step.run("load-prompt", fetchPrompt);
+
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const reply = await step.run(`model-${round}`, () => callModel(prompt, round));
+    if (reply.tool === null) {
+      // The send is a side effect, so it is a step too
+      await step.run("send-reply", () => send(conversation, reply.text));
+      return reply.text;
+    }
+    await step.run(`tool-${round}`, async () => {
+      effects.push(`run tool ${reply.tool}`);
+      return { free: true };
+    });
+  }
+  return null;
+}
+
+export function startTurn(id: string, conversation: string) {
+  return start(id, ({ step }) => turn(step, conversation));
+}
+```
+
+`effects` is the list of things that happened in the world, which is what a replay must not add to. Every push sits inside a step callback. The loop counter, `prompt` and `reply` are plain code and run again on a replay, which is fine: they are derived from memoized values.
+
+A route starts a turn and reads every run.
+
+```ts title="app/api/turns/route.ts"
+import { status } from "../../../lib/steps";
+import { effects, startTurn } from "../../../lib/turn";
+
+export async function POST(request: Request) {
+  const { id, conversation } = await request.json();
+  await startTurn(id, conversation);
+  return Response.json({ runs: status(), effects });
+}
+
+export function GET() {
+  return Response.json({ runs: status(), effects });
+}
+```
+
+A second route replays a run, which is what the runner does on its own after a crash or a retry.
+
+```ts title="app/api/turns/[id]/replay/route.ts"
+import { replay, status } from "../../../../../lib/steps";
+import { effects } from "../../../../../lib/turn";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  await replay(id);
+  return Response.json({ runs: status(), effects });
+}
+```
+
+Start a turn with `curl -X POST localhost:3000/api/turns -H 'content-type: application/json' -d '{"id":"turn_1","conversation":"c1"}'`. The log shows five steps that `ran` and the effects list has five entries. Replay it with `curl -X POST localhost:3000/api/turns/turn_1/replay`. The log gains an invocation in which every step is `memoized`, and the effects list is still five entries long.
+
+### Wrong and right
+
+The reply reaches the conversation twice, once on the first run and once after the retry.
+
+🔴 The send is plain function code. The replay runs the body from the top and the plain call runs again. This is the text branch of `turn` in `lib/turn.ts`.
+
+```ts title="lib/turn.ts"
+if (reply.tool === null) {
+  // Plain code. Every replay sends again
+  await send(conversation, reply.text);
+  return reply.text;
+}
+```
+
+✅ The send in its own step. On the replay it answers from the memo.
+
+```ts title="lib/turn.ts"
+if (reply.tool === null) {
+  await step.run("send-reply", () => send(conversation, reply.text));
+  return reply.text;
+}
+```
+
+The run fails on the last round with an error that names two steps.
+
+🔴 The send is called from inside the model step's callback. A step inside a step has no place in the memo, and the runner refuses it. This is the model call in `turn` in `lib/turn.ts`.
+
+```ts title="lib/turn.ts"
+const reply = await step.run(`model-${round}`, async () => {
+  const result = await callModel(prompt, round);
+  // A step inside a step: refused
+  if (result.tool === null) await step.run("send-reply", () => send(conversation, result.text));
+  return result;
+});
+```
+
+✅ Two steps, one after the other, from function code.
+
+```ts title="lib/turn.ts"
+const reply = await step.run(`model-${round}`, () => callModel(prompt, round));
+if (reply.tool === null) {
+  await step.run("send-reply", () => send(conversation, reply.text));
+  return reply.text;
+}
+```
+
+The prompt store sees one fetch per round, and more after every replay.
+
+🔴 The prompt is fetched at the top of each round by plain code. A replay that reaches round 2 fetches it twice more, for rounds whose model steps are memoized and never look at it. This is the start of `turn` in `lib/turn.ts`.
+
+```ts title="lib/turn.ts"
+async function turn(step: Step, conversation: string) {
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    // Once per round, and again per round on every replay
+    const prompt = await fetchPrompt();
+    const reply = await step.run(`model-${round}`, () => callModel(prompt, round));
+```
+
+✅ Fetched once per turn, in its own step, before the loop.
+
+```ts title="lib/turn.ts"
+async function turn(step: Step, conversation: string) {
+  const prompt = await step.run("load-prompt", fetchPrompt);
+
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const reply = await step.run(`model-${round}`, () => callModel(prompt, round));
+```
+
+### In this repo
+
+- [`turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/44f152245db53518c7574d30b601f56faaf82be1/apps/patterns/src/lib/stepped-effects/turn.ts) is `lib/turn.ts` on the harness runner, with the scripted model from the harness in place of `callModel`. Its `mode` option holds the three wrong examples above, so the demo can show the double send, the extra fetches and the refusal.
+- [`step-runner.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/429400f7aac389b9e9ab7e3ce4e788fae9ae5173/apps/patterns/src/lib/harness/step-runner.ts) is `lib/steps.ts` with `waitForEvent`, a log a page can subscribe to, and `reset()`.
+- [`SteppedEffectsDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/44f152245db53518c7574d30b601f56faaf82be1/apps/patterns/src/app/demos/SteppedEffectsDemo.tsx) is the two routes as buttons, with the side effects listed under the invocation that caused them.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) is the delivery half of a production turn, on Inngest. `record-reply`, `send-whatsapp-reply`, `update-message-delivery-status` and `fold-memory-summary` are four steps, one after the other. The reply text and the stored turn messages are derived from the loop's result by plain code, with a comment saying why that is safe: deterministic over memoized step outputs.
+- [`run-agent-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-agent-turn.ts) is the reasoning loop. `load-system-prompt` is one step before the loop, with the hoisting reason in its comment; `load-memory` is another; each round is `model-${stepCount}` for up to `MAX_AGENT_STEPS`, which is 8. The date line is built outside any step on purpose, so a turn resumed days later sees the real date. The file's RULE comment is the no-step-inside-a-step rule: every tool dispatches its own steps from function code, and the loop wraps none of them.
+- [`tracing.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/tracing.ts) has `steppedSpan`, which puts `withTurnSpan` inside `step.run` and not the other way round. A span is a side effect too: created outside a step, it would be emitted again on every replay.
+
+## Pitfalls
+
+- **The reply, the email or the message went out twice.** The send was plain code and a replay ran it again. See Wrong and right above.
+- **The run fails with an error naming two step ids.** A step was called inside another step's callback. Flatten them. See Wrong and right above.
+- **The prompt store or the config service is called many times per turn.** The fetch was in the loop and unstepped. Hoist it into one step above the loop. See Wrong and right above.
+- **Two rounds share one result.** Two steps had the same id, so the second answered from the first's memo. Put the round number or the call id in the id.
+- **A step's result is a plain object on the replay, missing its methods.** Step results are stored as JSON and rehydrated. Return data, and rebuild objects from it in plain code.
+- **A replay produced a different reply than the first run.** The model call was unstepped, so the replay called it again and the model answered differently. Each model round is a step.
+- **The function takes longer on a replay than it should.** Expensive plain code between the steps runs again on every invocation. Move it into a step, or make it cheap.
+- **A step ran even though the function was replayed.** Its id changed between runs, for example because it included a timestamp or a random value. Ids must be stable across invocations.
+
+## When not to use
+
+- The function runs in one process, once, with no retries and no pause. A plain async function is simpler.
+- A side effect is idempotent on its own, such as an upsert keyed by a stable id, and running it twice costs nothing. It can still be a step for the log, but it need not be.
+- The work is a pure computation over memoized results. That is exactly what plain code between steps is for.
+
+## Code
+
+<CodeLinks />
