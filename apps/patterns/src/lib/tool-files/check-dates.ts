@@ -27,7 +27,8 @@ export type CheckDatesResult =
   | { ok: true; free: boolean; from: string; to: string }
   | { ok: false; reason: "invalid_range" | "past_date"; today: string };
 
-const BOOKED = [{ from: "2026-10-10", to: "2026-10-12" }];
+/** The ranges already taken. Exported so a sandbox shim can embed them as a literal. */
+export const BOOKED = [{ from: "2026-10-10", to: "2026-10-12" }];
 
 /** Pure: no step, no span, no clock. The date comes in as an argument. */
 export function computeCheckDates(args: CheckDatesInput, today: string): CheckDatesResult {
