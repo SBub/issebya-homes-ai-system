@@ -1,0 +1,173 @@
+---
+title: Agent memory window
+kind: composite
+summary: The model sees a bounded window of exact recent turns plus one message of everything older, built fresh each turn with no model call, with the summarising done after the reply is sent.
+tags:
+  - agent-harness
+  - memory
+  - context-window
+uses:
+  - turn-replay-history
+  - fold-and-distill-memory
+code:
+  - path: apps/patterns/src/lib/memory-window/window.ts
+    ref: 43834f0a9399d4964c9b2135b520dd92ee53fa44
+    note: The composite on the harness table; loadMemory with the watermark before the tiers and the trim, foldMemory over what the trim drops, runTurn around both.
+  - path: apps/patterns/src/app/demos/MemoryWindowDemo.tsx
+    ref: 43834f0a9399d4964c9b2135b520dd92ee53fa44
+    note: The live demo; what the model saw on the latest turn on the left, the fold log, preferences and next memory message on the right.
+  - path: apps/guest-communication-agent/src/agent/memory.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: loadMemoryState, shared by the fast path and the fold; the watermark, the tiers, the trim, and the dropped rows handed to the fold.
+  - path: apps/guest-communication-agent/src/agent/context.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The budget; a real tokenizer, 8000 tokens trimmed to 6000, whole turns from the oldest and never the last.
+  - path: apps/guest-communication-agent/src/agent/run-agent-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The load as a step, and the memory message put ahead of the history rather than into the system prompt.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The fold as the last step, after the reply is sent and its delivery recorded.
+verifiedIn:
+  - 210
+updated: 2026-10-01
+---
+
+import { MemoryWindowDemo } from "@/app/demos/MemoryWindowDemo";
+
+## Problem
+
+On every turn the model needs two things that pull in opposite directions: the exact facts its tools found on the last few turns, and some memory of everything before that, inside a budget that stays flat as the conversation grows. [Turn replay history](/p/turn-replay-history) gives the first: tool messages stored per turn, replayed verbatim for the last few turns, as text for older ones, trimmed by whole turns to a token budget. [Fold and distill memory](/p/fold-and-distill-memory) gives the second: what falls out of the window becomes one fold, old folds become one preferences summary, and the model gets them as one message.
+
+The two have to agree on one thing to work together: what "fell out of the window" means. The trim decides it, by tokens, on the load. The fold has to summarise exactly those rows, no more and no fewer, and the next load has to start after them. This composite is that agreement, in one load function and one fold function that share their first three steps.
+
+## Mechanism
+
+Here is what happens, in order, on one turn.
+
+1. The inbound message is stored as a user row. The load runs: it reads the conversation's rows and the person's memory, and drops every row up to the watermark. That is the fold atom's first rule, applied before anything else.
+2. The remaining rows are grouped by turn. The last few groups replay their stored tool messages word for word; the older groups replay as text. That is the replay atom's tiers. The count includes the turn being answered, which has no reply yet.
+3. The groups are trimmed to the token budget, whole groups from the oldest, never the last. The groups that were dropped map back to their rows: the trim only peels from the front, so they are the rows of the first few turn groups. That is the replay atom's trim, with one addition: the dropped rows are kept, not thrown away.
+4. The memory message is built from the preferences and the most recent fold, and goes ahead of the kept history. The model is called with that list. No model call and no write has happened for memory so far.
+5. The model replies. The reply is stored with the turn's own messages, finalised, and sent. The person has their answer.
+6. The fold runs, after the send. It repeats steps 1 to 3 over the rows as they are now, with this turn's reply in them. The rows the trim drops now are what it summarises into one fold, advancing the watermark to the last of them. Over the fold limit, the oldest fold is distilled into the preferences and deleted.
+7. The next turn starts at step 1 with the watermark further along, so the folded rows are never tiered or trimmed again, and with a fold to put in the message.
+
+Two things follow from step 6.
+
+The fold's dropped set can be larger than the load's. The load ran before this turn's reply existed; the fold runs after, when the newest turn is a full verbatim group. That is why the fold re-reads the rows instead of using what the load saw.
+
+What the model sees shrinks when a fold lands. The folded turns leave the history and come back as one message. The total stays inside the budget, and the facts the model needs exactly are the ones still replayed verbatim.
+
+### Try it
+
+Press Send a turn three times. The left panel shows the third turn as the model saw it: the first turn as text, the second with its tool call and result, the new message, and no memory. Send a fourth: after the reply, rows 1 to 6 become fold 1 and the watermark moves to row 6. Send a fifth: the memory message is first, then only the unfolded turns. Keep going to the seventh: the model sees the memory, two turns as text, one verbatim, and the new message; after the reply, rows 7 to 12 become fold 2, fold 1 is distilled into the preferences, and the next memory message has both sections.
+
+<MemoryWindowDemo />
+
+## Combines
+
+<Combines />
+
+## Pattern
+
+The two files below, with `lib/history.ts` from [Turn replay history](/p/turn-replay-history) and `lib/memory.ts` from [Fold and distill memory](/p/fold-and-distill-memory) unchanged, are a working app. Paste them into a fresh Next project and drive it with `curl`. The route below replaces the replay atom's route at the same path.
+
+The window is the orchestrating file. The load and the fold share the watermark, the tiers and the trim, and differ only in what they do with the result.
+
+```ts title="lib/window.ts"
+import { allRows, buildHistory, trimToBudget } from "./history";
+import { buildMemoryMessage, groupByTurn, recordFold, unfoldedRows } from "./memory";
+
+const MAX_TOKENS = 160;
+const KEEP_TOKENS = 120;
+
+// The fast path, every turn: the watermark first, then the tiers, then the trim, then the memory message ahead
+export function loadMemory() {
+  const unfolded = unfoldedRows(allRows());
+  const groups = buildHistory(unfolded);
+  const kept = trimToBudget(groups, MAX_TOKENS, KEEP_TOKENS);
+  // The trim only peels whole turns off the front, so the dropped rows are the first turns' rows
+  const droppedRows = groupByTurn(unfolded)
+    .slice(0, groups.length - kept.length)
+    .flat();
+  const memoryMessage = buildMemoryMessage();
+  const history = kept.flat();
+  return { messages: memoryMessage === null ? history : [memoryMessage, ...history], droppedRows };
+}
+
+// The fold path, after the send: re-read, so this turn's own reply counts, and fold what the trim drops now
+export function foldMemory() {
+  return recordFold(loadMemory().droppedRows);
+}
+```
+
+`loadMemory` returns the rows it dropped next to the messages it kept. `foldMemory` is `loadMemory` run again for its other output.
+
+The route is one turn: store, load, reply, store, send, and fold after the response.
+
+```ts title="app/api/chat/route.ts"
+import { after } from "next/server";
+import { finalizeTurn, type Message, storeRow } from "../../../lib/history";
+import { folds, memory } from "../../../lib/memory";
+import { foldMemory, loadMemory } from "../../../lib/window";
+
+export async function POST(request: Request) {
+  const { message } = await request.json();
+  storeRow("user", message, null);
+  const { messages } = loadMemory();
+
+  // Stands in for the model and its tool: one call, one result, a reply
+  const call = {
+    id: `call_${messages.length}`,
+    name: "check_dates",
+    input: { from: "2026-10-06", to: "2026-10-08" },
+  };
+  const reply = `Still free. I saw ${messages.length} messages.`;
+  const tail: Message[] = [
+    { role: "assistant", content: [call] },
+    { role: "tool", content: [{ id: call.id, name: call.name, output: { free: true } }] },
+    { role: "assistant", content: reply },
+  ];
+  storeRow("assistant", reply, finalizeTurn(tail, reply));
+
+  // The reply is out with this response. The fold runs after it, off the reply path
+  after(() => foldMemory());
+  return Response.json({ reply, modelSaw: messages });
+}
+
+export function GET() {
+  return Response.json({ memory, folds, modelWouldSee: loadMemory().messages });
+}
+```
+
+Post four messages with `curl -X POST localhost:3000/api/chat -H 'content-type: application/json' -d '{"message":"Is it free?"}'`, a second apart so each fold has run before the next load. Each `modelSaw` grows by a turn, the oldest as text. After the fourth, `curl localhost:3000/api/chat` shows one fold covering rows 1 to 4, the watermark at 4, and a `modelWouldSee` that starts with the memory message and continues with the third and fourth turns. Post two more: after the sixth, the GET shows the preferences filled from the first fold, one fold covering rows 5 to 8, and the watermark at 8.
+
+### In this repo
+
+- [`window.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/43834f0a9399d4964c9b2135b520dd92ee53fa44/apps/patterns/src/lib/memory-window/window.ts) is `lib/window.ts` over the harness table and the two atoms' libraries, with the verbatim count and the budget as options and `runTurn` as the route.
+- [`MemoryWindowDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/43834f0a9399d4964c9b2135b520dd92ee53fa44/apps/patterns/src/app/demos/MemoryWindowDemo.tsx) is the route as a button, showing the load's result on the left and the fold's on the right.
+- [`memory.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/memory.ts) is `lib/window.ts` in production. `loadMemoryState` is `loadMemory`: it fetches the rows and the memory row together, slices after the watermark, calls `buildHistoryMessages` for the tiers, `trimToTokenBudget` for the trim, and maps the number of dropped groups back to `newlyDroppedRows`. `loadMemory` adds the fold rows and returns `historyMessages` and `memoryMessage`. `foldMemory` is `foldMemory`: it calls `loadMemoryState` again and hands `newlyDroppedRows`, as text, to the summariser. The verbatim count there, `VERBATIM_TURNS`, is 3, and it counts the group being answered, as this app does.
+- [`context.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/context.ts) is the budget: `MAX_CONTEXT_TOKENS` 8000, `KEEP_CONTEXT_TOKENS` 6000, counted with a real tokenizer, and `trimToTokenBudget` drops whole groups from the front and never the last.
+- [`run-agent-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-agent-turn.ts) is the load's place in the turn: the `load-memory` step, and `messages` built as the memory message followed by the history, with the memory message left out entirely when there is none.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) is the fold's place: `fold-memory-summary`, the last step, after the reply is recorded, sent and its delivery status written.
+
+## Pitfalls
+
+- **A folded turn reaches the model raw as well.** The watermark was applied after the tiers or the trim. Slice at the watermark first; see [Fold and distill memory](/p/fold-and-distill-memory).
+- **A fold ends in the middle of a turn.** The trim dropped messages, not turns. Whole turns; see [Turn replay history](/p/turn-replay-history).
+- **The fold summarised rows the model still sees.** The fold used a dropped set computed before this turn's reply was stored, with a different budget than the load, or over a different row set. One function for both paths, re-read in the fold.
+- **The fold and the history use different turn boundaries.** The fold grouped rows its own way. Group once, with the same rule, and map dropped groups to rows from that grouping.
+- **The summary contains tool JSON.** The fold was given the tiered messages instead of the rows. Hand it the rows' text.
+- **The memory message is counted against the budget and trims a turn it should not.** The budget was applied after the memory message was prepended. Trim the history, then prepend.
+- **Replies got slower when the conversation got long.** The fold ran before the send. After; see [Fold and distill memory](/p/fold-and-distill-memory).
+
+## When not to use
+
+- Short conversations. The replay atom alone is enough until a turn actually falls out of the window.
+- A provider that keeps and compresses the conversation on its side. You hold neither the rows nor the window.
+- A task where every past fact must be exact. Folds paraphrase; keep the budget large enough that nothing is folded, or store the facts in fields.
+
+## Code
+
+<CodeLinks />
