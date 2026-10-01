@@ -202,9 +202,10 @@ procedures, not code documentation) and anything gitignored.
 
 - `apps/website/app_docs/feature-7d77143c-shop-seller-submission-form.md`
   - Conditions:
-    - When changing the `/shop/sell` form, its Server Actions, or the `shop_seller_submissions` table / `seller-submissions` bucket
+    - When changing the `/shop/sell` wizard, its steps or Server Actions, or the `shop_seller_submissions` table (`status` = `draft` / `submitted` / review states) / `seller-submissions` bucket
+    - When building a multi-step form on one `useActionState` reducer, or a `<form action>` that must still POST with JavaScript off while the reducer also runs browser-only work
     - When adding another browser-to-Supabase-Storage upload, or when an upload fails on a CSP `connect-src` block
-    - When a seller submission is saved but the owner email never arrives, or a finalize is refused over photo paths
+    - When a seller submission is saved but the owner email never arrives, a Send is refused over photo paths, or `draft` rows pile up in Studio
 
 - `apps/website/app_docs/feature-bcb9a5cf-wishlist-heart-modal-email.md`
   - Conditions:
