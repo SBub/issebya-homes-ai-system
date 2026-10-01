@@ -1,0 +1,315 @@
+---
+title: Fold and distill memory
+kind: atom
+summary: Dropped turns fold into one summary after the reply is sent, a watermark stops them folding twice, old folds distil into one preferences summary, and the model gets one memory message.
+tags:
+  - agent-harness
+  - memory
+  - context-window
+code:
+  - path: apps/patterns/src/lib/memory-fold/fold.ts
+    ref: 250ee9fa2cbb59775054adf44d18fe17c56b6102
+    note: The memory on a joining stand-in for the summariser; the watermark, recordFold, the distil loop, the one memory message, and the two wrong variants.
+  - path: apps/patterns/src/app/demos/MemoryFoldDemo.tsx
+    ref: 250ee9fa2cbb59775054adf44d18fe17c56b6102
+    note: The live demo; Send a turn with the fold after the send, the fold log, the injected message, and the wrong shapes behind checkboxes.
+  - path: apps/guest-communication-agent/src/agent/memory.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: foldMemory and loadMemory over the shared state; the watermark before the trim, the fold of the dropped rows, maintainFoldWindow, buildMemoryMessage.
+  - path: apps/guest-communication-agent/src/lib/db.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The rows; the watermark and the preferences on guest_memory, one row per fold in guest_memory_folds, and the delete after a distil.
+  - path: apps/guest-communication-agent/src/agent/run-guest-turn.ts
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: Where the fold runs; its own step after the reply is sent and its delivery recorded, and a failure that never fails the turn.
+  - path: supabase/migrations/20260817120000_create_guest_memory_folds.sql
+    ref: 649af1c2812e991af413734965d2f971cd4afad7
+    note: The fold table; one row per fold with the first and last message id it covers.
+verifiedIn:
+  - 210
+updated: 2026-10-01
+---
+
+import { MemoryFoldDemo } from "@/app/demos/MemoryFoldDemo";
+
+## Problem
+
+A conversation outgrows the window the model sees. [Turn replay history](/p/turn-replay-history) trims whole turns from the oldest to fit a budget, and the trimmed turns are gone. The person said their name in the first message, and twenty messages later the model asks for it again.
+
+The obvious fix is a rolling summary: on each turn, summarise whatever was trimmed and put the summary in the prompt. Done naively that has three faults. The summariser is a model call, and a slow one; put on the reply path, it adds its whole round trip to every reply. With nothing marking what has already been summarised, the same turns are summarised again on the next turn, and reach the model twice, once raw and once as a summary. And if every summary is kept and injected, the prompt fills with summaries, and a summary of a summary of a summary loses what mattered.
+
+So the fold runs after the reply has gone out, as its own step. It summarises only the rows that newly fell out of the window, into one fold row, and advances a watermark to the id of the last row it folded, so the next fold starts after it and the next turn's history starts after it too. Only a small number of folds are kept; once there are more, the oldest is distilled into one durable preferences summary and deleted. The model gets one message: the preferences, then the most recent fold.
+
+### In this app
+
+- The WhatsApp agent's summariser measured 24 to 43 seconds per call in real traces. It used to run inside the load of memory, on the guest's reply path. It now runs in its own step after the reply is sent and its delivery recorded.
+- One fold is kept per guest. When a second one lands, the first is distilled into the guest's preferences summary and deleted, so the fold table stays at one or two rows per guest and the preferences keep accumulating across conversations.
+- The watermark is a message row id on the guest's memory row. It is applied before trimming, never after, and the summariser only ever sees the text of each row, never replayed tool messages.
+
+## Mechanism
+
+Here is what happens, in order, around one turn.
+
+1. A message arrives and is stored as a row. Your code loads the rows and the person's memory row: a watermark, which is a row id or nothing yet, and a preferences summary, or nothing yet.
+2. Your code drops every row up to and including the watermark. Those rows are already in a fold. This happens before any window or budget is applied, so a folded row can never reach the model raw.
+3. Your code builds the window over the remaining rows: the last few turns, whole. Older turns fall out. Nothing is summarised here; this is the fast path, and it makes no model call and writes nothing.
+4. Your code builds the memory message: the preferences, if any, and the most recent fold, if any, as one assistant-role message. It goes ahead of the history. With neither, there is no message at all, not an empty one.
+5. The model answers. The reply is stored and sent. The person has their answer.
+6. Now the fold runs, as its own step. It re-reads the rows, so this turn's own reply counts, applies the watermark, builds the window again, and takes the turns that fell out. If none did, it stops.
+7. It summarises those rows, as text, into one fold row that records the first and last row id it covers, and advances the watermark to that last id. The two writes are independent; the watermark advances even if the fold write fails, because a lost fold is a small loss and a double fold is a large one.
+8. It counts the folds. Over the limit, it distils the oldest into the preferences, standing facts only, and deletes it. It repeats until the count is at the limit.
+9. The next turn starts at step 1 with a watermark further along and a fold to inject.
+
+Two things follow from step 7.
+
+The watermark moves at a turn boundary, because the window drops whole turns. A fold never ends in the middle of a turn.
+
+Each fold summarises its own rows standing alone, never blended with the previous summary. Blending re-compresses the old summary on every fold; that is what the distil step is for, once, into the preferences.
+
+### Try it
+
+Press Send a turn three times. The window is two turns, so the third send folds the first turn after the reply: the fold log shows rows 1 to 2 summarised and the watermark moved to row 2, the rows panel marks them folded, and the memory message panel shows what the next turn gets. Send a fourth: the model saw the memory message first, the second turn folds, and the first fold is distilled into the preferences and deleted. Tick the first checkbox and send: the reply waits for the summariser. Tick the second and send four: the fold ranges overlap. Tick the third and send five: three folds, all injected, nothing distilled.
+
+<MemoryFoldDemo />
+
+## Pattern
+
+The two files below are a working app. Paste them into a fresh Next project and drive it with `curl`. A function that joins text stands in for the summariser model, with a delay so the cost of putting it on the reply path is visible.
+
+The library owns the memory state and the three operations: what is still unfolded, what fell out of the window, and the fold.
+
+```ts title="lib/memory.ts"
+export type Row = { id: number; role: "user" | "assistant"; content: string };
+
+export type Fold = { id: number; summary: string; fromId: number; toId: number };
+
+export const folds: Fold[] = [];
+// One row per person: how far folding has got, and what has been distilled so far
+export const memory: { watermark: number | null; preferences: string | null } = {
+  watermark: null,
+  preferences: null,
+};
+
+const WINDOW_TURNS = 2;
+const MAX_RECENT_FOLDS = 1;
+let nextFoldId = 1;
+
+// Stands in for the summariser model: joins the text, slowly, as a model would
+async function summarize(dropped: Row[]) {
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  return dropped.map((row) => `${row.role}: ${row.content}`).join(" | ");
+}
+
+// Stands in for the distiller model: keeps what the person said, as standing facts
+async function distill(prior: string | null, summary: string) {
+  const facts = summary
+    .split(" | ")
+    .filter((line) => line.startsWith("user: "))
+    .map((line) => line.slice("user: ".length));
+  return [prior, ...facts].filter((part) => part !== null).join("; ");
+}
+
+// A user row starts a turn; the assistant rows after it belong to it
+export function groupByTurn<R extends Row>(rows: R[]) {
+  const groups: R[][] = [];
+  for (const row of rows) {
+    const current = groups.at(-1);
+    if (row.role === "user" || current === undefined) groups.push([row]);
+    else current.push(row);
+  }
+  return groups;
+}
+
+// Rows after the watermark. Applied before the window, never after: a folded row must not reach the model twice
+export function unfoldedRows<R extends Row>(rows: R[]) {
+  const index = rows.findIndex((row) => row.id === memory.watermark);
+  return index === -1 ? rows : rows.slice(index + 1);
+}
+
+// The last turns the model sees, and the older ones that fell out
+export function splitWindow<R extends Row>(unfolded: R[]) {
+  const groups = groupByTurn(unfolded);
+  const cut = Math.max(0, groups.length - WINDOW_TURNS);
+  return { kept: groups.slice(cut).flat(), dropped: groups.slice(0, cut).flat() };
+}
+
+export function buildMemoryMessage(): { role: "assistant"; content: string } | null {
+  const sections: string[] = [];
+  if (memory.preferences !== null) sections.push(`Preferences:\n${memory.preferences}`);
+  const recent = folds.at(-1);
+  if (recent !== undefined) sections.push(`Summary of earlier conversation:\n${recent.summary}`);
+  if (sections.length === 0) return null;
+  // One message, assistant role, ahead of the history
+  return { role: "assistant", content: sections.join("\n\n") };
+}
+
+// The fold: summarise the dropped rows once, move the watermark, distil the excess folds
+export async function recordFold(dropped: Row[]) {
+  if (dropped.length === 0) return;
+  const summary = await summarize(dropped);
+  const toId = dropped[dropped.length - 1].id;
+  folds.push({ id: nextFoldId++, summary, fromId: dropped[0].id, toId });
+  // The watermark is the last folded row: the next fold starts after it
+  memory.watermark = toId;
+  while (folds.length > MAX_RECENT_FOLDS) {
+    const oldest = folds.shift();
+    if (oldest !== undefined)
+      memory.preferences = await distill(memory.preferences, oldest.summary);
+  }
+}
+
+export function foldMemory(rows: Row[]) {
+  return recordFold(splitWindow(unfoldedRows(rows)).dropped);
+}
+```
+
+`unfoldedRows` runs first on both paths, the load and the fold. `recordFold` takes the dropped rows as an argument, so what counts as dropped can come from a turn count here or from a token budget elsewhere.
+
+The route is one turn: store the message, build what the model sees, reply, store the reply, and fold after the response has gone out.
+
+```ts title="app/api/chat/route.ts"
+import { after } from "next/server";
+import {
+  buildMemoryMessage,
+  foldMemory,
+  folds,
+  memory,
+  type Row,
+  splitWindow,
+  unfoldedRows,
+} from "../../../lib/memory";
+
+const rows: Row[] = [];
+
+export async function POST(request: Request) {
+  const { message } = await request.json();
+  rows.push({ id: rows.length + 1, role: "user", content: message });
+
+  // The fast path: no model call for memory, no write. The watermark first, then the window
+  const memoryMessage = buildMemoryMessage();
+  const history = splitWindow(unfoldedRows(rows)).kept.map((row) => ({
+    role: row.role,
+    content: row.content,
+  }));
+  const modelSaw = memoryMessage === null ? history : [memoryMessage, ...history];
+
+  // Stands in for the model
+  const reply = `Noted. I saw ${modelSaw.length} messages.`;
+  rows.push({ id: rows.length + 1, role: "assistant", content: reply });
+
+  // The reply goes out with this response. The summariser's round trip never sits on it
+  after(() => foldMemory(rows));
+  return Response.json({ reply, modelSaw });
+}
+
+export function GET() {
+  return Response.json({ memory, folds, rows, nextMemoryMessage: buildMemoryMessage() });
+}
+```
+
+Post three messages with `curl -X POST localhost:3000/api/chat -H 'content-type: application/json' -d '{"message":"My name is Ana."}'`, changing the text each time and leaving a second between them. The third response returns at once; half a second later `curl localhost:3000/api/chat` shows one fold covering rows 1 to 2, the watermark at 2, and the memory message the fourth turn will get. Post a fourth: its `modelSaw` starts with the memory message, and the GET afterwards shows the preferences filled from the first fold, one fold left, and the watermark at 4.
+
+### Wrong and right
+
+Every reply takes half a second longer than the model needs.
+
+🔴 The fold is awaited before the response. The summariser's round trip is on the reply path. This is the end of `POST` in `app/api/chat/route.ts`.
+
+```ts title="app/api/chat/route.ts"
+  rows.push({ id: rows.length + 1, role: "assistant", content: reply });
+
+  // The response waits for the summariser
+  await foldMemory(rows);
+  return Response.json({ reply, modelSaw });
+}
+```
+
+✅ The fold runs after the response has gone out. The person has the reply; the summariser runs in the time nobody is waiting.
+
+```ts title="app/api/chat/route.ts"
+  rows.push({ id: rows.length + 1, role: "assistant", content: reply });
+
+  // The reply goes out with this response. The summariser's round trip never sits on it
+  after(() => foldMemory(rows));
+  return Response.json({ reply, modelSaw });
+}
+```
+
+The same early turns are in every fold, and the model sees them raw as well as summarised.
+
+🔴 Nothing records what has been folded. Every fold starts from the first row, and the load builds the history from the first row too. This is `unfoldedRows` in `lib/memory.ts`.
+
+```ts title="lib/memory.ts"
+// Every row, every time: rows 1 to 2 are in fold 1, in fold 2, and in the window until the window moves
+export function unfoldedRows<R extends Row>(rows: R[]) {
+  return rows;
+}
+```
+
+✅ The watermark is the last folded row, and both paths start after it.
+
+```ts title="lib/memory.ts"
+export function unfoldedRows<R extends Row>(rows: R[]) {
+  const index = rows.findIndex((row) => row.id === memory.watermark);
+  return index === -1 ? rows : rows.slice(index + 1);
+}
+```
+
+The prompt starts with five summaries, and the person's name is in the second one.
+
+🔴 Every fold is kept and every fold is injected. This is `buildMemoryMessage` and the end of `recordFold` in `lib/memory.ts`.
+
+```ts title="lib/memory.ts"
+export function buildMemoryMessage(): { role: "assistant"; content: string } | null {
+  if (folds.length === 0) return null;
+  // Every fold, oldest first. The message grows with the conversation
+  return {
+    role: "assistant",
+    content: folds.map((fold) => `Summary of earlier conversation:\n${fold.summary}`).join("\n\n"),
+  };
+}
+```
+
+✅ One recent fold is kept. The older ones are distilled into the preferences, which hold the standing facts, and the message is those two sections.
+
+```ts title="lib/memory.ts"
+export function buildMemoryMessage(): { role: "assistant"; content: string } | null {
+  const sections: string[] = [];
+  if (memory.preferences !== null) sections.push(`Preferences:\n${memory.preferences}`);
+  const recent = folds.at(-1);
+  if (recent !== undefined) sections.push(`Summary of earlier conversation:\n${recent.summary}`);
+  if (sections.length === 0) return null;
+  return { role: "assistant", content: sections.join("\n\n") };
+}
+```
+
+### In this repo
+
+- [`fold.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/250ee9fa2cbb59775054adf44d18fe17c56b6102/apps/patterns/src/lib/memory-fold/fold.ts) is `lib/memory.ts` as a store a page can subscribe to, with the summariser and the window size as options. Its `watermark: "none"` and `folds: "keep-all"` options are the second and third wrong examples above, kept so the demo can show the overlap and the growing message.
+- [`MemoryFoldDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/250ee9fa2cbb59775054adf44d18fe17c56b6102/apps/patterns/src/app/demos/MemoryFoldDemo.tsx) is the route as a button. Its first checkbox is the first wrong example: the fold awaited before the send, with the time to the send shown per turn.
+- [`memory.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/memory.ts) is `lib/memory.ts` in production. `loadMemoryState` is `unfoldedRows` and the window together: it finds the watermark row, slices after it, builds the tiered history, trims it to the token budget, and returns the rows the trim dropped. Its comment is the canonical statement that the watermark is applied before trimming. `loadMemory` is the fast path and never calls a model or writes. `foldMemory` runs `loadMemoryState` again, maps the dropped rows to text only, summarises them with an empty prior summary, inserts the fold row and advances the watermark in parallel, and then calls `maintainFoldWindow`, which distils the oldest fold into the preferences and deletes it while more than `MAX_RECENT_FOLDS`, which is 1, remain. `buildMemoryMessage` joins the preferences and the one recent fold into one assistant-role message, or returns null.
+- [`db.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/lib/db.ts) is the `memory` object and the `folds` array as tables. `advanceGuestMemoryWatermark` upserts only `summarized_through_message_id`, so a first fold creates the row and a later one leaves the preferences untouched. `insertGuestMemoryFold` is a plain insert with `message_id_from` and `message_id_to`. `loadGuestMemoryFolds` reads oldest first so the one to distil is the first element. `updateGuestMemoryPreferences` and `deleteGuestMemoryFold` are the two halves of a distil.
+- [`run-guest-turn.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/apps/guest-communication-agent/src/agent/run-guest-turn.ts) is the `after()`. `fold-memory-summary` is the last step of the turn, after `send-whatsapp-reply` and `update-message-delivery-status`, and its callback catches everything, marks its span and reports, so a summariser failure never fails a turn whose reply is already out.
+- [`20260817120000_create_guest_memory_folds.sql`](https://github.com/SBub/issebya-homes-ai-system/blob/649af1c2812e991af413734965d2f971cd4afad7/supabase/migrations/20260817120000_create_guest_memory_folds.sql) is the fold table: one row per fold with its summary text and the first and last message id it covers.
+
+## Pitfalls
+
+- **Replies got slower by the summariser's whole round trip.** The fold was awaited before the send. Run it after. See Wrong and right above.
+- **The same turns appear in two folds, and raw as well.** No watermark. Record the last folded row and start after it on both paths. See Wrong and right above.
+- **The prompt starts with a growing stack of summaries.** Every fold was kept and injected. Keep one, distil the rest. See Wrong and right above.
+- **A folded turn still shows up in the history.** The watermark was applied after the trim instead of before it. Slice the rows at the watermark first, then build the window.
+- **The fold and the history disagree about what was dropped.** The fold used the rows as they were when the turn started, not after the reply was stored. Re-read the rows in the fold step.
+- **A fold ends mid-turn, with a question in the fold and its answer in the history.** The window dropped rows instead of turns. Drop whole turns and the watermark lands on a turn boundary.
+- **A summariser outage failed the turn.** The fold step threw. Catch inside the step: the reply is already out, and a missing fold is only a bigger backlog next time.
+- **The summary contains tool JSON and dates in the wrong format.** The summariser was given replayed tool messages. Give it the text of each row only.
+- **The provider warns about a system message inside the messages.** The memory went in with the system role. Use the assistant role for the one memory message and keep the real system prompt in the system parameter.
+
+## When not to use
+
+- Conversations that end within the window. Nothing ever falls out; there is nothing to fold.
+- A provider that holds the conversation for you and compresses it on its side. You cannot fold what you do not hold.
+- Facts that must be exact, such as a confirmed date or an amount. A summary paraphrases. Keep those in rows the window replays, or in a structured field, not in a fold.
+
+## Code
+
+<CodeLinks />
