@@ -6,15 +6,15 @@ Performance metrics for the AI Developer Workflow (ADW) system.
 
 Summary metrics across all ADW runs.
 
-| Metric            | Value       | Last Updated                  |
-| ----------------- | ----------- | ----------------------------- |
-| Current Streak    | 33          | Wed Sep 30 09:55:25 WEST 2026 |
-| Longest Streak    | 33          | Wed Sep 30 09:55:25 WEST 2026 |
-| Total Plan Size   | 9822 lines  | Wed Sep 30 09:55:25 WEST 2026 |
-| Largest Plan Size | 698 lines   | Wed Sep 30 09:55:25 WEST 2026 |
-| Total Diff Size   | 36213 lines | Wed Sep 30 09:55:25 WEST 2026 |
-| Largest Diff Size | 2750 lines  | Wed Sep 30 09:55:25 WEST 2026 |
-| Average Presence  | 1.0         | Wed Sep 30 09:55:25 WEST 2026 |
+| Metric            | Value       | Last Updated                 |
+| ----------------- | ----------- | ---------------------------- |
+| Current Streak    | 34          | Fri Oct 2 11:13:52 WEST 2026 |
+| Longest Streak    | 34          | Fri Oct 2 11:13:52 WEST 2026 |
+| Total Plan Size   | 10029 lines | Fri Oct 2 11:13:52 WEST 2026 |
+| Largest Plan Size | 698 lines   | Fri Oct 2 11:13:52 WEST 2026 |
+| Total Diff Size   | 36587 lines | Fri Oct 2 11:13:52 WEST 2026 |
+| Largest Diff Size | 2750 lines  | Fri Oct 2 11:13:52 WEST 2026 |
+| Average Presence  | 1.0         | Fri Oct 2 11:13:52 WEST 2026 |
 
 ## ADW KPIs
 
@@ -55,3 +55,4 @@ Detailed metrics for individual ADW workflow runs.
 | Tue Sep 29 12:44:18 WEST 2026 | 066a1da6 | 189          | /feature    | 1        | 319               | 2747/3/48                       | Tue Sep 29 12:44:18 WEST 2026 | Tue Sep 29 12:44:18 WEST 2026 |
 | Tue Sep 29 19:26:32 WEST 2026 | 6d199710 | 197          | /feature    | 1        | 373               | 1476/4/19                       | Tue Sep 29 19:26:32 WEST 2026 | Tue Sep 29 19:26:32 WEST 2026 |
 | Wed Sep 30 09:55:25 WEST 2026 | 0a3bfba6 | 199          | /bug        | 1        | 181               | 565/101/5                       | Wed Sep 30 09:55:25 WEST 2026 | Wed Sep 30 09:55:25 WEST 2026 |
+| Fri Oct 2 11:13:52 WEST 2026  | 423b11e9 | 212          | /feature    | 1        | 207               | 359/15/8                        | Fri Oct 2 11:13:52 WEST 2026  | Fri Oct 2 11:13:52 WEST 2026  |
