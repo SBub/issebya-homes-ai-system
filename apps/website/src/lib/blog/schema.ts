@@ -58,6 +58,9 @@ const postMetaSchema = z.object({
       height: z.number().int().positive("Hero image height must be a positive integer"),
     })
     .optional(),
+  // Lifts the post above date order on `/blog`. Optional, so an unpinned post
+  // omits it rather than writing `false`.
+  pinned: z.boolean().optional(),
 });
 
 type BlogPostMeta = z.infer<typeof postMetaSchema>;
@@ -77,11 +80,15 @@ export function toBlogPost(meta: unknown, Content: ComponentType): BlogPost {
 }
 
 /**
- * Newest first. `yyyy-MM-dd` is lexicographically ordered, so no `Date` is
- * constructed here. Returns a new array; the input is not mutated.
+ * Pinned posts first, then each group newest first. `yyyy-MM-dd` is
+ * lexicographically ordered, so no `Date` is constructed here.
+ * `Array.prototype.sort` is stable, so posts with equal keys keep their
+ * registry order. Returns a new array; the input is not mutated.
  */
-export function sortPostsByDateDesc(posts: BlogPost[]): BlogPost[] {
-  return [...posts].sort((a, b) => b.date.localeCompare(a.date));
+export function sortPosts(posts: BlogPost[]): BlogPost[] {
+  return [...posts].sort(
+    (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.date.localeCompare(a.date),
+  );
 }
 
 /**

@@ -140,6 +140,7 @@ procedures, not code documentation) and anything gitignored.
 - `apps/website/app_docs/feature-fe1ca663-blog-with-booking-widget.md`
   - Conditions:
     - When adding, editing or removing a blog post under `apps/website/src/content/blog/`
+    - When pinning a blog post or changing `/blog` ordering
     - When changing `BookingWidget`, `RoomSwitcher`, or anything that renders `BookingEngine` outside `/booking/[type]`
     - When a blog route stops prerendering, or `sitemap.ts`/`robots.ts`/`SITE_URL` needs changing
     - When a local or E2E iCal feed fetch fails on a non-3000 port

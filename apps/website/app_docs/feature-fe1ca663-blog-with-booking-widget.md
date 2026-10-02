@@ -10,7 +10,7 @@
 
 ## What Was Built
 
-- `/blog`: an index listing every post newest first, with title, date and description.
+- `/blog`: an index listing every post newest first, with title, date and description. Any pinned post sorts ahead of the rest and carries a "Pinned" label above its date.
 - `/blog/[slug]`: one post per MDX file, prerendered via `generateStaticParams`, with per-post `generateMetadata` (canonical URL, Open Graph `article` tags, optional hero image).
 - `<BookingWidget />`: a Server Component available to every post with no import, rendering `<GuardedBookingEngine>` for `room1` and `room2`, the same component `booking/[type]/page.tsx` uses (Sentry `ErrorBoundary` with the WhatsApp fallback, around `Suspense`/`BookingEngineSkeleton`, around `<BookingEngine>`).
 - `<RoomSwitcher>`: a small `"use client"` tablist that toggles which of the two prerendered engines is on screen. Both engines arrive as `ReactNode` props, so switching is pure client state and issues no request.
@@ -23,9 +23,10 @@
 
 ### Files Modified
 
-- `apps/website/src/lib/blog/schema.ts` (new): `zod` frontmatter contract (`title`, `description`, `date`, `slug`, optional `hero`), plus `toBlogPost`, `sortPostsByDateDesc` and `assertUniqueSlugs`. Imports no MDX and does no rendering, which is what keeps it runnable in the vitest node pool.
+- `apps/website/src/lib/blog/schema.ts` (new): `zod` frontmatter contract (`title`, `description`, `date`, `slug`, optional `hero`, optional `pinned`), plus `toBlogPost`, `sortPosts` (pinned first, then newest first, stable for equal keys) and `assertUniqueSlugs`. Imports no MDX and does no rendering, which is what keeps it runnable in the vitest node pool.
 - `apps/website/src/lib/blog/posts.ts` (new): the registry. Explicit imports of each post module, validation at module scope, exports `allPosts` and `getPostBySlug`.
 - `apps/website/src/app/(main)/blog/page.tsx` (new): the index route.
+- `apps/website/src/app/(main)/blog/ui/PostCard.tsx`: the index card. Renders a "Pinned" label in the date line's style when `post.pinned` is true.
 - `apps/website/src/app/(main)/blog/[slug]/page.tsx` (new): the post route, `generateStaticParams`, `generateMetadata`, `notFound()` for unknown slugs.
 - `apps/website/src/app/(main)/blog/ui/BookingWidget.tsx` (new): builds both rooms' engine nodes and hands them to the switcher.
 - `apps/website/src/app/(main)/blog/ui/RoomSwitcher.tsx` (new): the client tablist, with a PostHog `room_tab_clicked` capture.
@@ -63,8 +64,10 @@ To add a post:
      date: "2026-08-14", // YYYY-MM-DD calendar day, never a Date
      slug: "<slug>", // lowercase kebab-case, must match the filename
      hero: { src: "/terrace.webp", alt: "...", width: 1200, height: 800 }, // optional
+     pinned: true, // optional; lifts the post above date order on /blog with a "Pinned" label
    };
    ```
+   Removing `pinned` returns the post to date order. Several pinned posts sort newest first among themselves.
 3. Write the body in markdown. To put the booking engine mid-article, write `<BookingWidget />` on its own line between paragraphs. No import is needed.
 4. Add an import for the new module to `apps/website/src/lib/blog/posts.ts` and a `toBlogPost(...)` entry to the `posts` array. This step is not optional: the registry is deliberately explicit, so a post that is not imported does not exist.
 5. The index, the post route, `generateStaticParams` and the sitemap pick it up from there.
@@ -79,7 +82,8 @@ A reader lands on a post, reads it, picks `room 1` or `room 2` in the widget, pi
 
 ## Testing
 
-- Unit (`yarn turbo run test --filter=website`): `src/lib/blog/__tests__/schema.unit.test.ts` covers the frontmatter contract, date and slug validation, date-descending sort and the duplicate-slug guard.
+- Unit (`yarn turbo run test --filter=website`): `src/lib/blog/__tests__/schema.unit.test.ts` covers the frontmatter contract, date and slug validation, the `pinned` flag (including rejecting `pinned: "yes"`), the sort (pinned first, each group newest first, stable for equal dates) and the duplicate-slug guard.
+- Browser: `src/app/(main)/blog/ui/PostCard.browser.test.tsx` asserts the "Pinned" label renders on a pinned card and is absent when `pinned` is false or omitted.
 - Browser: `src/app/(main)/blog/ui/RoomSwitcher.browser.test.tsx` asserts room 1's panel is on screen first, that clicking the room 2 tab swaps which panel is rendered, and that `aria-selected` follows the active tab. It then mounts the real `BookingClient` as each panel, with genuinely different per-room blocked dates, and asserts that the calendar under the room 2 tab disables room 2's blocked days and not room 1's, and that a date range picked on room 1 does not survive the switch (the engine comes back collapsed on room 2's own server defaults).
 - E2E (`yarn workspace website test:integration`): `e2e/blog-booking-flow.integration.spec.ts` checks the index orders posts newest first, drives a full booking from inside a post through to the (mocked) Stripe Checkout URL, asserts a room switch produces neither an availability fetch nor an RSC round trip, and asserts that the same switch remounts the engine rather than carrying room 1's expanded calendar and date selection across.
 
