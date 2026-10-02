@@ -1,0 +1,270 @@
+---
+title: Connection status with useSyncExternalStore
+kind: atom
+summary: A connection state that lives outside React, such as a socket's status, must show in the UI and re-render only the components that read it, with no React state and no query cache entry.
+tags:
+  - use-sync-external-store
+  - realtime
+  - hydration
+code:
+  - path: apps/patterns/src/lib/sse/progress-store.ts
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: A module variable and a Set of listeners; one update replaces the value and notifies; the EventSource callbacks outside React are the writer.
+  - path: apps/patterns/src/app/demos/SseProgressDemo.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: The reader; one useSyncExternalStore call with the module-level functions, no state and no effect, rendering the stream's status.
+  - path: apps/website/src/app/checkin/_components/CheckinTemplate.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: A production read of a primitive string snapshot with a constant server snapshot; the browser's hashchange event is the writer.
+verifiedIn:
+  - 23
+  - 112
+  - 201
+updated: 2026-10-02
+---
+
+## Problem
+
+A page shows whether its live connection is up. The value comes from a socket, and the socket's callbacks are where the truth lives: open, close, error. Nothing in React owns that value. The component that shows it only needs to read it, and re-render when it changes.
+
+The obvious home is React state. Put `status` in the component that opens the socket and pass it down, or hold it in a context. Two things go wrong. Every status change re-renders that component and everything under it, not just the indicator. And the only way to write the state is the setter from `useState`, so the socket module needs a hand into the tree to call it: a callback threaded through props, or a ref the module writes to. The writer is forced inside React.
+
+The other tempting home is the query cache. `setQueryData(["connection"], "live")` works from anywhere. But the cache is built for server data. An entry with no `queryFn` has nothing to refetch when a blanket invalidation reaches it, and the cache drops it once no component has observed it for `gcTime`. A connection status is never fetched from anywhere, so none of that fits.
+
+## Mechanism
+
+`useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)` lets a component read a value React does not own and re-render when it changes. [Reading an external store with useSyncExternalStore](/p/use-sync-external-store) has the three functions and their rules in full. This doc is about the store those functions sit on when the writer is outside React. Here is what happens, in order.
+
+1. The store is a module variable, `let status = "connecting"`, and a `Set` of listeners. Both live at module level, so there is one copy per JavaScript realm: one on the server, one in the browser.
+2. `subscribe(listener)` adds the listener to the set and returns a function that removes it. React calls `subscribe` once after the component mounts, and the returned function on unmount.
+3. `getSnapshot()` returns `status`. React calls it on every render, and again before commit, and compares the results with `Object.is`. A string compares by value, so a primitive needs no caching. An object would have to keep the same reference until something changes.
+4. `getServerSnapshot()` returns the constant `"connecting"`. The socket does not exist on the server, so there is nothing to read. React uses this function for the server render and again for hydration in the browser, so the HTML and the first client render match.
+5. The writer, the socket's status callback, calls one exported setter. The setter assigns the variable and calls every listener. When the value did not change, it returns early and nothing re-renders.
+6. Each listener belongs to React. On the call, React reads `getSnapshot` again, sees a different string, and re-renders the component that owns that listener. Nothing else re-renders: not the page, not the component that opened the socket.
+
+The hook reads in render, straight from the variable, so two indicators on one screen never disagree.
+
+One more consequence under Next's `cacheComponents`. Next prerenders client components too, and treats a read of the clock or the request as IO that aborts the client prerender. The component then ships as its Suspense fallback, and the build still reports the route as static. The server-side read of this hook is `getServerSnapshot` and nothing else. A constant there means the component touches no clock and no request, so it prerenders into the static shell as `connecting`. Compare the numeric `staleTime` in [Suspended query with an error boundary](/p/query-error-boundary), where one `Date.now()` inside a hook was enough to drop a component out of the shell.
+
+## Pattern
+
+The three files below are a working app. Paste them into a fresh Next project and open `/`. The indicator says `connecting`, turns `live` after a second, and drops to `reconnecting` for a second every five seconds.
+
+The store and the component share one file. Nothing else reads the status, so a separate store module would be one more file with one importer.
+
+```tsx title="app/ConnectionIndicator.tsx"
+"use client";
+
+import { useSyncExternalStore } from "react";
+
+type ConnectionStatus = "connecting" | "live" | "reconnecting";
+
+let status: ConnectionStatus = "connecting";
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot() {
+  return status;
+}
+
+function getServerSnapshot(): ConnectionStatus {
+  // The socket does not exist on the server, so every page hydrates as connecting
+  return "connecting";
+}
+
+// The only way in: the socket's status callback calls this, and nothing else writes status
+export function setConnectionStatus(next: ConnectionStatus) {
+  if (next === status) return;
+  status = next;
+  listeners.forEach((listener) => listener());
+}
+
+export function ConnectionIndicator() {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  return <span>{current}</span>;
+}
+```
+
+`status` and `listeners` are module variables, not state. `setConnectionStatus` is the file's only writer, and the component is its only other export, so the store has one way in. The component holds no state and no effect. Its listener sits in the set, and a call to the setter re-renders this component alone. When the writer is not written yet, the export has no caller and knip reports it; a `/** @public */` JSDoc tag on the setter keeps it out of the report until the caller lands. When a second reader appears, move the variable and the three functions to `app/connection-status.ts` and import them from both; the setter stays the only way in.
+
+The writer is the socket module. Here a timer stands in for the socket.
+
+```tsx title="app/Connection.tsx"
+"use client";
+
+import { useEffect } from "react";
+import { setConnectionStatus } from "./ConnectionIndicator";
+
+function connect() {
+  // Stands in for a socket: open after a second, then a drop and a recovery every five
+  const open = setTimeout(() => setConnectionStatus("live"), 1000);
+  const drop = setInterval(() => {
+    setConnectionStatus("reconnecting");
+    setTimeout(() => setConnectionStatus("live"), 1000);
+  }, 5000);
+
+  return () => {
+    clearTimeout(open);
+    clearInterval(drop);
+  };
+}
+
+export function Connection() {
+  useEffect(connect, []);
+
+  return null;
+}
+```
+
+In a real app the three `setConnectionStatus` calls sit in the socket's open, close and error callbacks. The effect owns only the socket's lifetime: open on mount, close on unmount. `Connection` renders nothing and never re-renders on a status change, because the status never passes through its state. Strict Mode mounts it twice in development, and the cleanup undoes everything, so the second run is clean.
+
+The page mounts both.
+
+```tsx title="app/page.tsx"
+import { Connection } from "./Connection";
+import { ConnectionIndicator } from "./ConnectionIndicator";
+
+export default function Page() {
+  return (
+    <>
+      <Connection />
+      <header>
+        <ConnectionIndicator />
+      </header>
+      <main>
+        <p>This paragraph does not re-render when the status changes.</p>
+      </main>
+    </>
+  );
+}
+```
+
+The page is a Server Component. It prerenders with `connecting` in the HTML, from `getServerSnapshot`. In a real app `Connection` and the indicator sit in the root layout, so one socket serves every route and every header shows its status.
+
+### Wrong and right
+
+Every status change re-renders the component that opens the socket and everything under it, and the socket module needs a setter handed to it.
+
+🔴 The status is `useState` in `Connection`, which now wraps the page to pass the value down. Every change re-renders `Connection` and its whole subtree, and `connect` needs `setStatus` as an argument, so the socket module cannot live outside the tree. This is `Connection`, with a context and the imports added above it.
+
+```tsx title="app/Connection.tsx"
+export function Connection({ children }: { children: ReactNode }) {
+  const [status, setStatus] = useState<ConnectionStatus>("connecting");
+
+  useEffect(() => connect(setStatus), []);
+
+  return <StatusContext value={status}>{children}</StatusContext>;
+}
+```
+
+✅ `Connection` holds nothing. The writer imports the setter, the indicator reads the store, and a status change re-renders the indicator alone.
+
+```tsx title="app/Connection.tsx"
+export function Connection() {
+  useEffect(connect, []);
+
+  return null;
+}
+```
+
+The status disappears after a few minutes on a page without the indicator, or a blanket invalidation puts the indicator in an error state.
+
+🔴 The socket's callbacks write the status with `setQueryData`, and the indicator reads it with `useQuery` under `["connection"]`. The entry has no `queryFn`, so `invalidateQueries()` or `refetchQueries()` with no filter tries to refetch it with nothing to run, and once no component observes the key for `gcTime`, five minutes by default, the cache drops it. This is `connect` in `Connection`, with the client taken from `useQueryClient` above the effect.
+
+```tsx title="app/Connection.tsx"
+function connect(queryClient: QueryClient) {
+  const open = setTimeout(() => queryClient.setQueryData(["connection"], "live"), 1000);
+
+  return () => clearTimeout(open);
+}
+```
+
+✅ The setter writes the store. No key, no client, and no cache semantics that were built for server data.
+
+```tsx title="app/Connection.tsx"
+function connect() {
+  const open = setTimeout(() => setConnectionStatus("live"), 1000);
+
+  return () => clearTimeout(open);
+}
+```
+
+The server render throws `Missing getServerSnapshot, which is required for server-rendered content`, or the HTML says one status and the hydrated page another.
+
+🔴 The hook has no third argument. On the server there is no socket and no value React can trust to match the hydrating client. A third argument that reads the live variable, or anything else that can differ between the server and the hydrating browser, fails the same way one step later, as a hydration mismatch. This is the hook call in `ConnectionIndicator`.
+
+```tsx title="app/ConnectionIndicator.tsx"
+export function ConnectionIndicator() {
+  const current = useSyncExternalStore(subscribe, getSnapshot);
+
+  return <span>{current}</span>;
+}
+```
+
+✅ A constant. The server and the hydrating client both render `connecting`, and the browser moves on from there with the first setter call.
+
+```tsx title="app/ConnectionIndicator.tsx"
+function getServerSnapshot(): ConnectionStatus {
+  return "connecting";
+}
+
+export function ConnectionIndicator() {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  return <span>{current}</span>;
+}
+```
+
+The console says `The result of getSnapshot should be cached to avoid an infinite loop`, then `Maximum update depth exceeded`.
+
+🔴 `getSnapshot` wraps the string in an object. Every read is a new reference, `Object.is` reports a change on every render, and React renders again without end. This is `getSnapshot` in `ConnectionIndicator`.
+
+```tsx title="app/ConnectionIndicator.tsx"
+function getSnapshot() {
+  return { status };
+}
+```
+
+✅ Return the string. A primitive compares by value, so two reads between changes are equal and nothing needs caching. A store that holds several fields at once keeps one object and replaces it whole on each change, as the stream store in [Reading an external store with useSyncExternalStore](/p/use-sync-external-store) does.
+
+```tsx title="app/ConnectionIndicator.tsx"
+function getSnapshot() {
+  return status;
+}
+```
+
+### In this repo
+
+- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/patterns/src/lib/sse/progress-store.ts) is the store: a module variable, a `Set` of listeners, and `update`, which replaces the snapshot and calls every listener. The writer is outside React. The `EventSource` callbacks in `run` and the `disconnect` handler call `update`, and nothing else does. `getServerSnapshot` returns the constant initial object, and the snapshot's `status` field is the connection status of that stream: `idle`, `running`, `disconnected`, `done` or `error`. It has a module of its own because the Server-Sent Events doc teaches it as a file beside the route it reads.
+- [`SseProgressDemo.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/patterns/src/app/demos/SseProgressDemo.tsx) is the reader: one `useSyncExternalStore` call with the module-level functions, no state and no effect, and `STATUS_TEXT[status]` is the indicator. Its buttons call `run` and `disconnect`, the writers, directly.
+- [`CheckinTemplate.tsx`](https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/website/src/app/checkin/_components/CheckinTemplate.tsx) is the same read in production, over the URL hash. `getHash` returns a primitive string, `getServerHash` returns the constant `""`, and `subscribeHash` listens to `hashchange`. The writer here is the browser, not a setter. Every visitor's HTML is the unauthorized view, and the browser flips it right after hydration, when `getHash` runs for the first time.
+- The ADW dashboard, a separate repository with no remote and so not linked here, is where the first file above comes from. Its `src/components/ConnectionIndicator.tsx` holds the store, `setConnectionStatus` and the header pill in one file, with styling and `role="status"` on top of what is shown here. Its agent rules say the status is written only through that setter: never export the variable, add a second setter, or mirror the value into React state or the query cache. The realtime module that will call the setter is not written yet, so the export carries the `/** @public */` tag.
+
+## Pitfalls
+
+- **Every status change re-renders the component that opens the socket and everything under it.** The status is `useState` in that component. Move it to the module store; the indicator alone re-renders. See Wrong and right above.
+- **The socket module needs a setter from React.** Same cause. With the store, the module imports `setConnectionStatus` and calls it from its own callbacks: no prop, no ref, no context.
+- **The status disappears, or a blanket invalidation puts the indicator in an error state.** The status sits in the query cache with no `queryFn`. Write it to the store instead. See Wrong and right above.
+- **`Missing getServerSnapshot, which is required for server-rendered content`, or the HTML and the hydrated page disagree.** The third argument is missing, or reads something that differs between the server and the hydrating client. Return the one constant. See Wrong and right above.
+- **Under `cacheComponents` the indicator ships as its Suspense fallback while the build says the route is static.** Something in the component reads the clock or the request during the client prerender. Keep `getServerSnapshot` a constant and keep `Date.now()` out of the render path, then check the served HTML, not only the build output.
+- **`The result of getSnapshot should be cached to avoid an infinite loop`.** `getSnapshot` builds a new object per call. Return the primitive. See Wrong and right above.
+- **A write from another file changes nothing on screen.** That file imported the variable and assigned it, so no listener ran. The variable is not exported for this reason. Every write goes through the setter.
+- **knip reports `setConnectionStatus` as unused.** The writer is not written yet. Tag the export `/** @public */` until it is, rather than deleting the setter or exporting the variable.
+
+## When not to use
+
+- Server data. Anything fetched belongs in React Query, which gives it loading, error, caching and refetch. A store snapshot has none of that.
+- A value only one component owns, such as an open menu or a form field. Use `useState`. There is no writer outside React.
+- The messages the socket delivers, as opposed to its state. That is data. Write it into the query cache with `setQueryData` under its key, and the readers of that key re-render.
+- A browser API that already fires events, such as `navigator.onLine` or a media query. Subscribe to the API directly, with no variable and no setter. [Reading an external store with useSyncExternalStore](/p/use-sync-external-store) shows that form.
+
+## Code
+
+<CodeLinks />
