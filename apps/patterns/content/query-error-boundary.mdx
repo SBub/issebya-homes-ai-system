@@ -1,0 +1,276 @@
+---
+title: Suspended query with an error boundary
+kind: atom
+summary: A component that reads with useSuspenseQuery needs a boundary that resets the query error state on retry, otherwise Retry re-renders the same cached error.
+tags:
+  - react-query
+  - suspense
+  - error-boundary
+code:
+  - path: apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: Takes reset from useQueryErrorResetBoundary and passes it as onReset on the error boundary around the grid.
+  - path: apps/website/src/app/(main)/shop/ui/ShopGridError.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: The fallback panel with the Try again button, rendered by the boundary with the retry callback.
+  - path: apps/website/src/app/(main)/shop/ui/ProductList.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: The suspended query under the boundary; a rejected page one throws into it.
+  - path: apps/website/src/app/(main)/shop/page.tsx
+    ref: a954380b270bb63654f418f2208b656c76a4c4d4
+    note: Mounts the boundary outside the grid's Suspense and inside the controls, so search and sort survive a failure.
+verifiedIn:
+  - 164
+  - 174
+  - 182
+updated: 2026-10-02
+---
+
+## Problem
+
+A client component reads its data with `useSuspenseQuery`. While the fetch runs, the hook suspends and the nearest `Suspense` shows its fallback. When the fetch fails, the hook throws the error instead. Without an error boundary of its own, that throw walks up to the route segment's `error.tsx`, which replaces the whole segment: the failed list, and everything around it that did not fail. Add a plain error boundary and the failure stays local, but its Retry button does nothing useful. The child re-mounts, reads the same query, finds the same error, and throws again.
+
+## Mechanism
+
+React Query keeps the outcome of every fetch on the query, under its key, including a failure. `useSuspenseQuery` hands both outcomes to React: a pending fetch as a thrown promise, a failed one as a thrown error. Here is what happens on a failure, in order.
+
+1. The fetcher rejects. The query's state becomes `error`, and on the next render the hook throws that error.
+2. React unwinds to the nearest error boundary, which renders its fallback in place of the child. A `Suspense` boundary only handles promises, so the throw passes it. If there is no error boundary below the segment, Next's `error.tsx` is the one that catches it.
+3. The visitor clicks Retry. The boundary clears its own state and re-mounts the child.
+4. The re-mounted hook reads the same query, and the error is still on it. Before deciding whether to refetch, the hook asks the query error reset boundary whether it has been reset. It has not, so the hook turns `retryOnMount` off for this query and throws the cached error again. The boundary shows the same fallback, with no request in between.
+5. `useQueryErrorResetBoundary` returns a `reset` function that flips that flag. Passed as the error boundary's `onReset`, it runs in the same click, before the child re-mounts.
+6. Now the re-mounted hook sees the flag, leaves `retryOnMount` on, and refetches. The query is pending again, so the hook suspends and the `Suspense` fallback shows. An effect clears the flag once the component has rendered, so the next failure throws like the first one.
+
+The two boundaries nest in a fixed order: the error boundary outside, `Suspense` inside. A pending promise stops at `Suspense`; an error passes it and stops at the error boundary.
+
+## Pattern
+
+The four files below are a working app. Paste them into a fresh Next project with `@tanstack/react-query` and `react-error-boundary` installed and open `/items`. The first load shows the error panel. Retry loads the list.
+
+One component composes the two boundaries and the reset. Every suspended query renders inside it.
+
+```tsx title="app/QueryBoundary.tsx"
+"use client";
+
+import { useQueryErrorResetBoundary } from "@tanstack/react-query";
+import { type ReactNode, Suspense } from "react";
+import { ErrorBoundary } from "react-error-boundary";
+
+export function QueryBoundary({
+  children,
+  fallback,
+}: {
+  children: ReactNode;
+  fallback: ReactNode;
+}) {
+  const { reset } = useQueryErrorResetBoundary();
+
+  return (
+    <ErrorBoundary
+      // Clears the query error state before the child re-mounts, so it refetches
+      onReset={reset}
+      fallbackRender={({ resetErrorBoundary }) => (
+        <div>
+          <p>Could not load.</p>
+          <button type="button" onClick={resetErrorBoundary}>
+            Retry
+          </button>
+        </div>
+      )}
+    >
+      <Suspense fallback={fallback}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+```
+
+`resetErrorBoundary` is the Retry. It calls `onReset` first, which clears the query error state, and then re-mounts the children. The `Suspense` boundary is inside, so the refetch that follows shows `fallback` rather than the error panel.
+
+The list is a client component. It reads with `useSuspenseQuery` and otherwise knows nothing about errors.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { useSuspenseQuery } from "@tanstack/react-query";
+
+type Item = { id: number; name: string };
+
+const itemsKey = ["items"];
+
+const items: Item[] = [
+  { id: 1, name: "Alpha" },
+  { id: 2, name: "Bravo" },
+  { id: 3, name: "Charlie" },
+];
+
+let attempts = 0;
+
+async function fetchItems() {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  attempts += 1;
+  // Stands in for an API that fails now and then: every odd attempt rejects
+  if (attempts % 2 === 1) throw new Error("Items are unavailable");
+  return items;
+}
+
+export function ItemList() {
+  const { data } = useSuspenseQuery({
+    queryKey: itemsKey,
+    queryFn: fetchItems,
+    // The default retries three times with backoff before the error reaches the boundary
+    retry: false,
+  });
+
+  return (
+    <ul>
+      {data.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+The first attempt rejects, so the first render throws into the boundary. Retry resets the query error state, the hook refetches, the second attempt resolves, and the list renders.
+
+The provider is a client component with one `QueryClient` for the whole session.
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type ReactNode, useState } from "react";
+
+export function Providers({ children }: { children: ReactNode }) {
+  // The lazy initialiser keeps a re-render from building a second client
+  const [queryClient] = useState(() => new QueryClient());
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+```
+
+The page mounts the list inside the boundary, inside the provider.
+
+```tsx title="app/items/page.tsx"
+import { Providers } from "../providers";
+import { QueryBoundary } from "../QueryBoundary";
+import { ItemList } from "./ItemList";
+
+export default function Page() {
+  return (
+    <Providers>
+      <QueryBoundary fallback={<p>Loading</p>}>
+        <ItemList />
+      </QueryBoundary>
+    </Providers>
+  );
+}
+```
+
+`Providers` sits above `QueryBoundary`: the query under the boundary reads the client the provider holds, and that is the client whose error state the reset clears. Combined with server prefetch with hydration, `HydrationBoundary` goes between the two. The first render is then a cache hit, and the boundary only matters for a later refetch or a cache miss.
+
+### Wrong and right
+
+A failed list takes the whole route segment with it, including the parts that did not fail.
+
+🔴 The list sits in a bare `Suspense`. `Suspense` handles the pending promise and nothing else, so the thrown error passes it and lands in the segment's `error.tsx`, which replaces everything in the segment. This is the body of `Page`.
+
+```tsx title="app/items/page.tsx"
+<Providers>
+  <Suspense fallback={<p>Loading</p>}>
+    <ItemList />
+  </Suspense>
+</Providers>
+```
+
+✅ The list sits in `QueryBoundary`. The error stops at the boundary's panel and the rest of the segment stays on screen.
+
+```tsx title="app/items/page.tsx"
+<Providers>
+  <QueryBoundary fallback={<p>Loading</p>}>
+    <ItemList />
+  </QueryBoundary>
+</Providers>
+```
+
+Retry shows the same error again at once, with no request in between.
+
+🔴 The error boundary has no `onReset`. Retry re-mounts the child, the hook finds the query still in its error state with the reset flag down, turns `retryOnMount` off and throws the cached error. This is the return of `QueryBoundary`.
+
+```tsx title="app/QueryBoundary.tsx"
+<ErrorBoundary
+  fallbackRender={({ resetErrorBoundary }) => (
+    <button type="button" onClick={resetErrorBoundary}>
+      Retry
+    </button>
+  )}
+>
+  <Suspense fallback={fallback}>{children}</Suspense>
+</ErrorBoundary>
+```
+
+✅ `onReset` calls `reset` from `useQueryErrorResetBoundary`, taken above the return. It runs before the re-mount, so the re-mounted hook refetches. This is the same return.
+
+```tsx title="app/QueryBoundary.tsx"
+<ErrorBoundary
+  onReset={reset}
+  fallbackRender={({ resetErrorBoundary }) => (
+    <button type="button" onClick={resetErrorBoundary}>
+      Retry
+    </button>
+  )}
+>
+  <Suspense fallback={fallback}>{children}</Suspense>
+</ErrorBoundary>
+```
+
+With the server prefetch in place, the HTML ships the `Suspense` fallback, while the build still reports the route as static.
+
+🔴 The hook has a numeric `staleTime`. With `cacheComponents` on, Next also prerenders client components and treats `Date.now()` as IO. React Query reads the clock in `isStaleByTime` on every render for a numeric `staleTime`, the first read aborts the client prerender, and the component ships as its `Suspense` fallback. Nothing fails: the build counts the route as static and the fallback renders in the browser. This is the hook call in `ItemList`, with the hydration pattern's `refetchOnMount: false`.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+  staleTime: 60_000,
+  refetchOnMount: false,
+});
+```
+
+✅ `staleTime: "static"` returns before the clock read, so the prerender completes and the list is in the HTML. It suits data that changes only when something writes it, never on a timer. Note that `invalidateQueries` and `refetchQueries` skip static queries; updates go through `setQueryData`, or `refetch()` from the hook.
+
+```tsx title="app/items/ItemList.tsx"
+const { data } = useSuspenseQuery({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+  staleTime: "static",
+  refetchOnMount: false,
+});
+```
+
+### In this repo
+
+- [`ShopGridBoundary.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx>) is the boundary. It takes `reset` from `useQueryErrorResetBoundary` and passes it as `onReset` on Sentry's `ErrorBoundary`, which has the same contract as `react-error-boundary` (a fallback render prop with a reset callback, and `onReset`). Its Try again also calls `router.refresh()` in the same transition, because the child under it is a Server Component whose payload can fail too; a reset alone would re-render the same errored chunk.
+- [`ShopGridError.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/website/src/app/(main)/shop/ui/ShopGridError.tsx>) is the fallback panel. The boundary renders it with the retry callback as `onRetry`.
+- [`ProductList.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/website/src/app/(main)/shop/ui/ProductList.tsx>) is the suspended query, `useSuspenseInfiniteQuery` with `refetchOnMount: false`. A rejected page one throws into the boundary. Later pages never throw while data exists; the list shows its own retry line for them.
+- [`page.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/a954380b270bb63654f418f2208b656c76a4c4d4/apps/website/src/app/(main)/shop/page.tsx>) mounts `ShopGridBoundary` outside the grid's `Suspense` and inside `ShopControls`, so the search box and sort stay usable when page one fails.
+- The ADW dashboard, a separate repository and so not linked here, wraps its sidebar query in the same `QueryBoundary` as above, with a styled default panel and an `errorFallback` prop, inside the `HydrationBoundary` of its server prefetch. That is where the `staleTime: "static"` finding comes from.
+
+## Pitfalls
+
+- **Retry shows the same error again at once, with no request.** The error boundary has no `onReset={reset}`. React Query turns `retryOnMount` off for a suspense query while its reset boundary has not been reset, so the re-mounted hook throws the cached error. See Wrong and right above.
+- **A failed list takes the whole segment with it.** The list sits in a bare `Suspense`. The throw passes it and lands in `error.tsx`. See Wrong and right above.
+- **Retry refetches the query, but a Server Component under the boundary keeps failing.** Resetting the query does nothing for a thrown RSC payload. Call `router.refresh()` in the same transition as the reset, as the shop grid does.
+- **The HTML ships the Suspense fallback while the build says the route is static.** A numeric `staleTime` reads the clock during the client prerender. Use `staleTime: "static"`, and check the served HTML, not only the build output. See Wrong and right above.
+- **`invalidateQueries` does nothing to a static query.** Static queries are skipped by `invalidateQueries` and `refetchQueries`. Write with `setQueryData`, or call `refetch()` from the hook.
+- **The first failure never reaches the boundary; the list just loads late.** React Query retries three times with backoff before a query settles as an error. That is right in production. In a test or a demo, set `retry: false` so the boundary is exercised.
+
+## When not to use
+
+- A read with plain `useQuery`. It returns `isError` instead of throwing (unless `throwOnError` is set), so the component renders its own error state and no boundary is involved.
+- Data awaited in a Server Component. The segment's `error.tsx` is already its boundary, and its retry re-requests the segment. The query reset only matters for a client read from the query cache.
+- A failure that should take the page down. When the suspended component is the page's only content, there is nothing to keep on screen, and `error.tsx` does the job without another component.
+
+## Code
+
+<CodeLinks />
