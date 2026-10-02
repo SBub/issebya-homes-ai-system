@@ -5,7 +5,7 @@ import { fromCalendarDay } from "@/lib/date-utils";
 import type { BlogPost } from "@/lib/blog/schema";
 
 export function PostCard({ post }: { post: BlogPost }) {
-  const { slug, title, description, date, hero } = post;
+  const { slug, title, description, date, hero, pinned } = post;
   const titleId = `post-${slug}-title`;
 
   return (
@@ -27,6 +27,7 @@ export function PostCard({ post }: { post: BlogPost }) {
       )}
 
       <div className="flex flex-col justify-center min-w-0 text-xs">
+        {pinned && <p className="uppercase tracking-[0.2em] text-[10px]">Pinned</p>}
         <p className="uppercase tracking-[0.2em] text-[10px]">
           {format(fromCalendarDay(date), "d MMM yyyy")}
         </p>

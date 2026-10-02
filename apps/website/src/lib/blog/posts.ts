@@ -25,13 +25,13 @@
 import WelcomeToIssebyaHomes, {
   meta as welcomeToIssebyaHomesMeta,
 } from "@/content/blog/welcome-to-issebya-homes.mdx";
-import { assertUniqueSlugs, type BlogPost, sortPostsByDateDesc, toBlogPost } from "./schema";
+import { assertUniqueSlugs, type BlogPost, sortPosts, toBlogPost } from "./schema";
 
 const posts: BlogPost[] = [toBlogPost(welcomeToIssebyaHomesMeta, WelcomeToIssebyaHomes)];
 
 assertUniqueSlugs(posts);
 
-export const allPosts: BlogPost[] = sortPostsByDateDesc(posts);
+export const allPosts: BlogPost[] = sortPosts(posts);
 
 export function getPostBySlug(slug: string): BlogPost | undefined {
   return allPosts.find((post) => post.slug === slug);
