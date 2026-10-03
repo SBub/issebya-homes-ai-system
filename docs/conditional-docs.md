@@ -282,6 +282,10 @@ procedures, not code documentation) and anything gitignored.
     - When pinning or unpinning a blog post, or changing how `/blog` orders posts (`sortPosts`)
     - When adding another optional field to the blog `meta` contract (`postMetaSchema`) or another label to `PostCard`
     - When a build fails in `toBlogPost` on a `pinned` value
+- `apps/website/app_docs/feature-bf15ab13-forest-bathing-blog-post.md`
+  - Conditions:
+    - When publishing a new blog post or pinning one, since the blog Playwright spec asserts the forest bathing post is first on `/blog`
+    - When choosing a hero image for a post from the existing `public/` photos instead of adding a new one
 
 ---
 
