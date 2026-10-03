@@ -2,12 +2,13 @@
 // Do not edit by hand; the registry validates every entry at module scope.
 import * as doc0 from "@content/connection-status.mdx";
 import * as doc1 from "@content/infinite-scrolling.mdx";
-import * as doc2 from "@content/query-error-boundary.mdx";
-import * as doc3 from "@content/server-prefetch-hydration.mdx";
-import * as doc4 from "@content/sse-route-handler.mdx";
-import * as doc5 from "@content/suspense-without-flash.mdx";
-import * as doc6 from "@content/use-action-state.mdx";
-import * as doc7 from "@content/use-sync-external-store.mdx";
+import * as doc2 from "@content/live-events-query-cache.mdx";
+import * as doc3 from "@content/query-error-boundary.mdx";
+import * as doc4 from "@content/server-prefetch-hydration.mdx";
+import * as doc5 from "@content/sse-route-handler.mdx";
+import * as doc6 from "@content/suspense-without-flash.mdx";
+import * as doc7 from "@content/use-action-state.mdx";
+import * as doc8 from "@content/use-sync-external-store.mdx";
 
 export const manifest = [
   {
@@ -21,33 +22,38 @@ export const manifest = [
     Content: doc1.default,
   },
   {
-    slug: "query-error-boundary",
+    slug: "live-events-query-cache",
     meta: doc2.frontmatter,
     Content: doc2.default,
   },
   {
-    slug: "server-prefetch-hydration",
+    slug: "query-error-boundary",
     meta: doc3.frontmatter,
     Content: doc3.default,
   },
   {
-    slug: "sse-route-handler",
+    slug: "server-prefetch-hydration",
     meta: doc4.frontmatter,
     Content: doc4.default,
   },
   {
-    slug: "suspense-without-flash",
+    slug: "sse-route-handler",
     meta: doc5.frontmatter,
     Content: doc5.default,
   },
   {
-    slug: "use-action-state",
+    slug: "suspense-without-flash",
     meta: doc6.frontmatter,
     Content: doc6.default,
   },
   {
-    slug: "use-sync-external-store",
+    slug: "use-action-state",
     meta: doc7.frontmatter,
     Content: doc7.default,
+  },
+  {
+    slug: "use-sync-external-store",
+    meta: doc8.frontmatter,
+    Content: doc8.default,
   },
 ] as const;
