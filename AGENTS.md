@@ -39,6 +39,11 @@ workspace's own `AGENTS.md` as well.
 
 When you add documentation, add an entry for it there.
 
+`.adw/project.md` is this repository's ADW profile: the toolkit's slash commands
+read it before anything else for the workspaces, ports, install, build and test
+commands, protected actions and documentation locations, so keep it in step with
+this file whenever one of those facts changes.
+
 ## Python workspaces
 
 The repo root is a virtual [uv](https://docs.astral.sh/uv/) workspace
