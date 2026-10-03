@@ -12,18 +12,47 @@ const checkInDisplayText = format(addDays(today, 10), "d MMM yyyy");
 
 const WIDGET_POST = "/blog/welcome-to-issebya-homes";
 const POST_TITLE = "A house for rest between the Sintra forest and the Atlantic";
+const FOREST_POST = "/blog/forest-bathing";
+const FOREST_TITLE = "Forest bathing: a slow walk in the Sintra woods";
 
 test.describe("Blog with an inline booking widget", () => {
   test("index lists the post and links to it", async ({ page }) => {
     await page.goto("/blog");
 
-    // Newest-first ordering is covered one layer down, in
-    // src/lib/blog/__tests__/schema.unit.test.ts, so with a single post the
-    // index only has to render it and route to it.
     // Each card is a single link labelled by the post title (PostCard.tsx).
+    // Ordering against the real registry is asserted in the next test.
     await page.getByRole("link", { name: POST_TITLE }).click();
     await expect(page).toHaveURL(WIDGET_POST);
     await expect(page.getByRole("heading", { level: 1, name: POST_TITLE })).toBeVisible();
+  });
+
+  test("index lists the forest bathing post first, with its description", async ({ page }) => {
+    await page.goto("/blog");
+
+    // sortPosts is newest-first; the forest bathing post is dated after the
+    // welcome post and neither is pinned.
+    const cards = page.getByRole("region", { name: "Posts" }).getByRole("listitem");
+    await expect(cards.first().getByRole("link", { name: FOREST_TITLE })).toBeVisible();
+    await expect(
+      cards.first().getByText("An unhurried morning among the trees of the Sintra forest"),
+    ).toBeVisible();
+    await expect(cards.nth(1).getByRole("link", { name: POST_TITLE })).toBeVisible();
+  });
+
+  test("the forest bathing post renders its hero and body", async ({ page }) => {
+    await page.goto(FOREST_POST);
+
+    const article = page.locator("article");
+    await expect(page.getByRole("heading", { level: 1, name: FOREST_TITLE })).toBeVisible();
+    await expect(article.getByRole("img", { name: /front yard at issebya\.homes/ })).toBeVisible();
+    await expect(
+      article.getByText(
+        "Forest bathing is the simple practice of spending unhurried time among trees",
+      ),
+    ).toBeVisible();
+    await expect(article.getByText("the easiest ritual to add to a stay")).toBeVisible();
+    // A plain note: no booking widget in this post.
+    await expect(article.getByTestId("booking-widget")).toHaveCount(0);
   });
 
   test("booking completes from inside a post", async ({ page }) => {

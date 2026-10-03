@@ -25,9 +25,13 @@
 import WelcomeToIssebyaHomes, {
   meta as welcomeToIssebyaHomesMeta,
 } from "@/content/blog/welcome-to-issebya-homes.mdx";
+import ForestBathing, { meta as forestBathingMeta } from "@/content/blog/forest-bathing.mdx";
 import { assertUniqueSlugs, type BlogPost, sortPosts, toBlogPost } from "./schema";
 
-const posts: BlogPost[] = [toBlogPost(welcomeToIssebyaHomesMeta, WelcomeToIssebyaHomes)];
+const posts: BlogPost[] = [
+  toBlogPost(welcomeToIssebyaHomesMeta, WelcomeToIssebyaHomes),
+  toBlogPost(forestBathingMeta, ForestBathing),
+];
 
 assertUniqueSlugs(posts);
 
