@@ -1,0 +1,222 @@
+---
+title: Branch protection rulesets
+kind: atom
+summary: Long-lived branches must refuse deletion, force pushes and direct commits, merge only through a green pull request, bind the admin too, and carry the same rules on every repo.
+tags:
+  - github
+  - ci
+  - rulesets
+code:
+  - path: .github/workflows/ci.yml
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The job named check, the one status both rulesets require; it runs on every pull request and on push to develop.
+  - path: .github/workflows/eval-golden.yml
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The job named eval-gate, required on master; a changes job skips it when nothing under the GCA app moved, and skipped counts as passed.
+  - path: .github/workflows/migrations.yml
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The jobs named drift-check and prod-migration-sync, required on master; the second has no if gate, and its comment says why.
+verifiedIn:
+  - 65
+  - 104
+  - 105
+  - 120
+updated: 2026-10-03
+---
+
+## Problem
+
+Two branches carry the project. `develop` is where every change lands first and `master` is what production runs. Both need the same guarantees: nobody deletes them, nobody rewrites their history, nothing reaches them except through a pull request, and that pull request is green before the merge button works. Those guarantees must hold for the repository owner too, because the owner is the one person who will be tempted to push a hot fix straight to `master` at midnight.
+
+GitHub offers two ways to say this. Classic branch protection is configured per branch in the settings page, has no export, and lets admins through unless a separate box is ticked. Repository rulesets are JSON objects with an API: they can be read back, diffed, created from a file, and bind admins by default. The second is the one to reuse. The question this doc answers is what exactly the rulesets on this repo say, how to read and recreate them, and which mistakes make a ruleset either toothless or so strict that nothing merges.
+
+## Mechanism
+
+A ruleset is one JSON object on the repository with a name, a target, an enforcement level, a list of bypass actors, a condition that names the branches, and a list of rules. `SBub/issebya-homes-ai-system` has two, `protect-develop` and `protect-master`, and no classic branch protection at all: `gh api repos/SBub/issebya-homes-ai-system/branches/master/protection` answers `404 Branch not protected`, which is correct and expected. Here is what each field does, as read from the live objects on 2026-10-03.
+
+1. `enforcement: active` makes the rules bind. The other values are `disabled` and `evaluate`, and `evaluate` only logs what would have been blocked.
+2. `bypass_actors: []` means nobody is exempt. An empty list binds the repository admin as well, so the owner goes through a pull request like anyone else. This is the setting classic protection hides behind "Do not allow bypassing".
+3. `conditions.ref_name.include` is `["refs/heads/develop"]` on one ruleset and `["refs/heads/master"]` on the other. Two rulesets, not one with two refs, so the required checks can differ.
+4. Rule `deletion` blocks deleting the branch. Rule `non_fast_forward` blocks force pushes.
+5. Rule `pull_request` requires a pull request for every change. Its parameters are the same on both: `required_approving_review_count: 0`, `dismiss_stale_reviews_on_push: true`, `require_code_owner_review: false`, `require_last_push_approval: false`, `required_review_thread_resolution: false`, `require_extra_approval_for_unattributed_changes: true`, `allowed_merge_methods: ["merge", "squash", "rebase"]`. Zero approvals because the repo has one maintainer; a review requirement would be a requirement to approve one's own work, which GitHub refuses.
+6. Rule `required_status_checks` lists the check contexts that must report success before the merge button works. On `develop` it is `check`. On `master` it is `check`, `eval-gate`, `drift-check` and `prod-migration-sync`. Both have `strict_required_status_checks_policy: false`, so a branch need not be up to date with its base, and `do_not_enforce_on_create: false`, so the rules also apply when the branch is first created.
+7. Not used on either: `required_linear_history`, `required_signatures`, `update` restrictions, `creation` restrictions, and `required_deployments`. Rebase and squash both stay allowed, so linear history is a habit here and not a rule.
+
+A check context is the name a workflow job reports under. For a job with no `name:` key, that is the job id: `check:` in `ci.yml` reports as `check`. The ruleset stores the string and nothing else. It does not know which workflow produces it, and it cannot tell a context that exists from one that does not. Two consequences follow. A required context no workflow produces blocks every merge forever, with the pull request stuck on "Expected, waiting for status to be reported". And a required job that is skipped by an `if:` counts as satisfied, because GitHub treats a skipped conclusion as passing for required checks. `prod-migration-sync` has no `if:` for exactly that reason; `eval-gate` has one on purpose, so a promotion that touches no GCA code passes without running the eval suite.
+
+The same two rulesets were created on `SBub/adw-dashboard` on 2026-10-03, by exporting them from this repo and posting them to the other, with one change: the `required_status_checks` rule was dropped, because the dashboard has no `.github/workflows` directory yet and a required check with no producer would have frozen it. Both rulesets there are `active` with `bypass_actors: []` and the three remaining rules. The follow-up is a CI workflow with a job named `check`, then one PUT that adds the fourth rule.
+
+## Pattern
+
+The three files below are a working toolkit. Put them in any checkout with `gh` authenticated and `jq` installed, then `sh rulesets/export.sh SBub/issebya-homes-ai-system` writes the repo's rulesets to JSON files, and `sh rulesets/apply.sh SBub/adw-dashboard rulesets/protect-develop.json` creates one on another repo. The JSON file is the full ruleset as `protect-develop` reads on this repo today.
+
+The export script lists a repo's rulesets, fetches each one by id, and strips the fields the API returns but will not accept back.
+
+```sh title="rulesets/export.sh"
+#!/bin/sh
+# Usage: sh rulesets/export.sh <owner>/<repo>
+# Writes rulesets/<name>.json for every ruleset on the repo.
+set -eu
+repo="$1"
+mkdir -p rulesets
+for id in $(gh api "repos/$repo/rulesets" --jq '.[].id'); do
+  # id, source, node_id, _links and the timestamps are server-owned; POST rejects them
+  gh api "repos/$repo/rulesets/$id" \
+    | jq '{name, target, enforcement, bypass_actors, conditions, rules}' \
+    > "rulesets/$(gh api "repos/$repo/rulesets/$id" --jq .name).json"
+done
+ls rulesets
+```
+
+Each file now holds exactly the six keys a create call accepts. Diffing two such files across repos is how you confirm a mirror is a mirror.
+
+This is the file the export writes for `develop`. The `master` file is the same object with `refs/heads/master` in the condition and four entries under `required_status_checks`: `check`, `eval-gate`, `drift-check`, `prod-migration-sync`.
+
+```json title="rulesets/protect-develop.json"
+{
+  "name": "protect-develop",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": ["refs/heads/develop"]
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [{ "context": "check" }]
+      }
+    }
+  ]
+}
+```
+
+Every string under `required_status_checks` must be a context some workflow on the target repo reports. For a repo with no CI, delete that whole rule object; an empty `required_status_checks` list is rejected by the API.
+
+The apply script creates a ruleset from a file, or replaces an existing one of the same name when there is one.
+
+```sh title="rulesets/apply.sh"
+#!/bin/sh
+# Usage: sh rulesets/apply.sh <owner>/<repo> rulesets/<name>.json
+# Creates the ruleset, or replaces the one with the same name if it exists.
+set -eu
+repo="$1"
+file="$2"
+name="$(jq -r .name "$file")"
+id="$(gh api "repos/$repo/rulesets" --jq ".[] | select(.name == \"$name\") | .id")"
+if [ -z "$id" ]; then
+  gh api -X POST "repos/$repo/rulesets" --input "$file" --jq '"created \(.name) \(.id)"'
+else
+  # PUT replaces the whole ruleset, rules list included; the file must be complete
+  gh api -X PUT "repos/$repo/rulesets/$id" --input "$file" --jq '"replaced \(.name) \(.id)"'
+fi
+```
+
+After it runs, `gh api repos/<owner>/<repo>/rulesets/<id>` returns the object you sent plus the server fields, and the branch refuses a direct push with `GH013: Repository rule violations found`.
+
+### Wrong and right
+
+Every pull request into `master` sits on "Expected, waiting for status to be reported" and the merge button never enables.
+
+🔴 The ruleset requires a context no workflow reports. Here the job in `ci.yml` was given a display `name:`, which is what GitHub now reports as the context, while the ruleset still says `check`. This is the top of the `jobs:` block.
+
+```yaml title=".github/workflows/ci.yml"
+jobs:
+  check:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+```
+
+✅ The job has no `name:`, so the job id is the context and it matches the ruleset. Rename the job or the ruleset together, never one alone.
+
+```yaml title=".github/workflows/ci.yml"
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+```
+
+After an update, a force push to `develop` goes through.
+
+🔴 The update sent only the rule it meant to change. PUT replaces the whole object, so the three rules not in the file are gone. This is the entire file that was PUT.
+
+```json title="rulesets/protect-develop.json"
+{
+  "name": "protect-develop",
+  "target": "branch",
+  "enforcement": "active",
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [{ "context": "check" }]
+      }
+    }
+  ]
+}
+```
+
+✅ The file is the full export with the one change in it. Export first, edit the file, PUT the file; never write a partial object by hand. This is the branch of `apply.sh` that sends it, and `$file` is the complete export.
+
+```sh title="rulesets/apply.sh"
+else
+  # PUT replaces the whole ruleset, rules list included; the file must be complete
+  gh api -X PUT "repos/$repo/rulesets/$id" --input "$file" --jq '"replaced \(.name) \(.id)"'
+fi
+```
+
+### In this repo
+
+The rulesets live on GitHub, not in the tree, so the linked files are the workflows that produce the contexts the rulesets name, all at the same commit.
+
+- [`ci.yml`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/.github/workflows/ci.yml) has the job `check`, the one context both rulesets require. It has no `name:`, so the job id is the context. It runs on `pull_request` with no branch filter and on `push` to `develop`, so a PR into either branch produces it.
+- [`eval-golden.yml`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/.github/workflows/eval-golden.yml) has the job `eval-gate`, required on `master`. A `changes` job sets an output when the GCA app moved, and `eval-gate` has an `if:` on it, so a promotion that touches no GCA code reports `skipped`, which GitHub counts as satisfied. That is the intended behaviour since PR #120; before it, SQL-only promotions could not merge.
+- [`migrations.yml`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/.github/workflows/migrations.yml) has `drift-check` and `prod-migration-sync`, both required on `master`. `drift-check` runs on every PR whose base is `master`. `prod-migration-sync` has no `if:` at all, and the comment above it explains that a skipped required check passes by vanishing, which is the case it exists to catch. The two rulesets were created on 2026-09-08. `protect-master` was last changed on 2026-09-23, when `prod-migration-sync`, the job PR #104 added two days earlier, went onto its required list.
+- `SBub/adw-dashboard`, the mirror, is a separate repository and so not linked here. Its `protect-develop` and `protect-master` were created on 2026-10-03 from this repo's export minus the `required_status_checks` rule, so they hold `deletion`, `non_fast_forward` and `pull_request` with identical parameters, `enforcement: active` and `bypass_actors: []`. The planned follow-up is a workflow with a job named `check`, then one PUT of the full file with the fourth rule added.
+
+## Pitfalls
+
+- **Every PR into the branch waits forever on a status that never reports.** A required context has no producer: a job was renamed, given a `name:`, or the workflow does not run on `pull_request` for that base. Grep `.github/workflows` for the exact string before adding it, and treat a job id that a ruleset names as part of a contract. See Wrong and right above.
+- **A force push or a branch deletion goes through after an update.** PUT replaced the rule list with the partial one you sent. Export, edit, PUT the whole file. See Wrong and right above.
+- **The API rejects the ruleset with 422 on `required_status_checks`.** The list is empty. A repo with no CI gets no `required_status_checks` rule at all; add the rule when the first workflow exists.
+- **A required check is green on a PR where the job never ran.** The job was skipped by an `if:` and GitHub counts skipped as passed. For a check that must run on every PR, remove the `if:` and make the job itself decide what to do, as `prod-migration-sync` does. Keep the `if:` only where a skip is the intended pass, as `eval-gate` does.
+- **The owner cannot push a one-line fix straight to `master`.** `bypass_actors` is empty, on purpose. Open a PR; `check` takes a few minutes. Adding the owner as a bypass actor turns the rulesets back into advice.
+- **A PR merges green against a base that moved under it.** `strict_required_status_checks_policy` is `false`, so the checks ran on the PR head, not on the merge result. This is a chosen trade-off for a one-maintainer repo where the alternative is re-running CI on every PR after every merge. Turn it on if two people start landing changes to the same files in the same hour.
+- **`gh api .../branches/<name>/protection` says the branch is not protected.** It is, by a ruleset. Classic protection and rulesets are separate systems with separate endpoints; the classic one knows nothing about rulesets. Read `repos/<owner>/<repo>/rulesets` instead, or `repos/<owner>/<repo>/rules/branches/<name>` for the merged view of what applies to one branch.
+- **The merge queue or auto-merge is unavailable.** Both are off on this repo. Merge explicitly once `gh pr checks <n>` shows every required context passed; `gh pr merge <n> --merge` does the same thing the button does, under the same rules.
+
+## When not to use
+
+- A repository with no CI yet. Use the rulesets without the `required_status_checks` rule, as the dashboard does, and add the rule with the first workflow. A required check with no producer is a locked door, not protection.
+- A scratch or personal repo where rewriting `main` is the workflow. The rules would only get in the way, and `evaluate` enforcement exists for the case where you want to see what would be blocked before committing.
+- A fleet of repositories under an organisation. An organisation ruleset applies one object to every repo that matches, which beats copying JSON between them. These are repository rulesets because `SBub` is a user account, not an organisation.
+
+## Code
+
+<CodeLinks />
