@@ -372,6 +372,12 @@ procedures, not code documentation) and anything gitignored.
 
 ## Cross-cutting constraints
 
+- `.adw/project.md`
+  - Conditions:
+    - When running or changing anything the ADW toolkit does in this repository (its slash commands in `.claude/commands/` read this file first: workspaces, install, build and test commands, reserved ports, protected actions, where plans and docs go)
+    - When a change moves a port, adds a workspace, renames a script, or changes an env file the toolkit must copy into a worktree: the profile must change in the same pull request
+    - IMPORTANT: the nine `##` headings and their order are a contract with the toolkit (`adws/PROFILE.md`); never rename or reorder them
+
 - `scripts/dev-webhook-gateway.ts` (read the file header)
   - Conditions:
     - IMPORTANT: before changing any app's port, or adding an inbound webhook
