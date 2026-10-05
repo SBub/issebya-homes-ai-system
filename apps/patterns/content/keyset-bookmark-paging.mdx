@@ -1,0 +1,405 @@
+---
+title: Keyset bookmark paging with per-page caching
+kind: atom
+summary: A sorted list is read a page at a time while new items land on top, so each page must continue where the last stopped, be cached on the server and be dropped with the others when the list changes.
+tags:
+  - pagination
+  - caching
+  - rsc
+code:
+  - path: apps/website/src/lib/shop/pagination.ts
+    ref: e1a90716450b2a5bfe50cd9efbfc449ead75bec6
+    note: The bookmark contract; a total order on (createdAt, slug), an opaque base64url cursor that carries its scope, and selectPage.
+  - path: apps/website/src/lib/shop/pages.ts
+    ref: e1a90716450b2a5bfe50cd9efbfc449ead75bec6
+    note: One "use cache" entry per (cursor, limit, sort, q) under the one tag shop-products, with cacheLife("days") as the safety net.
+  - path: apps/website/src/app/api/shop/products/route.ts
+    ref: e1a90716450b2a5bfe50cd9efbfc449ead75bec6
+    note: Reads the cursor from the request and decodes it before the cached read, so a bad cursor is a 400 and never a cache entry.
+  - path: apps/website/src/app/(main)/shop/ui/ProductList.tsx
+    ref: e1a90716450b2a5bfe50cd9efbfc449ead75bec6
+    note: The consumer; it hands each page's nextCursor back as the next request's cursor and never looks inside it.
+verifiedIn:
+  - 164
+  - 166
+  - 168
+  - 182
+updated: 2026-10-05
+---
+
+## Problem
+
+A list is sorted newest first and too long for one screen, so it is read a page at a time. Between two requests a new item lands at the top. The obvious way to ask for the next page is a page number: "skip the first three, give me three". After the insert everything below the new item has moved down by one, so "skip three" starts one item earlier than it should, and the visitor sees the last item of page one again at the top of page two. A removal does the opposite and one item is never shown.
+
+Each page should also be a server cache entry of its own. The list is the same for every visitor and rarely changes, so the database should answer once per page and not once per visit. When the list does change, every page is wrong at once, and there has to be one call that drops them all.
+
+## Mechanism
+
+Picture a stack of letters on a desk, newest on top. You read three and stick a note on the third one. Someone drops a new letter on the pile. "Give me the three letters below my note" still gives you the same three letters it would have before. "Skip three and give me the next three" now hands you the letter with your note on it a second time. The note is the bookmark, and it is what this atom replaces the page number with. Here is what happens, in order.
+
+1. The list is sorted by a timestamp, with the unique id as the tie-breaker. Two items can share a timestamp and then the timestamp alone does not say which comes first. With the id behind it no two items compare equal, so the order is total: every item has exactly one place, and that place does not depend on which items happen to exist around it. The timestamp is written once, when the item enters the list, and not again.
+2. A page asks for one more row than it shows. It shows the first `size` rows and keeps the extra one only as an answer to the question "is there a next page?". If the extra row exists, the bookmark is the `(timestamp, id)` of the last row shown. If it does not, the bookmark is `null` and this is the last page.
+3. The next page is "the rows strictly after the bookmark in sort order". Not "the rows after the bookmarked item": the bookmarked item does not have to exist any more. A compare against the pair is enough, so an item inserted above the bookmark, or the bookmarked item being removed, changes nothing about what comes next.
+4. The bookmark leaves the server as an opaque string, base64url over JSON, and it carries its scope: the slug of the list it belongs to. The browser never reads it. It goes into the Older link as `?after=`, comes back on the next request, and the server decodes it and checks the scope. A bookmark from another list, or a hand-edited one, is rejected. The server stores nothing between the two requests; everything it needs is in the string.
+5. Each page is one `"use cache"` entry. The cache keys the entry by the function's arguments, `(scope, bookmark)`, so page one and each later page of each list are separate entries with no key to build by hand. Every entry of one list carries the same tag, `history:<slug>`, not a per-page tag. When the list changes, one `updateTag("history:<slug>")` drops every page of that list at once. That is the right grain, because an insert at the top moves every page boundary below it: page two now starts one row higher than its entry says. An explicit `cacheLife` is the safety net for a writer that forgets the tag.
+6. Page one is the entry with no bookmark, under the same tag. It is not special: it is "the first `size` rows after nothing".
+
+Two worked examples, with five items and a page size of three. The items are A to E with timestamps 10:01 to 10:05, so sorted newest first they read E, D, C, B, A.
+
+With a bookmark. Page one asks for four rows and gets E, D, C, B. It shows E, D, C. B exists, so the bookmark is `(10:03, C)`. Now F lands at 10:06. Page two asks for the four rows strictly after `(10:03, C)` and gets B, A. There is no fourth row, so it shows B, A and the bookmark is `null`. Nothing repeated, nothing skipped. F is at the top of page one the next time page one is read, which, with the tag dropped, is the next request.
+
+With page numbers. Page one is "skip zero, take three": E, D, C. F lands. Page two is "skip three, take three" over F, E, D, C, B, A: skip F, E, D, and take C, B, A. C is on both pages. Had an item been removed instead, "skip three" would have jumped over B and the visitor would never see it.
+
+[Infinite scrolling](/p/infinite-scrolling) is the composite built on this atom. There the browser holds the bookmark in React Query's page params and sends it to a Route Handler as `?cursor=`; here a server component reads it from the page's own link. The paging and the cache are the same. [Revalidate a cached server section from a live event](/p/revalidate-cached-section) is where the `updateTag` call gets driven by a socket event on an open page, and why a section that reads nothing from the request needs `connection()` in front of the cached read.
+
+## Pattern
+
+The six files below are a working app. Paste them into a fresh Next project with `cacheComponents: true` in `next.config.ts`, open `/items/inbox`, and follow Older. Type a title into the box and submit: the new item is on top of page one, and an Older link copied before the insert still lands on the same rows.
+
+The bookmark module is the whole contract between two requests: the order, the opaque string, and the check on the way back in.
+
+```ts title="lib/bookmark.ts"
+export type SortKey = { updatedAt: string; id: number };
+
+// The last row a page showed, and the list it belongs to
+export type Bookmark = SortKey & { scope: string };
+
+export class UnknownCursorError extends Error {
+  constructor() {
+    super("Unknown cursor");
+    this.name = "UnknownCursorError";
+  }
+}
+
+// Newest first, then the higher id first: no two rows compare equal, so the order is total
+export function compareRows(a: SortKey, b: SortKey) {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
+  return b.id - a.id;
+}
+
+export function encodeBookmark(bookmark: Bookmark) {
+  return btoa(JSON.stringify(bookmark)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function isBookmark(value: unknown): value is Bookmark {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "scope" in value &&
+    typeof value.scope === "string" &&
+    "updatedAt" in value &&
+    typeof value.updatedAt === "string" &&
+    "id" in value &&
+    typeof value.id === "number"
+  );
+}
+
+export function decodeBookmark(cursor: string, scope: string): Bookmark {
+  let value: unknown;
+  try {
+    value = JSON.parse(atob(cursor.replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    throw new UnknownCursorError();
+  }
+  // Garbage and a bookmark from another list are the same mistake: not a page of this list
+  if (!isBookmark(value) || value.scope !== scope) throw new UnknownCursorError();
+  return value;
+}
+```
+
+`compareRows` is the one definition of the order, used to sort the rows and to compare a row against the bookmark. `updatedAt` is an ISO string in one fixed format, so string comparison is time comparison. The base64url alphabet is URL-safe, so the string goes into `?after=` as it is. `decodeBookmark` takes the scope the caller expects and throws the same error for garbage and for a bookmark from another list.
+
+The page function is pure. It takes the rows, the scope, the bookmark and the size, and returns the page and the next bookmark.
+
+```ts title="lib/page.ts"
+import { type Bookmark, type SortKey, compareRows, encodeBookmark } from "./bookmark";
+
+export type Page<T> = { items: T[]; nextCursor: string | null };
+
+export function pageAfter<T extends SortKey>(
+  rows: readonly T[],
+  scope: string,
+  after: Bookmark | null,
+  size: number,
+): Page<T> {
+  const sorted = [...rows].sort(compareRows);
+  // Strictly after the bookmark in sort order; the bookmarked row itself need not exist any more
+  const rest = after ? sorted.filter((row) => compareRows(row, after) > 0) : sorted;
+  // One row more than the page shows: its existence is the whole answer to "is there a next page?"
+  const window = rest.slice(0, size + 1);
+  const items = window.slice(0, size);
+  const last = items.at(-1);
+  const nextCursor =
+    window.length > size && last
+      ? encodeBookmark({ scope, updatedAt: last.updatedAt, id: last.id })
+      : null;
+
+  return { items, nextCursor };
+}
+```
+
+A test hands in five rows and a size of three, takes the first page, inserts a sixth row with a newer timestamp, and takes the page after the first page's bookmark: it is the same two rows it would have been without the insert. `nextCursor` is `null` on the last page, so a list whose length is an exact multiple of the size never hands out a link to an empty page.
+
+A data module stands in for the table. The timestamp is written when an item is added and never again.
+
+```ts title="app/items/data.ts"
+export type Item = { id: number; list: string; updatedAt: string; title: string };
+
+const items: Item[] = [
+  { id: 1, list: "inbox", updatedAt: "2026-10-05T10:01:00.000Z", title: "Letter A" },
+  { id: 2, list: "inbox", updatedAt: "2026-10-05T10:02:00.000Z", title: "Letter B" },
+  { id: 3, list: "inbox", updatedAt: "2026-10-05T10:03:00.000Z", title: "Letter C" },
+  { id: 4, list: "inbox", updatedAt: "2026-10-05T10:04:00.000Z", title: "Letter D" },
+  { id: 5, list: "inbox", updatedAt: "2026-10-05T10:05:00.000Z", title: "Letter E" },
+];
+
+export async function rowsFor(list: string) {
+  // Stands in for a database query
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return items.filter((item) => item.list === list);
+}
+
+export function addItem(list: string, title: string) {
+  items.push({ id: items.length + 1, list, updatedAt: new Date().toISOString(), title });
+}
+```
+
+The five seed rows are the worked example above. `addItem` is the new letter on the pile: a higher id and a later timestamp, so it sorts first.
+
+The server component reads the bookmark from the link, decodes it outside the cache, and reads one cached page.
+
+```tsx title="app/items/History.tsx"
+import { cacheLife, cacheTag } from "next/cache";
+import { redirect } from "next/navigation";
+import { type Bookmark, decodeBookmark, UnknownCursorError } from "../../lib/bookmark";
+import { pageAfter } from "../../lib/page";
+import { rowsFor } from "./data";
+
+const PAGE_SIZE = 3;
+
+async function getHistoryPage(scope: string, after: Bookmark | null) {
+  "use cache";
+  // The same tag on every page of this list, so one update drops them all
+  cacheTag(`history:${scope}`);
+  cacheLife("hours");
+  return pageAfter(await rowsFor(scope), scope, after, PAGE_SIZE);
+}
+
+export async function History({
+  scope,
+  searchParams,
+}: {
+  scope: string;
+  searchParams: Promise<{ after?: string | string[] }>;
+}) {
+  const { after } = await searchParams;
+
+  let bookmark: Bookmark | null = null;
+  if (typeof after === "string") {
+    try {
+      // Decoded here, outside the cache, so a bad link is the caller's mistake and never an entry
+      bookmark = decodeBookmark(after, scope);
+    } catch (error) {
+      if (!(error instanceof UnknownCursorError)) throw error;
+      redirect(`/items/${scope}`);
+    }
+  }
+
+  const { items, nextCursor } = await getHistoryPage(scope, bookmark);
+
+  return (
+    <>
+      <ul>
+        {items.map((item) => (
+          <li key={item.id}>{item.title}</li>
+        ))}
+      </ul>
+      <p>
+        {bookmark && <a href={`/items/${scope}`}>Newer</a>}{" "}
+        {nextCursor && <a href={`/items/${scope}?after=${nextCursor}`}>Older</a>}
+      </p>
+    </>
+  );
+}
+```
+
+`getHistoryPage` is the cache. Its arguments are its key, so `("inbox", null)` is page one of the inbox and `("inbox", { ... C ... })` is the page after C, each an entry of its own, both tagged `history:inbox`. Reading `searchParams` is what keeps this component out of the static shell, so the cached read is resolved from the live cache handler on each request. Older carries the next bookmark. Newer returns to the top: a bookmark points one way, and a true previous page would need a mirrored comparator, which the browser's Back button makes unnecessary for a server-rendered list.
+
+The page resolves the list and mounts the form and the history.
+
+```tsx title="app/items/[list]/page.tsx"
+import { Suspense } from "react";
+import { addToHistory } from "../actions";
+import { History } from "../History";
+
+export function generateStaticParams() {
+  return [{ list: "inbox" }];
+}
+
+export default async function Page({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ list: string }>;
+  searchParams: Promise<{ after?: string | string[] }>;
+}) {
+  const { list } = await params;
+
+  return (
+    <>
+      <form action={addToHistory.bind(null, list)}>
+        <input name="title" />
+        <button type="submit">Add on top</button>
+      </form>
+      <Suspense fallback={<p>Loading</p>}>
+        <History scope={list} searchParams={searchParams} />
+      </Suspense>
+    </>
+  );
+}
+```
+
+`searchParams` goes down as the promise, so only `History`, inside `Suspense`, waits on the request. The form's action is bound to the list, so the browser never chooses which list it writes to.
+
+The action adds a row and drops the one tag.
+
+```ts title="app/items/actions.ts"
+"use server";
+
+import { updateTag } from "next/cache";
+import { addItem } from "./data";
+
+const LIST = /^[a-z0-9-]+$/;
+
+export async function addToHistory(list: string, formData: FormData) {
+  const title = formData.get("title");
+  if (!LIST.test(list) || typeof title !== "string" || title === "") return;
+  addItem(list, title);
+  // Every page of this list carries this tag; an insert on top moves every page boundary
+  updateTag(`history:${list}`);
+}
+```
+
+`updateTag` expires every entry under `history:inbox`, page one and every later page, and the next read of each waits for fresh rows. A bookmark handed out before the insert is still a valid position in the order, so an Older link already open in another tab lands on the same rows as before.
+
+### Wrong and right
+
+The visitor sees an item twice, or one is never shown, after an item landed on top while they were reading.
+
+🔴 The page is an offset. Everything that landed above it shifts the window. This is the selection in `pageAfter`, with `after` as a page number.
+
+```ts title="lib/page.ts"
+const sorted = [...rows].sort(compareRows);
+const start = after * size;
+const items = sorted.slice(start, start + size);
+const nextCursor = start + size < sorted.length ? String(after + 1) : null;
+```
+
+✅ The page is what compares strictly after the bookmark. An insert above it changes nothing after it.
+
+```ts title="lib/page.ts"
+const sorted = [...rows].sort(compareRows);
+const rest = after ? sorted.filter((row) => compareRows(row, after) > 0) : sorted;
+const window = rest.slice(0, size + 1);
+const items = window.slice(0, size);
+```
+
+Page one shows the new item and page two still starts with the item that used to be page one's last.
+
+🔴 Each page carries its own tag, and the action drops the one for page one. The other pages keep the boundaries they were built with. This is the tag line in `getHistoryPage`.
+
+```ts title="app/items/History.tsx"
+async function getHistoryPage(scope: string, after: Bookmark | null) {
+  "use cache";
+  cacheTag(`history:${scope}:${after ? after.id : "first"}`);
+  cacheLife("hours");
+  return pageAfter(await rowsFor(scope), scope, after, PAGE_SIZE);
+}
+```
+
+✅ One tag for the whole list. The arguments already keep the pages apart as entries; the tag is for dropping them together.
+
+```ts title="app/items/History.tsx"
+async function getHistoryPage(scope: string, after: Bookmark | null) {
+  "use cache";
+  cacheTag(`history:${scope}`);
+  cacheLife("hours");
+  return pageAfter(await rowsFor(scope), scope, after, PAGE_SIZE);
+}
+```
+
+Two items saved in the same second swap places between two requests, and one of them is shown twice or not at all.
+
+🔴 The order and the bookmark are the timestamp alone. Items that share it have no fixed order between them. This is `compareRows` and the `SortKey` it compares.
+
+```ts title="lib/bookmark.ts"
+export type SortKey = { updatedAt: string };
+
+export function compareRows(a: SortKey, b: SortKey) {
+  return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0;
+}
+```
+
+✅ The unique id breaks the tie. No two rows compare equal, so every row has one place.
+
+```ts title="lib/bookmark.ts"
+export type SortKey = { updatedAt: string; id: number };
+
+export function compareRows(a: SortKey, b: SortKey) {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
+  return b.id - a.id;
+}
+```
+
+An Older link copied from one list works on another, and a hand-edited `?after=` is served as if the server had issued it.
+
+🔴 The bookmark is the plain id in the URL and the server trusts it. Any number is a page, and a page of any list. This is the decode step in `History`.
+
+```tsx title="app/items/History.tsx"
+const bookmark = typeof after === "string" ? Number(after) : null;
+```
+
+✅ The bookmark is opaque and carries its scope. The server decodes it, checks the scope, and sends a bad one back to the top of the list.
+
+```tsx title="app/items/History.tsx"
+let bookmark: Bookmark | null = null;
+if (typeof after === "string") {
+  try {
+    bookmark = decodeBookmark(after, scope);
+  } catch (error) {
+    if (!(error instanceof UnknownCursorError)) throw error;
+    redirect(`/items/${scope}`);
+  }
+}
+```
+
+### In this repo
+
+- [`pagination.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/e1a90716450b2a5bfe50cd9efbfc449ead75bec6/apps/website/src/lib/shop/pagination.ts) is `lib/bookmark.ts` and `lib/page.ts` in one module. `compareProducts` is `compareRows` over `(createdAt, slug)`, with the slug as the unique tie-breaker and plain code-point comparison so the order cannot drift with the runtime. `encodeCursor` and `decodeCursor` are the opaque base64url bookmark; its scope is the pair `(sort, q)`, and a mismatch is `CursorSortMismatchError` or `CursorSearchMismatchError` beside `UnknownCursorError` for garbage. `selectPage` is `pageAfter`: it sorts, finds the first product that compares strictly after the bookmark with `findIndex`, slices `limit` rows, and returns a `ProductsPage` whose `nextCursor` is `null` when the page reaches the end. It checks the end with `start + limit < sorted.length` instead of fetching one extra row, which is the in-memory form of the same question.
+- [`pages.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/e1a90716450b2a5bfe50cd9efbfc449ead75bec6/apps/website/src/lib/shop/pages.ts) is `getHistoryPage`. `getProductsPage` is `"use cache"` over `selectPage`, one entry per `(cursor, limit, sort, q)` argument tuple, every entry under the one tag `shop-products`, with `cacheLife("days")` as the safety net. The catalogue has no runtime writer yet, so the tag is dropped by a deploy; the comment names the one `revalidateTag("shop-products")` that would clear every page at once.
+- [`route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/e1a90716450b2a5bfe50cd9efbfc449ead75bec6/apps/website/src/app/api/shop/products/route.ts) is the decode step in `History`, as a Route Handler. It reads `cursor` from the query, calls `decodeCursor` before `getProductsPage`, and turns each of the three errors into a 400, so a bad cursor never reaches the cache. The bookmark travels as `?cursor=` on a fetch rather than `?after=` on a link, because the composite's consumer is in the browser.
+- [`ProductList.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/e1a90716450b2a5bfe50cd9efbfc449ead75bec6/apps/website/src/app/(main)/shop/ui/ProductList.tsx>) is the consumer. `getNextPageParam` returns `last.nextCursor`, `fetchProductsPage` puts it on the request as it is, and nothing in the file reads inside the string. It is the one place this repo pages by bookmark from the browser, which is what makes it the [Infinite scrolling](/p/infinite-scrolling) composite rather than this atom alone.
+- The ADW dashboard, a separate repository with no remote and so not linked here, is the server-rendered application of this atom as the snippets show it: a completed-run history per project, ordered by `(updated_at desc, id desc)`, a bookmark that travels in the page's own `?after=` link, one `"use cache"` entry per `(project, bookmark)` under one `history:<slug>` tag, and the `updateTag` call from the action in [Revalidate a cached server section from a live event](/p/revalidate-cached-section) when a run completes.
+
+## Pitfalls
+
+- **An item shows twice, or one is never shown, after something landed on top.** The page is an offset and the insert shifted the window. Page by a bookmark. See Wrong and right above.
+- **Two items saved in the same second swap, and one is duplicated or skipped.** The bookmark is the timestamp alone. Put the unique id behind it. See Wrong and right above.
+- **Page one shows the new item and page two still shows the old boundary.** Each page has its own tag and only one was dropped. One tag per list. See Wrong and right above.
+- **A link from another list, or a hand-edited one, returns a page of this list.** The bookmark is trusted as it comes. Make it opaque, carry the scope in it, and check the scope on the way in. See Wrong and right above.
+- **A bad link is a 500 and nothing says why.** The bookmark was decoded inside the `"use cache"` scope. An error thrown there loses its class on the way out, so the caller cannot tell a bad link from a real failure. Decode in the component or the route, before the cached read.
+- **The last page offers an Older link to an empty page.** `nextCursor` is set whenever the page has rows. Ask for one row more than the page shows, and hand out a bookmark only when it exists.
+- **Rows sort out of order even though the timestamps look right.** The strings are in two formats, with and without milliseconds, or with different offsets. One format, one zone, and string order is time order.
+- **The new item never shows on a page that reads nothing from the request.** Page one of a list that takes no `searchParams` is prerendered into the static shell, and a resumed shell reads the build-time entry whatever the tag says. Put `connection()` in front of the cached read, as [Revalidate a cached server section from a live event](/p/revalidate-cached-section) explains.
+- **The tag is dropped and the open page does not move.** `updateTag` expires the entry; it does not re-render a page already on screen. The next request sees the new rows. For an open page, the action's response re-renders the route, or the client calls `router.refresh()` after the action resolves.
+- **`updateTag` throws from a Route Handler.** It is the Server Action form. From a webhook or a Route Handler, call `revalidateTag(tag, { expire: 0 })` for the same immediate drop.
+
+## When not to use
+
+- Lists that need "jump to page 7". A bookmark only says what comes after a known row. Numbered pages are offsets, and either accept the shift or page over a frozen snapshot.
+- Tiny lists that fit one page. Render them whole and cache the one entry.
+- Lists sorted by a value that changes while the item is in the list, such as a score or a last-viewed time. The bookmark names a position by that value, so an edit moves the row across the boundary and it is shown twice or skipped. Sort by something written once, such as the time the item entered the list.
+
+## Code
+
+<CodeLinks />

@@ -3,14 +3,15 @@
 import * as doc0 from "@content/branch-protection.mdx";
 import * as doc1 from "@content/connection-status.mdx";
 import * as doc2 from "@content/infinite-scrolling.mdx";
-import * as doc3 from "@content/live-events-query-cache.mdx";
-import * as doc4 from "@content/query-error-boundary.mdx";
-import * as doc5 from "@content/revalidate-cached-section.mdx";
-import * as doc6 from "@content/server-prefetch-hydration.mdx";
-import * as doc7 from "@content/sse-route-handler.mdx";
-import * as doc8 from "@content/suspense-without-flash.mdx";
-import * as doc9 from "@content/use-action-state.mdx";
-import * as doc10 from "@content/use-sync-external-store.mdx";
+import * as doc3 from "@content/keyset-bookmark-paging.mdx";
+import * as doc4 from "@content/live-events-query-cache.mdx";
+import * as doc5 from "@content/query-error-boundary.mdx";
+import * as doc6 from "@content/revalidate-cached-section.mdx";
+import * as doc7 from "@content/server-prefetch-hydration.mdx";
+import * as doc8 from "@content/sse-route-handler.mdx";
+import * as doc9 from "@content/suspense-without-flash.mdx";
+import * as doc10 from "@content/use-action-state.mdx";
+import * as doc11 from "@content/use-sync-external-store.mdx";
 
 export const manifest = [
   {
@@ -29,43 +30,48 @@ export const manifest = [
     Content: doc2.default,
   },
   {
-    slug: "live-events-query-cache",
+    slug: "keyset-bookmark-paging",
     meta: doc3.frontmatter,
     Content: doc3.default,
   },
   {
-    slug: "query-error-boundary",
+    slug: "live-events-query-cache",
     meta: doc4.frontmatter,
     Content: doc4.default,
   },
   {
-    slug: "revalidate-cached-section",
+    slug: "query-error-boundary",
     meta: doc5.frontmatter,
     Content: doc5.default,
   },
   {
-    slug: "server-prefetch-hydration",
+    slug: "revalidate-cached-section",
     meta: doc6.frontmatter,
     Content: doc6.default,
   },
   {
-    slug: "sse-route-handler",
+    slug: "server-prefetch-hydration",
     meta: doc7.frontmatter,
     Content: doc7.default,
   },
   {
-    slug: "suspense-without-flash",
+    slug: "sse-route-handler",
     meta: doc8.frontmatter,
     Content: doc8.default,
   },
   {
-    slug: "use-action-state",
+    slug: "suspense-without-flash",
     meta: doc9.frontmatter,
     Content: doc9.default,
   },
   {
-    slug: "use-sync-external-store",
+    slug: "use-action-state",
     meta: doc10.frontmatter,
     Content: doc10.default,
+  },
+  {
+    slug: "use-sync-external-store",
+    meta: doc11.frontmatter,
+    Content: doc11.default,
   },
 ] as const;
