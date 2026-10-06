@@ -8,12 +8,14 @@ import { ShopSortControl } from "./ShopSortControl";
 /**
  * The controls row, shared with `ShopControls`. The explicit min height is the
  * row's measured height: the search form (233 px) and the sort (216 px) wrap
- * onto two 44 px lines below a 497 px viewport, and share one line from there
- * up (500 px here, rounded). The prerendered row and the hydrated one are
- * then the same size even if their contents ever drift.
+ * onto two 44 px lines below a 497 px viewport with macOS fonts, and share one
+ * line from there up. Linux Chromium (CI) renders the labels wider and needs
+ * more, so the one-line box applies from 560 px, which leaves margin for that
+ * difference. The prerendered row and the hydrated one are then the same size
+ * even if their contents ever drift.
  */
 export const SHOP_CONTROLS_ROW_CLASS =
-  "mb-6 flex min-h-[104px] min-[500px]:min-h-11 flex-wrap items-center justify-between gap-4 text-background";
+  "mb-6 flex min-h-[104px] min-[560px]:min-h-11 flex-wrap items-center justify-between gap-4 text-background";
 
 /** The grid wrapper's base class, shared with `ShopControls`. */
 export const SHOP_GRID_WRAPPER_CLASS = "transition-opacity";

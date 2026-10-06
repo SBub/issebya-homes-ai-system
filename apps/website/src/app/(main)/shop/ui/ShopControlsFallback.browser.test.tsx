@@ -25,8 +25,8 @@ const Grid = () => <div data-testid="grid-slot" style={{ height: 200 }} />;
 
 test.each([
   [390, 104],
-  [490, 104],
-  [505, 44],
+  [520, 104],
+  [600, 44],
   [1280, 44],
 ])("at %i px the fallback row and the live row take the same box", async (width, minHeight) => {
   await page.viewport(width, 800);

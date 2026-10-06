@@ -25,20 +25,20 @@ The `/shop` toolbar (Search and Sort on the grey `bg-shop-ground` band) rendered
 - `apps/website/src/app/(main)/shop/ui/ShopControlsFallback.tsx`: `SHOP_CONTROLS_ROW_CLASS` uses `items-center` instead of `items-end`. Shared with `ShopControls`, so the fallback and live rows stay identical.
 - `apps/website/src/app/(main)/shop/page.tsx`: band padding `py-10 md:py-16` became `pt-4 pb-10 md:pt-6 md:pb-16`.
 - `apps/website/src/app/(main)/shop/ui/ShopSortControl.browser.test.tsx`: asserts computed `appearance` is `none`, height 44, and the chevron SVG is present.
-- `apps/website/src/app/(main)/shop/ui/ShopControlsFallback.browser.test.tsx`: adds widths 490 and 505 around the wrap breakpoint, and asserts search and sort share height 44 and a vertical centre in both rows.
+- `apps/website/src/app/(main)/shop/ui/ShopControlsFallback.browser.test.tsx`: adds widths 520 and 600 around the wrap breakpoint, and asserts search and sort share height 44 and a vertical centre in both rows.
 - `apps/website/e2e/shop.integration.spec.ts`: the product-click URL assertion gets a 15 s timeout, because on a fresh dev server that click is the first visit to `/shop/[slug]` and the route compiles lazily.
 
 ### Key Changes
 
 - WebKit ignores author height and border on a native-appearance select, which is why Safari differed from Chrome. Resetting `appearance` (plus the `-webkit-` form) makes both engines paint our box.
 - Equal fixed heights are what make `items-center` give a common centre line in every engine.
-- The measured `min-[500px]` wrap breakpoint did not change: the extra chevron padding left the one-line fit within it (tests at 490 px and 505 px confirm fallback and live rows still match).
+- The wrap breakpoint is now `min-[560px]`, raised from the 500 px measured with macOS fonts to leave margin for the wider fonts of Linux Chromium (CI); the parity tests at 520 px and 600 px confirm fallback and live rows still match.
 - `min-h-screen` on the band stays so the footer does not jump while the skeleton or an empty search result shows.
 
 ## How to Use
 
 1. Open `/shop` on desktop: Search and Sort sit on one row as matching 44 px bordered boxes, with a small grey margin above.
-2. Below about 500 px the sort wraps under the search, as before.
+2. Below about 560 px the sort wraps under the search, as before.
 3. The sort stays a native, labelled `<select>`: `getByLabel("Sort").selectOption(...)` still works.
 
 ## Configuration
