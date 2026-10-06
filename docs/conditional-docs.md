@@ -287,6 +287,12 @@ procedures, not code documentation) and anything gitignored.
     - When publishing a new blog post or pinning one, since the blog Playwright spec asserts the forest bathing post is first on `/blog`
     - When choosing a hero image for a post from the existing `public/` photos instead of adding a new one
 
+- `apps/website/app_docs/feature-3ecb6844-shop-toolbar-safari-spacing.md`
+  - Conditions:
+    - When changing the `/shop` sort `<select>` styling, its chevron, or the heights of the Search and Sort controls
+    - When the `/shop` toolbar looks different in Safari than in Chrome, or its row alignment or wrap breakpoint changes
+    - When adjusting the padding of the `bg-shop-ground` products band on `/shop`
+
 ---
 
 ## apps/guest-communication-agent

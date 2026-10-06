@@ -25,3 +25,13 @@ test("busy marks the select", async () => {
 
   await expect.element(screen.getByLabelText("Sort")).toHaveAttribute("aria-busy", "true");
 });
+
+test("the sort select draws no native widget", async () => {
+  const screen = await render(<ShopSortControl value="newest" onChange={vi.fn()} busy={false} />);
+
+  const select = screen.getByLabelText("Sort").element() as HTMLSelectElement;
+  expect(select.tagName).toBe("SELECT");
+  expect(getComputedStyle(select).appearance).toBe("none");
+  expect(select.offsetHeight).toBe(44);
+  expect(select.parentElement?.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+});

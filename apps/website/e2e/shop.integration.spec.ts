@@ -333,7 +333,11 @@ test.describe("Shop", () => {
     expect(box).not.toBeNull();
     await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
 
-    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`);
+    // With the flipping test above skipped, this is the suite's first visit to
+    // /shop/[slug], so a fresh dev server compiles the route on this click and
+    // the URL only changes once that is done, which can take past the default
+    // 5s.
+    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`, { timeout: 15000 });
     await expect(
       page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
     ).toBeVisible();
