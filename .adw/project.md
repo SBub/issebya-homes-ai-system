@@ -130,7 +130,6 @@ lefthook runs prettier, lint, typecheck and knip (ruff and mypy for `*.py`) on e
   app's `vercel.json` `ignoreCommand` (`scripts/vercel-ignore.sh`) builds an `-adw-` commit only
   when it carries it. Slash commands never add or strip it. By hand:
   `git commit --allow-empty -m "chore: preview" -m "Deploy-Preview: yes"`.
-- KPI table: `docs/agentic-kpis.md`.
 
 ## Review
 
