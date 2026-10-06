@@ -34,7 +34,7 @@ export default function ShopIndexPage({ searchParams }: PageProps<"/shop">) {
     <div>
       <section
         aria-label="Products"
-        className="bg-shop-ground px-4 py-10 md:px-12 md:py-16 min-h-screen"
+        className="bg-shop-ground px-4 pt-4 pb-10 md:px-12 md:pt-6 md:pb-16 min-h-screen"
       >
         <Suspense
           fallback={

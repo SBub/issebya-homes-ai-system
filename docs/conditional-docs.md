@@ -271,6 +271,12 @@ procedures, not code documentation) and anything gitignored.
     - When checkout, the Stripe webhook or `api/bookings/direct` fails with `23505` on `guest_contacts_email_key` or `guest_contacts_phone_key`
     - When the `[guest-contacts] phone and email belong to different rows` warning appears and you need to know which row a booking links to
 
+- `apps/website/app_docs/feature-3ecb6844-shop-toolbar-safari-spacing.md`
+  - Conditions:
+    - When changing the `/shop` sort `<select>` styling, its chevron, or the heights of the Search and Sort controls
+    - When the `/shop` toolbar looks different in Safari than in Chrome, or its row alignment or wrap breakpoint changes
+    - When adjusting the padding of the `bg-shop-ground` products band on `/shop`
+
 ---
 
 ## apps/guest-communication-agent
