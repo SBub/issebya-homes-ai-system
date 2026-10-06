@@ -25,6 +25,8 @@ const Grid = () => <div data-testid="grid-slot" style={{ height: 200 }} />;
 
 test.each([
   [390, 104],
+  [490, 104],
+  [505, 44],
   [1280, 44],
 ])("at %i px the fallback row and the live row take the same box", async (width, minHeight) => {
   await page.viewport(width, 800);
@@ -62,6 +64,18 @@ test.each([
   expect(row(fallback).offsetHeight).toBe(row(live).offsetHeight);
   expect(row(fallback).offsetHeight).toBeGreaterThanOrEqual(minHeight);
   expect(slotOffset(fallback)).toBe(slotOffset(live));
+
+  for (const root of [fallback, live]) {
+    const search = root.getByRole("searchbox").element().getBoundingClientRect();
+    const sort = root.getByLabelText("Sort").element().getBoundingClientRect();
+    expect(search.height).toBe(44);
+    expect(sort.height).toBe(search.height);
+    if (minHeight === 44) {
+      expect(Math.abs(sort.top + sort.height / 2 - (search.top + search.height / 2))).toBeLessThan(
+        0.5,
+      );
+    }
+  }
 
   await expect.element(fallback.getByRole("searchbox", { name: "Search products" })).toBeDisabled();
   await expect.element(fallback.getByLabelText("Sort")).toBeDisabled();

@@ -62,7 +62,7 @@ export function ShopSearch({
             onEscape();
           }
         }}
-        className="min-h-11 px-3 border border-background/60 bg-transparent text-xs tracking-[0.2em] placeholder:uppercase placeholder:text-background/60 transition-colors hover:border-background focus:border-background"
+        className="h-11 min-h-11 px-3 border border-background/60 bg-transparent text-xs tracking-[0.2em] placeholder:uppercase placeholder:text-background/60 transition-colors hover:border-background focus:border-background"
       />
       {sort !== DEFAULT_SHOP_SORT && <input type="hidden" name="sort" value={sort} />}
     </form>

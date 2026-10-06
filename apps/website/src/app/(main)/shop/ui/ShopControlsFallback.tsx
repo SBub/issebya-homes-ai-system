@@ -13,7 +13,7 @@ import { ShopSortControl } from "./ShopSortControl";
  * then the same size even if their contents ever drift.
  */
 export const SHOP_CONTROLS_ROW_CLASS =
-  "mb-6 flex min-h-[104px] min-[500px]:min-h-11 flex-wrap items-end justify-between gap-4 text-background";
+  "mb-6 flex min-h-[104px] min-[500px]:min-h-11 flex-wrap items-center justify-between gap-4 text-background";
 
 /** The grid wrapper's base class, shared with `ShopControls`. */
 export const SHOP_GRID_WRAPPER_CLASS = "transition-opacity";
