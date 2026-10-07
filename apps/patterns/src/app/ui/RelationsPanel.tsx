@@ -51,7 +51,7 @@ export function RelationsPanel({ pattern }: { pattern: PatternDoc }) {
         <ul className="flex flex-wrap gap-x-3 gap-y-1">
           {pattern.verifiedIn.map((pr) => (
             <li key={pr}>
-              <a href={pullUrl(pr)} rel="noreferrer" className="text-secondary-link">
+              <a href={pullUrl(pr, pattern.repo)} rel="noreferrer" className="text-secondary-link">
                 #{pr}
               </a>
             </li>

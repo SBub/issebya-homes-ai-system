@@ -373,6 +373,10 @@ procedures, not code documentation) and anything gitignored.
     - When adding a live demo (client component under `src/app/demos/` or a route under `src/app/api/demo/`) to `apps/patterns`
     - When building a Server-Sent Events stream from a Next Route Handler, e.g. the website's booking confirmation timeline
     - When the patterns browser test pool fails, or an SSE stream buffers, never ends or does not resume
+- `apps/patterns/app_docs/feature-ac4e9c74-streamed-prefetch-live-catch-up.md`
+  - Conditions:
+    - When a pattern doc's proof code lives in another repository (the frontmatter `repo` field, `blobUrl`/`pullUrl`, `check-code-links.ts`)
+    - When building a live list that must be correct on first paint and never served from `"use cache"`, with a catch-up read when the subscription opens
 
 ---
 

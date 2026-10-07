@@ -1,0 +1,307 @@
+---
+title: Streamed per-request prefetch with live catch-up
+kind: composite
+summary: A list that changes constantly must be correct on first paint, streamed per request instead of cached, and then kept current by a live subscription that re-reads once when it opens.
+tags:
+  - react-query
+  - realtime
+  - streaming
+  - suspense
+  - rsc
+repo: SBub/adw-dashboard
+uses:
+  - server-prefetch-hydration
+  - live-events-query-cache
+  - query-error-boundary
+  - connection-status
+  - suspense-without-flash
+code:
+  - path: src/data/active-runs-state.ts
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The per-request read; React cache() around await connection() and the prefetch, not "use cache", so the list is a hole in the shell.
+  - path: src/app/(dashboard)/layout.tsx
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The static shell and Providers; the sidebar's request-time island under a Suspense fallback, beside a "use cache" project list as the contrast.
+  - path: src/app/(dashboard)/projects/page.tsx
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: A static heading in the shell, then the list as the hole, with HydrationBoundary around the reader as the island's own ancestor.
+  - path: src/app/providers.tsx
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The browser's one QueryClient and the effect that opens the channel after hydration; the closer is the cleanup.
+  - path: src/data/realtime.ts
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The channel; on every SUBSCRIBED it sets the status live and re-reads with setQueryData, and folds each event with current && reducer.
+  - path: src/data/active-runs-query.ts
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The one queryOptions every reader spreads, with staleTime "static" and refetchOnMount false.
+  - path: src/components/ActiveRunsView.tsx
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: One project's view of the shared entry through select, so it shows the same rows the sidebar counts.
+  - path: src/lib/active-runs.ts
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: The pure slices behind each select (activeRunsOf, activeRunCounts, groupActiveRuns), so the views cannot disagree.
+  - path: src/data/hydration.test.ts
+    ref: 4584304e8f3f1a68c4982d045d78966b440cdc85
+    note: Proves a re-hydrated server state with an equal or older dataUpdatedAt never overwrites the live entry.
+verifiedIn:
+  - 111
+updated: 2026-10-07
+---
+
+## Problem
+
+Some lists change all the time. Every active run of a build pipeline is one. A row appears when a run starts, changes as it moves through its phases, and leaves when it completes. The page must show that list correctly the moment it paints, and keep it correct while it stays open.
+
+Each obvious approach gets one part wrong. Cached, the list is wrong: a cache scope prerendered into the static shell serves the copy from the build, and a run that started after the deploy is missing. Fetched only in the browser, the list costs a placeholder and a round trip before the first row shows. Live without a catch-up, the list misses every change between the server's read and the moment the socket joined.
+
+## Mechanism
+
+The list is read per request on the server, streamed into the page as a hole in the static shell, hydrated into React Query, and then kept current by a live channel that re-reads once when it opens. Here is what happens, in order.
+
+1. The request arrives. The server immediately sends the static shell: header, nav, the sidebar frame. Inside it, the list's area shows its Suspense fallback. That is [Suspense without the flash](/p/suspense-without-flash): the heading and the frame are in the shell, and only the list is the hole.
+2. The server prefetch runs inside that boundary. Per request, not cached, means this read happens for this visitor, now. It is not reused from a build-time snapshot or a shared cache entry. The read is [Server prefetch with hydration](/p/server-prefetch-hydration), behind an `await connection()`.
+3. Streamed. When the read returns, the server sends the rest down the same open response. That chunk carries the list's HTML, which replaces the fallback, and the prefetched data for the client's query cache. There is no second request.
+4. Hydration. React makes the page interactive. The query cache is already seeded with that data, so the client component draws immediately with no fetch.
+5. The subscription. The providers component opens the live connection in an effect after hydration. When the connection reports it is open, it re-reads the list once to cover the gap since the server read. After that, each live event patches the cache entry and the views re-render. That is [Live events into the query cache](/p/live-events-query-cache), with the channel's status in [Connection status with useSyncExternalStore](/p/connection-status).
+
+A failed read in step 2 lands in the island's own boundary, not in the route's error page, so the shell stays up. That is [Suspended query with an error boundary](/p/query-error-boundary).
+
+### Why not cached
+
+Data that changes constantly must not sit inside `"use cache"` or the prerendered shell. Under `cacheComponents`, a cache scope prerendered into the shell is read on every request from the shell's Resume Data Cache, which was filled at build time. No tag drop reaches it. `await connection()` before the read makes it request-time, so the component that reads is a hole in the shell and is streamed per request. It also moves React Query's clock read for the settled query out of the prerender.
+
+[Revalidate a cached server section from a live event](/p/revalidate-cached-section) is the contrast case. It suits a section that is cached and changes rarely, where one tag drop per change is cheap.
+
+### One shared cache entry
+
+The list lives under one key. Every view reads that entry through `select`: the full list, one group's rows, a count. The views are slices of the same data, so they cannot disagree. Every reader spreads one `queryOptions`, so no reader can drift to its own key or its own refetch rule.
+
+Each event writes with `current && applyChange(current, ev)`. When nothing is cached yet, the updater returns `undefined` and the cache is left alone, so an event can never create a one-row list that looks complete. In the reference the layout and the page each render an island that reads the list. React `cache()` around the read dedupes it within the request, so both islands hydrate the same state from one database read. Hydrating the same state twice is a no-op: React Query only overwrites an entry when the incoming `dataUpdatedAt` is newer.
+
+The catch-up runs on every join, not only after a drop. The first join has the same gap as a reconnect: anything that changed between the server read and the join was never an event this tab saw. It writes the fresh list with `setQueryData`, unconditionally. `invalidateQueries` and `refetchQueries` skip a query with `staleTime: "static"`, so either would be a silent no-op. The full list is complete, so writing it when the entry is absent is safe, unlike a one-row event.
+
+### When client-only fetching is acceptable instead
+
+An operator view kept open for a long session can skip the server read. The first paint is a placeholder while the script loads, then one round trip fills the list. Over hours of use that cost is paid once. The live channel and its catch-up still apply.
+
+## Combines
+
+<Combines />
+
+## Pattern
+
+This grows the app from [Live events into the query cache](/p/live-events-query-cache). Read its Pattern first. `app/items/query.ts`, `app/items/apply-change.ts`, `app/providers.tsx` and `app/ConnectionIndicator.tsx` are that doc's files, unchanged. The three files below replace their namesakes. Enable `cacheComponents` in `next.config.ts`, open `/items`, insert a row while the page loads, and the row is there once the indicator says `live`.
+
+The list file now holds one `queryOptions` and two views of the same entry.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
+import { fetchItems, itemsKey } from "./query";
+
+const itemsQuery = queryOptions({
+  queryKey: itemsKey,
+  queryFn: fetchItems,
+  staleTime: "static",
+  // The hydrated data is stale on arrival; refetching it is the fetch we avoided
+  refetchOnMount: false,
+});
+
+export function ItemCount() {
+  // A slice of the one entry, so the count and the list cannot disagree
+  const { data } = useSuspenseQuery({ ...itemsQuery, select: (items) => items.length });
+
+  return <p>{data} items</p>;
+}
+
+export function ItemList() {
+  const { data } = useSuspenseQuery(itemsQuery);
+
+  return (
+    <ul>
+      {data.map((item) => (
+        <li key={item.id}>
+          {item.name} ({item.comments})
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Both views spread `itemsQuery`, so they read one entry under one key with one set of rules. `staleTime: "static"` means the entry changes only when something writes it.
+
+The page keeps its heading in the static shell and reads the list in an async island inside a Suspense boundary.
+
+```tsx title="app/items/page.tsx"
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import { connection } from "next/server";
+import { Suspense } from "react";
+import { ConnectionIndicator } from "../ConnectionIndicator";
+import { Providers } from "../providers";
+import { ItemCount, ItemList } from "./ItemList";
+import { fetchItems, itemsKey, makeQueryClient } from "./query";
+
+async function LiveItems() {
+  // Request time: this island is a hole in the shell, read for this visitor, now
+  await connection();
+
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey, queryFn: fetchItems });
+
+  return (
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <ItemCount />
+      <ItemList />
+    </HydrationBoundary>
+  );
+}
+
+export default function Page() {
+  return (
+    <Providers>
+      <h1>Items</h1>
+      <ConnectionIndicator />
+      <Suspense fallback={<p>Loading</p>}>
+        <LiveItems />
+      </Suspense>
+    </Providers>
+  );
+}
+```
+
+The heading, the indicator and the fallback are prerendered. On each request the server sends them at once, then streams the list's HTML and its dehydrated data into the same response when the read returns. The browser hydrates the entry and both views draw from it with no fetch.
+
+The start function gains the catch-up. It runs each time the channel reports it is open.
+
+```ts title="app/items/realtime.ts"
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
+import type { QueryClient } from "@tanstack/react-query";
+import { setConnectionStatus } from "../ConnectionIndicator";
+import { applyChange } from "./apply-change";
+import { fetchItems, type Item, type ItemSummary, itemsKey, supabase } from "./query";
+
+async function catchUp(queryClient: QueryClient) {
+  try {
+    // The whole list, written directly: invalidate and refetch skip a static query
+    queryClient.setQueryData<ItemSummary[]>(itemsKey, await fetchItems());
+  } catch (error) {
+    console.warn("Catch-up read failed, the cache is left as it was", error);
+  }
+}
+
+export function startRealtime(queryClient: QueryClient) {
+  const channel = supabase
+    .channel("items")
+    .on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+      queryClient.setQueryData<ItemSummary[]>(
+        itemsKey,
+        (current) => current && applyChange(current, ev),
+      );
+    })
+    .subscribe((status) => {
+      switch (status) {
+        case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
+          setConnectionStatus("live");
+          // Every join, the first one too: nothing before it was delivered to this tab
+          void catchUp(queryClient);
+          break;
+        case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
+        case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
+          setConnectionStatus("reconnecting");
+          break;
+        case REALTIME_SUBSCRIBE_STATES.CLOSED:
+          setConnectionStatus("connecting");
+          break;
+      }
+    });
+
+  return () => {
+    void supabase.removeChannel(channel);
+    setConnectionStatus("connecting");
+  };
+}
+```
+
+The gap between the server read and the join is closed on the first join, and the gap of a dropped connection on every re-join, by the same line. A failed read leaves the cache as it was, and the next event or re-join tries again.
+
+### Wrong and right
+
+A row that started after the deploy never shows until the channel catches up.
+
+🔴 The island reads inside a cache scope. It is prerendered into the shell, and every request resumes it from the build's copy. This is the top of `LiveItems`.
+
+```tsx title="app/items/page.tsx"
+async function LiveItems() {
+  "use cache";
+
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey, queryFn: fetchItems });
+```
+
+✅ The island awaits `connection()` first. It is a hole in the shell, read on every request.
+
+```tsx title="app/items/page.tsx"
+async function LiveItems() {
+  await connection();
+
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey, queryFn: fetchItems });
+```
+
+The catch-up runs and the list does not move.
+
+🔴 The catch-up invalidates the key. The query is static, so `invalidateQueries` skips it and nothing is fetched. This is the body of `catchUp`.
+
+```ts title="app/items/realtime.ts"
+async function catchUp(queryClient: QueryClient) {
+  await queryClient.invalidateQueries({ queryKey: itemsKey });
+}
+```
+
+✅ The catch-up reads the list and writes it.
+
+```ts title="app/items/realtime.ts"
+async function catchUp(queryClient: QueryClient) {
+  try {
+    queryClient.setQueryData<ItemSummary[]>(itemsKey, await fetchItems());
+  } catch (error) {
+    console.warn("Catch-up read failed, the cache is left as it was", error);
+  }
+}
+```
+
+### In this repo
+
+The production code is in the ADW dashboard, `SBub/adw-dashboard`, each file at the same commit. Its list is every visible project's active runs.
+
+- [`active-runs-state.ts`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/data/active-runs-state.ts) is `LiveItems`'s read: `getActiveRunsState` awaits `connection()` and prefetches the entry, wrapped in React `cache()` so every island in one request shares one read.
+- [`layout.tsx`](<https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/app/(dashboard)/layout.tsx>) is the static shell. It mounts `Providers` and the connection indicator, and renders the sidebar's `SidebarActiveRuns` island under a boundary with a loading fallback. The project list beside it is a `"use cache"` read, the contrast case.
+- [`page.tsx`](<https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/app/(dashboard)/projects/page.tsx>) is `Page`: the heading is static, in the shell, and `AllActiveRuns` is the hole, with its own `HydrationBoundary` around the reader.
+- [`providers.tsx`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/app/providers.tsx) is `Providers`: one `QueryClient` in a lazy `useState`, and the effect that starts the channel and returns its closer.
+- [`realtime.ts`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/data/realtime.ts) is `startRealtime`. On `SUBSCRIBED` it sets the status to live and calls `catchUp`, which writes the fresh active list with `setQueryData`. Each runs event is folded with `current && applyRunChange(current, ev)`.
+- [`active-runs-query.ts`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/data/active-runs-query.ts) is `itemsQuery`: the one `queryOptions` with `staleTime: "static"` and `refetchOnMount: false`.
+- [`ActiveRunsView.tsx`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/components/ActiveRunsView.tsx) is a view like `ItemCount`: one project's rows through `select`.
+- [`active-runs.ts`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/lib/active-runs.ts) holds the pure slices behind each `select`: one project's rows, the sidebar's counts, and the overview's groups.
+- [`hydration.test.ts`](https://github.com/SBub/adw-dashboard/blob/4584304e8f3f1a68c4982d045d78966b440cdc85/src/data/hydration.test.ts) proves that a server state hydrated again with an equal or older `dataUpdatedAt` leaves the live entry alone, so a route refresh never sets it back.
+
+## Pitfalls
+
+- **A run that started after the deploy never shows until a reconnect.** The read sits in a `"use cache"` scope, or nothing awaits `connection()` before it. The shell serves the build's copy. See Wrong and right above.
+- **A row that changed while the page loaded stays stale until its next event.** The channel opened with no catch-up. Re-read the list on every join, the first one included.
+- **The catch-up silently does nothing.** It calls `invalidateQueries` or `refetchQueries` on a `staleTime: "static"` query, which both skip. Write the read with `setQueryData`. See Wrong and right above.
+- **The count and the list disagree.** Each view has its own key and its own fetch. Keep one entry and derive each view with `select`.
+- **An event creates a one-row list that looks complete.** The updater defaulted a missing entry to `[]`. Write `current && applyChange(current, ev)`, so a missing entry stays missing.
+- **Two islands on one page make two database reads.** The layout and the page each call the read. Wrap it in React `cache()`, which dedupes within one request and never across requests.
+- **A failed read takes down the whole page.** The island has no boundary of its own, so the error reaches the route's error page. Put the island under its own error boundary, inside the shell.
+
+## When not to use
+
+- Data that changes rarely. Cache it and drop its tag on change, as in [Revalidate a cached server section from a live event](/p/revalidate-cached-section).
+- A list nobody needs live. Plain [Server prefetch with hydration](/p/server-prefetch-hydration) is enough, with no channel held open.
+- A long-session operator view, where a placeholder and one round trip on load are cheap. Fetch in the browser and keep the live channel and its catch-up.
+
+## Code
+
+<CodeLinks />

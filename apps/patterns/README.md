@@ -35,7 +35,9 @@ yarn workspace patterns test    # unit (node) and browser (chromium) tests
 3. Commit the doc and both generated files. A unit test fails when either
    generated file is stale, and a doc missing from the manifest has no route.
 4. Run `yarn workspace patterns check-links` (network) to confirm every code
-   link resolves on GitHub.
+   link resolves on GitHub. For a doc whose proof code is in another
+   repository (`repo` set), this is the existence proof: the unit test that
+   checks each `code[].path` on disk only covers this repository's docs.
 
 ### Frontmatter
 
@@ -45,6 +47,7 @@ kind: atom # or composite
 summary: One sentence, ending with a period, no em dash. # the "read when" line
 tags: [react-query, rsc] # kebab-case, at least one
 uses: [an-atom, another-atom] # composites only, required there; atoms only
+repo: SBub/adw-dashboard # optional; where code and verifiedIn live; default this repo
 code: # at least one
   - path: apps/website/src/lib/shop/query-client.ts # repo-relative
     ref: a1410c6b3afa1ac500fc7018ca1ad42d5956e3b0 # full 40-char commit SHA

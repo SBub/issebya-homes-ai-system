@@ -42,7 +42,7 @@ export default async function PatternPage(props: PageProps<"/p/[slug]">) {
         </div>
         <Content
           components={{
-            CodeLinks: () => <CodeLinks code={pattern.code} />,
+            CodeLinks: () => <CodeLinks code={pattern.code} repo={pattern.repo} />,
             Combines: () => <Combines uses={uses} />,
           }}
         />

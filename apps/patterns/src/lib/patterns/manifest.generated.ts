@@ -9,9 +9,10 @@ import * as doc5 from "@content/query-error-boundary.mdx";
 import * as doc6 from "@content/revalidate-cached-section.mdx";
 import * as doc7 from "@content/server-prefetch-hydration.mdx";
 import * as doc8 from "@content/sse-route-handler.mdx";
-import * as doc9 from "@content/suspense-without-flash.mdx";
-import * as doc10 from "@content/use-action-state.mdx";
-import * as doc11 from "@content/use-sync-external-store.mdx";
+import * as doc9 from "@content/streamed-prefetch-live-catch-up.mdx";
+import * as doc10 from "@content/suspense-without-flash.mdx";
+import * as doc11 from "@content/use-action-state.mdx";
+import * as doc12 from "@content/use-sync-external-store.mdx";
 
 export const manifest = [
   {
@@ -60,18 +61,23 @@ export const manifest = [
     Content: doc8.default,
   },
   {
-    slug: "suspense-without-flash",
+    slug: "streamed-prefetch-live-catch-up",
     meta: doc9.frontmatter,
     Content: doc9.default,
   },
   {
-    slug: "use-action-state",
+    slug: "suspense-without-flash",
     meta: doc10.frontmatter,
     Content: doc10.default,
   },
   {
-    slug: "use-sync-external-store",
+    slug: "use-action-state",
     meta: doc11.frontmatter,
     Content: doc11.default,
+  },
+  {
+    slug: "use-sync-external-store",
+    meta: doc12.frontmatter,
+    Content: doc12.default,
   },
 ] as const;
