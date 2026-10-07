@@ -62,6 +62,12 @@ const codeRefSchema = z.object({
   note: z.string().trim().min(1, "code.note is required").max(160, "code.note is too long"),
 });
 
+// `owner/name`, as flat character classes with no nested quantifier: the same
+// ReDoS reasoning as `kebabSchema`.
+const githubRepoSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, "repo must be owner/name");
+
 const patternMetaSchema = z
   .object({
     title: z.string().trim().min(1, "title is required").max(80, "title is too long"),
@@ -82,6 +88,8 @@ const patternMetaSchema = z
       }),
     tags: z.array(kebabSchema("Tag")).min(1, "tags needs at least one tag"),
     uses: z.array(slugSchema).optional(),
+    // When absent, the `code` paths and `verifiedIn` PRs are in this repository.
+    repo: githubRepoSchema.optional(),
     code: z.array(codeRefSchema).min(1, "code needs at least one entry"),
     verifiedIn: z.array(z.number().int().positive()).min(1, "verifiedIn needs at least one PR"),
     updated: calendarDaySchema,

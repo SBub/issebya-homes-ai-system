@@ -41,6 +41,10 @@
   is a complete file or a fragment of one of the named files, with the same
   `title="..."` label and a sentence saying where in that file it sits.
   Those two markers are the one exception to the no-emojis rule below.
+- When the proof code lives in another repository, set `repo: owner/name`,
+  pin every `code[].ref` to a SHA on _that_ repo's origin, and list _that_
+  repo's PR numbers in `verifiedIn`. One repo per doc. The local existence
+  test skips such a doc, so `yarn workspace patterns check-links` must pass.
 - `verifiedIn` lists pull request numbers, not issue numbers. Confirm each
   with `gh pr view <n> --json files` touches the linked files.
 - Never hand-edit `content/INDEX.md` or `src/lib/patterns/manifest.generated.ts`.

@@ -43,6 +43,21 @@ describe("parsePatternMeta", () => {
     expect(() => parsePatternMeta(withCodePath(path), "an-atom")).toThrow("code.path");
   });
 
+  it("accepts an owner/name repo and leaves it optional", () => {
+    expect(parsePatternMeta({ ...atom, repo: "SBub/adw-dashboard" }, "an-atom").repo).toBe(
+      "SBub/adw-dashboard",
+    );
+    expect(parsePatternMeta(atom, "an-atom").repo).toBeUndefined();
+  });
+
+  it.each([
+    ["no owner", "adw-dashboard"],
+    ["a URL", "https://github.com/x/y"],
+    ["three segments", "a/b/c"],
+  ])("rejects repo with %s", (_label, repo) => {
+    expect(() => parsePatternMeta({ ...atom, repo }, "an-atom")).toThrow("repo must be owner/name");
+  });
+
   it("rejects a composite without uses", () => {
     const { uses: _uses, ...noUses } = composite;
     expect(() => parsePatternMeta(noUses, "a-composite")).toThrow("a composite must list");
