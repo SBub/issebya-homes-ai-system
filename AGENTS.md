@@ -142,10 +142,11 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
 
 `apps/telegram-router` (3003) and `apps/guest-communication-agent` (3005) are
 pinned by an external contract: one reserved ngrok hostname fronts
-`scripts/dev-webhook-gateway.ts` on 3010, which routes by path prefix to them
-(and to the ADW trigger on 8001), and Twilio and Telegram hold registered URLs
-against it. Never move those two ports, and never start a second dev server for
-either webhook app.
+`scripts/dev-webhook-gateway.ts` on 3010, which routes by path prefix to them,
+and Twilio and Telegram hold registered URLs against it. GitHub label events do
+not use the tunnel: every onboarded repo's Issues webhook points at the Supabase
+Edge Function `github-webhook`. Never move those two ports, and never start a
+second dev server for either webhook app.
 
 `apps/website` has no such contract — the gateway has no route to it. It honours
 `PORT` and only defaults to 3000, which is what lets an ADW run give each

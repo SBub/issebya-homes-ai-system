@@ -4,15 +4,20 @@
 **Date:** 2026-09-21
 **Specification:** `specs/issue-90-adw-9e5b865a-sdlc_planner-adopt-existing-gateway-tunnel.md`
 
+> 2026-10-08 (issue 230): the root ADW stack launcher and the gateway's GitHub route were
+> removed; GitHub label events now go to the Supabase Edge Function `github-webhook`.
+> Where this doc once said the ADW stack, read: a gateway and tunnel already started by
+> another process.
+
 ## Overview
 
-`yarn dev` used to fail outright whenever the ADW stack (`yarn dev:adw`) was already
-running: GCA's `scripts/dev.ts` unconditionally spawned a second webhook gateway on
+`yarn dev` used to fail outright whenever a webhook gateway and ngrok tunnel were already
+running (another `yarn dev`, or ones started by hand): GCA's `scripts/dev.ts` unconditionally spawned a second webhook gateway on
 3010 and a second ngrok tunnel for the one reserved domain, ngrok refused the tunnel
 with `ERR_NGROK_334`, and that exit tore down `next dev` and `inngest dev` with it.
 `dev.ts` now probes for both shared processes first, adopts them when they are already
-up, and only ever signals the children it spawned itself. `yarn dev` and `yarn dev:adw`
-can now run side by side in either order.
+up, and only ever signals the children it spawned itself. Two `yarn dev` runs, or
+`yarn dev` and a hand-started gateway and tunnel, can now run side by side in either order.
 
 ## What Was Built
 
@@ -25,7 +30,7 @@ can now run side by side in either order.
 - A warning for the one adoption case that looks healthy and is not: a host match whose
   `config.addr` forwards somewhere other than the gateway port.
 - Shutdown scoped to spawned processes only, so Ctrl-C on `yarn dev` never takes down
-  the ADW listener's public path.
+  a gateway or tunnel it adopted.
 - A vitest unit test pinning the tunnel-match rule.
 
 ## Technical Implementation
@@ -71,12 +76,13 @@ can now run side by side in either order.
 
 Nothing to configure. The behaviour is automatic:
 
-1. With the ADW stack already up (`yarn dev:adw`), run `yarn dev` at the repo root or
+1. With the gateway and tunnel already up (for example `yarn dev:webhook-gateway` and
+   `ngrok http 3010 --domain=<reserved domain>`), run `yarn dev` at the repo root or
    `yarn workspace guest-communication-agent dev`.
 2. Both adoption lines appear in the log and only `next dev` and `inngest dev` start.
    No `ERR_NGROK_334`.
-3. Ctrl-C on `yarn dev` stops only those two. The gateway on 3010, the tunnel and the
-   ADW trigger on 8001 keep answering.
+3. Ctrl-C on `yarn dev` stops only those two. The gateway on 3010 and the tunnel keep
+   answering.
 4. On a clean machine, `yarn dev` behaves exactly as before: it starts the gateway and
    the tunnel itself, and stops both on Ctrl-C.
 
@@ -108,22 +114,20 @@ No new environment variables, no new dependency. `node:net`, `fetch` and
   yarn workspace guest-communication-agent exec tsx -e "import('./scripts/dev-adoption.ts').then(async (m) => { console.log('gateway listening on 3010:', await m.isPortListening(3010)); const t = m.findAdoptableTunnel(await m.fetchNgrokTunnels(), new URL(process.env.TWILIO_WEBHOOK_URL ?? 'https://example.invalid').host); console.log('adoptable tunnel:', t); })"
   ```
 
-  With the ADW stack up it prints `true` and an adoptable tunnel object; with nothing
+  With a gateway and tunnel up it prints `true` and an adoptable tunnel object; with nothing
   running, `false` and `undefined`.
 
-- The spawn-versus-adopt orchestration itself is a human check: run `yarn dev:adw` then
-  `yarn dev`, and the reverse. It is not automated because proving it would mean starting
+- The spawn-versus-adopt orchestration itself is a human check: start the gateway and
+  tunnel by hand, then `yarn dev`, and the reverse. It is not automated because proving it would mean starting
   GCA's dev server on 3005, a port under a live contract with Twilio that agents must not
   occupy.
 
 ## Notes
 
-- Adoption deliberately makes an adopted process's death non-fatal to `yarn dev`. If the
-  ADW stack is torn down mid-session, webhooks stop arriving without `dev.ts` noticing.
-  That is the same trade `scripts/dev-adw.sh` already accepts and was out of scope here.
-- `scripts/dev-adw.sh` and `scripts/dev-webhook-gateway.ts` were not touched. The former
-  already had this behaviour (`port_pid`, `ngrok_api`, its "not starting a second"
-  logging); this change gives `dev.ts` the matching half.
+- Adoption deliberately makes an adopted process's death non-fatal to `yarn dev`. If an
+  adopted gateway or tunnel is torn down mid-session, webhooks stop arriving without
+  `dev.ts` noticing.
+- `scripts/dev-webhook-gateway.ts` was not touched by this change.
 - The probes live in their own module only because `dev.ts` calls `main()` at module
   scope, so importing it from a test would start Supabase, three dev servers and a
   tunnel. All process orchestration stays in `dev.ts`.
