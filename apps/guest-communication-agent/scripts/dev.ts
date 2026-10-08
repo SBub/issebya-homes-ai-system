@@ -89,8 +89,9 @@ async function main(): Promise<void> {
   let shuttingDown = false;
 
   // Only what this run actually spawned. An adopted gateway or tunnel belongs
-  // to `yarn dev:adw` (whose listener is meant to stay up permanently), so it
-  // is never signalled here and its exit is never fatal to this stack.
+  // to another process (a second `yarn dev`, or a gateway/tunnel started by
+  // hand with `yarn dev:webhook-gateway` / `ngrok`), so it is never signalled
+  // here and its exit is never fatal to this stack.
   const spawned = [nextDev, inngestDev, gatewayDev, ngrokDev].filter(
     (p): p is ChildProcess => p !== undefined,
   );
@@ -132,9 +133,9 @@ async function main(): Promise<void> {
 // telegram-router's own `yarn dev` (port 3003) still has to be running
 // separately for that second leg to actually resolve — this only wires up
 // the routing, it doesn't start telegram-router itself, that's a distinct
-// app with its own lifecycle. `yarn dev:adw` starts the same gateway and is
-// meant to stay up permanently, so an existing listener on GATEWAY_PORT is
-// adopted rather than fought over.
+// app with its own lifecycle. Another `yarn dev` or a hand-started
+// `yarn dev:webhook-gateway` may already hold GATEWAY_PORT, so an existing
+// listener on GATEWAY_PORT is adopted rather than fought over.
 async function startWebhookGateway(): Promise<ChildProcess | undefined> {
   if (await isPortListening(GATEWAY_PORT)) {
     console.log(

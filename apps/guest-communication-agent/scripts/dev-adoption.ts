@@ -1,7 +1,7 @@
 import net from "node:net";
 
-// Probes for the two repo-level processes `yarn dev` shares with
-// `yarn dev:adw` (the webhook gateway and the ngrok tunnel), kept out of
+// Probes for the two repo-level processes `yarn dev` may find already
+// running (the webhook gateway and the ngrok tunnel), kept out of
 // dev.ts because dev.ts calls main() at module scope — importing it from a
 // test would start Supabase, three dev servers and a tunnel.
 

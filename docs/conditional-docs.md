@@ -312,7 +312,7 @@ procedures, not code documentation) and anything gitignored.
   - Conditions:
     - When `yarn dev` fails on startup with `ERR_NGROK_334`, or tears down `next dev`/`inngest dev` because a shared process it did not own exited
     - When changing `apps/guest-communication-agent/scripts/dev.ts`, or anything about which processes `yarn dev` spawns, adopts, or signals on Ctrl-C
-    - When running `yarn dev` and `yarn dev:adw` at the same time, or wondering why one leaves the other's gateway and tunnel alone
+    - When running two `yarn dev` stacks, or `yarn dev` alongside a hand-started gateway or tunnel, and wondering why one leaves the other's gateway and tunnel alone
 
 - `apps/guest-communication-agent/app_docs/feature-d7d0c40c-reject-past-dates-booking.md`
   - Conditions:

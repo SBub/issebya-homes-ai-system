@@ -92,8 +92,9 @@ lefthook runs prettier, lint, typecheck and knip (ruff and mypy for `*.py`) on e
 
 - 3003 (`telegram-router`) and 3005 (`guest-communication-agent`) are pinned by an external
   contract: one reserved ngrok hostname fronts `scripts/dev-webhook-gateway.ts` on 3010, which routes
-  by path prefix to them and to the ADW webhook trigger on 8001. Twilio and Telegram hold registered
-  URLs against it. Never move these ports or start a second process on them.
+  by path prefix to them. Twilio and Telegram hold registered URLs against it. GitHub label events
+  go to the Supabase Edge Function `github-webhook`, not the tunnel. Never move these ports or start
+  a second process on them.
 - 3004 (`patterns`) and 3000 (`website`) are defaults outside that contract; `website` honours
   `PORT`, which is what gives each run its own server. This run's port is in `.ports.env` at the worktree root (`PORT`, `BACKEND_PORT`, `FRONTEND_PORT`),
   written by the engine. Source it; never write, edit or delete it; fall back to 3000 only when it
