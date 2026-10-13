@@ -1,13 +1,10 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { TabsDesktop } from "@/app/ui/TabsDesktop";
-import { TabsMobile } from "@/app/ui/TabsMobile";
-import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
+import { ROOM_CONTENT, roomMetaDescription } from "@/lib/shared/room-content";
 import { BookingType, isValidBookingType } from "@/lib/shared/types/booking";
 import { SITE_URL } from "@/lib/site";
-import { room1Images, room2Images } from "@/utils/images";
-import Gallery from "./ui/Gallery";
 import { GuardedBookingEngine } from "./ui/GuardedBookingEngine";
+import { RoomPage } from "./ui/RoomPage";
 
 const bookingTabs = [
   {
@@ -22,44 +19,8 @@ const bookingTabs = [
   },
 ];
 
-const ROOM_CONTENT: Record<string, { title: string; description: string[]; airbnbUrl: string }> = {
-  room1: {
-    title: "Private room 1",
-    description: [
-      "The private room is located on the ground floor of a three-level house. It opens onto the front garden and has access to its own bathroom (not en suite). On the same level, there's a shared living room with a fireplace and a desk. Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic. All spaces, except for the guest bedroom and bathroom, are shared.",
-    ],
-    airbnbUrl: "https://www.airbnb.com/rooms/1424633715489915166",
-  },
-  room2: {
-    title: "Private room 2",
-    description: [
-      "The private room is located on the ground floor of a three-level house. It has its own en suite bathroom. On the same level, there's a shared living room with a fireplace and a desk. Upstairs, there is an open kitchen and a second living area. The kitchen is fully equipped, and the terrace just beyond it offers distant views of the Atlantic. All spaces, except for the guest bedroom and bathroom, are shared.",
-    ],
-    airbnbUrl: "https://www.airbnb.com/rooms/1507883205063503481",
-  },
-};
-
 export async function generateStaticParams() {
   return [{ type: BookingType.room1 }, { type: BookingType.room2 }];
-}
-
-const MAX_DESCRIPTION_LENGTH = 160;
-
-// The leading whole sentences of `text` that fit in a meta description. Only
-// cuts mid-sentence when the first sentence alone is already too long.
-function leadingSentences(text: string): string {
-  const sentences = text.split(/(?<=\.)\s+/);
-  let result = "";
-  for (const sentence of sentences) {
-    const next = result ? `${result} ${sentence}` : sentence;
-    if (next.length > MAX_DESCRIPTION_LENGTH) break;
-    result = next;
-  }
-  if (result) return result;
-
-  const cut = sentences[0].slice(0, MAX_DESCRIPTION_LENGTH - 1);
-  const lastSpace = cut.lastIndexOf(" ");
-  return `${lastSpace > 0 ? cut.slice(0, lastSpace) : cut}…`;
 }
 
 // Reads `params` only, never searchParams, cookies() or headers(), so the
@@ -74,7 +35,7 @@ export async function generateMetadata(props: {
   const type = isValidBookingType(requested) ? requested : BookingType.room1;
   const { title: roomTitle, description: paragraphs } = ROOM_CONTENT[type];
   const title = `Book ${roomTitle} - issebya.homes`;
-  const description = leadingSentences(paragraphs[0]);
+  const description = roomMetaDescription(paragraphs[0]);
   const url = `${SITE_URL}/booking/${type}`;
   // A JPEG with declared dimensions: WhatsApp's preview fetcher skips WebP
   // and uses width/height to render without a second fetch.
@@ -107,65 +68,12 @@ export default async function BookingTypePage(props: { params: Promise<{ type: s
   }
 
   const roomType = type === "room1" ? BookingType.room1 : BookingType.room2;
-  const { description, airbnbUrl } = ROOM_CONTENT[type];
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-shop-card font-sans">
-      <TabsMobile tabs={bookingTabs} activeTabId={type} />
-
-      {/* Gallery (top on mobile) */}
-      <div className="order-1 md:order-2 md:w-1/2 flex flex-col items-center justify-start p-4 md:pt-[88px] relative md:sticky md:top-0 md:h-screen">
-        <Gallery
-          key={type} // Force remount when type changes
-          images={type === "room1" ? room1Images : room2Images}
-          roomType={type}
-        />
-      </div>
-
-      {/* Room Content */}
-      <div className="order-2 md:order-1 md:w-1/2 p-4 md:p-12 space-y-6">
-        <TabsDesktop tabs={bookingTabs} activeTabId={type} />
-        <div className="space-y-6">
-          <GuardedBookingEngine roomType={roomType} />
-
-          <p className="text-secondary text-xs">
-            Capacity: max 2 persons. Once a reservation is made, we are unable to provide a refund.
-          </p>
-
-          <p className="text-secondary">
-            <a
-              href="https://maps.google.com/?q=Almoçageme,+Sintra,+Portugal"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-secondary-link"
-            >
-              Almoçageme, Sintra
-            </a>
-          </p>
-
-          {description.map((text, index) => (
-            <p key={index} className="text-secondary">
-              {text}
-            </p>
-          ))}
-
-          <p className="text-secondary">
-            <a
-              href={airbnbUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-secondary-link"
-            >
-              Read public reviews on Airbnb
-            </a>
-          </p>
-
-          <p className="text-secondary">
-            For special requests or any enquiries, please reach out to us directly on{" "}
-            <WhatsAppLink />.
-          </p>
-        </div>
-      </div>
-    </div>
+    <RoomPage
+      type={type}
+      tabs={bookingTabs}
+      engine={<GuardedBookingEngine roomType={roomType} />}
+    />
   );
 }
