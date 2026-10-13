@@ -10,6 +10,7 @@ import {
   usePersonCount,
 } from "@/app/(main)/booking/[type]/ui/BookingSummaryRow";
 import type { LockInWeek } from "@/lib/lock-in";
+import { splitPhoneNumber } from "@/lib/shared/country-codes";
 import { addBookingBreadcrumb } from "@/lib/sentry-booking";
 import { formatLockInRange } from "./LockInWeekGrid";
 
@@ -29,7 +30,8 @@ const initialState = {
   values: {
     guestName: "",
     email: "",
-    countryId: "",
+    // Same default as the nightly form (Portugal).
+    countryId: splitPhoneNumber("").countryId,
     localNumber: "",
     whatsappOptIn: false,
   },

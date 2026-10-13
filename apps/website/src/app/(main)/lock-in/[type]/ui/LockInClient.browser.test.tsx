@@ -83,6 +83,12 @@ test("picking an available week opens the guest form with 7 nights, the week pri
     .toBeInTheDocument();
   await expect.element(screen.getByText(/night\(s\):\s*7/)).toBeInTheDocument();
   await expect.element(screen.getByText(/Tourist tax/)).not.toBeInTheDocument();
+
+  const countryCode = screen.getByLabelText("Country code");
+  await expect.element(countryCode).toHaveValue("PT");
+  expect((countryCode.element() as HTMLSelectElement).selectedOptions[0]?.textContent).toMatch(
+    /\+351 Portugal/,
+  );
 });
 
 test("submitting sends the selected week to submitLockIn", async () => {
