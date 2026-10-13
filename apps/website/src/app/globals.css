@@ -146,6 +146,48 @@ body:has(dialog[open]) {
   @apply text-xs text-gray-600;
 }
 
+/* Lock-in week grid (in place of the collapsed date row) */
+
+.lock-in-intro {
+  @apply text-secondary mb-4;
+}
+
+.lock-in-weeks {
+  @apply grid grid-cols-2 md:grid-cols-3 gap-2;
+}
+
+.lock-in-week {
+  @apply flex flex-col items-start gap-1 px-3 py-2 border border-foreground bg-white text-left font-sans text-sm;
+}
+
+.lock-in-week-available {
+  @apply cursor-pointer hover:opacity-80 press-spring;
+}
+
+.lock-in-week-selected {
+  @apply bg-foreground text-background font-semibold;
+}
+
+.lock-in-week-booked {
+  @apply text-gray-400 bg-gray-100 border-gray-300 cursor-default;
+}
+
+.lock-in-week-range {
+  @apply font-medium;
+}
+
+.lock-in-week-booked .lock-in-week-range {
+  @apply line-through;
+}
+
+.lock-in-week-meta {
+  @apply text-xs;
+}
+
+.lock-in-selected-range {
+  @apply text-secondary text-sm mb-4;
+}
+
 /* Expanded State */
 
 .booking-engine-expanded {

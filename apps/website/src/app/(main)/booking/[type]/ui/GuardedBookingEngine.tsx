@@ -1,10 +1,6 @@
-import { Suspense } from "react";
-import { ErrorBoundary } from "@sentry/nextjs";
-import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
-import { BOOKING_UNAVAILABLE_COPY } from "@/lib/shared/booking-copy";
 import type { BookingType } from "@/lib/shared/types/booking";
 import { BookingEngine } from "./BookingEngine";
-import { BookingEngineSkeleton } from "./BookingEngineSkeleton";
+import { EngineGuard } from "./EngineGuard";
 
 /**
  * The booking engine with its guards, as rendered by both
@@ -24,20 +20,8 @@ import { BookingEngineSkeleton } from "./BookingEngineSkeleton";
  */
 export function GuardedBookingEngine({ roomType }: { roomType: BookingType }) {
   return (
-    <ErrorBoundary
-      fallback={
-        <div className="booking-engine-error">
-          <p className="text-sm text-red-600">
-            {BOOKING_UNAVAILABLE_COPY.lead}
-            <WhatsAppLink />
-            {BOOKING_UNAVAILABLE_COPY.tail}
-          </p>
-        </div>
-      }
-    >
-      <Suspense fallback={<BookingEngineSkeleton />}>
-        <BookingEngine roomType={roomType} />
-      </Suspense>
-    </ErrorBoundary>
+    <EngineGuard>
+      <BookingEngine roomType={roomType} />
+    </EngineGuard>
   );
 }

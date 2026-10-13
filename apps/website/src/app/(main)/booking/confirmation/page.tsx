@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay } from "@/lib/date-utils";
+import { PriceBreakdown } from "./ui/PriceBreakdown";
 
 export const metadata: Metadata = {
   title: "Booking Confirmed – Issebya Homes",
@@ -123,20 +124,11 @@ export default async function BookingConfirmationPage({
               </div>
             </div>
 
-            <div className="space-y-2 pt-2">
-              <div className="flex justify-between text-secondary">
-                <span>Room price</span>
-                <span>€{booking.base_price}</span>
-              </div>
-              <div className="flex justify-between text-secondary">
-                <span>Tourist tax</span>
-                <span>€{booking.tourist_tax}</span>
-              </div>
-              <div className="flex justify-between text-price border-t border-gray-300 pt-2">
-                <span>Total</span>
-                <span>€{booking.total_amount}</span>
-              </div>
-            </div>
+            <PriceBreakdown
+              basePrice={booking.base_price}
+              touristTax={booking.tourist_tax}
+              total={booking.total_amount}
+            />
 
             <div className="pt-4 text-secondary">
               A confirmation email has been sent to{" "}

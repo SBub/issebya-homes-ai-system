@@ -20,6 +20,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/blog`, changeFrequency: "weekly", priority: 0.7 },
     { url: `${SITE_URL}/booking/room1`, changeFrequency: "weekly", priority: 1 },
     { url: `${SITE_URL}/booking/room2`, changeFrequency: "weekly", priority: 1 },
+    { url: `${SITE_URL}/lock-in/room1`, changeFrequency: "weekly", priority: 0.9 },
+    { url: `${SITE_URL}/lock-in/room2`, changeFrequency: "weekly", priority: 0.9 },
     { url: `${SITE_URL}/shop`, changeFrequency: "weekly", priority: 0.6 },
     { url: `${SITE_URL}/shop/sell`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${SITE_URL}/contact`, changeFrequency: "yearly", priority: 0.5 },
