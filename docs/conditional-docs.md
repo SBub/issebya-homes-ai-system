@@ -299,6 +299,12 @@ procedures, not code documentation) and anything gitignored.
     - When touching `submitBooking`, `submitLockIn` or the shared private checkout core in `booking/[type]/actions.ts`
     - When changing `/lock-in/[type]`, the shared `RoomPage`, `BookingGuestForm` or `BookingSummaryRow`, or the confirmation page's price rows
 
+- `apps/website/app_docs/feature-7deb859c-lockin-waitlist-landing-page.md`
+  - Conditions:
+    - When changing `/lockin-waitlist`, its two forms, the thank-you follow-up, or the host placeholder in `lockin-waitlist/copy.ts`
+    - When touching the `lockin_waitlist` table, its welcome email, or its unsubscribe route and Sentry token scrubber
+    - When releasing the page (indexing, sitemap, linking it) or applying its migration
+
 ---
 
 ## apps/guest-communication-agent

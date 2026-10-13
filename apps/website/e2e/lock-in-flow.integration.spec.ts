@@ -140,10 +140,14 @@ test.describe("Lock-in flow", () => {
     await expect(page.getByText(`Total: ${LOCK_IN_PRICING.weekPrice}€`)).toBeVisible();
     await expect(page.getByText(/Tourist tax:/)).toHaveCount(0);
 
+    // guest_contacts is resolved by email, then by phone, so a fixed number
+    // would land on the shared contact other specs book against (and leave
+    // rows on) in the shared local Supabase. A random one keeps the row ours.
     const email = `e2e-lock-in-${randomUUID()}@example.com`;
+    const localNumber = `92${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
     await page.getByLabel(/^name/i).fill("Guest Example");
     await page.getByLabel(/email/i).fill(email);
-    await page.getByLabel(/whatsapp number/i).fill("920742845");
+    await page.getByLabel(/whatsapp number/i).fill(localNumber);
 
     await Promise.all([
       page.waitForURL("https://checkout.stripe.com/**"),
