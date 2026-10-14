@@ -1,5 +1,9 @@
 # Analytics (PostHog)
 
+**Specifications:**
+
+- specs/issue-238-adw-5fdec26b-sdlc_planner-production-only-posthog-analytics.md
+
 How `apps/website` sends visitor analytics to PostHog, which events exist, and how the owner's and
 automated browsers are kept out of the numbers.
 
