@@ -277,6 +277,12 @@ procedures, not code documentation) and anything gitignored.
     - When the `/shop` toolbar looks different in Safari than in Chrome, or its row alignment or wrap breakpoint changes
     - When adjusting the padding of the `bg-shop-ground` products band on `/shop`
 
+- `apps/website/app_docs/analytics.md`
+  - Conditions:
+    - When adding or changing a PostHog event or a `posthog.capture` call
+    - When changing PostHog init, its environment variables, or the `internal` / `automated` tags
+    - When PostHog numbers include previews, the owner's visits or test browsers
+
 ---
 
 ## apps/guest-communication-agent

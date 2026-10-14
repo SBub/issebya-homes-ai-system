@@ -43,6 +43,16 @@ See `app_docs/database/production-migrations.md` for deploying database changes.
 | `SUPABASE_ANON_KEY`         | Public anon key for client-side/guest access         |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key for admin operations (bypasses RLS) |
 
+## Analytics
+
+PostHog runs only on the production Vercel deploy. See `analytics.md`.
+
+| Variable                            | Description                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | PostHog project token (`ihai-website`, EU). Vercel Production only; unset locally and on Preview |
+| `NEXT_PUBLIC_POSTHOG_HOST`          | PostHog API host. Vercel Production only; unset locally and on Preview                         |
+| `NEXT_PUBLIC_VERCEL_ENV`            | Vercel system variable (`production`, `preview`, `development`). Never set by hand             |
+
 ## AI Agent Rules
 
 AI agents must **NEVER** read the following files:
