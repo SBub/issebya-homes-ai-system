@@ -1,4 +1,9 @@
+import posthog from "posthog-js";
 import { useActionState, useId } from "react";
+import {
+  type LockinWaitlistForm,
+  lockinWaitlistReasonAddedEvent,
+} from "@/lib/lockin-waitlist/analytics";
 import {
   LOCKIN_FOLLOWUP_LABEL,
   LOCKIN_FOLLOWUP_SAVED,
@@ -6,7 +11,7 @@ import {
   LOCKIN_THANKS_HEADLINE,
   LOCKIN_THANKS_TEXT,
 } from "@/lib/lockin-waitlist/copy";
-import { initialSignupReasonState } from "@/lib/lockin-waitlist/schema";
+import { initialSignupReasonState, type SignupReasonFormState } from "@/lib/lockin-waitlist/schema";
 import { saveSignupReason } from "../actions";
 import { FOCUS_CLASS, GeneralError, INPUT_CLASS } from "./FormParts";
 
@@ -17,9 +22,24 @@ function focusOnMount(node: HTMLHeadingElement | null) {
 }
 
 // Rendered only inside the two client forms, in place of the form that was
-// submitted. `followupToken` is this submit's single-use key to the answer.
-export function WaitlistThankYou({ followupToken }: { followupToken: string }) {
-  const [state, formAction, isPending] = useActionState(saveSignupReason, initialSignupReasonState);
+// submitted. `followupToken` is this submit's single-use key to the answer;
+// `form` says which form that was, for the PostHog event.
+export function WaitlistThankYou({
+  form,
+  followupToken,
+}: {
+  form: LockinWaitlistForm;
+  followupToken: string;
+}) {
+  // The action plus its PostHog event, once per saved reason. The reason text
+  // itself never leaves the action.
+  async function saveReason(prevState: SignupReasonFormState, formData: FormData) {
+    const next = await saveSignupReason(prevState, formData);
+    const tracked = lockinWaitlistReasonAddedEvent(form, followupToken, next);
+    if (tracked) posthog.capture(tracked.event, tracked.properties);
+    return next;
+  }
+  const [state, formAction, isPending] = useActionState(saveReason, initialSignupReasonState);
   const id = useId();
   const errorId = `${id}-reason-error`;
 

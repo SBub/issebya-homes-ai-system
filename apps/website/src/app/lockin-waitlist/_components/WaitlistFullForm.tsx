@@ -1,5 +1,6 @@
 "use client";
 
+import posthog from "posthog-js";
 import { useActionState, useId, useState } from "react";
 import {
   LOCKIN_DURATION_LABEL,
@@ -10,7 +11,11 @@ import {
   LOCKIN_MONTHS_LABEL,
   LOCKIN_NAME_LABEL,
 } from "@/lib/lockin-waitlist/copy";
-import { initialLockinWaitlistState } from "@/lib/lockin-waitlist/schema";
+import { lockinWaitlistJoinedEvent } from "@/lib/lockin-waitlist/analytics";
+import {
+  initialLockinWaitlistState,
+  type LockinWaitlistFormState,
+} from "@/lib/lockin-waitlist/schema";
 import { joinLockinWaitlist } from "../actions";
 import { ConsentField } from "./ConsentField";
 import { EmailField, GeneralError, HoneypotField, INPUT_CLASS, SubmitButton } from "./FormParts";
@@ -80,17 +85,26 @@ function ChoiceGroup({
   );
 }
 
+// The action plus its PostHog event, once per real join. Module level keeps
+// its identity stable across renders.
+async function joinFromFullForm(prevState: LockinWaitlistFormState, formData: FormData) {
+  const next = await joinLockinWaitlist(prevState, formData);
+  const tracked = lockinWaitlistJoinedEvent("full", next);
+  if (tracked) posthog.capture(tracked.event, tracked.properties);
+  return next;
+}
+
 // The closing form: email, the optional questions and consent.
 export function WaitlistFullForm() {
   const [state, formAction, isPending] = useActionState(
-    joinLockinWaitlist,
+    joinFromFullForm,
     initialLockinWaitlistState,
   );
   const [optedIn, setOptedIn] = useState(false);
   const id = useId();
   const { answers, errors } = state;
 
-  if (state.ok) return <WaitlistThankYou followupToken={state.followupToken} />;
+  if (state.ok) return <WaitlistThankYou form="full" followupToken={state.followupToken} />;
 
   return (
     // Re-keyed per attempt so every uncontrolled answer re-seeds from the

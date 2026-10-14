@@ -26,6 +26,12 @@ vi.mock("../actions", () => ({
   saveSignupReason: (...args: unknown[]) => mockSaveReason(...args),
 }));
 
+// PostHog is the other seam: every capture the forms make lands here.
+const mockCapture = vi.fn();
+vi.mock("posthog-js", () => ({
+  default: { capture: (...args: unknown[]) => mockCapture(...args) },
+}));
+
 import { WaitlistFullForm } from "./WaitlistFullForm";
 import { WaitlistShortForm } from "./WaitlistShortForm";
 
@@ -60,7 +66,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockJoin.mockReset();
   mockSaveReason.mockReset();
+  mockCapture.mockReset();
 });
+
+// Every argument of every capture, serialised, for "never sent" checks.
+function capturedText() {
+  return JSON.stringify(mockCapture.mock.calls);
+}
+
+async function joinFromHero(hero: Awaited<ReturnType<typeof renderBoth>>["hero"]) {
+  await userEvent.fill(hero.getByLabelText("Email", { exact: true }), "guest@example.com");
+  await userEvent.click(hero.getByRole("checkbox", { name: LOCKIN_OPT_IN_COPY }));
+  await userEvent.click(hero.getByRole("button", { name: LOCKIN_SUBMIT_LABEL }));
+}
 
 test("the short form's submit stays disabled until consent is ticked", async () => {
   const { hero } = await renderBoth();
@@ -141,4 +159,79 @@ test("the follow-up answer is sent with the submit's follow-up token", async () 
   expect(sent.get("followupToken")).toBe(FOLLOWUP);
   expect(sent.get("signupReason")).toBe("a reel");
   expect(sent.get("email")).toBeNull();
+});
+
+test("a short-form join captures one lockin_waitlist_joined without the email", async () => {
+  mockJoin.mockResolvedValue(success);
+  const { hero } = await renderBoth();
+
+  await joinFromHero(hero);
+
+  await expect.element(hero.getByRole("heading", { name: LOCKIN_THANKS_HEADLINE })).toBeVisible();
+  expect(mockCapture).toHaveBeenCalledExactlyOnceWith("lockin_waitlist_joined", { form: "short" });
+  expect(capturedText()).not.toContain("guest@example.com");
+});
+
+test("a full-form join captures the choices, never the name or email", async () => {
+  mockJoin.mockResolvedValue({
+    ...success,
+    answers: { name: "Ada Visitor", lifeArea: "health", duration: "7_days", months: ["december"] },
+  });
+  const { full } = await renderBoth();
+
+  await userEvent.fill(full.getByLabelText("Email", { exact: true }), "guest@example.com");
+  await userEvent.click(full.getByRole("checkbox", { name: LOCKIN_OPT_IN_COPY }));
+  await userEvent.click(full.getByRole("button", { name: LOCKIN_SUBMIT_LABEL }));
+
+  await expect.element(full.getByRole("heading", { name: LOCKIN_THANKS_HEADLINE })).toBeVisible();
+  expect(mockCapture).toHaveBeenCalledExactlyOnceWith("lockin_waitlist_joined", {
+    form: "full",
+    life_area: "health",
+    duration: "7_days",
+    months: ["december"],
+  });
+  expect(capturedText()).not.toContain("guest@example.com");
+  expect(capturedText()).not.toContain("Ada Visitor");
+});
+
+test("a validation error captures nothing", async () => {
+  mockJoin.mockResolvedValue({
+    ...initialLockinWaitlistState,
+    attempt: 1,
+    errors: { email: "Please enter a valid email address" },
+    email: "not-an-email",
+  });
+  const { hero } = await renderBoth();
+
+  await userEvent.fill(hero.getByLabelText("Email", { exact: true }), "not-an-email");
+  await userEvent.click(hero.getByRole("checkbox", { name: LOCKIN_OPT_IN_COPY }));
+  await userEvent.click(hero.getByRole("button", { name: LOCKIN_SUBMIT_LABEL }));
+
+  await expect.element(hero.getByText("Please enter a valid email address")).toBeVisible();
+  expect(mockCapture).not.toHaveBeenCalled();
+});
+
+test("a honeypot submit shows the thank-you panel and captures nothing", async () => {
+  mockJoin.mockResolvedValue({ ...success, followupToken: "" });
+  const { hero } = await renderBoth();
+
+  await joinFromHero(hero);
+
+  await expect.element(hero.getByRole("heading", { name: LOCKIN_THANKS_HEADLINE })).toBeVisible();
+  expect(mockCapture).not.toHaveBeenCalled();
+});
+
+test("a saved reason captures lockin_waitlist_reason_added without the reason text", async () => {
+  mockJoin.mockResolvedValue(success);
+  mockSaveReason.mockResolvedValue({ attempt: 1, ok: true, errors: {}, generalError: "" });
+  const { hero } = await renderBoth();
+
+  await joinFromHero(hero);
+  await userEvent.fill(hero.getByLabelText(LOCKIN_FOLLOWUP_LABEL), "a reel about deep work");
+  await userEvent.click(hero.getByRole("button", { name: LOCKIN_FOLLOWUP_SUBMIT_LABEL }));
+
+  await expect.element(hero.getByText(LOCKIN_FOLLOWUP_SAVED)).toBeVisible();
+  expect(mockCapture).toHaveBeenCalledTimes(2);
+  expect(mockCapture).toHaveBeenLastCalledWith("lockin_waitlist_reason_added", { form: "short" });
+  expect(capturedText()).not.toContain("a reel about deep work");
 });

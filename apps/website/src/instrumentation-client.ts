@@ -4,6 +4,7 @@
 
 import { captureRouterTransitionStart, init, replayIntegration } from "@sentry/nextjs";
 import posthog from "posthog-js";
+import { startAnalytics } from "@/lib/analytics";
 
 init({
   // eslint-disable-next-line no-secrets/no-secrets -- Sentry DSN is intentionally public (client-side)
@@ -41,17 +42,30 @@ init({
 
 export const onRouterTransitionStart = captureRouterTransitionStart;
 
-// This file configures the initialization of PostHog on the client.
+// This file configures the initialization of PostHog on the client: production
+// Vercel deploy only, with internal/automated tagging. See app_docs/analytics.md.
 // https://posthog.com/docs/libraries/next-js
-if (process.env.NODE_ENV === "production") {
-  const posthogProjectToken = process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN;
-  const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
-
-  if (posthogProjectToken && posthogHost) {
-    posthog.init(posthogProjectToken, {
-      api_host: posthogHost,
-      defaults: "2026-01-30",
-      capture_exceptions: true,
-    });
-  }
-}
+startAnalytics(
+  // Literal reads, so Next inlines them into the client bundle.
+  {
+    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV,
+    projectToken: process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+  },
+  typeof window === "undefined"
+    ? undefined
+    : { webdriver: navigator.webdriver, search: window.location.search },
+  {
+    init: (projectToken, host, onLoaded) => {
+      posthog.init(projectToken, {
+        api_host: host,
+        defaults: "2026-01-30",
+        capture_exceptions: true,
+        // Runs before the initial $pageview, so it carries the tags.
+        loaded: () => onLoaded(),
+      });
+    },
+    register: (properties) => posthog.register(properties),
+    unregister: (property) => posthog.unregister(property),
+  },
+);
