@@ -305,6 +305,12 @@ procedures, not code documentation) and anything gitignored.
     - When touching the `lockin_waitlist` table, its welcome email, or its unsubscribe route and Sentry token scrubber
     - When releasing the page (indexing, sitemap, linking it) or applying its migration
 
+- `apps/website/app_docs/analytics.md`
+  - Conditions:
+    - When adding or changing a PostHog event or a `posthog.capture` call
+    - When changing PostHog init, its environment variables, or the `internal` / `automated` tags
+    - When PostHog numbers include previews, the owner's visits or test browsers
+
 ---
 
 ## apps/guest-communication-agent

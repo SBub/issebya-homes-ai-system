@@ -52,6 +52,16 @@ See `app_docs/database/production-migrations.md` for deploying database changes.
 | `ADMIN_NOTIFICATION_EMAIL` | The owner's address. Receives booking and shop notifications, and is the `bcc` and `replyTo` of the guest pre-arrival email (that email fails, and is retried, if it is unset) |
 | `CRON_SECRET`              | Bearer secret Vercel sends to cron routes (`/api/cron/pre-arrival`). Production only; the route returns 500 if it is unset and 401 on any other `Authorization` header       |
 
+## Analytics
+
+PostHog runs only on the production Vercel deploy. See `analytics.md`.
+
+| Variable                            | Description                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | PostHog project token (`ihai-website`, EU). Vercel Production only; unset locally and on Preview |
+| `NEXT_PUBLIC_POSTHOG_HOST`          | PostHog API host. Vercel Production only; unset locally and on Preview                         |
+| `NEXT_PUBLIC_VERCEL_ENV`            | Vercel system variable (`production`, `preview`, `development`). Never set by hand             |
+
 ## AI Agent Rules
 
 AI agents must **NEVER** read the following files:
