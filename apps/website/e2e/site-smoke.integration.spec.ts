@@ -131,16 +131,18 @@ test.describe("Site smoke", () => {
     await expect(sectionLinks).toHaveCount(GUEST_INFO_SECTIONS.length);
     await expect(sectionLinks).toHaveText(GUEST_INFO_SECTIONS);
 
-    const parking = page.locator("#parking");
-    await expect(parking).not.toBeInViewport();
+    // A section near the bottom, so it starts fully below the fold. The early
+    // ones (Parking) already peek into an 844px viewport on load.
+    const beaches = page.locator("#beaches-hikes");
+    await expect(beaches).not.toBeInViewport();
 
-    const parkingLink = page.getByRole("link", { name: "Parking", exact: true });
-    await parkingLink.click();
+    const beachesLink = page.getByRole("link", { name: "Beaches & Hikes", exact: true });
+    await beachesLink.click();
 
-    await expect(page).toHaveURL(/#parking$/);
-    await expect(parkingLink).toHaveClass(ACTIVE);
+    await expect(page).toHaveURL(/#beaches-hikes$/);
+    await expect(beachesLink).toHaveClass(ACTIVE);
     // The scroll is smooth, so this must poll rather than read once.
-    await expect(parking).toBeInViewport();
+    await expect(beaches).toBeInViewport();
   });
 
   test.describe("noindex", () => {
