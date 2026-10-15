@@ -32,10 +32,13 @@ file restates the subset the ADW commands need and must be kept in step with it.
   (plain `next dev`, port from `PORT`): `dev` runs `scripts/start.ts`, which also boots local
   Supabase and a Stripe listener and kills whatever holds port 3000.
 - Starting `website` on a port other than 3000: export `E2E_MOCK_STRIPE=true`,
-  `E2E_MOCK_ICAL_FAILURE=true`, and the six `ROOM{1,2}_ICAL_{AIRBNB,VRBO,BOOKING}` variables with
-  `http://localhost:3000/dev-ical/...` rewritten to `http://localhost:$PORT/dev-ical/...` (only the
-  port; leave a real OTA URL untouched). The app serves those feeds itself and the integration
-  specs need the in-process mocks; an exported variable wins over `.env.development`.
+  `E2E_MOCK_ICAL_FAILURE=true`, `E2E_MOCK_RESEND=true`, and the six
+  `ROOM{1,2}_ICAL_{AIRBNB,VRBO,BOOKING}` variables with `http://localhost:3000/dev-ical/...`
+  rewritten to `http://localhost:$PORT/dev-ical/...` (only the port; leave a real OTA URL
+  untouched). The app serves those feeds itself and the integration specs need the in-process
+  mocks; without `E2E_MOCK_RESEND` the wishlist, seller and waitlist emails those specs trigger go
+  out through the real Resend key in `.env.development`. An exported variable wins over
+  `.env.development`.
 - `telegram-router` is Python (FastAPI, uv): thin `package.json` name `telegram-router-tasks`,
   `pyproject.toml` `[project] name` `telegram-router`. Resolve a `target_apps` name to its directory
   by matching either field under `apps/*` and `packages/*`.
