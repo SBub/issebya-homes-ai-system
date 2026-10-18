@@ -27,30 +27,44 @@ type BookingFixture = {
   totalAmount: number;
 };
 
+type RoomType = BookingFixture["roomType"];
+
 // Days +120 onwards clear every other spec's window: room1 +10..+13
 // (booking-flow, blog-booking-flow), room2 +40..+43 (the blog return fixture)
-// and the lock-in weeks, which end in late January 2027.
-const nightly: BookingFixture = {
-  roomType: "room1",
-  checkIn: toCalendarDay(addDays(today, 120)),
-  checkOut: toCalendarDay(addDays(today, 123)),
-  nights: 3,
-  personCount: 2,
-  basePrice: 300,
-  touristTax: 12,
-  totalAmount: 312,
-};
+// and the lock-in weeks, which end in late January 2027. Each (stay, room)
+// pair gets its own window: nightly room1 +120..+123, nightly room2
+// +124..+127, lock-in room1 +130..+137, lock-in room2 +140..+147.
+const nightlyOffset: Record<RoomType, number> = { room1: 120, room2: 124 };
+const lockInOffset: Record<RoomType, number> = { room1: 130, room2: 140 };
 
-const lockInWeek: BookingFixture = {
-  roomType: "room2",
-  checkIn: toCalendarDay(addDays(today, 130)),
-  checkOut: toCalendarDay(addDays(today, 137)),
-  nights: 7,
-  personCount: 1,
-  basePrice: 700,
-  touristTax: 0,
-  totalAmount: 700,
-};
+function nightlyStay(roomType: RoomType): BookingFixture {
+  const start = nightlyOffset[roomType];
+  return {
+    roomType,
+    checkIn: toCalendarDay(addDays(today, start)),
+    checkOut: toCalendarDay(addDays(today, start + 3)),
+    nights: 3,
+    personCount: 2,
+    basePrice: 300,
+    touristTax: 12,
+    totalAmount: 312,
+  };
+}
+
+// What calculateLockInPrice() writes: 7 nights, no tourist tax, total = base.
+function lockInWeek(roomType: RoomType): BookingFixture {
+  const start = lockInOffset[roomType];
+  return {
+    roomType,
+    checkIn: toCalendarDay(addDays(today, start)),
+    checkOut: toCalendarDay(addDays(today, start + 7)),
+    nights: 7,
+    personCount: 1,
+    basePrice: 700,
+    touristTax: 0,
+    totalAmount: 700,
+  };
+}
 
 // The fixture is a *confirmed* booking on purpose: /api/bookings/direct only
 // calls stripe.checkout.sessions.retrieve for a `pending` or missing row, and
@@ -128,69 +142,75 @@ function confirmationUrl(sessionId: string) {
 }
 
 test.describe("Booking confirmation page", () => {
-  test("a nightly room1 booking shows its details, tourist tax and email", async ({ page }) => {
-    const { sessionId, email, cleanup } = await seedConfirmedBooking(nightly);
+  for (const roomType of ["room1", "room2"] as const) {
+    const roomName = roomType === "room1" ? "Room 1" : "Room 2";
 
-    try {
-      await page.goto(confirmationUrl(sessionId));
+    test(`a nightly stay shows the tourist tax row (${roomType})`, async ({ page }) => {
+      const fixture = nightlyStay(roomType);
+      const { sessionId, email, cleanup } = await seedConfirmedBooking(fixture);
 
-      await expect(
-        page.getByRole("heading", { level: 1, name: "Booking Confirmed" }),
-      ).toBeVisible();
-      await expect(page.getByText("Thank you for your reservation")).toBeVisible();
+      try {
+        await page.goto(confirmationUrl(sessionId));
 
-      await expect(fieldValue(page, "Room")).toHaveText("Room 1");
-      await expect(fieldValue(page, "Check-in")).toHaveText(formatDay(nightly.checkIn));
-      await expect(fieldValue(page, "Check-out")).toHaveText(formatDay(nightly.checkOut));
-      await expect(fieldValue(page, "Nights")).toHaveText("3");
-      await expect(fieldValue(page, "Guests")).toHaveText("2 Guests");
+        await expect(
+          page.getByRole("heading", { level: 1, name: "Booking Confirmed" }),
+        ).toBeVisible();
+        await expect(page.getByText("Thank you for your reservation")).toBeVisible();
 
-      await expect(priceRow(page, "Room price")).toContainText("€300");
-      await expect(priceRow(page, "Tourist tax")).toContainText("€12");
-      await expect(priceRow(page, "Total")).toContainText("€312");
+        await expect(fieldValue(page, "Room")).toHaveText(roomName);
+        await expect(fieldValue(page, "Check-in")).toHaveText(formatDay(fixture.checkIn));
+        await expect(fieldValue(page, "Check-out")).toHaveText(formatDay(fixture.checkOut));
+        await expect(fieldValue(page, "Nights")).toHaveText("3");
+        await expect(fieldValue(page, "Guests")).toHaveText("2 Guests");
 
-      // The email comes from the guest_contacts join, flattened by the route.
-      await expect(page.getByText(/A confirmation email has been sent to/)).toContainText(email);
+        await expect(priceRow(page, "Room price")).toContainText("€300");
+        await expect(priceRow(page, "Tourist tax")).toContainText("€12");
+        await expect(priceRow(page, "Total")).toContainText("€312");
 
-      await expect(page.getByRole("img", { name: "Room 1" })).toBeVisible();
-      await expect(page.getByTestId("return-to-post")).toHaveCount(0);
-    } finally {
-      await cleanup();
-    }
-  });
+        // The email comes from the guest_contacts join, flattened by the route.
+        await expect(page.getByText(/A confirmation email has been sent to/)).toContainText(email);
 
-  test("a room2 lock-in week shows one guest and no tourist tax row", async ({ page }) => {
-    const { sessionId, cleanup } = await seedConfirmedBooking(lockInWeek);
+        await expect(page.getByRole("img", { name: roomName })).toBeVisible();
+        await expect(page.getByTestId("return-to-post")).toHaveCount(0);
+      } finally {
+        await cleanup();
+      }
+    });
 
-    try {
-      await page.goto(confirmationUrl(sessionId));
+    test(`a lock-in week shows no tourist tax row (${roomType})`, async ({ page }) => {
+      const fixture = lockInWeek(roomType);
+      const { sessionId, cleanup } = await seedConfirmedBooking(fixture);
 
-      await expect(
-        page.getByRole("heading", { level: 1, name: "Booking Confirmed" }),
-      ).toBeVisible();
+      try {
+        await page.goto(confirmationUrl(sessionId));
 
-      await expect(fieldValue(page, "Room")).toHaveText("Room 2");
-      await expect(fieldValue(page, "Check-in")).toHaveText(formatDay(lockInWeek.checkIn));
-      await expect(fieldValue(page, "Check-out")).toHaveText(formatDay(lockInWeek.checkOut));
-      await expect(fieldValue(page, "Nights")).toHaveText("7");
-      // Exact text, so a "1 Guests" plural regression fails.
-      await expect(fieldValue(page, "Guests")).toHaveText("1 Guest");
+        await expect(
+          page.getByRole("heading", { level: 1, name: "Booking Confirmed" }),
+        ).toBeVisible();
 
-      // Room price and Total are both €700: scope each to its own row.
-      await expect(priceRow(page, "Room price")).toContainText("€700");
-      await expect(priceRow(page, "Total")).toContainText("€700");
-      // Checked after the heading is visible, so the page has rendered.
-      await expect(page.getByText("Tourist tax")).toHaveCount(0);
-    } finally {
-      await cleanup();
-    }
-  });
+        await expect(fieldValue(page, "Room")).toHaveText(roomName);
+        await expect(fieldValue(page, "Check-in")).toHaveText(formatDay(fixture.checkIn));
+        await expect(fieldValue(page, "Check-out")).toHaveText(formatDay(fixture.checkOut));
+        await expect(fieldValue(page, "Nights")).toHaveText("7");
+        // Exact text, so a "1 Guests" plural regression fails.
+        await expect(fieldValue(page, "Guests")).toHaveText("1 Guest");
+
+        // Room price and Total are both €700: scope each to its own row.
+        await expect(priceRow(page, "Room price")).toContainText("€700");
+        await expect(priceRow(page, "Total")).toContainText("€700");
+        // Checked after the heading is visible, so the page has rendered.
+        await expect(page.getByText("Tourist tax")).toHaveCount(0);
+      } finally {
+        await cleanup();
+      }
+    });
+  }
 
   test.describe("on a mobile viewport", () => {
     test.use({ viewport: { width: 375, height: 667 } });
 
     test("the details render and the room photo is hidden", async ({ page }) => {
-      const { sessionId, cleanup } = await seedConfirmedBooking(nightly);
+      const { sessionId, cleanup } = await seedConfirmedBooking(nightlyStay("room1"));
 
       try {
         await page.goto(confirmationUrl(sessionId));
