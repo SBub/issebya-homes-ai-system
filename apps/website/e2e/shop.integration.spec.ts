@@ -21,6 +21,7 @@ import {
 } from "@/lib/shop/wishlist";
 import { createAdminClient, createClient } from "@/lib/shared/supabase";
 import { SITE_URL } from "@/lib/site";
+import { saveToWishlist } from "./support/journeys";
 
 // The catalogue reads no database. The wishlist tests write to the shared
 // local DB, each under its own unique email, and delete that contact
@@ -626,15 +627,7 @@ test.describe("Wishlist", () => {
         .single();
       return data;
     };
-    const wish = async () => {
-      await page.goto(`/shop/${firstProduct.slug}`);
-      await page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
-      await dialog.getByLabel("Email").fill(email);
-      await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-      await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
-      await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
-    };
+    const wish = () => saveToWishlist(page, firstProduct.slug, email);
 
     await wish();
     const oldToken = (await readContact())?.unsubscribe_token as string;
