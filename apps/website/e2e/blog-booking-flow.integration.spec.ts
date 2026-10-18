@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { addDays, format, startOfDay } from "date-fns";
 import { createAdminClient } from "@/lib/shared/supabase";
+import {
+  confirmAndReachStripe,
+  fillGuestDetails,
+  mockStripeCheckout,
+  selectCalendarRange,
+} from "./support/journeys";
 
 // Generate future dates relative to today so tests don't go stale
 const today = startOfDay(new Date());
-const checkInLabel = format(addDays(today, 10), "MMMM d, yyyy");
-const checkOutLabel = format(addDays(today, 13), "MMMM d, yyyy");
-// The same day as checkInLabel, in the format the collapsed engine displays it.
-const checkInDisplayText = format(addDays(today, 10), "d MMM yyyy");
+const checkInDate = addDays(today, 10);
+const checkOutDate = addDays(today, 13);
+// The check-in day, in the format the collapsed engine displays it.
+const checkInDisplayText = format(checkInDate, "d MMM yyyy");
 
 const WIDGET_POST = "/blog/welcome-to-issebya-homes";
 const POST_TITLE = "A house for rest between the Sintra forest and the Atlantic";
@@ -61,13 +67,7 @@ test.describe("Blog with an inline booking widget", () => {
     // E2E_MOCK_STRIPE, set by playwright.config.ts), and the browser-level
     // navigation to the returned checkout URL is fulfilled here so the test
     // never reaches real Stripe.
-    await page.route("https://checkout.stripe.com/**", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: "<html><body>Mock Stripe Checkout</body></html>",
-      }),
-    );
+    await mockStripeCheckout(page);
 
     await page.goto(WIDGET_POST);
 
@@ -79,21 +79,12 @@ test.describe("Blog with an inline booking widget", () => {
     await page.getByLabel("Book selected dates").click();
     await expect(page.getByLabel("Confirm booking")).toBeVisible();
 
-    await page.locator(`button:not([disabled])[aria-label="${checkInLabel}"]`).click();
-    await page.locator(`button:not([disabled])[aria-label="${checkOutLabel}"]`).click();
-
-    await page.getByLabel(/^name/i).fill("Guest Example");
-    await page.getByLabel(/email/i).fill("guest@example.com");
-    await page.getByLabel(/whatsapp number/i).fill("920742845");
-
-    await expect(page.getByLabel("Confirm booking")).toBeEnabled();
+    await selectCalendarRange(page, checkInDate, checkOutDate);
+    await fillGuestDetails(page, { email: "guest@example.com", localNumber: "920742845" });
 
     // Same destination a booking from /booking/[type] reaches, which is the
     // point of this test: the widget is the same engine, action and checkout.
-    await Promise.all([
-      page.waitForURL("https://checkout.stripe.com/**"),
-      page.getByLabel("Confirm booking").click(),
-    ]);
+    await confirmAndReachStripe(page);
   });
 
   // At `sm`+ the hero is floated left. The widget must clear it, or its box
@@ -147,8 +138,7 @@ test.describe("Blog with an inline booking widget", () => {
     await page.getByLabel("Book selected dates").click();
     await expect(page.getByLabel("Confirm booking")).toBeVisible();
 
-    await page.locator(`button:not([disabled])[aria-label="${checkInLabel}"]`).click();
-    await page.locator(`button:not([disabled])[aria-label="${checkOutLabel}"]`).click();
+    await selectCalendarRange(page, checkInDate, checkOutDate);
 
     const checkInDisplay = page.getByLabel("Select check-in date");
     await expect(checkInDisplay).toHaveText(checkInDisplayText);

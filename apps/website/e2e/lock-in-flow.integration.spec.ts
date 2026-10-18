@@ -1,19 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { addDays, format, isMonday } from "date-fns";
+import { addDays, isMonday } from "date-fns";
 import { LOCK_IN_PRICING } from "pricing";
 import { fromCalendarDay, toCalendarDay } from "@/lib/date-utils";
 import { LOCK_IN_FIRST_CHECK_IN, getLockInWeeks } from "@/lib/lock-in";
 import { createAdminClient } from "@/lib/shared/supabase";
+import {
+  confirmAndReachStripe,
+  fillGuestDetails,
+  lockInWeekLabel,
+  mockStripeCheckout,
+  pickFreeLockInWeek,
+  uniqueGuest,
+} from "./support/journeys";
 
 // The same list the page renders, so the spec follows today like the page.
 const weeks = getLockInWeeks(new Date());
-
-const weekLabel = (week: { checkIn: string; checkOut: string }) =>
-  `${format(fromCalendarDay(week.checkIn), "d MMM")} – ${format(
-    fromCalendarDay(week.checkOut),
-    "d MMM",
-  )}`;
 
 // getAvailability is "use cache"-tagged, so a seeded or removed row is
 // invisible to the page until the tag is expired. The E2E iCal toggle route
@@ -42,7 +44,7 @@ test.describe("Lock-in flow", () => {
     const first = weeks[0];
     expect(isMonday(fromCalendarDay(first.checkIn))).toBe(true);
     expect(first.checkIn >= LOCK_IN_FIRST_CHECK_IN).toBe(true);
-    await expect(page.locator(".lock-in-week").first()).toContainText(weekLabel(first));
+    await expect(page.locator(".lock-in-week").first()).toContainText(lockInWeekLabel(first));
   });
 
   test("a week with one booked night shows as Booked and is not a button", async ({
@@ -96,7 +98,7 @@ test.describe("Lock-in flow", () => {
       await page.goto("/lock-in/room1");
 
       const card = page.locator(".lock-in-week").first();
-      await expect(card).toContainText(weekLabel(weeks[0]));
+      await expect(card).toContainText(lockInWeekLabel(weeks[0]));
       await expect(card).toContainText("Booked");
       await expect(card).toHaveClass(/lock-in-week-booked/);
       expect(await card.evaluate((el) => el.tagName)).toBe("DIV");
@@ -110,55 +112,25 @@ test.describe("Lock-in flow", () => {
   test("picking a week goes to Stripe and writes a pending 7-night row with no tourist tax", async ({
     page,
   }) => {
-    // Stripe's API is mocked in-process (E2E_MOCK_STRIPE); the redirect to
-    // the mocked session URL is fulfilled here.
-    await page.route("https://checkout.stripe.com/**", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: "<html><body>Mock Stripe Checkout</body></html>",
-      }),
-    );
+    await mockStripeCheckout(page);
 
     await page.goto("/lock-in/room1");
     await expect(page.locator(".lock-in-week")).toHaveCount(12);
 
-    // The first week the real local data leaves free.
-    let picked: (typeof weeks)[number] | undefined;
-    for (const week of weeks) {
-      // Only an available week is a <button>; a booked one is a <div>.
-      const button = page.locator("button.lock-in-week").filter({ hasText: weekLabel(week) });
-      if ((await button.count()) > 0) {
-        picked = week;
-        await button.click();
-        await expect(button).toHaveAttribute("aria-pressed", "true");
-        break;
-      }
-    }
-    if (!picked) throw new Error("No free lock-in week in local data");
+    const picked = await pickFreeLockInWeek(page, weeks);
 
     await expect(page.getByText(`Total: ${LOCK_IN_PRICING.weekPrice}€`)).toBeVisible();
     await expect(page.getByText(/Tourist tax:/)).toHaveCount(0);
 
-    // guest_contacts is resolved by email, then by phone, so a fixed number
-    // would land on the shared contact other specs book against (and leave
-    // rows on) in the shared local Supabase. A random one keeps the row ours.
-    const email = `e2e-lock-in-${randomUUID()}@example.com`;
-    const localNumber = `92${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
-    await page.getByLabel(/^name/i).fill("Guest Example");
-    await page.getByLabel(/email/i).fill(email);
-    await page.getByLabel(/whatsapp number/i).fill(localNumber);
-
-    await Promise.all([
-      page.waitForURL("https://checkout.stripe.com/**"),
-      page.getByLabel("Confirm booking").click(),
-    ]);
+    const guest = uniqueGuest("e2e-lock-in-");
+    await fillGuestDetails(page, guest);
+    await confirmAndReachStripe(page);
 
     const supabase = createAdminClient();
     const { data: contact } = await supabase
       .from("guest_contacts")
       .select("id")
-      .eq("email", email)
+      .eq("email", guest.email)
       .single();
     expect(contact).not.toBeNull();
 
