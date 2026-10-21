@@ -881,7 +881,7 @@ describe("URL redaction in toModelMessage", () => {
   });
 
   const BOOKING_LINK_TEXT =
-    "Here's your booking link for Room 1, September 18-20, 2026:\n\nhttps://issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20";
+    "Here's your booking link for Room 1, September 18-20, 2026:\n\nhttps://home.issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20";
   const MAPS_LINK_TEXT = "Here's how to find us: https://maps.app.goo.gl/abc123XYZ, see you soon!";
   const PLAIN_TEXT =
     "Sure thing! Check-in is at 3pm, and there's a $50 deposit (refundable) — see you then :)";
@@ -924,7 +924,7 @@ describe("URL redaction in toModelMessage", () => {
     expect(linkMessage?.content).not.toContain("https://");
   });
 
-  it("redacts an old Google Maps-style URL too, proving the regex isn't issebya.com-specific", async () => {
+  it("redacts an old Google Maps-style URL too, proving the regex isn't home.issebya.com-specific", async () => {
     const rows = [
       { ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"), content: MAPS_LINK_TEXT },
       ...trailingFillerRows(8, 2),
@@ -976,7 +976,7 @@ describe("URL redaction in toModelMessage", () => {
     const rows = [
       {
         ...messageRow("msg-1", "assistant", 10, "2026-08-01T00:00:00Z"),
-        content: "Here you go, John:\n\nhttps://issebya.com/booking/room2?checkIn=2026-12-01",
+        content: "Here you go, John:\n\nhttps://home.issebya.com/booking/room2?checkIn=2026-12-01",
       },
       {
         ...messageRow("msg-2", "user", 10, "2026-08-01T00:01:00Z"),
@@ -999,7 +999,7 @@ describe("URL redaction in toModelMessage", () => {
     const linkMessage = result.historyMessages.find((m) =>
       typeof m.content === "string" ? m.content.includes("Here you go") : false,
     );
-    expect(linkMessage?.content).toContain("https://issebya.com/booking/room2");
+    expect(linkMessage?.content).toContain("https://home.issebya.com/booking/room2");
     expect(linkMessage?.content).not.toContain("[link]");
   });
 
@@ -1031,7 +1031,7 @@ describe("URL redaction in toModelMessage", () => {
     // redaction.
     const twoLinkText =
       "Here's your booking link for Room 1, September 18-20, 2026:\n\n" +
-      "https://issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20\n\n" +
+      "https://home.issebya.com/booking?room=room1&checkIn=2026-09-18&checkOut=2026-09-20\n\n" +
       "And here's how to find the property: https://maps.app.goo.gl/8gk3nQeD2rHFujeK7";
 
     const rows = [
@@ -1225,7 +1225,7 @@ describe("turn_messages replay", () => {
     });
   });
 
-  const LINK = "https://issebya.com/booking?room=room1&checkIn=2026-10-06&checkOut=2026-10-08";
+  const LINK = "https://home.issebya.com/booking?room=room1&checkIn=2026-10-06&checkOut=2026-10-08";
 
   // Two turn groups (both in the verbatim tier): the link turn [u0, a0],
   // then one guest message followed by `followUps` assistant rows.

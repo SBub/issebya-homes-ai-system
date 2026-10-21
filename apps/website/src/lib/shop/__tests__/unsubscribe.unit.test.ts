@@ -101,7 +101,7 @@ describe("isUnsubscribeToken / newUnsubscribeToken", () => {
 describe("unsubscribeUrl / unsubscribeResultPath", () => {
   it("builds the link and token-free result paths", () => {
     expect(unsubscribeUrl(TOKEN_A)).toBe(
-      `https://issebya.com/shop/wishlist/unsubscribe?token=${TOKEN_A}`,
+      `https://home.issebya.com/shop/wishlist/unsubscribe?token=${TOKEN_A}`,
     );
     expect(unsubscribeResultPath("unsubscribed")).toBe("/shop/wishlist/unsubscribe/done");
     expect(unsubscribeResultPath("already")).toBe("/shop/wishlist/unsubscribe/already");
@@ -204,14 +204,14 @@ describe("scrubUnsubscribeToken", () => {
   it("removes the token from the request URL and query", () => {
     const event = scrubUnsubscribeToken({
       request: {
-        url: `https://issebya.com/shop/wishlist/unsubscribe?token=${TOKEN_A}`,
+        url: `https://home.issebya.com/shop/wishlist/unsubscribe?token=${TOKEN_A}`,
         query_string: `token=${TOKEN_A}`,
       },
     });
 
     expect(JSON.stringify(event)).not.toContain(TOKEN_A);
     expect(event.request.url).toBe(
-      "https://issebya.com/shop/wishlist/unsubscribe?token=[redacted]",
+      "https://home.issebya.com/shop/wishlist/unsubscribe?token=[redacted]",
     );
   });
 
@@ -233,7 +233,7 @@ describe("scrubUnsubscribeToken", () => {
   it("removes the token from a parsed query object", () => {
     const event = scrubUnsubscribeToken({
       request: {
-        url: "https://issebya.com/shop/wishlist/unsubscribe",
+        url: "https://home.issebya.com/shop/wishlist/unsubscribe",
         query_string: { token: TOKEN_A },
       },
     });
@@ -243,7 +243,7 @@ describe("scrubUnsubscribeToken", () => {
 
   it("leaves unrelated events untouched", () => {
     const original = {
-      request: { url: "https://issebya.com/booking/confirmation?session=abc&token=keep" },
+      request: { url: "https://home.issebya.com/booking/confirmation?session=abc&token=keep" },
     };
     const event = scrubUnsubscribeToken(structuredClone(original));
 

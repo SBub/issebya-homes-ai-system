@@ -194,7 +194,7 @@ export function computeSendBookingLink(
     return { error: describeBookingRefusal(problem, args, today), reason: problem };
   }
 
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://home.issebya.com";
   const url = `${siteUrl}/booking/${room}?checkIn=${checkIn}&checkOut=${checkOut}&phone=${encodeURIComponent(phone)}&guestName=${encodeURIComponent(guestName)}&email=${encodeURIComponent(email)}&source=gca`;
   return { url };
 }

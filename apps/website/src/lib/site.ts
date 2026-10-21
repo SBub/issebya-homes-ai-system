@@ -8,10 +8,8 @@
  * turning those routes dynamic, which is the opposite of what they exist for.
  * A constant is the correct shape for them.
  *
- * Note the brand is `issebya.homes` while this is `issebya.com`. That matches
- * what `src/app/layout.tsx` has always emitted for Open Graph, so it is kept
- * as-is rather than changed in passing. If `issebya.homes` is the canonical
- * domain, changing this one line fixes the layout metadata, every post
- * canonical, the sitemap and robots together.
+ * The site lives on `home.issebya.com`, one of several `issebya.com`
+ * subdomains. The bare `issebya.com` is reserved for a hub that links to
+ * them, so it is not this site's origin. The brand stays `issebya.homes`.
  */
-export const SITE_URL = "https://issebya.com";
+export const SITE_URL = "https://home.issebya.com";
