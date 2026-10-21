@@ -36,7 +36,7 @@ file restates the subset the ADW commands need and must be kept in step with it.
   `ROOM{1,2}_ICAL_{AIRBNB,VRBO,BOOKING}` variables with `http://localhost:3000/dev-ical/...`
   rewritten to `http://localhost:$PORT/dev-ical/...` (only the port; leave a real OTA URL
   untouched). The app serves those feeds itself and the integration specs need the in-process
-  mocks; without `E2E_MOCK_RESEND` the wishlist, seller and waitlist emails those specs trigger go
+  mocks; without `E2E_MOCK_RESEND` the wishlist and seller emails those specs trigger go
   out through the real Resend key in `.env.development`. An exported variable wins over
   `.env.development`.
 - `telegram-router` is Python (FastAPI, uv): thin `package.json` name `telegram-router-tasks`,
