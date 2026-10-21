@@ -14,6 +14,7 @@ import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { checkoutSchema } from "@/lib/shared/schemas/booking";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { formatZodErrors } from "@/lib/shared/validation";
+import { SITE_URL } from "@/lib/site";
 import { stripe } from "@/lib/stripe";
 import type { DateRange } from "@/lib/shared/types/booking";
 import { emailSchema, localNumberSchema, nameSchema } from "./validation";
@@ -480,7 +481,7 @@ async function createCheckout(
               : `${origin}/booking/${roomType}`;
 
         const roomLabel = ROOM_LABELS[roomType];
-        const imageUrl = `https://issebya.com${ROOM_IMAGES[roomType]}`;
+        const imageUrl = `${SITE_URL}${ROOM_IMAGES[roomType]}`;
 
         const formatDate = (dateStr: string) => {
           const date = fromCalendarDay(dateStr);

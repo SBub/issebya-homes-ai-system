@@ -76,7 +76,7 @@ A reader lands on a post, reads it, picks `room 1` or `room 2` in the widget, pi
 
 ## Configuration
 
-- No new environment variables. `SITE_URL` in `src/lib/site.ts` is a constant, not env-driven, because `sitemap.ts`, `robots.ts` and post canonicals cannot read the request without turning dynamic. Note it is `https://issebya.com` while the brand is `issebya.homes`, matching what `layout.tsx` has always emitted. Changing that one line updates the layout metadata, every canonical, the sitemap and robots together.
+- No new environment variables. `SITE_URL` in `src/lib/site.ts` is a constant, not env-driven, because `sitemap.ts`, `robots.ts` and post canonicals cannot read the request without turning dynamic. It is `https://home.issebya.com` (the bare `issebya.com` is reserved for a hub) while the brand is `issebya.homes`. Changing that one line updates the layout metadata, every canonical, the sitemap and robots together.
 - New dependencies: `@next/mdx`, `@mdx-js/loader`, `@mdx-js/react`, and `@types/mdx` as a dev dependency.
 - The dev and E2E iCal feed values in `.env.example` are now root-relative paths (`/dev-ical/room1-airbnb.ics`). A local `.env.development` still carrying `http://localhost:3000/...` will point a non-3000 run at the wrong server. Production OTA feeds are absolute URLs and pass through untouched.
 

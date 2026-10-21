@@ -99,7 +99,7 @@ describe("sendWishlistConfirmationEmail", () => {
     productSlug: "oak-side-table",
     unsubscribeToken: "a".repeat(64),
   };
-  const link = `https://issebya.com/shop/wishlist/unsubscribe?token=${"a".repeat(64)}`;
+  const link = `https://home.issebya.com/shop/wishlist/unsubscribe?token=${"a".repeat(64)}`;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -125,7 +125,7 @@ describe("sendWishlistConfirmationEmail", () => {
     });
     expect(message.react).toBeUndefined();
     const lines: string[] = message.text.split("\n");
-    expect(lines).toContain("https://issebya.com/shop/oak-side-table");
+    expect(lines).toContain("https://home.issebya.com/shop/oak-side-table");
     expect(lines).toContain(`${SITE_URL}/shop/oak-side-table`);
     expect(message.text).toContain("Oak side table");
   });

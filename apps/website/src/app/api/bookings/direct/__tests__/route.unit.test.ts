@@ -41,8 +41,8 @@ vi.mock("next/cache", () => ({
 
 function makeRequest(sessionId?: string): NextRequest {
   const url = sessionId
-    ? `https://issebya.com/api/bookings/direct?session=${sessionId}`
-    : "https://issebya.com/api/bookings/direct";
+    ? `https://home.issebya.com/api/bookings/direct?session=${sessionId}`
+    : "https://home.issebya.com/api/bookings/direct";
   return new NextRequest(url);
 }
 

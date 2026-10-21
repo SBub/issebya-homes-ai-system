@@ -149,7 +149,7 @@ function parseSandboxOutput(stdout: string): SandboxResult | null {
 // body.
 export async function buildScript(code: string, api: SandboxApi): Promise<string> {
   const requested = new Set(Object.keys(api));
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://home.issebya.com";
 
   const preambleParts: string[] = [];
   const toolMethods: string[] = [];

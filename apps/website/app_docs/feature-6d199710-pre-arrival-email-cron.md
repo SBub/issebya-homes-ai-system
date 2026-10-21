@@ -48,7 +48,7 @@ The booking confirmation email promises every guest an email 48 hours before arr
 1. Set `CRON_SECRET` (random, at least 16 characters, for example `openssl rand -hex 24`) on the website's Vercel project, in the Production environment.
 2. Promote `develop` to `master`. The promotion also applies the migration through `migrations.yml`. Crons only run on the production deployment, so this is when the first real run happens.
 3. Preview who would be emailed without sending anything:
-   `curl -H "Authorization: Bearer $CRON_SECRET" "https://issebya.com/api/cron/pre-arrival?dryRun=1"`
+   `curl -H "Authorization: Bearer $CRON_SECRET" "https://home.issebya.com/api/cron/pre-arrival?dryRun=1"`
    The response lists the candidates (booking id, check-in, masked email) and any `too_late` skips.
 4. Trigger a real run from the Cron Jobs page in the Vercel dashboard ("Run"), or wait for the daily 07:00 to 07:59 UTC run. The owner receives each email as a bcc, and each booking that was emailed has `pre_arrival_email_sent_at` set.
 5. To stop a booking from being emailed (for example, one whose email was already sent by hand), set `pre_arrival_email_sent_at = now()` on it in Supabase Studio.

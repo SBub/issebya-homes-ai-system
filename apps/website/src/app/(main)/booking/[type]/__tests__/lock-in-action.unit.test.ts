@@ -38,7 +38,7 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 vi.mock("next/headers", () => ({
-  headers: async () => new Map([["host", "issebya.com"]]),
+  headers: async () => new Map([["host", "home.issebya.com"]]),
 }));
 
 vi.mock("next/cache", () => ({
@@ -204,9 +204,9 @@ describe("submitLockIn", () => {
         source: "direct",
       });
       // The protocol follows NODE_ENV, so only the host and path are pinned.
-      expect(stripeArgs.cancel_url).toMatch(/:\/\/issebya\.com\/lock-in\/room1$/);
+      expect(stripeArgs.cancel_url).toMatch(/:\/\/home\.issebya\.com\/lock-in\/room1$/);
       expect(stripeArgs.success_url).toMatch(
-        /:\/\/issebya\.com\/booking\/confirmation\?session=\{CHECKOUT_SESSION_ID\}$/,
+        /:\/\/home\.issebya\.com\/booking\/confirmation\?session=\{CHECKOUT_SESSION_ID\}$/,
       );
 
       expect(mockInsert).toHaveBeenCalledOnce();
