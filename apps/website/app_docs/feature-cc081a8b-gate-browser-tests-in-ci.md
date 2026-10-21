@@ -3,6 +3,7 @@
 **ADW ID:** cc081a8b
 **Date:** 2026-09-21
 **Specification:** `specs/issue-98-adw-cc081a8b-sdlc_planner-gate-browser-tests-in-ci.md`
+**Later update (issue 249, ADW ID 32f1e217):** `specs/issue-249-adw-32f1e217-sdlc_planner-run-website-e2e-in-ci.md`
 
 ## Overview
 
@@ -27,6 +28,23 @@ three-browser sweep as an explicit opt-in, and writes down why the Playwright
 - A CI step that installs the chromium Playwright binary before the test step.
 - A complete `optimizeDeps.include` list for the browser project, so the gated
   run survives a cold Vite cache.
+- (Issue 249) `.github/workflows/e2e.yml`: a separate `E2E` workflow that runs
+  the Playwright suite (chromium) on every PR into `develop`. It starts a
+  runner-local Supabase with `supabase start` (migrations from
+  `supabase/migrations/`), exports its URL and keys, installs chromium, and runs
+  `yarn workspace website test:integration --project=chromium`. With `CI=true`,
+  `playwright.config.ts` starts its own `next dev`. No secrets are read: Stripe
+  and Resend keys are dummies, the three `E2E_MOCK_*` flags are on, and iCal
+  feeds are the app's own `/dev-ical` files. It has no `paths:` filter, so the
+  check always reports. The Playwright report is uploaded on failure.
+- (Issue 249) `src/lib/sentry-enabled.ts` (`isSentryEnabled`): Sentry now
+  initialises only when `VERCEL_ENV` / `NEXT_PUBLIC_VERCEL_ENV` is
+  `production`, wired into `sentry.server.config.ts`, `sentry.edge.config.ts`
+  and `src/instrumentation-client.ts`. `NODE_ENV` is not the gate because it is
+  `production` on previews too. This keeps CI and e2e runs from sending events.
+  Covered by `src/lib/__tests__/sentry-enabled.unit.test.ts` and
+  `e2e/sentry-disabled.integration.spec.ts`, which asserts a page load plus an
+  uncaught error sends nothing to `*.sentry.io` or the `/monitoring` tunnel.
 - The gate boundary recorded in `apps/website/AGENTS.md` and
   `apps/website/ENGINEERING.md`, including the deliberate `e2e/` exemption.
 
