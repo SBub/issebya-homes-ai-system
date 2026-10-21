@@ -43,7 +43,7 @@ None.
 ## Testing
 
 - `yarn workspace website vitest run --project browser "src/app/(main)/blog/ui/BookingWidget.browser.test.tsx"`: fails without `clear-both`, passes with it. Gated in `yarn turbo run test` and pre-push.
-- `yarn workspace website test:integration`: runs the new e2e geometry test (ADW test phase only, not CI).
+- `yarn workspace website test:integration`: runs the new e2e geometry test (ADW test phase and the E2E workflow).
 - Manual: open `/blog/welcome-to-issebya-homes` at 1280 px and check the widget's border box starts below the photo.
 
 ## Notes

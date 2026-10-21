@@ -1,0 +1,111 @@
+name: E2E
+
+# Separate from ci.yml on purpose, same convention as migrations.yml and
+# eval-golden.yml: one concern per workflow.
+#
+# Runs the website's Playwright e2e suite (chromium) on every PR into develop,
+# against a Supabase stack started on this runner from supabase/migrations/.
+# Every external service is mocked or keyed with a dummy: the three E2E_MOCK_*
+# flags are on (src/instrumentation.ts), Stripe and Resend keys are fake, iCal
+# feeds are the app's own /dev-ical files, PostHog and Sentry stay off because
+# NEXT_PUBLIC_VERCEL_ENV / VERCEL_ENV are unset. No secrets are read, and the
+# job talks only to the stack it started.
+#
+# No paths: filter, on purpose. A filtered workflow never reports a check,
+# which is why migrations.yml gave up its own.
+#
+# The Supabase CLI is pinned to the same version as migrations.yml. Bump both
+# together, on purpose.
+
+on:
+  pull_request:
+    branches: [develop]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  website-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # Dummies only. Unmocked Stripe or Resend calls fail on auth instead of
+      # reaching a real account. STRIPE_WEBHOOK_SECRET is job-level so the dev
+      # server and the Playwright process sign and verify with the same value.
+      STRIPE_SECRET_KEY: sk_test_e2e_ci_dummy
+      STRIPE_WEBHOOK_SECRET: whsec_e2e_ci_dummy
+      RESEND_API_KEY: re_e2e_ci_dummy
+      RESEND_FROM_EMAIL: e2e@example.com
+      ADMIN_NOTIFICATION_EMAIL: e2e-admin@example.com
+      # A leading / resolves against PORT (src/lib/ical-feed-url.ts) and is
+      # served from apps/website/public/dev-ical/.
+      ROOM1_ICAL_AIRBNB: /dev-ical/room1-airbnb.ics
+      ROOM1_ICAL_VRBO: /dev-ical/room1-vrbo.ics
+      ROOM1_ICAL_BOOKING: /dev-ical/room1-booking.ics
+      ROOM2_ICAL_AIRBNB: /dev-ical/room2-airbnb.ics
+      ROOM2_ICAL_VRBO: /dev-ical/room2-vrbo.ics
+      ROOM2_ICAL_BOOKING: /dev-ical/room2-booking.ics
+      E2E_MOCK_STRIPE: "true"
+      E2E_MOCK_ICAL_FAILURE: "true"
+      E2E_MOCK_RESEND: "true"
+      PORT: "3000"
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+
+      # Root project (supabase/config.toml). Applies every migration to a
+      # fresh database; no db reset or separate migration step needed.
+      - name: Start Supabase
+        run: supabase start
+
+      - name: Export Supabase env
+        run: |
+          eval "$(supabase status -o env)"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Playwright browser (chromium)
+        run: yarn workspace website playwright install --with-deps chromium
+
+      # CI=true (set by GitHub) makes playwright.config.ts start its own
+      # next dev server and run the chromium project only.
+      - name: Run e2e suite
+        run: yarn workspace website test:integration --project=chromium --reporter=list,html --trace=retain-on-failure
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/website/playwright-report/
+            apps/website/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop
