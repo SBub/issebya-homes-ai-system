@@ -75,7 +75,7 @@ function makeWebhookRequest(body: string, sig?: string): NextRequest {
   };
   if (sig) headers["stripe-signature"] = sig;
 
-  return new NextRequest("https://issebya.com/api/webhook/stripe", {
+  return new NextRequest("https://home.issebya.com/api/webhook/stripe", {
     method: "POST",
     body,
     headers,

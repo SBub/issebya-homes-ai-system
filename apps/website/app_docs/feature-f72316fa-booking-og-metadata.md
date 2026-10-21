@@ -8,7 +8,7 @@
 
 When GCA's `send_booking_link` sends a guest a `/booking/roomN?checkIn=…` link on
 WhatsApp, the preview used to show the home page's card: the site-wide title,
-`og:url` = `https://issebya.com`, and a WebP image with no declared size. Each
+`og:url` = `https://home.issebya.com`, and a WebP image with no declared size. Each
 room page now has its own Open Graph card with the room's title, a short room
 description, a canonical URL for that room, and a 1200×630 JPEG room photo that
 WhatsApp can render. The card depends on the room only, not on the link's dates,
@@ -64,7 +64,7 @@ height: 630, type: "image/jpeg", alt }`. The relative URL resolves against the
   instead of streaming it. No `htmlLimitedBots` config was needed.
 
 Card values per room: title `Book Private room N - issebya.homes`, `og:url` and
-`<link rel="canonical">` `https://issebya.com/booking/roomN`, `og:type`
+`<link rel="canonical">` `https://home.issebya.com/booking/roomN`, `og:type`
 `website`, `twitter:card` `summary_large_image`.
 
 ## How to Use

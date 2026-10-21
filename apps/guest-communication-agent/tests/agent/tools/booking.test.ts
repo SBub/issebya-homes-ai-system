@@ -167,7 +167,7 @@ describe("computeSendBookingLink", () => {
     delete process.env.NEXT_PUBLIC_SITE_URL;
 
     const url = bookingUrl(computeSendBookingLink(bookingArgs, "+15551234567"));
-    expect(url).toContain("https://issebya.com/booking");
+    expect(url).toContain("https://home.issebya.com/booking");
 
     if (original !== undefined) {
       process.env.NEXT_PUBLIC_SITE_URL = original;

@@ -122,7 +122,7 @@ function makeRequest({
   query = "",
 }: { auth?: string | null; query?: string } = {}) {
   const headers = auth === null ? undefined : { authorization: auth };
-  return new NextRequest(`https://issebya.com/api/cron/pre-arrival${query}`, { headers });
+  return new NextRequest(`https://home.issebya.com/api/cron/pre-arrival${query}`, { headers });
 }
 
 async function callRoute(request = makeRequest()) {
