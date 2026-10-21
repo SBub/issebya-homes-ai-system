@@ -67,19 +67,7 @@ Both property names are literals the PostHog filter matches on. Never rename the
 
 Never send email, name, tokens or any free text to PostHog.
 
-| Event                          | Properties                                         | Fired when                                                                                       |
-| ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `lockin_waitlist_joined`       | `form` (`short` / `full`), `life_area`, `duration`, `months` | the waitlist action returns `ok` with a non-empty follow-up token (a real join, including a repeat submit of the same email) |
-| `lockin_waitlist_reason_added` | `form`                                             | the thank-you step saves a reason for a real join                                               |
-
-`life_area`, `duration` and `months` are sent only when answered (the short form never has them);
-an unanswered question is omitted, not sent empty. The honeypot path returns `ok` with an empty
-token, and validation or general errors return `ok: false`, so none of them counts as a
-conversion. The events are built by the pure helpers in `src/lib/lockin-waitlist/analytics.ts`;
-each form wraps its server action in a client function that awaits it and then captures, so there
-is exactly one event per submit and no `useEffect`.
-
-Existing events, unchanged by this setup: `room_tab_clicked`, `whatsapp_link_clicked`,
+Events: `room_tab_clicked`, `whatsapp_link_clicked`,
 `gallery_image_viewed`, `booking_calendar_opened`, `booking_dates_selected`,
 `checkout_session_created`, `shop_products_page_loaded`, `shop_search_applied`,
 `shop_sort_changed`, `shop_card_image_changed`, `wishlist_form_opened`, `wishlist_item_added`,
@@ -88,5 +76,4 @@ Existing events, unchanged by this setup: `room_tab_clicked`, `whatsapp_link_cli
 
 ## UTM parameters
 
-posthog-js records `utm_*` parameters on `$pageview` by itself. Never strip query strings from
-links to `/lockin-waitlist`, or campaign attribution is lost.
+posthog-js records `utm_*` parameters on `$pageview` by itself.

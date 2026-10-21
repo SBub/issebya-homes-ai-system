@@ -3,7 +3,6 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import * as Sentry from "@sentry/nextjs";
-import { scrubLockinUnsubscribeToken } from "@/lib/lockin-waitlist/unsubscribe";
 import { scrubUnsubscribeToken } from "@/lib/shop/unsubscribe";
 
 Sentry.init({
@@ -20,9 +19,8 @@ Sentry.init({
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
 
-  // With every request traced and PII on, a wishlist or lock-in waitlist
-  // unsubscribe request would otherwise ship its token in the request URL and
-  // span data. Each scrubber only touches events about its own route.
-  beforeSend: (event) => scrubLockinUnsubscribeToken(scrubUnsubscribeToken(event)),
-  beforeSendTransaction: (event) => scrubLockinUnsubscribeToken(scrubUnsubscribeToken(event)),
+  // With every request traced and PII on, a wishlist unsubscribe request
+  // would otherwise ship its token in the request URL and span data.
+  beforeSend: (event) => scrubUnsubscribeToken(event),
+  beforeSendTransaction: (event) => scrubUnsubscribeToken(event),
 });

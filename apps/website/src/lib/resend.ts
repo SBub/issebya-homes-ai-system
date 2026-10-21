@@ -3,8 +3,6 @@ import { BookingConfirmationEmail } from "@/app/emails/BookingConfirmationEmail"
 import { BookingNotificationEmail } from "@/app/emails/BookingNotificationEmail";
 import { PreArrivalEmail } from "@/app/emails/PreArrivalEmail";
 import { preArrivalEmailSubject, preArrivalEmailText } from "@/lib/bookings/pre-arrival-email";
-import { LOCKIN_EMAIL_SUBJECT, lockinWelcomeEmailText } from "@/lib/lockin-waitlist/copy";
-import { lockinUnsubscribeUrl } from "@/lib/lockin-waitlist/unsubscribe";
 import {
   formatCents,
   SELLER_CONDITION_LABELS,
@@ -213,38 +211,6 @@ export async function sendWishlistConfirmationEmail({
 
   if (error) {
     throw new Error(`Resend failed to send the wishlist confirmation email: ${error.message}`);
-  }
-}
-
-export async function sendLockinWaitlistWelcomeEmail({
-  email,
-  unsubscribeToken,
-}: {
-  email: string;
-  unsubscribeToken: string;
-}): Promise<void> {
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
-
-  if (!fromEmail) {
-    throw new Error("Missing environment variable: RESEND_FROM_EMAIL");
-  }
-
-  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
-  const url = lockinUnsubscribeUrl(unsubscribeToken);
-
-  const { error } = await resend.emails.send({
-    from: fromEmail,
-    to: email,
-    ...(adminEmail ? { replyTo: adminEmail } : {}),
-    subject: LOCKIN_EMAIL_SUBJECT,
-    text: lockinWelcomeEmailText({ unsubscribeUrl: url }),
-    // No List-Unsubscribe-Post: one-click POST unsubscribe is out of scope.
-    headers: { "List-Unsubscribe": `<${url}>` },
-  });
-
-  if (error) {
-    throw new Error(`Resend failed to send the lock-in waitlist welcome email: ${error.message}`);
   }
 }
 
