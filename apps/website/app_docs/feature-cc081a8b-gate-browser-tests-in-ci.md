@@ -83,13 +83,14 @@ three-browser sweep as an explicit opt-in, and writes down why the Playwright
    workspace) now runs unit plus chromium browser tests. This is exactly what CI
    and the pre-push hook run.
 2. To add a test that gates, write a `*.unit.test.ts` or a
-   `*.browser.test.tsx`. A spec added under `e2e/` will not re-run in CI.
+   `*.browser.test.tsx`. A spec added under `e2e/` gates PRs into `develop`
+   through the `E2E` workflow, not the push hook.
 3. For the cross-browser sweep, run `yarn workspace website test:browser`. It
    sets `VITEST_ALL_BROWSERS=1` and covers chromium, firefox and webkit in watch
    mode. Expect webkit to fail to launch on macOS 14 arm64.
 4. For the Playwright E2E layer, run `yarn workspace website test:integration`
    manually, with the dev server, local Supabase and `.env.development` in
-   place.
+   place. CI runs it too, through `.github/workflows/e2e.yml`.
 
 ## Configuration
 
@@ -128,11 +129,12 @@ three-browser sweep as an explicit opt-in, and writes down why the Playwright
 - The manual sweep reports 106 passed (53 each on chromium and firefox) across
   21 files and exits 1 on the webkit connection timeout. That exit code is
   expected on macOS 14 arm64 and is not a regression.
-- **Why the `e2e/` layer stays out of CI:** it needs a running dev server on the
-  run's own port, the shared local Supabase, `.env.development`, and the
-  `E2E_MOCK_STRIPE` / `E2E_MOCK_ICAL_FAILURE` in-process mocks from
-  `src/instrumentation.ts`. None of that exists in the CI image. It runs
-  manually and as step 7 of the ADW test phase (`.claude/commands/test.md`).
+- **Why the `e2e/` layer stayed out of CI at the time:** it needs a running dev
+  server, a local Supabase, the app's environment, and the `E2E_MOCK_*`
+  in-process mocks from `src/instrumentation.ts`, and the CI image had none of
+  them. Issue 249 added `.github/workflows/e2e.yml`, which provides the server,
+  a runner-local Supabase and the mocks, so the suite now gates PRs into
+  `develop`. It still runs as step 7 of the ADW test phase too.
 - Caching the chromium download in CI was left out on purpose. The install is
   ~30s; an `actions/cache` keyed on the Playwright version is a reasonable
   follow-up if the CI budget tightens, at the cost of a cache-invalidation

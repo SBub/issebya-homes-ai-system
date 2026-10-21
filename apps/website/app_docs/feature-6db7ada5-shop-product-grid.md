@@ -65,7 +65,7 @@ None. No environment variables or database access. The palette colours are in `g
 
 - Unit (node pool, gating): `src/lib/shop/__tests__/schema.unit.test.ts`, `roman.unit.test.ts`, `products.unit.test.ts`.
 - Browser (gating): `src/app/(main)/shop/ui/ProductCard.browser.test.tsx` (content and single named link), `src/app/ui/Breadcrumb.browser.test.tsx` (now includes a shop-parent case).
-- E2E (not run in CI): `e2e/shop.integration.spec.ts` covers the six cards, no breadcrumb on the index, card to details to back, 404 for an unknown slug, the header active state and the sitemap entries.
+- E2E (E2E workflow on PRs into develop): `e2e/shop.integration.spec.ts` covers the six cards, no breadcrumb on the index, card to details to back, 404 for an unknown slug, the header active state and the sitemap entries.
 - `yarn build` in `apps/website` should list both `/shop` and `/shop/[slug]` as prerendered.
 
 ## Notes
