@@ -45,7 +45,7 @@ None. This needs Tailwind v4's `after:` variant, which only creates the pseudo-e
 ## Testing
 
 - `yarn turbo run test --filter=./apps/website` runs the browser tests. They render the card in a 300px-wide wrapper so it fits the viewport, because `elementFromPoint` returns `null` off-screen. They then check what sits at the centre of the description, price, brand, photo and "Next image" button. Both new tests were checked against a broken build: without the `after:*` classes the text test fails, and without `z-10` the photo test fails.
-- `yarn workspace website test:integration` runs the Playwright test. It clicks with `page.mouse.click` at the description's coordinates, not `locator.click()`. Playwright's actionability check reports the stretched `::after` as "intercepts pointer events", which is exactly the behaviour under test. This suite is not in CI. It runs in the ADW test phase.
+- `yarn workspace website test:integration` runs the Playwright test. It clicks with `page.mouse.click` at the description's coordinates, not `locator.click()`. Playwright's actionability check reports the stretched `::after` as "intercepts pointer events", which is exactly the behaviour under test. This suite runs in the ADW test phase and the E2E workflow on PRs into develop.
 - These existing tests still pass unedited and guard the one-link contract: "the card is an article whose only accessible link is the product name", "the arrows are not inside the link", the swipe test, and the e2e `getByRole("article").getByRole("link")` `toHaveText(names)` assertions.
 
 ## Notes
