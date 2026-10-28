@@ -109,13 +109,12 @@ async function seedConfirmedBooking(fixture: BookingFixture) {
   };
 }
 
-// The details are a plain <label> + <p> pair with no form control, so
-// getByLabel cannot resolve them: scope to the label's parent instead.
+// Each detail is a <dt> term with its value in the <dd> right after it.
 function fieldValue(page: Page, label: string) {
-  return page.locator(`label:text-is("${label}")`).locator("..").locator("p");
+  return page.locator(`dt:text-is("${label}")`).locator("+ dd");
 }
 
-// A price row is a <div> holding a label <span> and an amount <span>.
+// A price row is a <div> holding a <dt> label and a <dd> amount.
 function priceRow(page: Page, label: string) {
   return page.getByText(label, { exact: true }).locator("..");
 }
