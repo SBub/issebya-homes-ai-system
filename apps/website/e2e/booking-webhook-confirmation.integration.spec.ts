@@ -1,18 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { addDays, startOfDay } from "date-fns";
-import { LOCK_IN_PRICING } from "pricing";
 import Stripe from "stripe";
 import { fromCalendarDay, toCalendarDay } from "@/lib/date-utils";
-import { getLockInWeeks } from "@/lib/lock-in";
-import { calculateLockInPrice, calculateTotalPrice, formatPrice } from "@/lib/price-utils";
+import { calculateTotalPrice, formatPrice } from "@/lib/price-utils";
 import { createAdminClient } from "@/lib/shared/supabase";
 import {
   confirmAndReachStripe,
   deleteGuestBookings,
   fillGuestDetails,
   mockStripeCheckout,
-  pickFreeLockInWeek,
   uniqueGuest,
 } from "./support/journeys";
 
@@ -23,11 +20,10 @@ import {
 // tax, in the database and on the confirmation page.
 //
 // Date windows this spec owns: nightly room1 +200..+203, nightly room2
-// +210..+213, the seeded pending room2 booking +220..+223 (bad signatures),
-// and the latest free lock-in week of each room. They stay clear of the other
-// specs: +10..+13 (booking-flow), +40..+43 (blog return fixture),
-// +120..+147 (booking-confirmation), the earliest free lock-in week
-// (lock-in-flow) and +300..+302 (the GCA link test).
+// +210..+213 and the seeded pending room2 booking +220..+223 (bad signatures).
+// They stay clear of the other specs: +10..+13 (booking-flow), +40..+43 (blog
+// return fixture), +120..+127 (booking-confirmation) and +300..+302 (the GCA
+// link test).
 //
 // room2's availability cache cannot be expired from a spec: the webhook
 // revalidates it on confirm, but the cleanup delete afterwards does not. An
@@ -53,12 +49,8 @@ function webhookSecret(): string {
   return secret;
 }
 
-// fieldValue, priceRow and confirmationUrl are copied on purpose from
+// priceRow and confirmationUrl are copied on purpose from
 // booking-confirmation.integration.spec.ts, so neither spec depends on the other.
-function fieldValue(page: Page, label: string) {
-  return page.locator(`label:text-is("${label}")`).locator("..").locator("p");
-}
-
 function priceRow(page: Page, label: string) {
   return page.getByText(label, { exact: true }).locator("..");
 }
@@ -67,8 +59,7 @@ function confirmationUrl(sessionId: string) {
   return `/booking/confirmation?session=${encodeURIComponent(sessionId)}`;
 }
 
-// Copied from lock-in-flow.integration.spec.ts: the E2E iCal toggle route
-// expires room1's availability tag; `enabled: false` leaves the feeds alone.
+// The E2E iCal toggle route expires room1's availability tag; `enabled: false` leaves the feeds alone.
 const expireRoom1Availability = async (request: APIRequestContext) => {
   const response = await request.post("/api/e2e-ical-mock", { data: { enabled: false } });
   expect(response.ok()).toBe(true);
@@ -267,36 +258,6 @@ test.describe("Booking to confirmed booking through the Stripe webhook", () => {
 
       await expect(priceRow(page, "Tourist tax")).toContainText(`€${expected.touristTax}`);
       await expect(priceRow(page, "Total")).toContainText(`€${expected.total}`);
-    });
-  }
-
-  for (const room of ["room1", "room2"] as const) {
-    test(`a lock-in week is confirmed with no tourist tax (${room})`, async ({ page, request }) => {
-      webhookSecret();
-      const expected = calculateLockInPrice();
-
-      await mockStripeCheckout(page);
-      await page.goto(`/lock-in/${room}`);
-      await expect(page.locator(".lock-in-week")).toHaveCount(12);
-
-      // The latest free week: lock-in-flow takes the earliest.
-      const picked = await pickFreeLockInWeek(page, [...getLockInWeeks(new Date())].reverse());
-
-      const confirmed = await bookAndConfirm(page, request, room, {
-        checkIn: picked.checkIn,
-        checkOut: picked.checkOut,
-        nights: expected.nights,
-        touristTax: 0,
-      });
-
-      // The one allowed literal: a lock-in carries no tourist tax.
-      expect(Number(confirmed.tourist_tax)).toBe(0);
-      expect(Number(confirmed.total_amount)).toBe(LOCK_IN_PRICING.weekPrice);
-
-      await expect(fieldValue(page, "Nights")).toHaveText("7");
-      await expect(priceRow(page, "Total")).toContainText(`€${LOCK_IN_PRICING.weekPrice}`);
-      // Checked after the heading is visible, so the page has rendered.
-      await expect(page.getByText("Tourist tax")).toHaveCount(0);
     });
   }
 

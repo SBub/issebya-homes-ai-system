@@ -6,8 +6,7 @@ import { headers } from "next/headers";
 import { getAvailability } from "@/lib/availability";
 import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay, isValidDateRange, mergeDateRanges } from "@/lib/date-utils";
-import { validateLockInWeek } from "@/lib/lock-in";
-import { calculateLockInPrice, calculateTotalPrice } from "@/lib/price-utils";
+import { calculateTotalPrice } from "@/lib/price-utils";
 import { captureBookingError } from "@/lib/sentry-booking";
 import { combinePhoneNumber } from "@/lib/shared/country-codes";
 import { upsertGuestContact } from "@/lib/shared/guest-contacts";
@@ -55,16 +54,6 @@ export type BookingFormState = {
   url: string | null;
   guestContactId: string | null;
 };
-
-function readFormValues(formData: FormData): BookingFormValues {
-  return {
-    guestName: String(formData.get("guestName") ?? ""),
-    email: String(formData.get("email") ?? ""),
-    countryId: String(formData.get("countryId") ?? ""),
-    localNumber: String(formData.get("localNumber") ?? "").replace(/\D/g, ""),
-    whatsappOptIn: formData.get("whatsappOptIn") === "on",
-  };
-}
 
 function toFieldErrors(error: Parameters<typeof formatZodErrors>[0]): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -199,82 +188,15 @@ export async function submitBooking(
   prevState: BookingFormState,
   formData: FormData,
 ): Promise<BookingFormState> {
-  return createCheckout(
-    "nightly",
-    roomType,
-    checkIn,
-    checkOut,
-    source,
-    returnTo,
-    prevState,
-    formData,
-  );
-}
-
-// A lock-in week (see src/lib/lock-in.ts). The browser only ever offers valid
-// weeks, but the range is untrusted input, so it is re-validated here before
-// anything else runs: a tampered range never reaches availability, Supabase
-// or Stripe. Lock-ins are always direct bookings with no blog return.
-export async function submitLockIn(
-  roomType: "room1" | "room2",
-  checkIn: string | null,
-  checkOut: string | null,
-  prevState: BookingFormState,
-  formData: FormData,
-): Promise<BookingFormState> {
-  if (checkIn && checkOut) {
-    const week = validateLockInWeek(checkIn, checkOut, new Date());
-    if (!week.ok) {
-      captureBookingError(
-        new Error(week.error),
-        { roomType, checkIn, checkOut },
-        {
-          step: "checkout_creation",
-        },
-      );
-      return {
-        attempt: (prevState?.attempt ?? 0) + 1,
-        errors: {},
-        generalError: week.error,
-        values: readFormValues(formData),
-        blockedDates: null,
-        success: false,
-        url: null,
-        guestContactId: null,
-      };
-    }
-  }
-
-  return createCheckout(
-    "lock-in",
-    roomType,
-    checkIn,
-    checkOut,
-    "direct",
-    null,
-    prevState,
-    formData,
-  );
-}
-
-// The checkout both products share: contact validation, the availability
-// re-check, the guest contact, the Stripe session and the pending row. The
-// products differ only in price, line items and the cancel URL. Not exported:
-// every export of a "use server" file is a callable endpoint.
-async function createCheckout(
-  product: "nightly" | "lock-in",
-  roomType: "room1" | "room2",
-  checkIn: string | null,
-  checkOut: string | null,
-  source: "direct" | "gca",
-  returnTo: string | null,
-  prevState: BookingFormState,
-  formData: FormData,
-): Promise<BookingFormState> {
   const attempt = (prevState?.attempt ?? 0) + 1;
 
-  const values = readFormValues(formData);
-  const { guestName, email, countryId, localNumber, whatsappOptIn } = values;
+  const guestName = String(formData.get("guestName") ?? "");
+  const email = String(formData.get("email") ?? "");
+  const countryId = String(formData.get("countryId") ?? "");
+  const localNumber = String(formData.get("localNumber") ?? "").replace(/\D/g, "");
+  const whatsappOptIn = formData.get("whatsappOptIn") === "on";
+
+  const values: BookingFormValues = { guestName, email, countryId, localNumber, whatsappOptIn };
 
   if (!checkIn || !checkOut) {
     const generalError = "Please select check-in and check-out dates.";
@@ -452,10 +374,11 @@ async function createCheckout(
         };
       }
 
-      const { nights, basePrice, touristTax, total } =
-        product === "lock-in"
-          ? calculateLockInPrice()
-          : calculateTotalPrice(checkInDateOnly, checkOutDateOnly, personCount);
+      const { nights, basePrice, touristTax, total } = calculateTotalPrice(
+        checkInDateOnly,
+        checkOutDateOnly,
+        personCount,
+      );
 
       parentSpan?.setAttributes({
         "booking.nights": nights,
@@ -473,12 +396,9 @@ async function createCheckout(
         // With no resolved return target both of these collapse to exactly
         // the strings this action has always sent, character for character.
         const returnParam = blogReturn ? `&return=${encodeURIComponent(blogReturn.path)}` : "";
-        const cancelUrl =
-          product === "lock-in"
-            ? `${origin}/lock-in/${roomType}`
-            : blogReturn
-              ? `${origin}${blogReturn.href}`
-              : `${origin}/booking/${roomType}`;
+        const cancelUrl = blogReturn
+          ? `${origin}${blogReturn.href}`
+          : `${origin}/booking/${roomType}`;
 
         const roomLabel = ROOM_LABELS[roomType];
         const imageUrl = `${SITE_URL}${ROOM_IMAGES[roomType]}`;
@@ -502,33 +422,30 @@ async function createCheckout(
             },
           },
           async (stripeSpan) => {
-            const stayItem = {
-              price_data: {
-                currency: "eur",
-                product_data: {
-                  name: `${formatDate(checkIn)} – ${formatDate(checkOut)}`,
-                  description:
-                    product === "lock-in"
-                      ? `${roomLabel}: lock-in week, ${nights} nights`
-                      : `${roomLabel}: ${nights} night${nights > 1 ? "s" : ""}`,
-                  images: imageUrl ? [imageUrl] : [],
-                },
-                unit_amount: Math.round(basePrice * 100),
-              },
-              quantity: 1,
-            };
-            const touristTaxItem = {
-              price_data: {
-                currency: "eur",
-                product_data: { name: "Tourist tax" },
-                unit_amount: Math.round(touristTax * 100),
-              },
-              quantity: 1,
-            };
             const stripeSession = await stripe.checkout.sessions.create({
               payment_method_types: ["card"],
-              // A lock-in week carries no tourist tax, so no tax line at all.
-              line_items: product === "lock-in" ? [stayItem] : [stayItem, touristTaxItem],
+              line_items: [
+                {
+                  price_data: {
+                    currency: "eur",
+                    product_data: {
+                      name: `${formatDate(checkIn)} – ${formatDate(checkOut)}`,
+                      description: `${roomLabel}: ${nights} night${nights > 1 ? "s" : ""}`,
+                      images: imageUrl ? [imageUrl] : [],
+                    },
+                    unit_amount: Math.round(basePrice * 100),
+                  },
+                  quantity: 1,
+                },
+                {
+                  price_data: {
+                    currency: "eur",
+                    product_data: { name: "Tourist tax" },
+                    unit_amount: Math.round(touristTax * 100),
+                  },
+                  quantity: 1,
+                },
+              ],
               metadata: {
                 roomType,
                 checkIn,

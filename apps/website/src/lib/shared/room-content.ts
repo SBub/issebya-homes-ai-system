@@ -1,4 +1,4 @@
-// Per-room copy shared by the booking and lock-in pages (and their metadata).
+// Per-room copy for the booking page and its metadata, also read by the e2e smoke spec.
 export const ROOM_CONTENT: Record<
   string,
   { title: string; description: string[]; airbnbUrl: string }

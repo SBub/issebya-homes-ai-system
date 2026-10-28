@@ -3,7 +3,7 @@
  */
 
 import { differenceInDays } from "date-fns";
-import { LOCK_IN_PRICING, ROOM_PRICING } from "pricing";
+import { ROOM_PRICING } from "pricing";
 
 /**
  * Calculate the number of nights between two dates.
@@ -52,25 +52,6 @@ export function calculateTotalPrice(
     basePrice,
     touristTax,
     total,
-  };
-}
-
-/**
- * Price of a lock-in week, in the same shape as `calculateTotalPrice` so the
- * Stripe metadata and the pending booking row read it the same way. A flat
- * week price: no tourist tax, and the person count does not enter it.
- */
-export function calculateLockInPrice(): {
-  nights: number;
-  basePrice: number;
-  touristTax: number;
-  total: number;
-} {
-  return {
-    nights: LOCK_IN_PRICING.nights,
-    basePrice: LOCK_IN_PRICING.weekPrice,
-    touristTax: 0,
-    total: LOCK_IN_PRICING.weekPrice,
   };
 }
 

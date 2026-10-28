@@ -293,12 +293,6 @@ procedures, not code documentation) and anything gitignored.
     - When the `/shop` toolbar looks different in Safari than in Chrome, or its row alignment or wrap breakpoint changes
     - When adjusting the padding of the `bg-shop-ground` products band on `/shop`
 
-- `apps/website/app_docs/feature-4278a071-lock-in-week-booking.md`
-  - Conditions:
-    - When changing the lock-in week rules (first Monday, weeks shown, validation) or the lock-in week price
-    - When touching `submitBooking`, `submitLockIn` or the shared private checkout core in `booking/[type]/actions.ts`
-    - When changing `/lock-in/[type]`, the shared `RoomPage`, `BookingGuestForm` or `BookingSummaryRow`, or the confirmation page's price rows
-
 - `apps/website/app_docs/analytics.md`
   - Conditions:
     - When adding or changing a PostHog event or a `posthog.capture` call
