@@ -30,12 +30,10 @@ type BookingFixture = {
 type RoomType = BookingFixture["roomType"];
 
 // Days +120 onwards clear every other spec's window: room1 +10..+13
-// (booking-flow, blog-booking-flow), room2 +40..+43 (the blog return fixture)
-// and the lock-in weeks, which end in late January 2027. Each (stay, room)
-// pair gets its own window: nightly room1 +120..+123, nightly room2
-// +124..+127, lock-in room1 +130..+137, lock-in room2 +140..+147.
+// (booking-flow, blog-booking-flow) and room2 +40..+43 (the blog return
+// fixture). Each room gets its own window: room1 +120..+123, room2
+// +124..+127.
 const nightlyOffset: Record<RoomType, number> = { room1: 120, room2: 124 };
-const lockInOffset: Record<RoomType, number> = { room1: 130, room2: 140 };
 
 function nightlyStay(roomType: RoomType): BookingFixture {
   const start = nightlyOffset[roomType];
@@ -48,21 +46,6 @@ function nightlyStay(roomType: RoomType): BookingFixture {
     basePrice: 300,
     touristTax: 12,
     totalAmount: 312,
-  };
-}
-
-// What calculateLockInPrice() writes: 7 nights, no tourist tax, total = base.
-function lockInWeek(roomType: RoomType): BookingFixture {
-  const start = lockInOffset[roomType];
-  return {
-    roomType,
-    checkIn: toCalendarDay(addDays(today, start)),
-    checkOut: toCalendarDay(addDays(today, start + 7)),
-    nights: 7,
-    personCount: 1,
-    basePrice: 700,
-    touristTax: 0,
-    totalAmount: 700,
   };
 }
 
@@ -172,34 +155,6 @@ test.describe("Booking confirmation page", () => {
 
         await expect(page.getByRole("img", { name: roomName })).toBeVisible();
         await expect(page.getByTestId("return-to-post")).toHaveCount(0);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    test(`a lock-in week shows no tourist tax row (${roomType})`, async ({ page }) => {
-      const fixture = lockInWeek(roomType);
-      const { sessionId, cleanup } = await seedConfirmedBooking(fixture);
-
-      try {
-        await page.goto(confirmationUrl(sessionId));
-
-        await expect(
-          page.getByRole("heading", { level: 1, name: "Booking Confirmed" }),
-        ).toBeVisible();
-
-        await expect(fieldValue(page, "Room")).toHaveText(roomName);
-        await expect(fieldValue(page, "Check-in")).toHaveText(formatDay(fixture.checkIn));
-        await expect(fieldValue(page, "Check-out")).toHaveText(formatDay(fixture.checkOut));
-        await expect(fieldValue(page, "Nights")).toHaveText("7");
-        // Exact text, so a "1 Guests" plural regression fails.
-        await expect(fieldValue(page, "Guests")).toHaveText("1 Guest");
-
-        // Room price and Total are both €700: scope each to its own row.
-        await expect(priceRow(page, "Room price")).toContainText("€700");
-        await expect(priceRow(page, "Total")).toContainText("€700");
-        // Checked after the heading is visible, so the page has rendered.
-        await expect(page.getByText("Tourist tax")).toHaveCount(0);
       } finally {
         await cleanup();
       }

@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateBasePrice,
-  calculateLockInPrice,
   calculateNights,
   calculateTotalPrice,
   calculateTouristTax,
   formatPrice,
 } from "../price-utils";
-import { LOCK_IN_PRICING, ROOM_PRICING } from "pricing";
+import { ROOM_PRICING } from "pricing";
 
 const { basePrice, touristTax, touristTaxNights } = ROOM_PRICING;
 
@@ -137,16 +136,5 @@ describe("formatPrice", () => {
 
   it("formats a large price", () => {
     expect(formatPrice(1250)).toBe("1250€");
-  });
-});
-
-describe("calculateLockInPrice", () => {
-  it("charges the flat week price with no tourist tax for 7 nights", () => {
-    expect(calculateLockInPrice()).toEqual({
-      nights: 7,
-      basePrice: LOCK_IN_PRICING.weekPrice,
-      touristTax: 0,
-      total: LOCK_IN_PRICING.weekPrice,
-    });
   });
 });

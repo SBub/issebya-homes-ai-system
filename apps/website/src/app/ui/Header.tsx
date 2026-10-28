@@ -30,12 +30,6 @@ export default function Header() {
         >
           Booking
         </Link>
-        <Link
-          href="/lock-in/room1"
-          className={`pb-1 ${isActive("/lock-in") ? "border-b-2 border-black" : ""}`}
-        >
-          Lock-in
-        </Link>
         <Link href="/blog" className={`pb-1 ${isActive("/blog") ? "border-b-2 border-black" : ""}`}>
           Blog
         </Link>

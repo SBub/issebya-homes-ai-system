@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { addDays, startOfDay } from "date-fns";
-import { LOCK_IN_PRICING } from "pricing";
 import { toCalendarDay } from "@/lib/date-utils";
-import { getLockInWeeks } from "@/lib/lock-in";
 import { ROOM_CONTENT } from "@/lib/shared/room-content";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { sortProducts } from "@/lib/shop/pagination";
@@ -14,7 +12,6 @@ import {
   deleteGuestBookings,
   fillGuestDetails,
   mockStripeCheckout,
-  pickFreeLockInWeek,
   saveToWishlist,
   selectCalendarRange,
   uniqueGuest,
@@ -40,7 +37,6 @@ const headOf = (html: string) => {
 };
 
 const NAV = [
-  { name: "Lock-in", url: "/lock-in/room1" },
   { name: "Blog", url: "/blog" },
   { name: "Shop", url: "/shop" },
   { name: "Contact", url: "/contact" },
@@ -68,8 +64,7 @@ const ROOMS = ["room1", "room2"] as const;
 // Booking windows clear of every other spec. The suite runs `workers: 1` (see
 // the note in blog-booking-flow.integration.spec.ts): booking-flow books and
 // seeds room1 +10..+13 and prefills room1 +300..+302; blog-booking-flow books
-// room1 +10..+13 and seeds a confirmed room2 +40..+43; lock-in-flow seeds
-// room1 inside the first lock-in week and books the first free room1 week.
+// room1 +10..+13 and seeds a confirmed room2 +40..+43.
 // +320 and beyond is past anything the OTA feeds publish, and the
 // ?checkIn=&checkOut= prefill reaches it without month navigation.
 const today = startOfDay(new Date());
@@ -274,25 +269,6 @@ test.describe("Site smoke", () => {
 
           await page.getByLabel("Book selected dates").click();
           await expect(page.getByLabel("Confirm booking")).toBeVisible();
-          await fillGuestDetails(page, guest);
-          await confirmAndReachStripe(page);
-        } finally {
-          await deleteGuestBookings(guest.email);
-        }
-      });
-    }
-
-    for (const room of ROOMS) {
-      test(`lock-in week in ${room} reaches Stripe`, async ({ page }) => {
-        const guest = uniqueGuest("e2e-smoke-");
-        try {
-          await mockStripeCheckout(page);
-          await page.goto(`/lock-in/${room}`);
-          await expect(page.locator(".lock-in-week")).toHaveCount(12);
-
-          // From the end of the list, so lock-in-flow keeps the first free week.
-          await pickFreeLockInWeek(page, [...getLockInWeeks(new Date())].reverse());
-          await expect(page.getByText(`Total: ${LOCK_IN_PRICING.weekPrice}€`)).toBeVisible();
           await fillGuestDetails(page, guest);
           await confirmAndReachStripe(page);
         } finally {

@@ -17,18 +17,3 @@ export const ROOM_PRICING = {
   /** Number of nights tourist tax applies to */
   touristTaxNights: 3,
 } as const;
-
-/**
- * Lock-in: one room for a fixed Monday-to-Monday week. Flat price, no
- * tourist tax. 525 is a placeholder (7 x 75) until the owner sets it.
- */
-export const LOCK_IN_PRICING = {
-  /** Price of the whole week in euros */
-  weekPrice: 525,
-
-  /** Currency code */
-  currency: "EUR",
-
-  /** Nights in a lock-in week */
-  nights: 7,
-} as const;
