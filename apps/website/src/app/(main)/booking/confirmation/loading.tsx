@@ -1,3 +1,3 @@
 export default function Loading() {
-  return <div className="text-sm text-gray-500">Loading your booking...</div>;
+  return <p className="md:w-1/2 p-4 md:p-12 text-secondary">Loading your booking...</p>;
 }
