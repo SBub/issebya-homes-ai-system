@@ -98,6 +98,12 @@ procedures, not code documentation) and anything gitignored.
     - When adding a table, column, or query
     - IMPORTANT: read before writing any migration
 
+- `apps/website/app_docs/feature-6d199710-pre-arrival-email-cron.md`
+  - Conditions:
+    - When adding a scheduled job (Vercel Cron) or a guest email
+    - When changing the pre-arrival email, its copy, `pre_arrival_email_sent_at`, or `/api/cron/pre-arrival`
+    - When a guest did not get, or got twice, their pre-arrival email
+
 - `apps/website/app_docs/database/production-migrations.md`
   - Conditions:
     - When a schema change has to reach production
@@ -134,6 +140,7 @@ procedures, not code documentation) and anything gitignored.
 - `apps/website/app_docs/feature-fe1ca663-blog-with-booking-widget.md`
   - Conditions:
     - When adding, editing or removing a blog post under `apps/website/src/content/blog/`
+    - When pinning a blog post or changing `/blog` ordering
     - When changing `BookingWidget`, `RoomSwitcher`, or anything that renders `BookingEngine` outside `/booking/[type]`
     - When a blog route stops prerendering, or `sitemap.ts`/`robots.ts`/`SITE_URL` needs changing
     - When a local or E2E iCal feed fetch fails on a non-3000 port
@@ -260,6 +267,37 @@ procedures, not code documentation) and anything gitignored.
     - When changing where `ShopControls` renders, `ShopControlsFallback`, `ShopResults`, or the `/shop` controls row height (see also `apps/website/ENGINEERING.md` "Shop controls in the static shell")
     - When the `/shop` controls are missing from the prerendered HTML, or the cards jump down when page one arrives
     - When the sort select or search box shows a different value than the list, or a browser test rendering `/shop` fails on `useSearchParams`
+- `apps/website/app_docs/feature-9190fc91-stretched-link-product-card.md`
+  - Conditions:
+    - When changing the `ProductCard` name link's `after:*` classes, the photo wrapper's `z-10`, or the stacking/positioning of anything inside a `/shop` card
+    - When the description/price area of a `/shop` card stops navigating, or swipe or an arrow on a card photo navigates instead of flipping
+    - When tempted to make card text selectable with `pointer-events`, or a Playwright click on card text fails with "intercepts pointer events"
+- `apps/website/app_docs/feature-0a3bfba6-guest-contact-split-row-upsert.md`
+  - Conditions:
+    - When changing `upsertGuestContact`, its lookup order, or which fields it writes to `guest_contacts`
+    - When checkout, the Stripe webhook or `api/bookings/direct` fails with `23505` on `guest_contacts_email_key` or `guest_contacts_phone_key`
+    - When the `[guest-contacts] phone and email belong to different rows` warning appears and you need to know which row a booking links to
+- `apps/website/app_docs/feature-423b11e9-pin-blog-post.md`
+  - Conditions:
+    - When pinning or unpinning a blog post, or changing how `/blog` orders posts (`sortPosts`)
+    - When adding another optional field to the blog `meta` contract (`postMetaSchema`) or another label to `PostCard`
+    - When a build fails in `toBlogPost` on a `pinned` value
+- `apps/website/app_docs/feature-bf15ab13-forest-bathing-blog-post.md`
+  - Conditions:
+    - When publishing a new blog post or pinning one, since the blog Playwright spec asserts the forest bathing post is first on `/blog`
+    - When choosing a hero image for a post from the existing `public/` photos instead of adding a new one
+
+- `apps/website/app_docs/feature-3ecb6844-shop-toolbar-safari-spacing.md`
+  - Conditions:
+    - When changing the `/shop` sort `<select>` styling, its chevron, or the heights of the Search and Sort controls
+    - When the `/shop` toolbar looks different in Safari than in Chrome, or its row alignment or wrap breakpoint changes
+    - When adjusting the padding of the `bg-shop-ground` products band on `/shop`
+
+- `apps/website/app_docs/analytics.md`
+  - Conditions:
+    - When adding or changing a PostHog event or a `posthog.capture` call
+    - When changing PostHog init, its environment variables, or the `internal` / `automated` tags
+    - When PostHog numbers include previews, the owner's visits or test browsers
 
 ---
 
@@ -280,7 +318,7 @@ procedures, not code documentation) and anything gitignored.
   - Conditions:
     - When `yarn dev` fails on startup with `ERR_NGROK_334`, or tears down `next dev`/`inngest dev` because a shared process it did not own exited
     - When changing `apps/guest-communication-agent/scripts/dev.ts`, or anything about which processes `yarn dev` spawns, adopts, or signals on Ctrl-C
-    - When running `yarn dev` and `yarn dev:adw` at the same time, or wondering why one leaves the other's gateway and tunnel alone
+    - When running two `yarn dev` stacks, or `yarn dev` alongside a hand-started gateway or tunnel, and wondering why one leaves the other's gateway and tunnel alone
 
 - `apps/guest-communication-agent/app_docs/feature-d7d0c40c-reject-past-dates-booking.md`
   - Conditions:
@@ -321,7 +359,40 @@ procedures, not code documentation) and anything gitignored.
 
 ---
 
+## apps/patterns
+
+- `apps/patterns/AGENTS.md` — always, for any change under that app
+- `apps/patterns/README.md`
+  - Conditions:
+    - When adding or editing a pattern doc, or changing the frontmatter contract, the section order or the generated files
+- `apps/patterns/content/INDEX.md`
+  - Conditions:
+    - When planning UI data flow, Suspense, caching, pagination or forms in any Next app in this repo
+    - Generated; lists every pattern doc with a "read when" line. Read the matching `content/<slug>.mdx` files from there
+- `apps/patterns/app_docs/feature-066a1da6-patterns-library-app.md`
+  - Conditions:
+    - When changing how `apps/patterns` loads, validates or routes docs (registry, generated manifest, MDX plugins in `next.config.ts`)
+    - When a pattern doc fails the build or tests, or `INDEX.md`/the manifest reports as stale
+    - When a `/p/<slug>` page overflows horizontally on mobile
+- `apps/patterns/app_docs/feature-7c786f67-sse-route-handler-demo.md`
+  - Conditions:
+    - When adding a live demo (client component under `src/app/demos/` or a route under `src/app/api/demo/`) to `apps/patterns`
+    - When building a Server-Sent Events stream from a Next Route Handler, e.g. the website's booking confirmation timeline
+    - When the patterns browser test pool fails, or an SSE stream buffers, never ends or does not resume
+- `apps/patterns/app_docs/feature-ac4e9c74-streamed-prefetch-live-catch-up.md`
+  - Conditions:
+    - When a pattern doc's proof code lives in another repository (the frontmatter `repo` field, `blobUrl`/`pullUrl`, `check-code-links.ts`)
+    - When building a live list that must be correct on first paint and never served from `"use cache"`, with a catch-up read when the subscription opens
+
+---
+
 ## Cross-cutting constraints
+
+- `.adw/project.md`
+  - Conditions:
+    - When running or changing anything the ADW toolkit does in this repository (its slash commands in `.claude/commands/` read this file first: workspaces, install, build and test commands, reserved ports, protected actions, where plans and docs go)
+    - When a change moves a port, adds a workspace, renames a script, or changes an env file the toolkit must copy into a worktree: the profile must change in the same pull request
+    - IMPORTANT: the nine `##` headings and their order are a contract with the toolkit (`adws/PROFILE.md`); never rename or reorder them
 
 - `scripts/dev-webhook-gateway.ts` (read the file header)
   - Conditions:

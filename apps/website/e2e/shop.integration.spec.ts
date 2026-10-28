@@ -21,6 +21,7 @@ import {
 } from "@/lib/shop/wishlist";
 import { createAdminClient, createClient } from "@/lib/shared/supabase";
 import { SITE_URL } from "@/lib/site";
+import { saveToWishlist } from "./support/journeys";
 
 // The catalogue reads no database. The wishlist tests write to the shared
 // local DB, each under its own unique email, and delete that contact
@@ -315,6 +316,34 @@ test.describe("Shop", () => {
     ).toBeVisible();
   });
 
+  // A coordinate click, not `locator.click()`: at the description's centre the
+  // name link's stretched `::after` is on top, which Playwright's actionability
+  // check reports as "intercepts pointer events". That is the behaviour under
+  // test, and a mouse click there is what a visitor does. That the arrows
+  // still do not navigate is the flipping test above.
+  test("pressing a card's description opens the product", async ({ page }) => {
+    await page.goto("/shop");
+
+    const description = page
+      .getByRole("region", { name: "Products" })
+      .getByRole("article")
+      .first()
+      .getByText(firstProduct.description);
+    await description.scrollIntoViewIfNeeded();
+    const box = await description.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+    // With the flipping test above skipped, this is the suite's first visit to
+    // /shop/[slug], so a fresh dev server compiles the route on this click and
+    // the URL only changes once that is done, which can take past the default
+    // 5s.
+    await expect(page).toHaveURL(`/shop/${firstProduct.slug}`, { timeout: 15000 });
+    await expect(
+      page.getByRole("heading", { level: 1, name: firstProduct.name, exact: true }),
+    ).toBeVisible();
+  });
+
   test("the controls are in the page HTML", async ({ request }) => {
     // The dev server does not split the static shell from the streamed hole,
     // so this only proves the controls are in the first HTML response; the
@@ -598,15 +627,7 @@ test.describe("Wishlist", () => {
         .single();
       return data;
     };
-    const wish = async () => {
-      await page.goto(`/shop/${firstProduct.slug}`);
-      await page.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: WISHLIST_DIALOG_HEADING });
-      await dialog.getByLabel("Email").fill(email);
-      await dialog.getByRole("checkbox", { name: WISHLIST_OPT_IN_COPY, exact: true }).check();
-      await dialog.getByRole("button", { name: WISHLIST_SAVE_LABEL, exact: true }).click();
-      await expect(dialog.getByRole("status")).toContainText(WISHLIST_SUCCESS_COPY);
-    };
+    const wish = () => saveToWishlist(page, firstProduct.slug, email);
 
     await wish();
     const oldToken = (await readContact())?.unsubscribe_token as string;
@@ -682,7 +703,17 @@ test.describe("Seller submission", () => {
   test("the shop links to the sell page", async ({ page }) => {
     await page.goto("/shop");
 
-    await page.getByRole("link", { name: "Offer it here." }).click();
+    // The link sits under the grid, so scrolling to it trips infinite scroll,
+    // and each new page pushes it down. Let the grid finish growing first, or
+    // the click lands where the link was a moment ago and nothing happens.
+    const sellLink = page.getByRole("link", { name: "Offer it here." });
+    const cards = page.getByRole("region", { name: "Products" }).getByRole("article");
+    await expect(async () => {
+      await sellLink.scrollIntoViewIfNeeded();
+      await expect(cards).toHaveCount(allProducts.length, { timeout: 1000 });
+    }).toPass();
+
+    await sellLink.click();
 
     await expect(page).toHaveURL("/shop/sell");
     await expect(page.getByRole("heading", { level: 1, name: "Offer a piece" })).toBeVisible();

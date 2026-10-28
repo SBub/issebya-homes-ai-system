@@ -1,0 +1,539 @@
+---
+title: Revalidate a cached server section from a live event
+kind: atom
+summary: A server-cached part of a page must update on the open page when a live event moves an item into it, without that part becoming client state.
+tags:
+  - rsc
+  - caching
+  - realtime
+  - server-actions
+code:
+  - path: apps/website/src/lib/availability.ts
+    ref: c2048ddb3c66b588c2668119f29dcb45d0c69300
+    note: A "use cache" read tagged per entity with cacheTag, the shape of getHistory; the tag is what a writer drops.
+  - path: apps/website/src/app/(main)/booking/[type]/actions.ts
+    ref: c2048ddb3c66b588c2668119f29dcb45d0c69300
+    note: A server action that expires one entity tag with expire 0 and reads again at once; read-your-own-writes, not stale-while-revalidate.
+  - path: apps/website/src/app/api/webhook/stripe/route.ts
+    ref: c2048ddb3c66b588c2668119f29dcb45d0c69300
+    note: The same tag dropped from a Route Handler with revalidateTag and expire 0, the path for a change no open page sees.
+  - path: apps/website/src/app/(main)/shop/ui/ShopProviders.tsx
+    ref: c2048ddb3c66b588c2668119f29dcb45d0c69300
+    note: The client component that owns the session's QueryClient; the live handler and its router belong beside its useState.
+  - path: apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx
+    ref: c2048ddb3c66b588c2668119f29dcb45d0c69300
+    note: An error boundary around a Server Component whose retry calls router.refresh() and the reset in one transition.
+verifiedIn:
+  - 39
+  - 45
+  - 77
+  - 164
+  - 174
+  - 182
+updated: 2026-10-03
+---
+
+## Problem
+
+A page shows two lists of the same kind of thing. One list is live: it is in the query cache, hydrated from a server prefetch and patched by a socket, as [Live events into the query cache](/p/live-events-query-cache) does. The other list is history. Its rows never change once written, so they do not belong in the browser's cache at all. The server renders them inside a `"use cache"` scope and serves the same HTML until something says otherwise.
+
+Then an item finishes. The socket delivers the update, the reducer takes the item out of the live list, and the page is wrong: the item is in neither list. The history scope on the server still holds the rows it was filled with, and nothing in the browser can write to it.
+
+The tempting fix is to make history live too. Prefetch it, hydrate it, patch it with the same reducer. Now the immutable half has hydration semantics, a cache entry with a `queryFn`, a `staleTime`, and a reducer that only ever prepends. Two sources for one page, one of which needed none of this. The other tempting fix is `router.refresh()` on the event. The server re-renders the page, reads the scope, and serves the same cached rows.
+
+## Mechanism
+
+Three things have to happen, and they have to happen in order: the cached scope must be reachable from the open page, a server call must expire it, and the browser must re-render the route after that call returns. Here is what happens, in order.
+
+1. The history list is an async Server Component. It reads through a function with `"use cache"` that tags its entry per entity, `cacheTag("history:" + id)`. The entry lives in the server's cache handler with the default lifetime. One tag per entity, so a completion in one list leaves every other list cached.
+2. The component awaits `connection()` from `next/server` before that read. Under `cacheComponents` a prerendered route is served by resuming its static shell, and a `"use cache"` scope that was part of the shell is read, on every later request, from the shell's embedded Resume Data Cache. That copy is frozen at build time. The live cache handler is never asked for it, so a tag update that expires the live entry changes nothing a visitor sees. `connection()` means prerendering stops there (`connection.md`), so the component is a request-time hole in the shell, and the scope inside it is resolved from the live handler on each request. The scope keeps its default lifetime, so the read still runs only on a miss: at build, and once after each tag update, not per request. The reference confirmed both halves on Next 16.3.8 under `next start` with `NEXT_PRIVATE_DEBUG_CACHE=1`: before the fix every request logged `use-cache: Resume Data Cache entry found` for the scope; after it, a `generated entry` line follows the action and none follows a plain GET.
+3. A Server Action takes the entity id, validates it, and calls `updateTag("history:" + id)`. `updateTag`, not `revalidateTag`. `updateTag.md` names the difference: `updateTag` is the Server Action form for read-your-own-writes, it expires the entry at once and the next read waits for fresh data. `revalidateTag(tag, "max")` is stale-while-revalidate, so the next read is served the old entry while a new one is built in the background. The action does nothing else. A Server Action is a public endpoint, callable by anyone with the URL, so the worst a caller can do is make the next render of one list read the database once.
+4. The live-event handler in the browser applies the event to the query cache first, then calls the action, and only when the action has resolved calls `router.refresh()`. The cache write comes first so the live list has already let the item go by the time the server re-renders. The refresh comes last because a refresh that runs before the tag is dropped re-renders the hole from the old entry. Per `server-actions.md`, an action that calls `updateTag` also ships a re-render of the current route in its response; the explicit refresh is the guarantee that the order is revalidate, then render, whatever that response carried. On the refresh the hole is a cache miss, the read hits the database, and the new row is in the streamed HTML.
+5. The hole sits in its own `Suspense` and its own error boundary. The shell carries the fallback at the section's position and the rows stream in behind it. A failed read lands in that boundary's panel, not in the segment's `error.tsx`, so the live list beside it stays on screen. The boundary's retry calls `router.refresh()` and the reset in one transition, because the child is a Server Component: a reset alone re-renders the same failed payload.
+6. The scope is the one server cache in front of the database. On the server `fetch` is Next's patched fetch, and a `fetch` inside a `"use cache"` scope is stored in Next's fetch data cache with the scope's lifetime and no tags (`migrating-to-cache-components.md`, "`fetch` cache options"). `updateTag` expires the scope and the read re-executes, but the request inside it is answered from that untagged entry, so the regenerated section is built from the stale body. The server-side database client sets `cache: "no-store"` on every request, the documented opt-out. Inside a cache scope that is permitted: the scope's own output is still cached and tagged, and only the inner request is no longer stored on its own.
+
+The live list is a cache scope too, and it is in the shell. Its tag would not reach it on a resume either. That is fine: the browser owns that list, hydration never overwrites a newer live entry, and the socket keeps it current. The pattern is for the half the browser does not own.
+
+## Pattern
+
+The nine files below are a working app. Paste them into a fresh Next project with `cacheComponents: true` in `next.config.ts`, `@tanstack/react-query`, `@supabase/supabase-js` and `react-error-boundary` installed, and `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set for the build as well as the server. The database needs an `items` table with `id`, `list`, `name` and `status` (`active` or `done`), `REPLICA IDENTITY FULL` on it so a delete event carries its `list`, and `items` in the `supabase_realtime` publication. Build, run `next start`, open `/items/inbox`, and set an active row's status to `done` in the table editor. It leaves the top list and appears under Done with no reload.
+
+The database client is one module for both sides. On the server it opts every request out of Next's fetch data cache.
+
+```ts title="lib/db.ts"
+import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+if (!url || !key)
+  throw new Error("Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+
+// A fetch inside "use cache" is otherwise stored a second time, untagged, and outlives the tag
+const serverFetch: typeof fetch = (input, init) => fetch(input, { ...init, cache: "no-store" });
+
+export const supabase = createClient(url, key, {
+  ...(typeof window === "undefined" ? { global: { fetch: serverFetch } } : {}),
+});
+```
+
+The browser's `fetch` is not patched and has no data cache, so the browser client keeps the default. With this in place the `"use cache"` scope is the only server cache, and dropping its tag reaches the database.
+
+The query module holds what both sides share: the row, the key, the two reads, and the client factory.
+
+```ts title="app/items/query.ts"
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
+import { supabase } from "../../lib/db";
+
+export type Item = { id: number; list: string; name: string; status: "active" | "done" };
+
+export function itemsKey(list: string) {
+  return ["items", list];
+}
+
+async function fetchItems(list: string, status: Item["status"]): Promise<Item[]> {
+  const { data, error } = await supabase
+    .from("items")
+    .select("id, list, name, status")
+    .eq("list", list)
+    .eq("status", status)
+    .order("id", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export function fetchActive(list: string) {
+  return fetchItems(list, "active");
+}
+
+export function fetchDone(list: string) {
+  return fetchItems(list, "done");
+}
+
+export function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      dehydrate: {
+        shouldDehydrateQuery: (query) =>
+          defaultShouldDehydrateQuery(query) || query.state.status === "pending",
+      },
+    },
+  });
+}
+```
+
+`fetchActive` fills the query cache and `fetchDone` fills the server scope. Only the active rows ever have a key.
+
+The page prerenders one list, prefetches its active rows for hydration, and renders its done rows in a hole.
+
+```tsx title="app/items/[list]/page.tsx"
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import { cacheTag } from "next/cache";
+import { connection } from "next/server";
+import { Suspense } from "react";
+import { Providers } from "../../providers";
+import { ItemList } from "../ItemList";
+import { fetchActive, fetchDone, itemsKey, makeQueryClient } from "../query";
+import { HistoryBoundary } from "./HistoryBoundary";
+
+export function generateStaticParams() {
+  // Prerendered, so the route has a static shell, which is the case the hole below exists for
+  return [{ list: "inbox" }];
+}
+
+async function getActiveState(list: string) {
+  "use cache";
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey(list), queryFn: () => fetchActive(list) });
+  return dehydrate(queryClient);
+}
+
+async function getHistory(list: string) {
+  "use cache";
+  // One tag per list; the action drops this one and no other
+  cacheTag(`history:${list}`);
+  return fetchDone(list);
+}
+
+async function HistorySection({ list }: { list: string }) {
+  // Before the cached read, so this section is a request-time hole and not part of the shell
+  await connection();
+  const items = await getHistory(list);
+
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
+
+export default async function Page({ params }: { params: Promise<{ list: string }> }) {
+  const { list } = await params;
+
+  return (
+    <Providers>
+      <HydrationBoundary state={await getActiveState(list)}>
+        <Suspense fallback={<p>Loading</p>}>
+          <ItemList list={list} />
+        </Suspense>
+      </HydrationBoundary>
+      <h2>Done</h2>
+      <HistoryBoundary>
+        <HistorySection list={list} />
+      </HistoryBoundary>
+    </Providers>
+  );
+}
+```
+
+`getActiveState` is the prefetch from [Server prefetch with hydration](/p/server-prefetch-hydration), inside a cache scope because `dehydrate` reads the clock. It is in the shell, and that is right: the browser owns that list from here on. `getHistory` is the scope this doc is about. `HistorySection` reads it after `connection()`, so the build's route table shows the page as a partial prerender, the shell carries the boundary's fallback at this position, and the rows stream in on each request from the live cache handler.
+
+The action validates its argument and drops the tag.
+
+```ts title="app/actions/revalidate-history.ts"
+"use server";
+
+import { updateTag } from "next/cache";
+
+const LIST = /^[a-z0-9-]+$/;
+
+export async function revalidateHistory(list: string) {
+  // Anyone can call this, so it checks its one argument and does nothing but drop one tag
+  if (typeof list !== "string" || !LIST.test(list)) return;
+  updateTag(`history:${list}`);
+}
+```
+
+`updateTag` expires the entry at once, so the read that follows waits for fresh rows. No database write, no read, no return value. An invalid argument returns without touching anything.
+
+The reducer is the one from the live-events doc with one change: a row that is no longer active leaves the live list. A second function says whether an event changed history.
+
+```ts title="app/items/apply-change.ts"
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import type { Item } from "./query";
+
+export type ItemChange = RealtimePostgresChangesPayload<Item>;
+
+export function applyChange(current: Item[], ev: ItemChange): Item[] {
+  switch (ev.eventType) {
+    case "INSERT": {
+      if (ev.new.status !== "active") return current;
+      if (current.some((item) => item.id === ev.new.id)) return current;
+      return [ev.new, ...current];
+    }
+    case "UPDATE": {
+      // A done row leaves the live list; the server-rendered history is where it belongs now
+      if (ev.new.status !== "active") return current.filter((item) => item.id !== ev.new.id);
+      return current.map((item) => (item.id === ev.new.id ? ev.new : item));
+    }
+    case "DELETE": {
+      return current.filter((item) => item.id !== ev.old.id);
+    }
+  }
+}
+
+export function isHistoryChange(ev: ItemChange) {
+  return ev.eventType !== "DELETE" && ev.new.status === "done";
+}
+```
+
+Both functions are pure. A test hands `applyChange` a list and an update to `done` and checks the row is gone; it hands `isHistoryChange` the same event and checks it says yes. An insert that is already `done` is a history change too: it never enters the live list, and the server still has to show it.
+
+The start function routes each event through the reducer into the cache, and then, for a history change, tells the caller which list changed.
+
+```ts title="app/items/realtime.ts"
+import type { QueryClient } from "@tanstack/react-query";
+import { supabase } from "../../lib/db";
+import { applyChange, isHistoryChange } from "./apply-change";
+import { type Item, itemsKey } from "./query";
+
+export function startRealtime(queryClient: QueryClient, onHistoryChange: (list: string) => void) {
+  const channel = supabase
+    .channel("items")
+    .on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+      const list = ev.eventType === "DELETE" ? ev.old.list : ev.new.list;
+      if (list === undefined) return;
+      queryClient.setQueryData<Item[]>(
+        itemsKey(list),
+        (current) => current && applyChange(current, ev),
+      );
+      // After the cache write, so the live list has already let the row go when the server re-renders
+      if (isHistoryChange(ev)) onHistoryChange(list);
+    })
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+}
+```
+
+Nothing in this file knows about the server cache or the router. It writes the cache, then reports. The callback runs for a list whether or not its page is open, so a completion in a list nobody is looking at still drops that list's tag, and its next visit is fresh.
+
+The provider owns the client and the router, and wires the callback in the one order that works.
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { QueryClientProvider } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { type ReactNode, useEffect, useState } from "react";
+import { revalidateHistory } from "./actions/revalidate-history";
+import { makeQueryClient } from "./items/query";
+import { startRealtime } from "./items/realtime";
+
+export function Providers({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(makeQueryClient);
+  const router = useRouter();
+
+  useEffect(
+    () =>
+      startRealtime(queryClient, (list) => {
+        // The tag first, the refresh only once that has resolved; a failed action leaves history until its lifetime
+        void revalidateHistory(list)
+          .then(() => router.refresh())
+          .catch(() => {});
+      }),
+    [queryClient, router],
+  );
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+```
+
+`router.refresh()` re-renders the current route on the server and streams the result in. The hole is a cache miss by then, so the new row is in the response. The `HydrationBoundary` receives a dehydrated state again on that refresh; React Query overwrites an entry only when the incoming state is newer than the live one, so the browser's write to the active list is never set back. The app router instance is stable for the session, so listing it as a dependency does not restart the channel.
+
+The live list is the one from the live-events doc with the list as a prop.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { fetchActive, itemsKey } from "./query";
+
+export function ItemList({ list }: { list: string }) {
+  const { data } = useSuspenseQuery({
+    queryKey: itemsKey(list),
+    queryFn: () => fetchActive(list),
+    refetchOnMount: false,
+  });
+
+  return (
+    <ul>
+      {data.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+It reads the hydrated entry and re-renders on every `setQueryData` under its key. It knows nothing about history.
+
+The boundary around the hole is a client component. Its retry refreshes the route as well as resetting.
+
+```tsx title="app/items/[list]/HistoryBoundary.tsx"
+"use client";
+
+import { useRouter } from "next/navigation";
+import { type ReactNode, startTransition, Suspense } from "react";
+import { ErrorBoundary } from "react-error-boundary";
+
+export function HistoryBoundary({ children }: { children: ReactNode }) {
+  const router = useRouter();
+
+  return (
+    <ErrorBoundary
+      fallbackRender={({ resetErrorBoundary }) => (
+        <div>
+          <p>Could not load history.</p>
+          <button
+            type="button"
+            onClick={() =>
+              startTransition(() => {
+                // The child is a Server Component; a reset alone re-renders the same failed payload
+                router.refresh();
+                resetErrorBoundary();
+              })
+            }
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    >
+      <Suspense fallback={<p>Loading history</p>}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+```
+
+`Suspense` inside, the error boundary outside, as in [Suspended query with an error boundary](/p/query-error-boundary). The pending read stops at `Suspense`; a thrown read passes it and stops here, and the live list above is untouched.
+
+### Wrong and right
+
+A completion shows up on the next deploy and not before. With `NEXT_PRIVATE_DEBUG_CACHE=1` under `next start`, every request logs `use-cache: Resume Data Cache entry found` for the history scope, and no `generated entry` line follows the action.
+
+🔴 The section reads the scope with nothing before it. The scope is prerendered into the shell, and every later request resumes the shell and reads the build-time rows from its embedded cache. `updateTag` expires the live entry, the read re-executes with fresh rows, and no visitor ever sees them. This is `HistorySection` in the page.
+
+```tsx title="app/items/[list]/page.tsx"
+async function HistorySection({ list }: { list: string }) {
+  const items = await getHistory(list);
+
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+✅ `connection()` first. Prerendering stops there, the section is a hole, and the scope is resolved from the live handler on each request. The lifetime is unchanged, so the read still runs on a miss only.
+
+```tsx title="app/items/[list]/page.tsx"
+async function HistorySection({ list }: { list: string }) {
+  await connection();
+  const items = await getHistory(list);
+
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={item.id}>{item.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+The refresh shows the old list. The new row is there on the next visit.
+
+🔴 The action calls `revalidateTag` with the `max` profile. That is stale-while-revalidate: the entry is marked stale, the next read is served the old rows while fresh ones are fetched in the background, and the refresh that follows the action is that next read. This is the body of `revalidateHistory`.
+
+```ts title="app/actions/revalidate-history.ts"
+export async function revalidateHistory(list: string) {
+  if (typeof list !== "string" || !LIST.test(list)) return;
+  revalidateTag(`history:${list}`, "max");
+}
+```
+
+✅ `updateTag`. The entry is expired at once and the next read waits for fresh rows, which is what a refresh triggered by the writer needs.
+
+```ts title="app/actions/revalidate-history.ts"
+export async function revalidateHistory(list: string) {
+  if (typeof list !== "string" || !LIST.test(list)) return;
+  updateTag(`history:${list}`);
+}
+```
+
+The refresh shows the old list, and a second refresh by hand shows the new row.
+
+🔴 The handler refreshes first and lets the action run in the background. The refresh reaches the server before the tag is dropped and re-renders the hole from the cached entry. This is the callback in `Providers`.
+
+```tsx title="app/providers.tsx"
+startRealtime(queryClient, (list) => {
+  router.refresh();
+  void revalidateHistory(list);
+});
+```
+
+✅ The refresh runs in the action's `then`. By the time the server re-renders, the entry is gone.
+
+```tsx title="app/providers.tsx"
+startRealtime(queryClient, (list) => {
+  void revalidateHistory(list)
+    .then(() => router.refresh())
+    .catch(() => {});
+});
+```
+
+History shows the finished row twice after a refresh, or shows it only until the next navigation.
+
+🔴 The handler writes the finished row into the query cache under a history key, and the page renders history from that entry. Now there are two sources: the server scope and the cache entry. The entry has a `queryFn` and a `staleTime` it never needed, and on a page that has not loaded history the updater seeds a one-row list that looks complete and is not. This is the end of the event handler in `startRealtime`.
+
+```ts title="app/items/realtime.ts"
+if (isHistoryChange(ev)) {
+  queryClient.setQueryData<Item[]>(["history", list], (current) => [ev.new, ...(current ?? [])]);
+}
+```
+
+✅ The handler reports the change and writes nothing for history. The server scope stays the one source, and the refresh re-renders it.
+
+```ts title="app/items/realtime.ts"
+if (isHistoryChange(ev)) onHistoryChange(list);
+```
+
+The action runs, the debug log shows a fresh `generated entry` for the history scope, and the regenerated section still shows the old rows.
+
+🔴 The server-side database client uses the default `fetch`. Inside the cache scope that request is stored in Next's fetch data cache with the scope's lifetime and no tags. The tag update re-executes the scope, and the request inside it is answered from that stored body. This is the export in `lib/db.ts`.
+
+```ts title="lib/db.ts"
+export const supabase = createClient(url, key);
+```
+
+✅ The server-side client sets `cache: "no-store"` on every request. The scope's output is still cached and tagged; the request inside it is not stored on its own.
+
+```ts title="lib/db.ts"
+const serverFetch: typeof fetch = (input, init) => fetch(input, { ...init, cache: "no-store" });
+
+export const supabase = createClient(url, key, {
+  ...(typeof window === "undefined" ? { global: { fetch: serverFetch } } : {}),
+});
+```
+
+A failed history read takes the live list with it.
+
+🔴 The hole sits in a bare `Suspense`. The pending read stops there, but a thrown read passes it and lands in the segment's `error.tsx`, which replaces the whole segment, the live list included. This is the end of the page's return.
+
+```tsx title="app/items/[list]/page.tsx"
+<h2>Done</h2>
+<Suspense fallback={<p>Loading history</p>}>
+  <HistorySection list={list} />
+</Suspense>
+```
+
+✅ The hole sits in its own boundary. The failure stops at the panel, the live list stays on screen, and Retry refreshes the route so the Server Component is re-requested.
+
+```tsx title="app/items/[list]/page.tsx"
+<h2>Done</h2>
+<HistoryBoundary>
+  <HistorySection list={list} />
+</HistoryBoundary>
+```
+
+### In this repo
+
+The monorepo has no page with a live half and a server-cached half, so no one file holds the whole pattern. The linked files are the pieces it is built from, each at the same commit.
+
+- [`availability.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2048ddb3c66b588c2668119f29dcb45d0c69300/apps/website/src/lib/availability.ts) is step 1, the shape of `getHistory`. `getAvailability` is a `"use cache"` function tagged with `cacheTag("availability", "availability-" + room)`: one tag for all rooms, one per room. A writer that drops the per-room tag leaves the other room cached. It has no `connection()` before it because nothing of it is prerendered; `/api/availability` reads the request.
+- [`booking/[type]/actions.ts`](<https://github.com/SBub/issebya-homes-ai-system/blob/c2048ddb3c66b588c2668119f29dcb45d0c69300/apps/website/src/app/(main)/booking/%5Btype%5D/actions.ts>) is step 3 in its Route Handler-compatible form. The checkout action calls `revalidateTag("availability-" + roomType, { expire: 0 })` and reads `getAvailability` again on the next line. `{ expire: 0 }` is the `revalidateTag` spelling of read-your-own-writes, which `revalidateTag.md` points at when `updateTag` is not available; in a Server Action `updateTag` is the current form. The action has other jobs, which is why it is not public in the sense `revalidateHistory` is: it is the booking flow, called with form data.
+- [`webhook/stripe/route.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/c2048ddb3c66b588c2668119f29dcb45d0c69300/apps/website/src/app/api/webhook/stripe/route.ts) is the first pitfall's answer. A paid booking arrives from Stripe, not from an open page, so a Route Handler drops the same per-room tag with `revalidateTag(tag, { expire: 0 })`. That is the path for a change no browser sees.
+- [`ShopProviders.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/c2048ddb3c66b588c2668119f29dcb45d0c69300/apps/website/src/app/(main)/shop/ui/ShopProviders.tsx>) is step 4's home, `Providers`: the client component with the session's one `QueryClient` in a lazy `useState`, mounted by the shop layout. The effect that starts a channel, and the `useRouter` its callback needs, belong beside that `useState`. The shop has no live source, so there is no effect yet.
+- [`ShopGridBoundary.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/c2048ddb3c66b588c2668119f29dcb45d0c69300/apps/website/src/app/(main)/shop/ui/ShopGridBoundary.tsx>) is step 5, `HistoryBoundary`. Its children are a Server Component, and its Try again calls `router.refresh()` and the reset in one `startTransition`, for the reason given there: a reset alone re-renders the same errored payload. It also resets the query error boundary, because the component under it reads a suspense query too; the history boundary has no query and needs no `onReset`.
+- The ADW dashboard, a separate repository with no remote and so not linked here, is where the files above come from and where the mechanism was proved. Its project page has `getRunsState` (the live half, prerendered into the shell) and `getHistory` (tagged `history:<slug>`) as two `"use cache"` functions; `HistorySection` awaits `connection()` first; `src/app/actions/revalidate-history.ts` validates the slug against a static regexp and calls `updateTag` on the history tag (and on the active prefetch tag, which this doc leaves out because the browser owns that list); `src/app/providers.tsx` wires `onHistoryChange` to the action and then `router.refresh()`; `src/data/apply-run-change.ts` has `isHistoryChange`; and `src/data/supabase.ts` gives the server client the `no-store` fetch. Its README sections "Runs: active and history", "Two caches, one source" and "What is prerendered and what is not" record the two defects that are the first and fifth pairs above, and how each was shown with the debug log.
+
+## Pitfalls
+
+- **A completion shows up on the next deploy and not before.** The history scope is in the static shell, and a resumed render reads it from the shell's embedded cache, which the tag never reaches. Await `connection()` before the cached read. See Wrong and right above.
+- **The refresh shows the old list.** Either the action used `revalidateTag(tag, "max")`, which serves stale while it revalidates, or `router.refresh()` ran before the action resolved. Use `updateTag`, and refresh in its `then`. See Wrong and right above.
+- **The action runs, the scope regenerates, and the rows are still old.** The read inside the scope went through Next's fetch data cache, untagged. Give the server-side client `cache: "no-store"`. See Wrong and right above.
+- **History shows a row twice, or a one-row list after a navigation.** History was written into the query cache. It has no key; leave it server-rendered and report the change instead. See Wrong and right above.
+- **A failed history read blanks the live list too.** The hole has no boundary of its own. Give it one, with a retry that refreshes the route. See Wrong and right above.
+- **A completion nobody is watching does not move.** The move is triggered by a browser that received the event. With no page open, history stays as it was until the scope's lifetime or the next completion anyone sees. When that is not acceptable, a database webhook into a Route Handler drops the same tag with `revalidateTag(tag, { expire: 0 })`, since `updateTag` is Server Actions only. The Stripe webhook above is that shape.
+- **Anyone can call the action.** It is a public endpoint. Validate the argument with a static pattern, drop the tag, and do nothing else. The cost of a hostile call is one database read on the next render of one list.
+- **The live list's own tag changes nothing on a resume.** That prefetch scope is in the shell too, so `updateTag` on its tag has no visible effect on a prerendered route. That is fine when the browser owns the list: the socket patches it, and hydration skips a dehydrated state older than the live entry. Do not move it out of the shell for the sake of a tag.
+- **The fix looks right and is not.** A row that existed at build time proves nothing: the shell carries it whether or not the tag worked. Prove it with a change made after the build, then look for the row in the next response's HTML. With the debug log on, a `generated entry` line for the scope right after the action, and none between two plain GETs, is the mechanical half of the proof.
+- **The page is a partial prerender and the build output says so.** That is the expected result of `connection()` in the section, not a regression. The shell holds the boundary's fallback at that position and the rows stream in. What would be wrong is the rows missing from the document altogether.
+
+## When not to use
+
+- A section the browser already owns. Rows in the query cache are patched by the socket, as [Live events into the query cache](/p/live-events-query-cache) does. A tag update on their prefetch scope has nothing to add.
+- Data with no live source. The scope's lifetime, or a `revalidateTag` from the writer that changes the rows, is the whole story; there is no event to refresh from.
+- A change the same visitor made with a form. The Server Action that writes the row calls `updateTag` itself and Next re-renders the route in the action's response. No socket, no callback, no `router.refresh()`.
+- A change no open page will ever see. A Route Handler with `revalidateTag(tag, { expire: 0 })` serves the next visitor; the browser-side half of this pattern has no browser to run in.
+
+## Code
+
+<CodeLinks />

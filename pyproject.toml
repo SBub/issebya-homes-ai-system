@@ -5,6 +5,7 @@ name = "issebya-homes-ai-system-py"
 members = ["apps/*", "packages/*"]
 exclude = [
   "apps/guest-communication-agent",
+  "apps/patterns",
   "apps/website",
   "packages/pricing",
 ]

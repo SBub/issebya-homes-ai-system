@@ -62,7 +62,7 @@ export async function computeCheckAvailability(
   const reqStart = new Date(checkIn);
   const reqEnd = new Date(checkOut);
 
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://issebya.com";
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://home.issebya.com";
   const res = await fetch(`${siteUrl}/api/availability?room=${room}`);
   if (!res.ok) {
     throw new Error(`GET /api/availability?room=${room} failed with status ${res.status}`);

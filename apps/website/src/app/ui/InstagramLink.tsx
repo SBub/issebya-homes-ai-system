@@ -3,7 +3,7 @@ import Image from "next/image";
 export function InstagramLink() {
   return (
     <a
-      href="https://www.instagram.com/issebya.homes"
+      href="https://www.instagram.com/home.issebya"
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Instagram"

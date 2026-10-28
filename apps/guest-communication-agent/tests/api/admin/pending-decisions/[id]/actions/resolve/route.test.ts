@@ -87,7 +87,7 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
     updateMessageDeliveryStatusMock.mockResolvedValue(undefined);
     sendWhatsAppMessageMock.mockResolvedValue({ ok: true });
     computeSendBookingLinkMock.mockReturnValue({
-      url: "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
+      url: "https://home.issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
     });
   });
 
@@ -141,12 +141,12 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
       );
       expect(sendWhatsAppMessageMock).toHaveBeenCalledWith(
         "+351920742845",
-        "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
+        "https://home.issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
       );
       expect(recordMessageMock).toHaveBeenCalledWith(
         "convo-1",
         "assistant",
-        "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
+        "https://home.issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
       );
       expect(updateMessageDeliveryStatusMock).toHaveBeenCalledWith("msg-new-1", "sent");
       expect(markPendingOwnerDecisionResolvedByIdMock).toHaveBeenCalledWith(
@@ -158,7 +158,7 @@ describe("POST /api/admin/pending-decisions/[id]/actions/resolve", () => {
         ok: true,
         resolution: "manually_resolved",
         sentMessage:
-          "https://issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
+          "https://home.issebya.com/booking?room=room1&checkIn=2026-09-01&checkOut=2026-09-05",
       });
     });
 

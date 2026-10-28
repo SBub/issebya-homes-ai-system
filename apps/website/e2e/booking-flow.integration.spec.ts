@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { addDays, format, startOfDay } from "date-fns";
 import { createAdminClient } from "@/lib/shared/supabase";
+import {
+  confirmAndReachStripe,
+  fillGuestDetails,
+  mockStripeCheckout,
+  selectCalendarRange,
+} from "./support/journeys";
 
 // Generate future dates relative to today so tests don't go stale
 const today = startOfDay(new Date());
@@ -64,13 +70,7 @@ test.describe("Booking flow", () => {
     // (window.location.href in BookingEngineExpanded's success handler) —
     // that part IS visible to page.route(), and is fulfilled below with a
     // fake page so the test never touches real Stripe infrastructure.
-    await page.route("https://checkout.stripe.com/**", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: "<html><body>Mock Stripe Checkout</body></html>",
-      }),
-    );
+    await mockStripeCheckout(page);
 
     await page.goto("/booking/room1");
 
@@ -80,23 +80,11 @@ test.describe("Booking flow", () => {
     // Wait for calendar to be visible
     await expect(page.getByLabel("Confirm booking")).toBeVisible();
 
-    // Select check-in and check-out dates (use enabled buttons to avoid outside-month duplicates)
-    await page.locator(`button:not([disabled])[aria-label="${checkInLabel}"]`).click();
-    await page.locator(`button:not([disabled])[aria-label="${checkOutLabel}"]`).click();
-
-    // Enter guest details
-    await page.getByLabel(/^name/i).fill("Guest Example");
-    await page.getByLabel(/email/i).fill("guest@example.com");
-    await page.getByLabel(/whatsapp number/i).fill("920742845");
-
-    // Book button should be enabled
-    await expect(page.getByLabel("Confirm booking")).toBeEnabled();
+    await selectCalendarRange(page, checkInDate, checkOutDate);
+    await fillGuestDetails(page, { email: "guest@example.com", localNumber: "920742845" });
 
     // Click book — should navigate to the (mocked) Stripe checkout page
-    await Promise.all([
-      page.waitForURL("https://checkout.stripe.com/**"),
-      page.getByLabel("Confirm booking").click(),
-    ]);
+    await confirmAndReachStripe(page);
   });
 
   test("user sees error when dates are no longer available", async ({ page }) => {

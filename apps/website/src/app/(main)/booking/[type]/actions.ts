@@ -13,6 +13,7 @@ import { upsertGuestContact } from "@/lib/shared/guest-contacts";
 import { checkoutSchema } from "@/lib/shared/schemas/booking";
 import { createAdminClient } from "@/lib/shared/supabase";
 import { formatZodErrors } from "@/lib/shared/validation";
+import { SITE_URL } from "@/lib/site";
 import { stripe } from "@/lib/stripe";
 import type { DateRange } from "@/lib/shared/types/booking";
 import { emailSchema, localNumberSchema, nameSchema } from "./validation";
@@ -358,6 +359,9 @@ export async function submitBooking(
       } catch (contactError) {
         parentSpan?.setStatus({ code: 2, message: "guest_contacts upsert failed" });
         captureException(contactError, { tags: { "db.operation": "guest_contacts_upsert" } });
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[booking] guest_contacts upsert failed", describeError(contactError));
+        }
         return {
           attempt,
           errors: {},
@@ -397,7 +401,7 @@ export async function submitBooking(
           : `${origin}/booking/${roomType}`;
 
         const roomLabel = ROOM_LABELS[roomType];
-        const imageUrl = `https://issebya.com${ROOM_IMAGES[roomType]}`;
+        const imageUrl = `${SITE_URL}${ROOM_IMAGES[roomType]}`;
 
         const formatDate = (dateStr: string) => {
           const date = fromCalendarDay(dateStr);
@@ -524,6 +528,9 @@ export async function submitBooking(
       } catch (error) {
         parentSpan?.setStatus({ code: 2, message: "Checkout creation failed" });
         captureException(error);
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[booking] checkout creation failed", describeError(error));
+        }
         return {
           attempt,
           errors: {},
@@ -537,4 +544,17 @@ export async function submitBooking(
       }
     },
   );
+}
+
+// Dev-only visibility for failures Sentry swallows locally. Code and message
+// only: a Postgrest error's `details` carries the guest's email.
+function describeError(error: unknown): { code?: string; message?: string } {
+  if (typeof error !== "object" || error === null) {
+    return { message: String(error) };
+  }
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return {
+    ...(typeof code === "string" ? { code } : {}),
+    ...(typeof message === "string" ? { message } : {}),
+  };
 }

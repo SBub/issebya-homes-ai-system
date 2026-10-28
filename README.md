@@ -59,6 +59,13 @@ Architecture: thin I/O layer, one webhook, dispatches to plain APIs on the
 other apps. Not much to it by design; it stays dumb so the agent stays the
 one place with actual logic.
 
+### apps/patterns
+
+Internal pattern library: one short MDX doc per React/Next pattern proven in
+the shop work (mechanism, excerpt, pitfalls, pinned links to the code),
+rendered as a small static site and read by agents straight from
+`apps/patterns/content/`. See that app's README.
+
 ### Cross-cutting
 
 Every app is left-shift audited with static analysis (lint, typecheck, knip,

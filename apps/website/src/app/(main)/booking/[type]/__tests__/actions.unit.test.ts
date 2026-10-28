@@ -38,7 +38,7 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 vi.mock("next/headers", () => ({
-  headers: async () => new Map([["host", "issebya.com"]]),
+  headers: async () => new Map([["host", "home.issebya.com"]]),
 }));
 
 const mockRevalidateTag = vi.fn();
@@ -586,11 +586,11 @@ describe("submitBooking", () => {
 // mock that stands in for Stripe ignores the request body entirely. So the
 // exact strings are pinned here.
 //
-// `headers()` is mocked above to a host of issebya.com and NODE_ENV is not
+// `headers()` is mocked above to a host of home.issebya.com and NODE_ENV is not
 // "production" under vitest, so the action's own origin handling produces
-// http://issebya.com.
+// http://home.issebya.com.
 describe("submitBooking threads the originating blog post through checkout", () => {
-  const ORIGIN = "http://issebya.com";
+  const ORIGIN = "http://home.issebya.com";
   // eslint-disable-next-line no-secrets/no-secrets -- Stripe URL template placeholder, not a secret
   const BASE_SUCCESS_URL = `${ORIGIN}/booking/confirmation?session={CHECKOUT_SESSION_ID}`;
 

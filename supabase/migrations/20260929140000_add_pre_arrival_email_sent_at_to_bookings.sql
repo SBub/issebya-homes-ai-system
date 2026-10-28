@@ -1,0 +1,13 @@
+-- Records that a booking's pre-arrival email (address, parking, check-in
+-- arrangements) went out. Null means "not yet sent".
+--
+-- Set by the website's /api/cron/pre-arrival route with a conditional update
+-- (`where id = $1 and pre_arrival_email_sent_at is null`) *before* sending, so
+-- two overlapping cron deliveries claim the booking at most once. If the send
+-- then fails, the route resets it to null so the next day's run retries.
+--
+-- No RLS, policy, grant or index change: the route uses the service role, and
+-- the candidate set is a handful of confirmed bookings in a three-day window.
+-- `booking_availability` is a view with an explicit column list, so it is
+-- unaffected.
+alter table public.bookings add column pre_arrival_email_sent_at timestamptz;

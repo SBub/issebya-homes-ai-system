@@ -1,4 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "bash ../../scripts/vercel-ignore.sh"
+  "ignoreCommand": "bash ../../scripts/vercel-ignore.sh",
+  "crons": [{ "path": "/api/cron/pre-arrival", "schedule": "0 7 * * *" }]
 }

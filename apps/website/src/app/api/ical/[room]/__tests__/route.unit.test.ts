@@ -59,7 +59,7 @@ function setupSupabaseMocks(result: QueryResult) {
 }
 
 function makeRequest(room: string): NextRequest {
-  return new NextRequest(`https://issebya.com/api/ical/${room}`);
+  return new NextRequest(`https://home.issebya.com/api/ical/${room}`);
 }
 
 function makeParams(room: string) {

@@ -39,6 +39,11 @@ workspace's own `AGENTS.md` as well.
 
 When you add documentation, add an entry for it there.
 
+`.adw/project.md` is this repository's ADW profile: the toolkit's slash commands
+read it before anything else for the workspaces, ports, install, build and test
+commands, protected actions and documentation locations, so keep it in step with
+this file whenever one of those facts changes.
+
 ## Python workspaces
 
 The repo root is a virtual [uv](https://docs.astral.sh/uv/) workspace
@@ -120,6 +125,10 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
   `VERCEL_TOKEN=… VERCEL_TEAM_ID=… yarn vercel:prune`. The selection logic is
   in `scripts/lib/vercel-prune.ts`; change it together with its unit test
   (`apps/website/src/lib/__tests__/vercel-prune.unit.test.ts`).
+- Scheduled jobs are Vercel Cron entries in each app's own `vercel.json`
+  (`crons`). They run only against the production deployment, never on
+  previews or locally, so a new cron's first real run is after promotion to
+  `master`.
 
 ## Environment files
 
@@ -133,15 +142,19 @@ version`. Pin uv where it can actually be pinned: CI passes an explicit
 
 `apps/telegram-router` (3003) and `apps/guest-communication-agent` (3005) are
 pinned by an external contract: one reserved ngrok hostname fronts
-`scripts/dev-webhook-gateway.ts` on 3010, which routes by path prefix to them
-(and to the ADW trigger on 8001), and Twilio and Telegram hold registered URLs
-against it. Never move those two ports, and never start a second dev server for
-either webhook app.
+`scripts/dev-webhook-gateway.ts` on 3010, which routes by path prefix to them,
+and Twilio and Telegram hold registered URLs against it. GitHub label events do
+not use the tunnel: every onboarded repo's Issues webhook points at the Supabase
+Edge Function `github-webhook`. Never move those two ports, and never start a
+second dev server for either webhook app.
 
 `apps/website` has no such contract — the gateway has no route to it. It honours
 `PORT` and only defaults to 3000, which is what lets an ADW run give each
 worktree its own server instead of testing whatever is already on 3000. Don't
 hardcode a port there, and don't assume 3000 is the one under test.
+
+`apps/patterns` is the same: not behind the webhook gateway, defaults to 3004,
+honours `PORT`.
 
 The repository runs a single shared local Supabase instance. Never reset it as
 part of a task.

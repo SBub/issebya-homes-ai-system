@@ -101,8 +101,8 @@ describe("wishlistEmailSentCopy", () => {
 });
 
 describe("wishlistConfirmationEmailText", () => {
-  const productUrl = `https://issebya.com/shop/${firstProduct.slug}`;
-  const unsubscribeUrl = `https://issebya.com/shop/wishlist/unsubscribe?token=${"a".repeat(64)}`;
+  const productUrl = `https://home.issebya.com/shop/${firstProduct.slug}`;
+  const unsubscribeUrl = `https://home.issebya.com/shop/wishlist/unsubscribe?token=${"a".repeat(64)}`;
   const text = wishlistConfirmationEmailText({
     productName: firstProduct.name,
     productUrl,

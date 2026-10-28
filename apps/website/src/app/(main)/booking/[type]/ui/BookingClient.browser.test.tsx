@@ -218,7 +218,7 @@ test("calendar auto-expands when arriving via a GCA link", async () => {
 });
 
 // The GCA sends links shaped
-// https://issebya.com/booking/room1?checkIn=2026-09-01&checkOut=2026-09-05.
+// https://home.issebya.com/booking/room1?checkIn=2026-09-01&checkOut=2026-09-05.
 // Those params are calendar-day labels, so the guest has to be shown the days
 // they name, not the days a UTC-midnight parse happens to land on in the
 // browser's timezone.

@@ -29,7 +29,7 @@ import { GET } from "../route";
 // --- Helpers ---
 
 async function get(query = ""): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await GET(new NextRequest(`https://issebya.com/api/shop/products${query}`));
+  const res = await GET(new NextRequest(`https://home.issebya.com/api/shop/products${query}`));
   return { status: res.status, body: await res.json() };
 }
 

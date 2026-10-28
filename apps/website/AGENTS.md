@@ -55,8 +55,9 @@ arithmetic.
   so expect the sweep to fail there on webkit alone.
 - The Playwright `e2e/` suite is **deliberately not in CI**. It needs a running
   dev server on this run's port, the shared local Supabase, `.env.development`
-  and the `E2E_MOCK_STRIPE` / `E2E_MOCK_ICAL_FAILURE` in-process mocks from
-  `src/instrumentation.ts`, none of which exist in the CI image. It runs
+  and the `E2E_MOCK_STRIPE` / `E2E_MOCK_ICAL_FAILURE` / `E2E_MOCK_RESEND`
+  in-process mocks from `src/instrumentation.ts`, none of which exist in the CI
+  image. It runs
   manually via `yarn workspace website test:integration` and automatically as
   step 7 of the ADW test phase (`.claude/commands/test.md`). A spec you add
   under `e2e/` will not re-run in CI; put anything that must gate into a

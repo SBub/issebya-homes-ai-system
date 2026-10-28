@@ -50,11 +50,12 @@ Airbnb's public listing and are linked out to, not reproduced on-site.
   `/booking/confirmation`), `/contact`, `/guest-info`, legal pages
   (`/privacy-policy`, `/terms-and-conditions`), a `/blog`, and static
   per-guest `/checkin/[room]/[guest]` pages.
-- Canonical production domain is **issebya.com**, even though the brand
-  name displayed everywhere (site copy, branding guidelines, Instagram
-  handle) is "issebya.homes". This is a confirmed, deliberate fact, not a
-  bug — `src/lib/site.ts` carries a code comment questioning the mismatch;
-  future work should not "fix" it by changing the domain.
+- Canonical production domain is **home.issebya.com**, even though the brand
+  name displayed everywhere (site copy, branding guidelines) is
+  "issebya.homes". The Instagram handle is @home.issebya. The bare `issebya.com` is reserved for a hub
+  that links to the `home.`, `edit.` and `build.` subdomains; until the hub
+  exists it redirects here. Old `issebya.com/...` links in sent emails and
+  OTA listings rely on that redirect keeping the path.
 - Brand name is written strictly lowercase: "issebya.homes".
 
 ## Brand Commitments
@@ -66,7 +67,7 @@ Airbnb's public listing and are linked out to, not reproduced on-site.
   hospitality brand: Work Sans for body text, Nothing You Could Do
   (handwritten style) for headers.
 - Current palette: `#f0eeea` background (warm beige), `#000000` foreground.
-- Instagram: instagram.com/issebya.homes.
+- Instagram: instagram.com/home.issebya.
 
 ## Evidence on Hand
 

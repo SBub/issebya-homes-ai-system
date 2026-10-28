@@ -5,7 +5,7 @@ import { findAdoptableTunnel } from "../../scripts/dev-adoption";
 // Fixtures match the real shape of ngrok's local agent API
 // (GET http://127.0.0.1:4040/api/tunnels). findAdoptableTunnel is pure, so
 // these are the whole proof: the match rule is what keeps `yarn dev` from
-// spawning a second tunnel for a domain `yarn dev:adw` already holds, and
+// spawning a second tunnel for a domain another process already holds, and
 // from adopting a tunnel Twilio's signature check would then reject.
 
 const HOST = "kerchief-coveted-remorse.ngrok-free.dev";

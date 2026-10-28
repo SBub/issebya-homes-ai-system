@@ -1,0 +1,390 @@
+---
+title: Live events into the query cache
+kind: atom
+summary: A list prefetched into React Query must follow row changes pushed over a socket, with no refetch, no second store and no channel tied to one component's lifetime.
+tags:
+  - react-query
+  - realtime
+  - supabase
+code:
+  - path: apps/website/src/app/(main)/shop/ui/ShopProviders.tsx
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The client component that owns the session's one QueryClient; the effect that opens the channel belongs beside its useState.
+  - path: apps/website/src/lib/shop/query-client.ts
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The one QueryClient factory for the server prefetch and the browser provider, so the hydrated entry and the live writes share a cache.
+  - path: apps/website/src/lib/shop/pagination.ts
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: shopProductsQueryKey, the one key builder; a writer that patches the entry imports it exactly as the reader does.
+  - path: apps/website/src/app/(main)/shop/ui/ProductList.tsx
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: The reader; a suspense hook under the imported key with refetchOnMount false, which knows nothing about who writes the entry.
+  - path: apps/patterns/src/lib/sse/progress-store.ts
+    ref: 4c0a5067bbaad6dfaaf92698c6b4c610095a8a65
+    note: A connection opened outside React, each event folded into the current snapshot with a spread, and a closer that runs when the last reader leaves.
+verifiedIn:
+  - 164
+  - 201
+updated: 2026-10-03
+---
+
+## Problem
+
+A page shows a list. The server prefetched it and hydrated it into React Query, so it is in the HTML and the browser did not fetch it. Now the rows change on the server, and a socket pushes each change to the open tab. Three questions follow, and the obvious answer to each is wrong.
+
+Where does the socket live? The list component is the obvious host. Then the channel closes when the visitor navigates away, and a second list on the same page opens a second channel. Where does an event go? React state next to the list is the obvious store. Then the hydrated data and the live data sit in two places, and they disagree as soon as the first event lands. How does the list update? `invalidateQueries` is the obvious call. Then every push costs a fetch, which is the request the prefetch existed to avoid.
+
+## Mechanism
+
+React Query's cache is already the store for the list, and the components that show it already subscribe to it through `useSuspenseQuery`. The events go into that cache, and nothing else changes. Here is what happens, in order.
+
+1. The cache holds the list under one imported key, filled by the server prefetch and hydrated into the browser's `QueryClient`. The reader calls `useSuspenseQuery` with that key. That call is the subscription: when the entry changes, the reader re-renders. [Server prefetch with hydration](/p/server-prefetch-hydration) is the first half of this doc.
+2. A pure function `applyChange(current, event)` returns the next list for one event. Insert prepends the row, update merges it into the matching entry, delete removes by id. It touches no cache, no client and no clock, and never mutates its input. A unit test calls it with a hand-built list and a hand-built event and checks the result; no socket is involved.
+3. `startRealtime(queryClient)` opens one channel on the Supabase client and listens to `postgres_changes` on the table. On each event it calls `queryClient.setQueryData(key, (current) => applyChange(current, event))`. That line is the only place the list changes. The function returns a closer that removes the channel.
+4. The provider that owns the `QueryClient` calls `startRealtime` from a `useEffect`. The channel exists once per tab, wherever the provider is mounted, for as long as it is mounted. The effect returns the closer, so unmount closes the channel, and Strict Mode's mount, unmount, mount in development leaves exactly one channel open.
+5. The channel's status callback writes to a separate store, the one in [Connection status with useSyncExternalStore](/p/connection-status). The status is not server data and has no place in the query cache. The rows are not connection state and have no place in that store.
+6. The reader never sees an event. It sees the cache entry change and re-renders from it, the same way it would after a refetch.
+
+Two facts about the event decide what the reducer does. An event carries the table's columns and nothing else. When the cached shape has fields the table does not store, such as a count joined in by a view, an update must spread the row over the existing entry so those fields survive, and an insert gets neutral values for them. And Supabase sends `old` with only the primary key unless the table's replica identity is `full`, so a delete can rely on `old.id` and on nothing else.
+
+One interaction with the hydration work. The reader may set `staleTime: "static"` to keep the list in the prerendered HTML under `cacheComponents`, as [Suspended query with an error boundary](/p/query-error-boundary) explains. `setQueryData` writes to a static query like any other, so the push path is unaffected. `invalidateQueries` and `refetchQueries` skip static queries, so the one thing a static list cannot do is catch up by invalidation after a dropped connection. That catch-up has to call `refetch` from the hook itself. The Pitfalls name it.
+
+## Pattern
+
+The six files below, with `app/ConnectionIndicator.tsx` from [Connection status with useSyncExternalStore](/p/connection-status) beside them, are a working app. Paste them into a fresh Next project with `@tanstack/react-query` and `@supabase/supabase-js` installed and `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set. The database needs an `items` table with `id` and `name`, a `comments` table with an `item_id`, a view `item_summaries` that selects the items with `count(comments.id) as comments`, and `items` in the `supabase_realtime` publication. Open `/items`, insert a row in the table editor, and it appears at the top of the list with no reload.
+
+One module holds what both sides share. It is the module from the hydration doc with two additions: the Supabase client, and the cached shape, which has one field the table does not store.
+
+```ts title="app/items/query.ts"
+import { createClient } from "@supabase/supabase-js";
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
+
+// The row as the table stores it, which is all an event carries
+export type Item = { id: number; name: string };
+
+// The cached shape: the row plus a count the view computes
+export type ItemSummary = Item & { comments: number };
+
+export const itemsKey = ["items"];
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+if (!url || !key)
+  throw new Error("Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+
+export const supabase = createClient(url, key);
+
+export async function fetchItems(): Promise<ItemSummary[]> {
+  const { data, error } = await supabase.from("item_summaries").select("id, name, comments");
+  if (error) throw error;
+  return data;
+}
+
+export function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      dehydrate: {
+        shouldDehydrateQuery: (query) =>
+          defaultShouldDehydrateQuery(query) || query.state.status === "pending",
+      },
+    },
+  });
+}
+```
+
+`Item` is what an event's `new` holds. `ItemSummary` is what the cache holds and the list renders. The one `supabase` instance serves the prefetch on the server and the channel in the browser; a second `createClient` in the browser would be a second socket.
+
+The reducer is a pure function from the cached list and one event to the next list.
+
+```ts title="app/items/apply-change.ts"
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import type { Item, ItemSummary } from "./query";
+
+export function applyChange(
+  current: ItemSummary[],
+  ev: RealtimePostgresChangesPayload<Item>,
+): ItemSummary[] {
+  switch (ev.eventType) {
+    case "INSERT": {
+      if (current.some((item) => item.id === ev.new.id)) return current;
+      // A new row has nothing to count yet, and the event carries only the table's columns
+      return [{ ...ev.new, comments: 0 }, ...current];
+    }
+    case "UPDATE": {
+      // The row over the entry, so comments survives; the row alone would drop it
+      return current.map((item) => (item.id === ev.new.id ? { ...item, ...ev.new } : item));
+    }
+    case "DELETE": {
+      // old holds only the primary key unless the table's replica identity is full
+      const id = ev.old.id;
+      if (id === undefined) return current;
+      return current.filter((item) => item.id !== id);
+    }
+  }
+}
+```
+
+Nothing here knows about React Query or the socket. A test builds a list with `comments: 3`, hands in an update event for that id, and checks that the name changed and the count is still 3. The duplicate check on insert makes a replayed event harmless, and the id check on delete handles `old` arriving empty.
+
+The start function opens the channel, routes each event through the reducer into the cache, and reports the channel's status.
+
+```ts title="app/items/realtime.ts"
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
+import type { QueryClient } from "@tanstack/react-query";
+import { setConnectionStatus } from "../ConnectionIndicator";
+import { applyChange } from "./apply-change";
+import { type Item, type ItemSummary, itemsKey, supabase } from "./query";
+
+export function startRealtime(queryClient: QueryClient) {
+  const channel = supabase
+    .channel("items")
+    .on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+      // The only place the list changes; with nothing cached there is no list to patch
+      queryClient.setQueryData<ItemSummary[]>(
+        itemsKey,
+        (current) => current && applyChange(current, ev),
+      );
+    })
+    .subscribe((status) => {
+      switch (status) {
+        case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
+          setConnectionStatus("live");
+          break;
+        case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
+        case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
+          setConnectionStatus("reconnecting");
+          break;
+        case REALTIME_SUBSCRIBE_STATES.CLOSED:
+          setConnectionStatus("connecting");
+          break;
+      }
+    });
+
+  return () => {
+    void supabase.removeChannel(channel);
+    setConnectionStatus("connecting");
+  };
+}
+```
+
+`setQueryData` with an updater reads the current entry and writes what the updater returns. When the updater returns `undefined`, because nothing is cached under the key yet, the cache is left alone, and the next mount of the list fetches. The status callback is the one writer of the connection store, and `setConnectionStatus` is the setter that doc said was not written yet. The returned closer removes the channel and puts the indicator back to `connecting`, so the next start begins where a fresh page does.
+
+The provider is the one from the hydration doc with one line added.
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { QueryClientProvider } from "@tanstack/react-query";
+import { type ReactNode, useEffect, useState } from "react";
+import { makeQueryClient } from "./items/query";
+import { startRealtime } from "./items/realtime";
+
+export function Providers({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(makeQueryClient);
+
+  // Once per tab, where the client lives; the closer is the cleanup, so unmount closes the channel
+  useEffect(() => startRealtime(queryClient), [queryClient]);
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+```
+
+The effect runs after the first commit in the browser, never on the server. Its dependency is the client, which the lazy initialiser keeps the same for the life of the provider, so the effect runs once and the cleanup runs on unmount. In development Strict Mode runs mount, cleanup, mount, and the indicator shows one connect, close and reconnect; production connects once.
+
+The list is the one from the hydration doc. The only change is that each row shows the count.
+
+```tsx title="app/items/ItemList.tsx"
+"use client";
+
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { fetchItems, itemsKey } from "./query";
+
+export function ItemList() {
+  const { data } = useSuspenseQuery({
+    queryKey: itemsKey,
+    queryFn: fetchItems,
+    // The hydrated data is stale on arrival; refetching it is the fetch we avoided
+    refetchOnMount: false,
+  });
+
+  return (
+    <ul>
+      {data.map((item) => (
+        <li key={item.id}>
+          {item.name} ({item.comments})
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Nothing in this file knows about the socket. The hook reads the entry under `itemsKey`, and every `setQueryData` on that key re-renders this component from the cache, the same way a refetch would.
+
+The page is the hydration doc's page with the indicator mounted.
+
+```tsx title="app/items/page.tsx"
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import { Suspense } from "react";
+import { ConnectionIndicator } from "../ConnectionIndicator";
+import { Providers } from "../providers";
+import { ItemList } from "./ItemList";
+import { fetchItems, itemsKey, makeQueryClient } from "./query";
+
+export default async function Page() {
+  const queryClient = makeQueryClient();
+  await queryClient.prefetchQuery({ queryKey: itemsKey, queryFn: fetchItems });
+
+  return (
+    <Providers>
+      <ConnectionIndicator />
+      <HydrationBoundary state={dehydrate(queryClient)}>
+        <Suspense fallback={<p>Loading</p>}>
+          <ItemList />
+        </Suspense>
+      </HydrationBoundary>
+    </Providers>
+  );
+}
+```
+
+The server fetches the view once and hands the list over in the HTML. The browser hydrates it, the provider's effect joins the channel, and from then on the cache follows the table. In a real app `Providers` sits in the root layout, so one channel serves every route and survives navigation.
+
+### Wrong and right
+
+The list stops updating after a navigation, or every change arrives twice.
+
+🔴 The list component opens the channel. Navigating away unmounts the list and closes the channel, and two lists on one page open two channels that both patch the same entry. This is the top of `ItemList`, with `useQueryClient` and `useEffect` imported above it.
+
+```tsx title="app/items/ItemList.tsx"
+export function ItemList() {
+  const queryClient = useQueryClient();
+  useEffect(() => startRealtime(queryClient), [queryClient]);
+
+  const { data } = useSuspenseQuery({
+    queryKey: itemsKey,
+    queryFn: fetchItems,
+    refetchOnMount: false,
+  });
+```
+
+✅ The provider opens it. One channel per tab, for as long as the provider is mounted, however many lists read the entry. This is the body of `Providers`.
+
+```tsx title="app/providers.tsx"
+export function Providers({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(makeQueryClient);
+
+  useEffect(() => startRealtime(queryClient), [queryClient]);
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+```
+
+The hydrated list and the live list disagree, and a second page shows the old rows.
+
+🔴 The handler writes a module variable and the list reads it with `useSyncExternalStore` beside the hydrated query. Now there are two lists: the one the server hydrated into the cache, and the one the socket builds, which starts empty and never sees the prefetch. This is the event handler in `startRealtime`, with `liveItems`, `listeners` and a `subscribe` function declared above it.
+
+```ts title="app/items/realtime.ts"
+.on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+  liveItems = applyChange(liveItems, ev);
+  listeners.forEach((listener) => listener());
+})
+```
+
+✅ The handler writes the cache entry the list already reads. One list, hydrated by the server and patched by the socket.
+
+```ts title="app/items/realtime.ts"
+.on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+  queryClient.setQueryData<ItemSummary[]>(itemsKey, (current) =>
+    current && applyChange(current, ev),
+  );
+})
+```
+
+Every change costs a request, or, with `staleTime: "static"` on the list, changes nothing at all.
+
+🔴 The handler invalidates the key. Each event marks the entry stale and refetches the whole list, which is the request the prefetch avoided, and a burst of events is a burst of requests. A static query is skipped by `invalidateQueries`, so there the call does nothing and the list never moves. This is the same handler.
+
+```ts title="app/items/realtime.ts"
+.on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, () => {
+  void queryClient.invalidateQueries({ queryKey: itemsKey });
+})
+```
+
+✅ The handler applies the event. No request, and a static query takes the write like any other.
+
+```ts title="app/items/realtime.ts"
+.on<Item>("postgres_changes", { event: "*", schema: "public", table: "items" }, (ev) => {
+  queryClient.setQueryData<ItemSummary[]>(itemsKey, (current) =>
+    current && applyChange(current, ev),
+  );
+})
+```
+
+A rename resets the count to zero.
+
+🔴 The update case replaces the entry with the row. The row has no `comments`, so the type checker rejects `ev.new` on its own, and the fix that compiles fills the count with zero. Every update then wipes a value the event never carried. This is the `UPDATE` case in `applyChange`.
+
+```ts title="app/items/apply-change.ts"
+case "UPDATE": {
+  return current.map((item) => (item.id === ev.new.id ? { ...ev.new, comments: 0 } : item));
+}
+```
+
+✅ The row is spread over the existing entry. The columns the event carries change, and the fields it does not carry survive.
+
+```ts title="app/items/apply-change.ts"
+case "UPDATE": {
+  return current.map((item) => (item.id === ev.new.id ? { ...item, ...ev.new } : item));
+}
+```
+
+In development the indicator flips twice on load and the network tab shows two channel joins.
+
+🔴 The effect calls the start function and discards its closer. Strict Mode runs the effect, its missing cleanup, and the effect again, so the first channel stays open beside the second. This is the effect in `Providers`.
+
+```tsx title="app/providers.tsx"
+useEffect(() => {
+  startRealtime(queryClient);
+}, [queryClient]);
+```
+
+✅ The effect returns the closer. The first channel closes before the second opens, and unmount closes the last one.
+
+```tsx title="app/providers.tsx"
+useEffect(() => startRealtime(queryClient), [queryClient]);
+```
+
+### In this repo
+
+The monorepo has no Supabase channel yet, so no one file holds the whole pattern. The linked files are the pieces it is built from, each at the same commit.
+
+- [`ShopProviders.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/apps/website/src/app/(main)/shop/ui/ShopProviders.tsx>) is `Providers`: a client component with the one `QueryClient` in a lazy `useState`, mounted by the shop layout so it outlives any one route. The `useEffect` that starts a channel would sit beside that `useState`. The shop has no live source, so there is no effect yet.
+- [`query-client.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/apps/website/src/lib/shop/query-client.ts) is `makeQueryClient`: one factory for the server prefetch and the browser provider, with the pending dehydrate rule. The hydrated entry and any later `setQueryData` land in the client this factory built.
+- [`pagination.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/apps/website/src/lib/shop/pagination.ts) holds `shopProductsQueryKey`, the one key builder, which is `itemsKey` here. A writer that patches the grid imports it with the same arguments the reader uses, or it writes to a different entry.
+- [`ProductList.tsx`](<https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/apps/website/src/app/(main)/shop/ui/ProductList.tsx>) is `ItemList`: `useSuspenseInfiniteQuery` under the imported key with `refetchOnMount: false`. It knows nothing about who writes its entry. A `setQueryData` under its key would re-render it exactly as the hydration did.
+- [`progress-store.ts`](https://github.com/SBub/issebya-homes-ai-system/blob/4c0a5067bbaad6dfaaf92698c6b4c610095a8a65/apps/patterns/src/lib/sse/progress-store.ts) is the shape of `startRealtime` without React Query: `run` opens an `EventSource` outside React, each `progress` event is folded into the current snapshot with a spread, and the connection closes when the last reader leaves. It keeps a hand-made store because its stream carries no server data to hydrate, which is the case [Connection status with useSyncExternalStore](/p/connection-status) covers. Here the data is a prefetched list, so the cache is the store and the reducer writes there.
+- The ADW dashboard, a separate repository with no remote and so not linked here, is where the files above come from. Its `src/data/realtime.ts` is `startRealtime` on a channel named `adw` over `adw.projects`; `src/data/apply-project-change.ts` is the reducer, with `running`, `completed`, `failed` and `last_run_at` as the derived fields a view computes, and a vitest file beside it that builds the three payloads by hand; `src/app/providers.tsx` is the effect; `src/components/ProjectNav.tsx` is the reader, with `staleTime: "static"`; `src/components/ConnectionIndicator.tsx` is the store. Two differences from the snippets above: its updater defaults an empty cache to `[]`, which the Pitfalls below argue against, and its channel listens to `adw.projects` only, so the counts, which come from `adw.runs`, do not move until a reload. A runs listener on the same channel is the planned next step.
+
+## Pitfalls
+
+- **The list stops updating after a navigation, or every change arrives twice.** The channel is opened in the list component, so it lives and dies with the list and multiplies with it. Open it in the provider that owns the `QueryClient`. See Wrong and right above.
+- **The hydrated list and the live list disagree.** Events go into state or a hand-made store next to the cache. Two stores, one hydrated and one not, cannot agree. Write the cache entry. See Wrong and right above.
+- **Every change costs a request, or, on a static query, nothing happens.** The handler invalidates instead of writing. `invalidateQueries` refetches the whole list per event and skips static queries entirely. Apply the event with `setQueryData`. See Wrong and right above.
+- **A rename resets the count to zero.** The update case replaces the entry with the row, and the row has no count. Spread the row over the entry. See Wrong and right above.
+- **In development the indicator flips twice and two channels are open.** The effect does not return the closer. Return it. See Wrong and right above.
+- **Changes made while the tab was disconnected never show.** Nothing replays the events missed between a drop and the re-join, and on a static query `invalidateQueries` is a no-op. When the status goes from `reconnecting` to `live`, call `refetch` from the hook, which does refetch a static query. The same gap exists between the server's prefetch and the first join. A refetch on the first join is the fetch the hydration avoided, so weigh it against how often the rows change. The reference does not do either yet.
+- **The list shows one item after a navigation.** The updater defaulted an empty cache to `[]`. On a route without the list, an event created the entry with that one row, and the list then found data under its key and did not fetch. Return `undefined` when nothing is cached; `setQueryData` leaves the cache alone.
+- **A delete leaves the row in place.** The reducer matched on a field other than the primary key. `old` holds only the key unless the table's replica identity is `full`. Match on `old.id`.
+- **A count never moves.** The count is derived from another table, and the channel listens to this one. A change there is an event on that table. Add a listener for it to the same channel, with a reducer of its own; do not open a second channel.
+- **Nothing arrives, and the indicator says `live`.** The table is not in the `supabase_realtime` publication, or Row Level Security denies the publishable key a select on it. The channel joins either way. Check the publication first.
+
+## When not to use
+
+- Data with no live source. Plain React Query with its refetch rules is enough, and a channel with nothing to deliver is a socket held open for no reason.
+- Events that are not row changes. Presence, a broadcast message, and the socket's own status have no cache entry to patch. The status goes to the connection store, and a broadcast is handled where it is received.
+- Server Components. There is no socket on the server. A Server Component shows the data as of the request, and a change there is a `revalidateTag` for the next request, not an event.
+
+## Code
+
+<CodeLinks />
