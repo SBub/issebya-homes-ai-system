@@ -57,7 +57,7 @@ Both property names are literals the PostHog filter matches on. Never rename the
 
 ### Owner's one-time steps
 
-1. Open `https://issebya.homes/?internal=1` once per browser and device, as a full page load
+1. Open `https://home.issebya.com/?internal=1` once per browser and device, as a full page load
    (type it in the address bar, not a client-side link). `?internal=0` undoes it.
 2. In PostHog project settings, set the test-account filter by hand to "event property `internal`
    is not set" and "event property `automated` is not set", then use "Filter out internal and test
