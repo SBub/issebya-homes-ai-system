@@ -173,7 +173,7 @@ test.describe("Site smoke", () => {
       await page.goto("/contact");
       const instagram = page.locator("footer").getByRole("link", { name: "Instagram" });
 
-      await expect(instagram).toHaveAttribute("href", "https://www.instagram.com/issebya.homes");
+      await expect(instagram).toHaveAttribute("href", "https://www.instagram.com/home.issebya");
       await expect(instagram).toHaveAttribute("target", "_blank");
       await expect(instagram).toHaveAttribute("rel", "noopener noreferrer");
     });

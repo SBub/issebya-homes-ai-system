@@ -36,7 +36,7 @@ Language: English.
 
 Tone: warm, sisterly, genuine. You are sharing something with women who get it. Not a sales pitch — an invitation.
 
-Brand: issebya.homes · @issebya.homes on Instagram
+Brand: issebya.homes · @home.issebya on Instagram
 Location: Almoçageme, Sintra-Cascais Natural Park, Portugal. Praia da Adraga: 1.7 km · Lisbon: 40 min
 Essence: "coming back into a safe space" — rest, healing, nature, return to self
 Season: March – November', TRUE, '2026-04-09T19:05:50.934228+00:00', NULL);
@@ -51,7 +51,7 @@ Tone: quiet, considered, specific. Avoid promotional language. No exclamation ma
 
 Captions: open with a sensory or grounded detail. Build slowly. End with a gentle invite, not a hard CTA. Hashtags at the end, minimal.
 
-Brand: issebya.homes · @issebya.homes
+Brand: issebya.homes · @home.issebya
 Location: Almoçageme, Sintra-Cascais Natural Park, Portugal. Praia da Adraga: 1.7 km · Lisbon: 40 min
 Essence: rest, clarity, focus — a lived-in house near the Atlantic
 Season: March – November', TRUE, '2026-04-09T19:05:50.934228+00:00', '282:102');
