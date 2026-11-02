@@ -3,11 +3,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { WhatsAppLink } from "@/app/ui/WhatsAppLink";
 import { resolveBlogReturn } from "@/lib/blog/return-path";
 import { fromCalendarDay } from "@/lib/date-utils";
 
 export const metadata: Metadata = {
-  title: "Booking Confirmed – Issebya Homes",
+  title: "Booking confirmed - issebya.homes",
 };
 
 type BookingData = {
@@ -84,91 +85,90 @@ export default async function BookingConfirmationPage({
   const roomLabel = roomLabels[booking.room_type] ?? booking.room_type;
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex flex-col md:flex-row gap-8">
-        {/* Left - Booking Details */}
-        <div className="md:w-1/2">
-          <div className="mb-6 text-center md:text-left">
-            <h1 className="text-price mb-1">Booking Confirmed</h1>
-            <p className="text-secondary">Thank you for your reservation</p>
-          </div>
-
-          <div className="space-y-4">
-            <div className="border-b border-gray-300 pb-3">
-              <label className="text-secondary block mb-1">Room</label>
-              <p className="text-secondary">{roomLabel}</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="border-b border-gray-300 pb-3">
-                <label className="text-secondary block mb-1">Check-in</label>
-                <p className="text-secondary">{formatDate(booking.check_in)}</p>
-              </div>
-              <div className="border-b border-gray-300 pb-3">
-                <label className="text-secondary block mb-1">Check-out</label>
-                <p className="text-secondary">{formatDate(booking.check_out)}</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="border-b border-gray-300 pb-3">
-                <label className="text-secondary block mb-1">Nights</label>
-                <p className="text-secondary">{booking.nights}</p>
-              </div>
-              <div className="border-b border-gray-300 pb-3">
-                <label className="text-secondary block mb-1">Guests</label>
-                <p className="text-secondary">
-                  {booking.person_count} {booking.person_count === 1 ? "Guest" : "Guests"}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2">
-              <div className="flex justify-between text-secondary">
-                <span>Room price</span>
-                <span>€{booking.base_price}</span>
-              </div>
-              <div className="flex justify-between text-secondary">
-                <span>Tourist tax</span>
-                <span>€{booking.tourist_tax}</span>
-              </div>
-              <div className="flex justify-between text-price border-t border-gray-300 pt-2">
-                <span>Total</span>
-                <span>€{booking.total_amount}</span>
-              </div>
-            </div>
-
-            <div className="pt-4 text-secondary">
-              A confirmation email has been sent to{" "}
-              <span className="font-bold">{booking.email}</span>
-            </div>
-
-            <p className="text-secondary">
-              48 hours before your arrival, we&apos;ll send you the exact address, parking details,
-              and all essential information for your stay.
-            </p>
-
-            {/* `block` so the surrounding space-y-4 rhythm applies: vertical
-                margin does nothing to an inline <a>. */}
-            {blogReturn && (
-              <Link
-                href={blogReturn.href}
-                data-testid="return-to-post"
-                className="block text-secondary-link"
-              >
-                ← back to {blogReturn.title}
-              </Link>
-            )}
-          </div>
+    <>
+      {/* Details: same column, padding and rhythm as the room page's content column */}
+      <div className="md:w-1/2 p-4 md:p-12 space-y-8">
+        <div className="space-y-1">
+          <h1 className="text-price">Booking Confirmed</h1>
+          <p className="text-secondary">Thank you for your reservation</p>
         </div>
 
-        {/* Right - Image (hidden on mobile) */}
-        <div className="hidden md:flex md:w-1/2 items-center justify-center">
-          <div className="relative w-[70%] min-h-[400px]">
-            <Image src={imageSrc} alt={roomLabel} fill className="object-cover" />
+        <dl className="border-t border-foreground">
+          <Field label="Room" value={roomLabel} />
+          <div className="grid grid-cols-2 gap-x-6">
+            <Field label="Check-in" value={formatDate(booking.check_in)} />
+            <Field label="Check-out" value={formatDate(booking.check_out)} />
           </div>
+          <div className="grid grid-cols-2 gap-x-6">
+            <Field label="Nights" value={booking.nights} />
+            <Field
+              label="Guests"
+              value={`${booking.person_count} ${booking.person_count === 1 ? "Guest" : "Guests"}`}
+            />
+          </div>
+        </dl>
+
+        <dl className="space-y-2 tabular-nums">
+          <PriceRow label="Room price" amount={booking.base_price} />
+          <PriceRow label="Tourist tax" amount={booking.tourist_tax} />
+          <div className="flex justify-between items-baseline border-t border-foreground pt-3">
+            <dt className="text-xs uppercase">Total</dt>
+            <dd className="text-price">€{booking.total_amount}</dd>
+          </div>
+        </dl>
+
+        <div className="space-y-4 max-w-[65ch]">
+          <p className="text-secondary">
+            A confirmation email has been sent to <span className="font-bold">{booking.email}</span>
+          </p>
+          <p className="text-secondary">
+            48 hours before your arrival, we&apos;ll send you the exact address, parking details,
+            and all essential information for your stay.
+          </p>
+          <p className="text-secondary">
+            For special requests or any enquiries, please reach out to us directly on{" "}
+            <WhatsAppLink />.
+          </p>
+          {/* `block` so the surrounding space-y rhythm applies: vertical
+              margin does nothing to an inline <a>. */}
+          {blogReturn && (
+            <Link
+              href={blogReturn.href}
+              data-testid="return-to-post"
+              className="block text-secondary-link"
+            >
+              ← back to {blogReturn.title}
+            </Link>
+          )}
         </div>
       </div>
+
+      {/* Room photo: framed and placed like the room page's gallery, hidden on
+          mobile so the booking details come first */}
+      <div className="hidden md:flex md:w-1/2 flex-col items-center justify-start p-4 md:pt-[88px] md:sticky md:top-0 md:h-screen">
+        <div className="relative w-[60%] mx-auto aspect-[4/3]">
+          <Image src={imageSrc} alt={roomLabel} fill sizes="30vw" className="object-cover" />
+        </div>
+        <p className="text-center my-4 px-4 text-xs uppercase">{roomLabel}</p>
+      </div>
+    </>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="border-b border-gray-300 py-3">
+      <dt className="text-xs uppercase mb-1">{label}</dt>
+      <dd className="text-secondary font-medium">{value}</dd>
+    </div>
+  );
+}
+
+function PriceRow({ label, amount }: { label: string; amount: number }) {
+  return (
+    <div className="flex justify-between text-secondary">
+      <dt>{label}</dt>
+      <dd>€{amount}</dd>
     </div>
   );
 }
