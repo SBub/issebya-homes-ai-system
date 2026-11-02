@@ -67,7 +67,7 @@ None. No new dependencies, environment variables or images.
 - `yarn turbo run build --filter=./apps/website` validates the `meta` and
   prerenders `/blog/forest-bathing`.
 - `yarn workspace website test:integration` runs the extended Playwright spec
-  (run by the ADW test phase, not CI).
+  (run by the ADW test phase and the E2E workflow).
 - No unit test was added: `posts.ts` imports `.mdx`, which the vitest node pool
   cannot transform, and the schema and sorter are already covered by
   `src/lib/blog/__tests__/schema.unit.test.ts`.

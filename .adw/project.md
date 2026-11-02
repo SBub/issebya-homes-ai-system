@@ -86,7 +86,9 @@ when `website` is a target: `PORT=<run port> yarn workspace website test:integra
 The `prepare_app` server must already be up on this run's port (`reuseExistingServer` adopts it,
 with the overrides above); never set `CI=1`, which disables that reuse. The specs seed and clean up
 fixtures in the shared local Supabase via `createAdminClient()`, acceptable only because runs are
-serial. Agent-driven `e2e/*.md` journeys at the repo root are opt-in and normally absent.
+serial. CI also runs this suite, chromium only, on every PR into `develop`
+(`.github/workflows/e2e.yml`), with its own runner-local Supabase; that has no bearing on how the
+test phase runs it. Agent-driven `e2e/*.md` journeys at the repo root are opt-in and normally absent.
 
 lefthook runs prettier, lint, typecheck and knip (ruff and mypy for `*.py`) on every commit and
 `yarn turbo run test` on every push. Never bypass it.

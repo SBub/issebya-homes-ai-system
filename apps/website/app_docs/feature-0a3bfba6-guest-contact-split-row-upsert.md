@@ -51,7 +51,7 @@ None. No migration, no env var, no change to the unique constraints.
 ## Testing
 
 - Unit: `yarn workspace website vitest run --project unit src/lib/shared/__tests__/guest-contacts.unit.test.ts`.
-- E2E (ADW test phase, not CI): `apps/website/e2e/booking-split-guest-contact.integration.spec.ts`. It seeds a phone-owning row and an email-owning row, books with both, and asserts navigation to Stripe, the phone row untouched, the email row's `phone` still null, and the pending booking linked to the email row. It cleans up its own rows; never reset the shared Supabase.
+- E2E (ADW test phase and the E2E workflow): `apps/website/e2e/booking-split-guest-contact.integration.spec.ts`. It seeds a phone-owning row and an email-owning row, books with both, and asserts navigation to Stripe, the phone row untouched, the email row's `phone` still null, and the pending booking linked to the email row. It cleans up its own rows; never reset the shared Supabase.
 - Manual: follow the spec's Steps to Reproduce; Stripe Checkout should open and the terminal should show one split-row warning with two ids.
 
 ## Notes

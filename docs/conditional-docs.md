@@ -41,6 +41,7 @@ procedures, not code documentation) and anything gitignored.
     - When changing availability, booking persistence, or the iCal merge
     - When you need to know why a page renders the way it does before changing it
     - When you need to know which test layers run in CI and on push, and which are manual
+    - When touching Sentry init, `sentry-enabled.ts`, or the `/monitoring` tunnel
 
 - `apps/website/app_docs/nextjs-patterns-guide.md`
   - Conditions:
@@ -176,6 +177,7 @@ procedures, not code documentation) and anything gitignored.
     - When a `*.browser.test.tsx` passes locally but fails in CI with `Vitest failed to find the runner`, or a `new dependencies optimized` line appears in the run
     - When changing the website's `test` / `test:browser` scripts, `browser.instances`, or `optimizeDeps.include` in `vitest.config.ts`
     - When deciding whether a new test should gate, or wondering why an `e2e/` spec never runs in CI
+    - When changing `.github/workflows/e2e.yml` or what the e2e suite needs in CI
 
 - `apps/website/app_docs/feature-f72316fa-booking-og-metadata.md`
   - Conditions:

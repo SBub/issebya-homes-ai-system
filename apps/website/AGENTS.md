@@ -53,14 +53,27 @@ arithmetic.
   runs the full chromium/firefox/webkit sweep and is manual. Webkit cannot
   launch on macOS 14 arm64 (Playwright ships a frozen build for that platform),
   so expect the sweep to fail there on webkit alone.
-- The Playwright `e2e/` suite is **deliberately not in CI**. It needs a running
-  dev server on this run's port, the shared local Supabase, `.env.development`
-  and the `E2E_MOCK_STRIPE` / `E2E_MOCK_ICAL_FAILURE` / `E2E_MOCK_RESEND`
-  in-process mocks from `src/instrumentation.ts`, none of which exist in the CI
-  image. It runs
-  manually via `yarn workspace website test:integration` and automatically as
-  step 7 of the ADW test phase (`.claude/commands/test.md`). A spec you add
-  under `e2e/` will not re-run in CI; put anything that must gate into a
-  `*.unit.test.ts` or a `*.browser.test.tsx` instead.
+- The `E2E` workflow (`.github/workflows/e2e.yml`) runs the chromium `e2e/`
+  suite on every PR into `develop`, against a Supabase stack started on the
+  runner, with the three `E2E_MOCK_*` mocks from `src/instrumentation.ts` on
+  and dummy Stripe/Resend keys. A spec you add under `e2e/` gates PRs into
+  `develop` (not pushes, and not the lefthook hook). It is still step 7 of the
+  ADW test phase (`.claude/commands/test.md`) and runs manually via
+  `yarn workspace website test:integration`.
+- If a spec fails only in CI, fix the job's environment, never the spec, and
+  never with retries, skips or `continue-on-error`. Never put a real key or a
+  `secrets.` reference into that workflow.
 - A new browser test now costs every push a few seconds. Keep them
   component-scoped (mock children), as the existing ones are.
+
+## Sentry is production-only
+
+- Server, edge and client Sentry `init` take `enabled` from
+  `isSentryEnabled` in `src/lib/sentry-enabled.ts`, which is true only for the
+  Vercel `production` environment. Local, e2e (local, ADW, CI) and preview runs
+  send nothing. Keep that helper the single decision point.
+- Never enable Sentry from `NODE_ENV`: it is `"production"` on previews too.
+- The client reports through the same-origin `/monitoring` tunnel
+  (`tunnelRoute` in `next.config.ts`), so a check for Sentry traffic must watch
+  that path, not just `*.sentry.io`, as `e2e/sentry-disabled.integration.spec.ts`
+  does.

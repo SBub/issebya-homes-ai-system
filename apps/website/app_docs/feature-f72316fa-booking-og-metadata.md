@@ -93,7 +93,7 @@ None. There are no environment variables. The absolute URLs come from
   (160 characters or fewer), the twitter card, the unknown-type fallback, and a
   negative check that no field falls back to the root card (`SITE_URL` or a
   `.webp` image).
-- Playwright (ADW test phase only, not CI):
+- Playwright (ADW test phase and the E2E workflow):
   `yarn workspace website test:integration` runs
   `e2e/booking-og-metadata.integration.spec.ts`.
 - Build: `/booking/room1` and `/booking/room2` must still show as prerendered in

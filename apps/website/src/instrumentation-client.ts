@@ -5,8 +5,12 @@
 import { captureRouterTransitionStart, init, replayIntegration } from "@sentry/nextjs";
 import posthog from "posthog-js";
 import { startAnalytics } from "@/lib/analytics";
+import { isSentryEnabled } from "@/lib/sentry-enabled";
 
 init({
+  // Production deploy only: local, e2e and preview runs send nothing.
+  enabled: isSentryEnabled(process.env.NEXT_PUBLIC_VERCEL_ENV),
+
   // eslint-disable-next-line no-secrets/no-secrets -- Sentry DSN is intentionally public (client-side)
   dsn: "https://443012969c4bd9a2da6f78ad93b1ba75@o4510946424586240.ingest.de.sentry.io/4510946428518480",
 

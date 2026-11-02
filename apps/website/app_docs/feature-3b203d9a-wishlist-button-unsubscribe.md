@@ -61,7 +61,7 @@ Follow-up to #143 (see `feature-bcb9a5cf-wishlist-heart-modal-email.md`). The ic
 - `src/lib/shop/__tests__/unsubscribe.unit.test.ts`: token shape, resolver outcomes (unsubscribed, already, race, invalid, malformed input with no DB call, error message without the token), the old-link-dies-on-re-consent case, and scrubber coverage.
 - `src/app/(main)/shop/[slug]/__tests__/actions.unit.test.ts`: rotation on re-consent, one email on a renewed consent for an already-wished product, a subscribed contact keeping its token, nothing stored when the pre-read fails.
 - `src/lib/shop/__tests__/wishlist.unit.test.ts`, `src/lib/__tests__/resend.unit.test.ts`, `WishlistDialog.browser.test.tsx`: email footer and header, button accessible name.
-- `e2e/shop.integration.spec.ts` (not in CI): malformed link lands on `/invalid` with a 404; full flow of unsubscribe, item kept, already, re-consent, old link dead.
+- `e2e/shop.integration.spec.ts` (E2E workflow on PRs into develop): malformed link lands on `/invalid` with a 404; full flow of unsubscribe, item kept, already, re-consent, old link dead.
 - Run with `yarn turbo run test --filter=./apps/website`.
 
 ## Notes

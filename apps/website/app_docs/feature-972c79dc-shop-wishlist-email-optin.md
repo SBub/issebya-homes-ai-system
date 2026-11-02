@@ -118,7 +118,7 @@ production through the usual migration gate (see
 - `test:browser`: the form component, with `../actions`, Sentry and PostHog
   mocked (open event, disabled submit + helper, success + remembered email,
   prefill from `localStorage`).
-- `e2e/shop.integration.spec.ts` (Playwright, local only, does not gate CI):
+- `e2e/shop.integration.spec.ts` (Playwright, gates PRs into develop via the E2E workflow):
   wishes the same product twice under a unique email and asserts one item row
   and one consent row, checks the prefill after reload, and asserts `anon`
   gets `42501` on both tables. It deletes its contact afterwards; items

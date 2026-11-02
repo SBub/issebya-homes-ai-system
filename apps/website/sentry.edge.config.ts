@@ -4,8 +4,12 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import * as Sentry from "@sentry/nextjs";
+import { isSentryEnabled } from "@/lib/sentry-enabled";
 
 Sentry.init({
+  // Production deploy only: local, e2e and preview runs send nothing.
+  enabled: isSentryEnabled(process.env.VERCEL_ENV),
+
   // eslint-disable-next-line no-secrets/no-secrets -- Sentry DSN is intentionally public (server-side)
   dsn: "https://443012969c4bd9a2da6f78ad93b1ba75@o4510946424586240.ingest.de.sentry.io/4510946428518480",
 

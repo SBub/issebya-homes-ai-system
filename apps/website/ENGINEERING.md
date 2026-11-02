@@ -86,17 +86,38 @@ shows in a production build; check layout stability with `next start`.
 | Integration (E2E) | `e2e/*.integration.spec.ts`                                     | Full flows via Playwright against real Next.js dev server; mock API responses via `page.route()` |
 
 The unit and browser rows gate: `yarn test` runs both, and that is what CI and
-the lefthook `pre-push` hook run. The integration row does not gate; it runs
-manually and via the ADW test phase.
+the lefthook `pre-push` hook run. The integration row runs manually, via the ADW
+test phase, and in the `E2E` workflow (`.github/workflows/e2e.yml`), which gates
+PRs into `develop`.
 
-Config: `vitest.config.ts` (unit + browser projects), `playwright.config.ts` (spins up `yarn dev`).
+Config: `vitest.config.ts` (unit + browser projects), `playwright.config.ts` (spins up `yarn dev:next`).
 
 ```bash
 yarn test             # vitest unit + browser (chromium), what CI and pre-push run
 yarn test:unit        # vitest unit only, watch
 yarn test:browser     # vitest browser, all three browsers, watch, manual sweep
-yarn test:integration # Playwright E2E, manual / ADW only, not in CI
+yarn test:integration # Playwright E2E, manual / ADW, and the E2E workflow on PRs into develop
 ```
+
+## Error tracking (Sentry)
+
+Three configs initialise Sentry: `sentry.server.config.ts`,
+`sentry.edge.config.ts` and `src/instrumentation-client.ts`. All three take
+`enabled` from `isSentryEnabled` (`src/lib/sentry-enabled.ts`), reading
+`VERCEL_ENV` on server and edge and `NEXT_PUBLIC_VERCEL_ENV` on the client (a
+literal read, so Next inlines it). Only the production Vercel deploy sends;
+local, e2e (local, ADW and CI) and preview runs send nothing. The DSN is
+hardcoded and public. Client traffic tunnels through `/monitoring` on the app's
+own origin (`tunnelRoute` in `next.config.ts`). Errors in tests stay visible in
+the Playwright report artifact and the job log.
+
+### Rules
+
+- Production only. Never gate on `NODE_ENV`, which is `"production"` on
+  previews too.
+- Keep `isSentryEnabled` the single decision point for all three configs.
+- `e2e/sentry-disabled.integration.spec.ts` must watch the `/monitoring` path,
+  not just `*.sentry.io`: a hostname-only check passes with client Sentry on.
 
 ## Environment variables
 

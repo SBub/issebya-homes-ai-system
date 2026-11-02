@@ -42,7 +42,7 @@ None.
 ## Testing
 
 - `yarn turbo run test --filter=./apps/website` runs the browser tests (gated in pre-push and CI). They spy on `Element.prototype.scrollIntoView` and check its `this` is the `.booking-engine` element (inside `#book` for the widget case) and that `window.scrollTo` is never called.
-- `yarn workspace website test:integration` runs the Playwright spec (ADW test phase only, not CI). Smooth scrolling is asynchronous, so the spec waits until `scrollY` has been still for 30 frames before asserting; asserting straight after the click passes regardless of the scroll target.
+- `yarn workspace website test:integration` runs the Playwright spec (ADW test phase and the E2E workflow). Smooth scrolling is asynchronous, so the spec waits until `scrollY` has been still for 30 frames before asserting; asserting straight after the click passes regardless of the scroll target.
 
 ## Notes
 
